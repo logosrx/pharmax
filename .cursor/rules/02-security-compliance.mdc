@@ -1,0 +1,32 @@
+---
+description: HIPAA-aware and SOC 2-ready security rules
+alwaysApply: true
+---
+
+# Security and Compliance Rules
+
+- Never log PHI.
+- Never put secrets in code.
+- Never put secrets in client-exposed environment variables.
+- Never use real patient data in examples, tests, prompts, screenshots, or fixtures.
+- Use synthetic/fake data only.
+- Every tenant-sensitive query must include organization and applicable clinic/team/bucket scope.
+- Cross-clinic data leakage is a critical incident.
+- Sensitive actions require audit logs.
+- Webhooks require authentication or signature verification.
+- Webhooks require idempotency.
+- Patient search must use PHI-safe encrypted/hash/token search patterns.
+- Do not build broad decrypted PHI search.
+- Do not create fake compliance claims.
+
+Access must support isolation by:
+
+- organization
+- pharmacy site
+- clinic/practice account
+- team
+- user
+- role
+- permission
+- bucket
+- workstation

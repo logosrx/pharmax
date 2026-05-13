@@ -1,0 +1,64 @@
+---
+description: SLA timers, emergency buckets, cancellations, productivity, and idle tracking rules
+alwaysApply: true
+---
+
+# SLA and Performance Rules
+
+Track every prescription from the second it enters the system.
+
+Track:
+
+- time before typing starts
+- time spent typing
+- time before PV1 starts
+- time spent in PV1
+- time before filling starts
+- time spent filling
+- time before final verification starts
+- time spent in final verification
+- time before shipping receives the order
+- time shipping takes until shipped
+
+Use detailed interval records, not only timestamp columns.
+
+Required intervals:
+
+- WAIT_BEFORE_TYPING
+- TYPING_ACTIVE
+- WAIT_BEFORE_PV1
+- PV1_ACTIVE
+- WAIT_BEFORE_FILL
+- FILL_ACTIVE
+- WAIT_BEFORE_FINAL_VERIFICATION
+- FINAL_VERIFICATION_ACTIVE
+- WAIT_BEFORE_SHIPPING
+- SHIPPING_ACTIVE
+
+Orders over SLA should show warning/yellow, breach/red, and then move or appear in an emergency bucket.
+
+Cancellation must go through CancelOrder command and requires:
+
+- disposition reason
+- user stamp
+- cancelled_from_status
+- command_log
+- order_event
+- audit_log
+- event_outbox
+
+Track application-level activity only:
+
+- login
+- logout
+- heartbeat
+- order opened
+- queue claimed
+- command started
+- command completed
+- scan
+- print
+- idle started
+- idle ended
+
+Do not track screenshots, keystrokes, unrelated websites, or personal device activity.

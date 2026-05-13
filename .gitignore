@@ -1,0 +1,38 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# environment / secrets
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# build outputs
+.next/
+dist/
+build/
+coverage/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# OS/editor
+.DS_Store
+.vscode/settings.json
+
+# Cursor local/private config
+.cursor/mcp.json
+.cursor/*.local.json
+
+# local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# test artifacts
+playwright-report/
+test-results/

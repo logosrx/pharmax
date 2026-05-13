@@ -1,0 +1,48 @@
+---
+description: Pharmacy workflow safety rules
+alwaysApply: true
+---
+
+# Workflow Safety Rules
+
+Primary workflow:
+
+RECEIVED
+→ TYPING_IN_PROGRESS
+→ TYPED_READY_FOR_PV1
+→ PV1_IN_PROGRESS
+→ PV1_APPROVED_READY_FOR_FILL
+→ FILL_IN_PROGRESS
+→ FILL_COMPLETED_READY_FOR_FINAL
+→ FINAL_VERIFICATION_IN_PROGRESS
+→ FINAL_VERIFICATION_APPROVED_READY_FOR_SHIP
+→ READY_TO_SHIP
+→ SHIPPED
+
+Exception states:
+
+TYPING_PENDING_MISSING_INFO
+PV1_REJECTED
+FINAL_VERIFICATION_REJECTED
+ON_HOLD
+CANCELLED
+
+Non-negotiable rules:
+
+- Never update order.current_status directly outside a command handler.
+- Every critical mutation command requires an idempotency key.
+- Every critical workflow transition must lock the order row.
+- Every critical transition must write command_log, order_event, audit_log, and event_outbox.
+- Every rejection requires a reason code.
+- Every hold requires ry reopen requires a reason code.
+- Every cancellation requires a disposition reason and user stamp.
+- Every label reprint requires a reason code.
+- Every verification record must store workflow_policy_id and workflow_policy_version.
+- No fill before PV1 approval.
+- No final verification before fill completion.
+- No ship before final verification approval.
+- No expired lot assignment.
+- No held lot assignment.
+- No silent label reprints.
+- No silent printer failures.
+- Backend validation is the source of truth.

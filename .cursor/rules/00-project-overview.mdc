@@ -1,0 +1,60 @@
+---
+description: Enterprise Pharmacy OS project overview and architecture rules
+alwaysApply: true
+---
+
+# Pharmax Enterprise Pharmacy OS
+
+We are building a modern enterprise pharmacy operating system inspired by LifeFile.
+
+The platform must support:
+
+- RX intake
+- Typing
+- PV1 pharmacist verification
+- Filling
+- Final pharmacist verification
+- Shipping release
+- Zebra vial label printing
+- Barcode scanner validation
+- Lot and inventory traceability
+- EasyPost-style tracking
+- Custom operational buckets
+- Clinic/team/user isolation
+- Billing and invoicing
+- Complex reporting
+- SLA timers and emergency buckets
+- User productivity reports
+- Secure patient/provider/order search
+- Full audit history
+
+Preferred architecture:
+
+Next.js frontend
+→ thin API routes
+→ auth/RBAC/context
+→ command handlers
+→ workflow engine
+→ domain services
+→ repositories
+→ PostgreSQL transaction
+→ order update
+→ queue/bucket movement
+→ order event
+→ audit log
+→ command log
+→ event outbox
+→ workers process side effects
+
+Use:
+
+- Next.js, React, TypeScript, Tailwind
+- PostgreSQL
+- Prisma
+- Redis or Valkey
+- Background workers
+- S3-compatible storage
+- Modular nternals
+
+Do not build route-heavy business logic.
+Do not build premature microservices.

@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pharmax-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: pharmax
+    ports:
+      - "5432:5432"
+    volumes:
+      - pharmax_postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: pharmax-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - pharmax_redis_data:/data
+
+volumes:
+  pharmax_postgres_data:
+  pharmax_redis_data:

@@ -1,0 +1,16 @@
+{
+  "name": "pharmax",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.1.1",
+  "scripts": {
+    "dev": "pnpm --filter pharmacy-os dev",
+    "build": "pnpm --filter pharmacy-os build",
+    "lint": "pnpm --filter pharmacy-os lint",
+    "typecheck": "pnpm --filter pharmacy-os exec tsc --noEmit",
+    "format": "pnpm --filter pharmacy-os exec prettier --write .",
+    "db:up": "docker compose up -d postgres redis",
+    "db:down": "docker compose down",
+    "status": "git status"
+  }
+}
