@@ -1,0 +1,111 @@
+// Public surface of @pharmax/database.
+//
+// Other packages MUST import the Prisma client and types from here, not
+// from `@prisma/client` or the generated path directly. This keeps the
+// generator location an implementation detail and lets us swap clients
+// (e.g. for an Accelerate / Data Proxy variant) without rippling
+// imports across the monorepo.
+
+export { prisma } from "./client.js";
+export * as billing from "./billing/index.js";
+export * as phi from "./phi/index.js";
+export {
+  Prisma,
+  PrismaClient,
+  // Enums (re-exported for ergonomic value-side usage in commands/seeds)
+  BucketKind,
+  CancellationDisposition,
+  CarrierCredentialStatus,
+  ClinicStatus,
+  CommandStatus,
+  EasyPostWebhookEventStatus,
+  HoldReason,
+  HoldReleaseReason,
+  OrderStageIntervalKind,
+  IntakeSourceKind,
+  InventoryTransactionReason,
+  InvoiceLineKind,
+  InvoiceStatus,
+  LabelPrinterConnection,
+  LabelPrinterProtocol,
+  LabelPrinterStatus,
+  LabelPrinterVendor,
+  LabelStockKind,
+  LotStatus,
+  OrderLineStatus,
+  OrderPriority,
+  OrderStatus,
+  OrganizationStatus,
+  OutboxStatus,
+  PatientStatus,
+  PrescriptionStatus,
+  PrintJobStatus,
+  ProviderStatus,
+  ReopenReason,
+  RoleScope,
+  ShipmentCarrier,
+  ShipmentStatus,
+  ShipmentTrackingEventKind,
+  ShipmentTrackingSource,
+  ShippingProvider,
+  SiteStatus,
+  StripeWebhookEventStatus,
+  TeamStatus,
+  UserStatus,
+  VerificationDecision,
+  VerificationStage,
+  WorkflowPolicyStatus,
+  WorkstationStatus,
+} from "./generated/client/index.js";
+
+// Row types (re-exported so consumers depend on @pharmax/database, not
+// on @prisma/client or the generated client path directly). Add new
+// models here as the schema grows; missing exports surface as TS2305
+// errors at the consumption site.
+export type {
+  AuditChainState,
+  AuditLog,
+  Bucket,
+  Clinic,
+  ClinicSite,
+  CommandLog,
+  EventOutbox,
+  IdempotencyKey,
+  InventoryTransaction,
+  Invoice,
+  InvoiceLine,
+  LabelPrinter,
+  Lot,
+  LotAssignment,
+  Order,
+  OrderCancellation,
+  OrderCorrectionReopen,
+  OrderEvent,
+  OrderHold,
+  OrderLine,
+  OrderStageInterval,
+  Organization,
+  Patient,
+  PharmacySite,
+  Permission,
+  Prescription,
+  PrintJob,
+  PrintTemplate,
+  Product,
+  Provider,
+  Role,
+  RolePermission,
+  CarrierCredential,
+  EasyPostWebhookEvent,
+  Shipment,
+  ShipmentTrackingEvent,
+  StripeCustomer,
+  StripeWebhookEvent,
+  Team,
+  User,
+  UserRole,
+  VialLabel,
+  VerificationRecord,
+  WorkflowPolicy,
+  Workstation,
+} from "./generated/client/index.js";

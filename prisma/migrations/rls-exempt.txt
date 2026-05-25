@@ -1,0 +1,46 @@
+# Migration RLS exemption list.
+#
+# Tables listed here are INTENTIONALLY not tenant-scoped at the RLS
+# layer. The migration linter (`scripts/check-migration-rls.ts`)
+# rejects any new `CREATE TABLE` that is neither paired with an
+# `ENABLE ROW LEVEL SECURITY` policy in the same migration nor
+# present here.
+#
+# Format: one bare lowercase table name per line. Lines starting
+# with `#` are comments.
+#
+# Adding an entry here is a SOC 2 audit event. The reason MUST be
+# documented inline as a comment ABOVE the table name and a code
+# reviewer MUST sign off — exemptions weaken tenant isolation by
+# construction and need an architecture-level justification.
+#
+# Current exemptions:
+
+# System-wide registry of permission codes. Same rows visible to all
+# organizations by design (every org reads from the same registry to
+# look up permission ids). Modified only by migrations.
+permission
+
+# Junction table: Role <-> Permission. The Role rows ARE tenant-scoped
+# (and RLS-protected), so cross-org leaks through this junction require
+# first leaking a Role row, which the Role policy prevents. Keeping
+# this junction out of RLS avoids an extra subquery on every join.
+role_permission
+
+# Junction table: Clinic <-> Site. Same logic as role_permission —
+# both Clinic and PharmacySite ARE tenant-scoped, so the parent
+# policies close the leak surface.
+clinic_site
+
+# Inbound Stripe webhook events. Arrive BEFORE the platform knows
+# which tenant the event resolves to; the dispatcher resolves the
+# tenant from the Stripe customer id and enters a tenancy context
+# for the actual side-effect. The raw event store is platform-level.
+stripe_webhook_event
+
+# Inbound EasyPost (carrier tracking) webhook events. Same reason as
+# stripe_webhook_event: the platform doesn't know which tenant a
+# tracker event belongs to until the worker drain resolves the
+# shipment by tracking number (in system context) and enters that
+# org's tenancy to execute RecordShipmentTrackingEvent.
+easypost_webhook_event

@@ -1,0 +1,237 @@
+# Pharmax CI — runs on every PR + every push to main.
+#
+# This workflow is the SOURCE OF TRUTH for "the build is green". A PR
+# may not merge unless every job below succeeds. Locally, `pnpm verify`
+# runs the same gates (except the integration-tests job, which lives
+# in `integration.yml` and needs a Postgres service container).
+#
+# Job design:
+#   - One `setup` job that installs deps + generates Prisma client and
+#     caches everything. Subsequent jobs `needs:` it and reuse the
+#     cached pnpm store + node_modules.
+#   - Parallel quality jobs (lint, format, typecheck, prisma-validate,
+#     custom safety linters) so a broken format isn't gated behind a
+#     30s typecheck.
+#   - A single `test` job that runs Vitest with coverage thresholds.
+#     Coverage thresholds enforced by `vitest.config.ts` — a drop
+#     fails the job.
+#
+# Permissions: principle of least privilege. The default
+# `contents: read` token is enough for everything here; no `write` or
+# `id-token` scopes are granted.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Allow manual reruns from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run per (workflow, branch). New pushes cancel in-flight runs
+  # on the same branch — saves CI minutes and surfaces the latest
+  # state faster.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned for reproducibility. Matches `engines.node` in package.json
+  # and the corepack-managed pnpm version. Bumping these is a separate
+  # PR so we get a clean reviewable change.
+  NODE_VERSION: "22"
+  PNPM_VERSION: "11.1.1"
+  # Prevent pnpm from prompting in non-TTY environments.
+  CI: "true"
+
+jobs:
+  setup:
+    name: Install + generate Prisma
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      pnpm-store-path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Locate pnpm store
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `postinstall` already runs `pnpm db:generate`, but we cache
+      # the generated client across jobs so downstream jobs don't
+      # have to regenerate.
+      - name: Cache generated Prisma client
+        uses: actions/cache/save@v4
+        with:
+          path: packages/database/src/generated
+          key: prisma-client-${{ runner.os }}-${{ hashFiles('prisma/schema.prisma') }}
+
+  lint:
+    name: Lint
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+
+  format:
+    name: Format check
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+
+  typecheck:
+    name: Typecheck
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+
+  prisma-validate:
+    name: Prisma validate
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma:validate
+
+  safety-linters:
+    name: Pharmacy safety linters
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # These are the Pharmax-specific gates:
+    #   - check:migrations enforces RLS on every new table.
+    #   - check:schema enforces tenancy + audit invariants.
+    #   - check:commands enforces the command-handler layout.
+    # Each is a TypeScript file under `scripts/`. They run in
+    # parallel via the chained shell.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check:migrations
+      - run: pnpm check:schema
+      - run: pnpm check:commands
+
+  test:
+    name: Unit tests + coverage
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      # `test:coverage` runs the full suite AND enforces the
+      # thresholds configured in `vitest.config.ts`. A drop below
+      # any threshold (global or per-package) fails the job.
+      - run: pnpm test:coverage
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  audit:
+    name: Dependency audit (advisory)
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    # Advisory only: warnings here don't block the merge but they DO
+    # show up in the PR checks list so reviewers can see "Sentry CLI
+    # CVE filed yesterday" without leaving the page. Promotion of a
+    # CVE class to "blocking" happens via a follow-up PR that flips
+    # `continue-on-error` to false on a per-severity basis.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level=high --prod
+
+  # Aggregate status: a single job that all branch protection rules
+  # can point to. When we add or remove jobs above, we only update
+  # `needs:` here — protection rules don't change.
+  ci-pass:
+    name: ci-pass
+    runs-on: ubuntu-latest
+    needs: [lint, format, typecheck, prisma-validate, safety-linters, test]
+    if: always()
+    steps:
+      - name: All required jobs succeeded
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::One or more required CI jobs failed or were cancelled."
+          exit 1
+      - run: echo "All required CI jobs passed."

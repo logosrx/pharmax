@@ -1,0 +1,97 @@
+# Integration test workflow.
+#
+# Separate from ci.yml because:
+#   1. It needs a Postgres service container, which roughly doubles
+#      job startup time. Running it on every PR is wasteful when the
+#      change touches no SQL.
+#   2. It runs sequentially (single-fork pool — see
+#      packages/integration-tests/vitest.config.ts) because of
+#      per-tenant advisory locks. We can't parallelize across CI jobs
+#      either; one Postgres instance, one test process.
+#
+# Trigger: any PR that touches the database layer, the migration
+# directory, the integration tests themselves, or this workflow file.
+# On push to main, run unconditionally so we have a daily green
+# signal independent of which directories got touched.
+
+name: integration
+
+on:
+  pull_request:
+    paths:
+      - "prisma/**"
+      - "packages/database/**"
+      - "packages/integration-tests/**"
+      - "packages/tenancy/**"
+      - "packages/command-bus/**"
+      - "packages/audit/**"
+      - "packages/crypto/**"
+      - "scripts/check-migration-rls.ts"
+      - ".github/workflows/integration.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "11.1.1"
+  CI: "true"
+
+jobs:
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pharmax
+        ports:
+          - 5432:5432
+        # Wait for Postgres to be ready before the steps run. Without
+        # this, the first `prisma migrate deploy` races the container
+        # startup and fails intermittently.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pharmax"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pharmax
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/pharmax
+      # The integration suite never wires apps' KMS env vars, but the
+      # tenancy + crypto packages need a seed for their own boots.
+      PHARMAX_LOCAL_KMS_SEED: ci-integration-seed-do-not-use-in-prod-32+chars
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations
+        run: pnpm db:migrate:deploy
+
+      - name: Run integration tests
+        run: pnpm test:integration

@@ -1,0 +1,28 @@
+{
+  "name": "pharmacy-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/main.ts",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@pharmax/command-bus": "workspace:*",
+    "@pharmax/crypto": "workspace:*",
+    "@pharmax/database": "workspace:*",
+    "@pharmax/platform-core": "workspace:*",
+    "@pharmax/shipping": "workspace:*",
+    "@pharmax/tenancy": "workspace:*",
+    "@sentry/node": "^8.55.2",
+    "ulid": "^2.3.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

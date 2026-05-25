@@ -1,3 +1,15 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+allowBuilds:
+  esbuild: true
+  "@prisma/engines": true
+  "@prisma/client": true
+  prisma: true
+  sharp: true
+  # @sentry/cli's postinstall downloads the Sentry CLI binary used at
+  # build time (apps/web only) to upload source maps. The binary is
+  # not used at runtime. Approving it here so the install completes
+  # without manual intervention on every clone.
+  "@sentry/cli": true

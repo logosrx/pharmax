@@ -1,0 +1,15 @@
+node_modules
+.pnpm-store
+dist
+build
+.next
+coverage
+playwright-report
+test-results
+pnpm-lock.yaml
+*.min.js
+*.min.css
+
+# Prisma artifacts
+packages/database/src/generated
+prisma/migrations

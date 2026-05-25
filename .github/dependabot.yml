@@ -1,0 +1,58 @@
+# Dependabot configuration.
+#
+# Weekly updates, grouped so we don't drown in 50 PRs. Major version
+# bumps are split out into their own PRs so we get a chance to read
+# the migration notes. Security alerts always open immediately,
+# regardless of the schedule below.
+#
+# Why grouped: minor / patch updates for unrelated devDependencies
+# (eslint plugins, prettier, types/node) shouldn't each get their
+# own PR. They're low-risk and reviewing 30 individual bumps is
+# busywork — review one bundled PR instead.
+#
+# Why split majors: a major bump for `next`, `prisma`, or
+# `@sentry/nextjs` has migration implications and deserves its own
+# focused PR.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      # Minor + patch bumps across all dev dependencies — one PR.
+      dev-dependencies:
+        dependency-type: development
+        update-types: ["minor", "patch"]
+      # Minor + patch bumps across all production deps — one PR.
+      production-dependencies:
+        dependency-type: production
+        update-types: ["minor", "patch"]
+    # Major bumps fall out of every group and each gets its own PR.
+    ignore:
+      # Pinned by `engines.node` — bump manually with a runtime
+      # validation PR.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci
+    groups:
+      actions:
+        update-types: ["minor", "patch"]

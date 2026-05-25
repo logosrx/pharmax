@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The Prisma-generated client is valid TS but does not pass our strict
+    // unused-locals / verbatim-module-syntax rules. Loosen for this package
+    // only; consumers still get the full strict mode.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "verbatimModuleSyntax": false,
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -13,6 +13,10 @@ node_modules/
 dist/
 build/
 coverage/
+*.tsbuildinfo
+
+# Prisma generated client (re-generated on `pnpm install` / `pnpm db:generate`)
+packages/database/src/generated/
 
 # logs
 *.log

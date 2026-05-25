@@ -1,0 +1,25 @@
+# Pre-push hook — heavier gate than pre-commit.
+#
+# pre-commit (see ./pre-commit) only formats + lints STAGED files.
+# That keeps the dev loop fast for small edits but means a broken
+# typecheck or a failing test can still be committed and noticed
+# only by CI 5 minutes later.
+#
+# This pre-push hook runs the workspace-wide typecheck before any
+# push reaches GitHub — it's slower (~15-45s depending on cache
+# warmth) but it shifts the feedback loop from CI back to the
+# developer's terminal. Tests are intentionally NOT in this hook;
+# they live in CI because a full vitest pass can take minutes and
+# we don't want devs aliasing `git push` to skip hooks.
+#
+# Bypass: `git push --no-verify` for emergency hotfixes only.
+
+set -e
+
+echo "[pre-push] running pnpm typecheck"
+pnpm typecheck
+
+echo "[pre-push] running pharmax safety linters"
+pnpm check:migrations
+pnpm check:schema
+pnpm check:commands
