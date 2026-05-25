@@ -48,6 +48,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
   { code: "roles.manage", description: "Create / edit roles" },
   { code: "patients.create", description: "Register a new patient at a clinic" },
   { code: "patients.read", description: "Read patient identity (PHI access)" },
+  {
+    code: "patients.crypto_shred",
+    description:
+      "Crypto-shred a patient: render PHI permanently unreadable (right-to-be-forgotten)",
+  },
   { code: "providers.create", description: "Register a new prescribing provider" },
   { code: "providers.read", description: "Read provider directory" },
   { code: "orders.create", description: "Create new orders" },

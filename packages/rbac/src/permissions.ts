@@ -1,7 +1,7 @@
 // Typed permission registry.
 //
 // This file is the SINGLE source of truth for the action vocabulary
-// of the platform. It mirrors the 37 codes seeded by `prisma/seed.ts`
+// of the platform. It mirrors the 38 codes seeded by `prisma/seed.ts`
 // — that mirror is verified by a test in `permissions.test.ts`.
 //
 // Why a typed constant object instead of a loose string enum:
@@ -32,6 +32,7 @@ export const PERMISSIONS = Object.freeze({
   // Patient roster.
   PATIENTS_CREATE: "patients.create",
   PATIENTS_READ: "patients.read",
+  PATIENTS_CRYPTO_SHRED: "patients.crypto_shred",
 
   // Provider (prescriber) roster.
   PROVIDERS_CREATE: "providers.create",
@@ -123,6 +124,11 @@ export const PERMISSION_METADATA: Readonly<
   },
   [PERMISSIONS.PATIENTS_READ]: {
     description: "Read patient identity (PHI access).",
+    category: "Patients",
+  },
+  [PERMISSIONS.PATIENTS_CRYPTO_SHRED]: {
+    description:
+      "Crypto-shred a patient: render PHI permanently unreadable (right-to-be-forgotten, compliance action; OrgAdmin only by default).",
     category: "Patients",
   },
   [PERMISSIONS.PROVIDERS_CREATE]: {

@@ -1340,10 +1340,11 @@ model Patient {
   clinic         Clinic       @relation(fields: [clinicId], references: [id], onDelete: Restrict)
 
   // --- Encrypted PHI columns (envelope-encrypted JSON) ---
-  // Required identity:
-  firstNameEnc    Json
-  lastNameEnc     Json
-  dateOfBirthEnc  Json
+  // Identity (required at intake by RegisterPatient's Zod schema,
+  // nullable at the DB layer so CryptoShredPatient can NULL them):
+  firstNameEnc    Json?
+  lastNameEnc     Json?
+  dateOfBirthEnc  Json?
   // Optional identifying / demographic fields:
   middleNameEnc   Json?
   sexAtBirthEnc   Json?
@@ -1360,14 +1361,16 @@ model Patient {
   mrnEnc          Json?
 
   // --- Blind-index columns (HMAC, base64url, 43 chars) ---
-  // Required (paired with required *Enc fields above):
-  lastNameBi     String
-  firstNameBi    String
+  // Identity BIs (paired with the identity *Enc fields above; same
+  // nullability rationale — required by RegisterPatient at intake,
+  // NULLed by CryptoShredPatient on shred):
+  lastNameBi     String?
+  firstNameBi    String?
   // YYYYMMDD; required exact-DOB matching.
-  dobBi          String
+  dobBi          String?
   // YYYYMM; supports fuzzy "born in this month" lookups for fixing
   // typos at intake without revealing full DOB to the query plan.
-  dobYearMonthBi String
+  dobYearMonthBi String?
   // Optional, follow the corresponding *Enc nullability:
   phoneLast10Bi  String?
   emailBi        String?

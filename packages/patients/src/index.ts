@@ -49,7 +49,14 @@ export {
   type RegisterPatientOutput,
 } from "./commands/register-patient.js";
 
+export {
+  CryptoShredPatient,
+  type CryptoShredPatientInput,
+  type CryptoShredPatientOutput,
+} from "./commands/crypto-shred-patient.js";
+
 import * as blindIndexesModule from "./blind-indexes.js";
+import * as cryptoShredPatientModule from "./commands/crypto-shred-patient.js";
 import * as registerPatientModule from "./commands/register-patient.js";
 import * as patientRepositoryModule from "./patient-repository.js";
 import * as redactPatientModule from "./redact-patient.js";
@@ -62,5 +69,6 @@ export const patients = {
   ...patientRepositoryModule,
   commands: {
     RegisterPatient: registerPatientModule.RegisterPatient,
+    CryptoShredPatient: cryptoShredPatientModule.CryptoShredPatient,
   },
 } as const;
