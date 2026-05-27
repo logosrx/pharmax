@@ -99,9 +99,14 @@ describe("outboxHandlers.labels.vial_print.requested.v1", () => {
       client: {
         printJob: { findFirst: vi.fn(), update: vi.fn() },
         labelPrinter: { findFirst: vi.fn() },
-      },
+      } as never,
+      // Escalation handler needs the broader Prisma surface (org +
+      // user lookups, command bus); registration alone doesn't call
+      // it, so a cast-through-never is safe in this assertion.
+      prisma: {} as never,
     });
     expect(handlers["labels.vial_print.requested.v1"]).toBeDefined();
     expect(handlers["labels.vial_print.reprint_requested.v1"]).toBeDefined();
+    expect(handlers["shipment.tracking.recorded.v1"]).toBeDefined();
   });
 });

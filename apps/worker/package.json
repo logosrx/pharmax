@@ -10,11 +10,17 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@pharmax/billing": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
+    "@pharmax/composition": "workspace:*",
+    "stripe": "^22.1.1",
     "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
+    "@pharmax/events": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
+    "@pharmax/security": "workspace:*",
     "@pharmax/shipping": "workspace:*",
+    "@pharmax/telemetry": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
     "@sentry/node": "^8.55.2",
     "ulid": "^2.3.0",

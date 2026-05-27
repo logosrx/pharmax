@@ -23,7 +23,10 @@
 //   3. Add a unit test that drives a fake `ClaimedOutboxEventRow`
 //      through it.
 
+import type { PrismaClient } from "@pharmax/database";
 import type { logger as loggerContract } from "@pharmax/platform-core";
+
+import type { StripeInvoicePort } from "@pharmax/billing";
 
 import {
   dispatchVialPrintJob,
@@ -31,6 +34,9 @@ import {
   type PrintJobClient,
   type VialPrintDeliveryPort,
 } from "./dispatch-vial-print-job.js";
+import { createEscalateOnShipmentExceptionHandler } from "./escalate-on-shipment-exception.js";
+import { createMaterializeBillingOnOrderShippedHandler } from "./materialize-billing-on-order-shipped.js";
+import { createPushInvoiceToStripeHandler } from "./push-invoice-to-stripe.js";
 import type { ClaimedOutboxEventRow } from "./row-types.js";
 
 type Logger = loggerContract.Logger;
@@ -48,8 +54,29 @@ export type OutboxEventHandler = (
 export type OutboxHandlerMap = Readonly<Partial<Record<string, OutboxEventHandler>>>;
 
 type OutboxHandlerDeps = {
+  /**
+   * Narrow slice for the vial-print handler — `print_job` /
+   * `label_printer` reads + updates. Kept narrow so the unit
+   * tests can fake just these tables without standing up a
+   * full PrismaClient mock.
+   */
   readonly client: PrintJobClient;
+  /**
+   * Full Prisma client for handlers that need cross-tenant reads
+   * in system context plus the command bus (notably the
+   * shipment-exception escalation handler). The split keeps the
+   * vial-print fake small while the escalation handler gets the
+   * real client surface it needs.
+   */
+  readonly prisma: PrismaClient;
   readonly delivery?: VialPrintDeliveryPort;
+  /**
+   * Production Stripe port. When `null`, the
+   * `billing.invoice.finalized.v1` handler logs + no-ops (no retry
+   * storm against an unconfigured Stripe). Wired only in
+   * environments that have `STRIPE_SECRET_KEY` set.
+   */
+  readonly stripePort?: StripeInvoicePort | null;
 };
 
 /**
@@ -79,7 +106,12 @@ const handleOrganizationCreatedV1: OutboxEventHandler = async (row, ctx) => {
   });
 };
 
-function createVialPrintOutboxHandler(deps: OutboxHandlerDeps): OutboxEventHandler {
+interface VialPrintOutboxHandlerDeps {
+  readonly client: PrintJobClient;
+  readonly delivery?: VialPrintDeliveryPort;
+}
+
+function createVialPrintOutboxHandler(deps: VialPrintOutboxHandlerDeps): OutboxEventHandler {
   const delivery = deps.delivery ?? noopVialPrintDelivery;
 
   return async (row, ctx) => {
@@ -107,10 +139,22 @@ export const outboxHandlers: OutboxHandlerMap = {
 
 /** Production registry wired from apps/worker main with Prisma + delivery port. */
 export function createOutboxHandlers(deps: OutboxHandlerDeps): OutboxHandlerMap {
-  const vialPrintHandler = createVialPrintOutboxHandler(deps);
+  const vialPrintHandler = createVialPrintOutboxHandler({
+    client: deps.client,
+    ...(deps.delivery !== undefined ? { delivery: deps.delivery } : {}),
+  });
+  const escalationHandler = createEscalateOnShipmentExceptionHandler({ client: deps.prisma });
+  const billingMaterializationHandler = createMaterializeBillingOnOrderShippedHandler();
+  const stripePushHandler = createPushInvoiceToStripeHandler({
+    client: deps.prisma,
+    stripePort: deps.stripePort ?? null,
+  });
   return {
     "organization.created.v1": handleOrganizationCreatedV1,
     "labels.vial_print.requested.v1": vialPrintHandler,
     "labels.vial_print.reprint_requested.v1": vialPrintHandler,
+    "shipment.tracking.recorded.v1": escalationHandler,
+    "order.shipped.v1": billingMaterializationHandler,
+    "billing.invoice.finalized.v1": stripePushHandler,
   };
 }

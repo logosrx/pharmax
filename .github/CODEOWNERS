@@ -1,0 +1,93 @@
+# Pharmax CODEOWNERS.
+#
+# Owners are auto-requested as reviewers when a PR touches their
+# files. SOC 2 CC8.1 (change management) is satisfied in part by
+# requiring a code owner approval for changes to controlled paths —
+# branch protection enforces this (see docs/security/branch-protection.md).
+#
+# Ownership uses GitHub team handles where possible (teams scale
+# across joiners/leavers). Until those teams exist, replace the
+# placeholders below with the owner accounts before enabling
+# `Require review from Code Owners` in branch protection.
+#
+# Syntax: https://docs.github.com/en/repositories/managing-your-repositories-settings-and-customization/customizing-your-repository/about-code-owners
+#
+# Order matters: the LAST matching pattern wins. Keep the
+# fall-throughs at the top and the targeted overrides at the bottom.
+
+# ---------------------------------------------------------------------------
+# Catch-all owner: any unowned file falls to the platform team.
+# ---------------------------------------------------------------------------
+
+*                                       @pharmax/platform
+
+# ---------------------------------------------------------------------------
+# Security-critical code: dual-owner with @pharmax/security.
+# Every PR touching these requires a security-team approval AS WELL.
+# ---------------------------------------------------------------------------
+
+# Identity, authentication, MFA, session resolution.
+/apps/web/src/server/auth/              @pharmax/platform @pharmax/security
+/apps/web/proxy.ts                      @pharmax/platform @pharmax/security
+/apps/web/app/sign-in/**                @pharmax/platform @pharmax/security
+/apps/web/app/sign-up/**                @pharmax/platform @pharmax/security
+/apps/web/app/api/webhooks/clerk/**     @pharmax/platform @pharmax/security
+
+# Crypto package (envelope encryption, KMS, blind indexes).
+/packages/crypto/                       @pharmax/platform @pharmax/security
+# Crypto consumers' boot code — KMS adapter selection lives here.
+/apps/web/src/server/bootstrap.ts       @pharmax/platform @pharmax/security
+/apps/worker/src/main.ts                @pharmax/platform @pharmax/security
+/apps/print-agent/src/main.ts           @pharmax/platform @pharmax/security
+/apps/print-agent/src/bootstrap.ts      @pharmax/platform @pharmax/security
+
+# Audit log + outbox + Merkle root signing.
+/packages/audit/                        @pharmax/platform @pharmax/security
+/packages/security/                     @pharmax/platform @pharmax/security
+/apps/worker/src/security/              @pharmax/platform @pharmax/security
+
+# RBAC + tenancy.
+/packages/rbac/                         @pharmax/platform @pharmax/security
+/packages/tenancy/                      @pharmax/platform @pharmax/security
+
+# Telemetry — observability of security signals.
+/packages/telemetry/                    @pharmax/platform @pharmax/security
+
+# Billing, refunds, Stripe ports — financial integrity sensitive.
+/packages/billing/                      @pharmax/platform @pharmax/security
+/apps/web/src/server/billing/           @pharmax/platform @pharmax/security
+/apps/web/app/api/webhooks/stripe/**    @pharmax/platform @pharmax/security
+/apps/worker/src/billing/               @pharmax/platform @pharmax/security
+/apps/worker/src/drains/stripe*.ts      @pharmax/platform @pharmax/security
+
+# ---------------------------------------------------------------------------
+# Database schema + migrations — touch with the database team.
+# ---------------------------------------------------------------------------
+
+/prisma/                                @pharmax/platform @pharmax/database
+/packages/database/                     @pharmax/platform @pharmax/database
+
+# ---------------------------------------------------------------------------
+# Infrastructure as Code.
+# ---------------------------------------------------------------------------
+
+/infra/                                 @pharmax/platform @pharmax/infrastructure
+/.github/workflows/                     @pharmax/platform @pharmax/infrastructure
+
+# ---------------------------------------------------------------------------
+# Compliance + policy documents.
+# ---------------------------------------------------------------------------
+
+/docs/policy/                           @pharmax/security
+/docs/security/                         @pharmax/security
+/docs/adr/                              @pharmax/platform @pharmax/security
+/SECURITY.md                            @pharmax/security
+/.github/CODEOWNERS                     @pharmax/platform @pharmax/security
+/.github/gitleaks.toml                  @pharmax/platform @pharmax/security
+
+# ---------------------------------------------------------------------------
+# Documentation (catch-all). Lower bar than policy — anyone on
+# platform can review docs that aren't policy.
+# ---------------------------------------------------------------------------
+
+/docs/                                  @pharmax/platform

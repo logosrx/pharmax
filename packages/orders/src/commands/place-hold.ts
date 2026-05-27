@@ -81,6 +81,7 @@ import { defineCommand } from "@pharmax/command-bus";
 import { HoldReason, OrderStatus, Prisma } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
+import { applyCommandStageIntervalTransition } from "@pharmax/sla";
 import {
   applyTransition,
   isOrderState,
@@ -302,6 +303,32 @@ export const PlaceHold = defineCommand<PlaceHoldInput, PlaceHoldOutput>({
         currentStatus: OrderStatus.ON_HOLD,
         currentAssigneeUserId: null,
       },
+    });
+
+    // ---- SLA: close current interval + open HOLD_ACTIVE ----
+    //
+    // PlaceHold is multi-from-state: reachable from every active,
+    // non-hold, non-terminal status (engine enforces this via
+    // HOLD_FROM_STATES). Whatever interval is currently open
+    // (`WAIT_BEFORE_TYPING`, `TYPING_ACTIVE`, `WAIT_BEFORE_PV1`,
+    // `PV1_ACTIVE`, `WAIT_AFTER_PV1_REJECT`, …) gets closed
+    // without a kind assertion (the entry in
+    // `COMMAND_STAGE_INTERVAL_TRANSITION` omits `close`), then a
+    // fresh `HOLD_ACTIVE` row is opened with the placer as
+    // `actorUserId`. SLA reports break "active rework" out from
+    // "active hold" by the open kind alone.
+    //
+    // The bus row lock on `order` makes this atomic with the
+    // status flip above; a crash between the two is impossible.
+    await applyCommandStageIntervalTransition({
+      commandName: "PlaceHold",
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+      siteId: target.siteId,
+      at: now,
+      commandLogId,
+      actorUserId: ctx.actor.userId,
     });
 
     const nextVersion = target.version + 1;

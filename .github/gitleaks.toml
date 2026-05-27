@@ -1,0 +1,88 @@
+# Pharmax gitleaks configuration.
+#
+# Extends gitleaks' built-in ruleset with Pharmax-specific secret
+# patterns we have seen accidentally pasted into PRs or fixtures.
+# Inheriting the default ruleset is critical — it covers AWS access
+# keys, GCP service accounts, generic high-entropy strings, Stripe
+# keys, Slack tokens, etc.
+#
+# When you add a new third-party integration whose credential has a
+# distinct prefix (e.g. EasyPost `EZTK...`, Clerk publishable
+# `pk_live_...`), add a rule below so the secret scanner catches an
+# accidental commit even when the value happens to be valid-looking
+# random text rather than a known-format token.
+#
+# Reference: https://github.com/gitleaks/gitleaks#configuration
+
+[extend]
+# Pull in gitleaks' built-in rules (`useDefault = true` is implicit
+# when `[extend]` is present with no `useDefault = false`). We do
+# NOT replace the defaults — only add to them.
+
+# -----------------------------------------------------------------
+# Clerk
+# -----------------------------------------------------------------
+
+[[rules]]
+id = "clerk-secret-key"
+description = "Clerk secret key (sk_test_/sk_live_)"
+regex = '''sk_(?:test|live)_[A-Za-z0-9]{32,}'''
+keywords = ["sk_test_", "sk_live_"]
+
+[[rules]]
+id = "clerk-publishable-key-live"
+description = "Clerk LIVE publishable key in source (use env in prod)"
+regex = '''pk_live_[A-Za-z0-9_-]{32,}'''
+keywords = ["pk_live_"]
+
+[[rules]]
+id = "clerk-webhook-secret"
+description = "Clerk webhook (Svix) secret"
+regex = '''whsec_[A-Za-z0-9+/=]{32,}'''
+keywords = ["whsec_"]
+
+# -----------------------------------------------------------------
+# EasyPost
+# -----------------------------------------------------------------
+
+[[rules]]
+id = "easypost-test-key"
+description = "EasyPost test API key"
+regex = '''EZTK[A-Za-z0-9]{24,}'''
+keywords = ["EZTK"]
+
+[[rules]]
+id = "easypost-production-key"
+description = "EasyPost production API key"
+regex = '''EZAK[A-Za-z0-9]{24,}'''
+keywords = ["EZAK"]
+
+# -----------------------------------------------------------------
+# Pharmax-internal
+# -----------------------------------------------------------------
+
+[[rules]]
+id = "pharmax-local-kms-seed-leak"
+description = "Pharmax local KMS seed leaking out of a fixture (>=32 chars)"
+# Only flag when an env-style assignment shows up in source. Bare
+# strings would false-positive on every long base64.
+regex = '''(?i)PHARMAX_LOCAL_KMS_SEED\s*[:=]\s*['"]?[A-Za-z0-9+/=_-]{32,}['"]?'''
+keywords = ["PHARMAX_LOCAL_KMS_SEED"]
+# Allow the value to remain inside CI workflow files where it's an
+# intentional CI-only seed; the env files would still trip.
+[rules.allowlist]
+paths = ['''^\.github/workflows/integration\.yml$''']
+
+# -----------------------------------------------------------------
+# General allowlists
+# -----------------------------------------------------------------
+
+[allowlist]
+description = "Pharmax-wide gitleaks allowlist"
+# Permit example/scaffold values in `.env.example` and ADR markdown.
+paths = [
+  '''^\.env\.example$''',
+  '''^docs/.*\.md$''',
+  '''^.*\.test\.ts$''',
+  '''^.*\.spec\.ts$''',
+]

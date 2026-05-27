@@ -27,7 +27,12 @@ import {
   executeCommand,
   resetCommandBusConfigurationForTests,
 } from "@pharmax/command-bus";
-import { CancellationDisposition, Prisma, RoleScope } from "@pharmax/database";
+import {
+  CancellationDisposition,
+  OrderStageIntervalKind,
+  Prisma,
+  RoleScope,
+} from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
 import {
   configureRbac,
@@ -36,6 +41,7 @@ import {
   resetRbacConfigurationForTests,
   type ResolvedGrant,
 } from "@pharmax/rbac";
+import { createOrderStageIntervalTxStub } from "@pharmax/sla/test-utils";
 import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
 import {
@@ -105,6 +111,14 @@ interface FakeOverrides {
    * returning a fake row. Used to simulate P2002 unique violations.
    */
   cancellationCreateError?: Error;
+  /**
+   * Kind of the currently-open `OrderStageInterval` row at lock time.
+   * Cancel is multi-from-state, so each source state has a different
+   * open kind — tests parameterize this to mirror the cancellation
+   * source. Default reflects a freshly-received order
+   * (`WAIT_BEFORE_TYPING`).
+   */
+  initialOpenIntervalKind?: OrderStageIntervalKind;
 }
 
 function buildPrismaFake(overrides: FakeOverrides = {}): {
@@ -131,6 +145,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return policy === null ? null : { id: POLICY_ID, ...policy };
       }),
     },
+    orderStageInterval: createOrderStageIntervalTxStub(
+      (table, op, args) => calls.push({ table, op, args }),
+      overrides.initialOpenIntervalKind ?? OrderStageIntervalKind.WAIT_BEFORE_TYPING
+    ),
     order: {
       update: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "update", args });
@@ -386,6 +404,21 @@ describe("CancelOrder — happy path", () => {
     expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(1);
     expect(callsOf(fake.calls, "eventOutbox", "createMany")).toHaveLength(1);
     expect(callsOf(fake.calls, "idempotencyKey", "create")).toHaveLength(1);
+
+    // SLA close: any currently-open stage interval is terminated, no
+    // successor interval is opened (cancel is terminal in SLA terms).
+    // `expectedKind` is omitted from the close-only entry for
+    // CancelOrder (multi-from-state), so the close runs against any
+    // open kind — `WAIT_BEFORE_TYPING` here because the fixture
+    // cancels from `RECEIVED`.
+    const intervalCloseCalls = callsOf(fake.calls, "orderStageInterval", "updateMany");
+    expect(intervalCloseCalls).toHaveLength(1);
+    const intervalCloseData = (intervalCloseCalls[0]!.args as { data: Record<string, unknown> })
+      .data;
+    expect(intervalCloseData["endedAt"]).toEqual(new Date("2026-05-23T18:30:00.000Z"));
+    expect(typeof intervalCloseData["closeCommandLogId"]).toBe("string");
+    // No successor interval opened — terminal in SLA terms.
+    expect(callsOf(fake.calls, "orderStageInterval", "create")).toHaveLength(0);
   });
 
   it.each([

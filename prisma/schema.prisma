@@ -102,10 +102,43 @@ enum RoleScope {
   TEAM
 }
 
+// Lifecycle of a workflow policy row. See ADR-0017 for the full
+// rationale and the create / in-flight selection contracts.
+//
+//   DRAFT      Authored but never activated. Rejected by both
+//              create-command and in-flight selectors.
+//   ACTIVE     Current canonical policy. At most one ACTIVE per
+//              (organizationId, code) — enforced by the partial
+//              unique index `workflow_policy_active_unique`
+//              (defined in the lifecycle migration; Prisma schema
+//              syntax cannot express partial uniques).
+//   SUPERSEDED A previously ACTIVE policy that has been replaced
+//              by a newer ACTIVE row of the same (organizationId,
+//              code). REMAINS READABLE for in-flight orders via
+//              `loadPolicy: { from: "target" }` (the grandfather
+//              rule), REJECTED for create commands via
+//              `loadPolicy: { code, version }`.
+//   ARCHIVED   Permanently decommissioned. No in-flight order
+//              should still reference this row; rejected by every
+//              selector. Operators move SUPERSEDED → ARCHIVED only
+//              after confirming no in-flight orders point at it.
 enum WorkflowPolicyStatus {
   DRAFT
   ACTIVE
-  RETIRED
+  SUPERSEDED
+  ARCHIVED
+}
+
+// Lifecycle of a workflow_policy_overlay row. Mirrors the
+// WorkflowPolicyStatus shape so the same DRAFT → ACTIVE → SUPERSEDED →
+// ARCHIVED state machine applies. ADR-0019 §"Storage shape sketch"
+// + the activation invariant in `validateActivateOverlay` from
+// `@pharmax/workflow`.
+enum WorkflowPolicyOverlayStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+  ARCHIVED
 }
 
 enum CommandStatus {
@@ -136,6 +169,22 @@ enum EasyPostWebhookEventStatus {
   SUCCEEDED
   FAILED
   IGNORED
+}
+
+enum ClerkWebhookEventStatus {
+  // The dispatcher has not yet been invoked for this delivery.
+  PENDING
+  // Dispatcher returned a state-changing outcome (link / sync /
+  // terminate). Recorded so a re-delivery (Svix retries on 5xx)
+  // becomes a no-op fast path.
+  APPLIED
+  // Dispatcher returned a no-op outcome (no INVITED row,
+  // session-only signal, unknown event type). Same idempotency
+  // semantics as APPLIED.
+  NOOP
+  // Dispatcher threw. Receiver returned 5xx so Clerk retries.
+  // Persisted for forensic visibility.
+  FAILED
 }
 
 enum InvoiceStatus {
@@ -420,6 +469,48 @@ enum CarrierCredentialStatus {
   DISABLED
 }
 
+enum PricingRuleStatus {
+  ACTIVE
+  SUPERSEDED
+  ARCHIVED
+}
+
+// PackagePhoto tracking-source enum. How the trackingNumber on a
+// captured package photo was determined.
+//
+//   - ORDER          — auto-resolved from the matched order's most
+//                      recent Shipment.trackingNumber.
+//   - TRACKING_EVENT — reserved for resolution from a
+//                      ShipmentTrackingEvent payload (carrier-issued
+//                      tracker that exists before a Shipment row).
+//                      Phase 1 does not populate this.
+//   - MANUAL         — operator typed the tracking number directly
+//                      into the capture form (label-on-the-package).
+enum PackagePhotoTrackingSource {
+  ORDER
+  TRACKING_EVENT
+  MANUAL
+}
+
+// PackagePhoto match-strategy enum. How the photo was associated
+// with an order/patient (or not at all).
+//
+//   - EXTERNAL_ORDER_NUMBER — auto-matched on
+//                             (organizationId, externalOrderNumber).
+//   - MANUAL_PATIENT_ID     — reserved for an operator-resolution
+//                             workflow that explicitly assigns an
+//                             unmatched photo to a patient/order.
+//                             Phase 1 does not populate this.
+//   - UNMATCHED             — no order matched. The row is still
+//                             persisted; a follow-up command can
+//                             resolve it.
+enum PackagePhotoMatchStrategy {
+  EXTERNAL_ORDER_NUMBER
+  MANUAL_PATIENT_ID
+  MANUAL_ORDER_ID
+  UNMATCHED
+}
+
 enum OrderStageIntervalKind {
   WAIT_BEFORE_TYPING
   TYPING_ACTIVE
@@ -431,6 +522,19 @@ enum OrderStageIntervalKind {
   FINAL_VERIFICATION_ACTIVE
   WAIT_BEFORE_SHIPPING
   SHIPPING_ACTIVE
+  // Active interval while an order is paused via PlaceHold.
+  // ReleaseHold closes it and opens the interval that corresponds
+  // to the heldFromStatus the hold row recorded. SLA reports
+  // exclude HOLD_ACTIVE from per-stage breach windows because a
+  // held order is NOT consuming its PV1 / fill / final budget.
+  HOLD_ACTIVE
+  // Wait intervals that track time-in-rejection. RejectPV1 closes
+  // PV1_ACTIVE and opens WAIT_AFTER_PV1_REJECT; ReopenForCorrection
+  // closes WAIT_AFTER_PV1_REJECT and opens the next-stage interval
+  // per the reopenToState parameter. Disentangles rework cost from
+  // first-pass pharmacist time on productivity reports.
+  WAIT_AFTER_PV1_REJECT
+  WAIT_AFTER_FINAL_REJECT
 }
 
 // How an order entered the system. `intakeSourceRefId` is the
@@ -467,7 +571,8 @@ model Organization {
   users            User[]
   roles            Role[]
   userRoles        UserRole[]
-  workflowPolicies WorkflowPolicy[]
+  workflowPolicies        WorkflowPolicy[]
+  workflowPolicyOverlays  WorkflowPolicyOverlay[]
   commandLogs      CommandLog[]
   orderEvents      OrderEvent[]
   auditLogs        AuditLog[]
@@ -478,27 +583,30 @@ model Organization {
   invoices         Invoice[]
   invoiceLines     InvoiceLine[]
 
-  patients            Patient[]
-  providers           Provider[]
-  prescriptions       Prescription[]
-  orders              Order[]
-  orderLines          OrderLine[]
-  orderCancellations       OrderCancellation[]
-  orderHolds               OrderHold[]
-  orderCorrectionReopens   OrderCorrectionReopen[]
-  verificationRecords VerificationRecord[]
-  products              Product[]
-  lots                  Lot[]
-  lotAssignments        LotAssignment[]
-  inventoryTransactions InventoryTransaction[]
-  labelPrinters         LabelPrinter[]
-  printTemplates        PrintTemplate[]
-  printJobs             PrintJob[]
-  vialLabels            VialLabel[]
+  patients               Patient[]
+  providers              Provider[]
+  prescriptions          Prescription[]
+  orders                 Order[]
+  orderLines             OrderLine[]
+  orderCancellations     OrderCancellation[]
+  orderHolds             OrderHold[]
+  orderCorrectionReopens OrderCorrectionReopen[]
+  verificationRecords    VerificationRecord[]
+  products               Product[]
+  lots                   Lot[]
+  lotAssignments         LotAssignment[]
+  inventoryTransactions  InventoryTransaction[]
+  labelPrinters          LabelPrinter[]
+  printTemplates         PrintTemplate[]
+  printJobs              PrintJob[]
+  vialLabels             VialLabel[]
   shipments              Shipment[]
   shipmentTrackingEvents ShipmentTrackingEvent[]
   carrierCredentials     CarrierCredential[]
   orderStageIntervals    OrderStageInterval[]
+  pricingRules           PricingRule[]
+  packagePhotos          PackagePhoto[]
+  packagePhotoUploadTokens PackagePhotoUploadToken[]
 
   @@map("organization")
 }
@@ -515,19 +623,34 @@ model PharmacySite {
   timezone String     @default("UTC")
   status   SiteStatus @default(ACTIVE)
 
+  // Business address (non-PHI; the pharmacy's physical location).
+  // Populated by UpdatePharmacySiteAddress; consumed by the carrier
+  // auto-purchase flow (PurchaseShipmentLabel) as the from-address.
+  // See migration 20260607000000_phase5_pharmacy_site_address for
+  // the plaintext-vs-encrypted rationale.
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String  @default("US")
+  phone        String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  teams        Team[]
-  buckets      Bucket[]
-  workstations Workstation[]
-  userRoles    UserRole[]
-  clinicLinks  ClinicSite[]
-  orders        Order[]
-  lots          Lot[]
-  labelPrinters LabelPrinter[]
-  shipments     Shipment[]
+  teams               Team[]
+  buckets             Bucket[]
+  workstations        Workstation[]
+  userRoles           UserRole[]
+  clinicLinks         ClinicSite[]
+  orders              Order[]
+  lots                Lot[]
+  labelPrinters       LabelPrinter[]
+  shipments           Shipment[]
   orderStageIntervals OrderStageInterval[]
+  packagePhotos       PackagePhoto[]
+  packagePhotoUploadTokens PackagePhotoUploadToken[]
 
   @@unique([organizationId, code])
   @@index([organizationId, status])
@@ -554,10 +677,14 @@ model Clinic {
   stripeCustomer StripeCustomer?
   invoices       Invoice[]
   invoiceLines   InvoiceLine[]
+  pricingRules   PricingRule[]
   patients       Patient[]
   prescriptions  Prescription[]
   orders         Order[]
   orderLines     OrderLine[]
+  packagePhotos  PackagePhoto[]
+  packagePhotoUploadTokens PackagePhotoUploadToken[]
+  workflowPolicyOverlays WorkflowPolicyOverlay[]
 
   @@unique([organizationId, code])
   @@index([organizationId, status])
@@ -660,6 +787,7 @@ model Workstation {
 
   labelPrinters LabelPrinter[]
   printJobs     PrintJob[]
+  packagePhotos PackagePhoto[]
 
   @@unique([siteId, code])
   @@index([organizationId, status])
@@ -684,25 +812,46 @@ model User {
   mfaEnrolled    Boolean    @default(false)
   lastLoginAt    DateTime?
 
+  // Bridge to the Clerk identity layer (see migration
+  // `20260606000000_phase5_user_clerk_id`). Clerk owns auth
+  // (sign-in, MFA, sessions); Pharmax owns RBAC + tenancy. The
+  // web tier's `resolveOperatorTenancyContext` maps a Clerk
+  // session → this column → the rest of the user row.
+  //
+  // Nullable because system-only users never log in via Clerk
+  // (`shipping-webhook@*`, `print-agent@*`, etc.) and because
+  // operators may be pre-provisioned server-side before their
+  // first sign-in.
+  //
+  // Unique-when-present: one Pharmax user maps to AT MOST one
+  // Clerk identity. The partial-unique index is declared in the
+  // migration with `WHERE "clerkUserId" IS NOT NULL` so multiple
+  // unlinked rows can coexist.
+  clerkUserId String? @unique
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  userRoles           UserRole[]
-  commandLogs         CommandLog[]
-  orderEvents         OrderEvent[]
-  auditLogs           AuditLog[]
-  assignedOrders      Order[]              @relation("OrderAssignee")
-  orderCancellations  OrderCancellation[]  @relation("OrderCancellationActor")
-  orderHoldsPlaced         OrderHold[]               @relation("OrderHoldPlacer")
-  orderHoldsReleased       OrderHold[]               @relation("OrderHoldReleaser")
-  orderCorrectionReopens   OrderCorrectionReopen[]   @relation("OrderCorrectionReopenActor")
-  verificationRecords VerificationRecord[] @relation("VerificationRecordActor")
-  lotAssignments      LotAssignment[]       @relation("LotAssignmentActor")
-  printJobsRequested  PrintJob[]            @relation("PrintJobRequester")
-  shipmentsCreated    Shipment[]            @relation("ShipmentCreator")
-  shipmentsConfirmed  Shipment[]            @relation("ShipmentConfirmer")
-  carrierCredentialsCreated CarrierCredential[] @relation("CarrierCredentialCreator")
-  stageIntervalsActed OrderStageInterval[]  @relation("StageIntervalActor")
+  userRoles                 UserRole[]
+  commandLogs               CommandLog[]
+  orderEvents               OrderEvent[]
+  auditLogs                 AuditLog[]
+  assignedOrders            Order[]                 @relation("OrderAssignee")
+  orderCancellations        OrderCancellation[]     @relation("OrderCancellationActor")
+  orderHoldsPlaced          OrderHold[]             @relation("OrderHoldPlacer")
+  orderHoldsReleased        OrderHold[]             @relation("OrderHoldReleaser")
+  orderCorrectionReopens    OrderCorrectionReopen[] @relation("OrderCorrectionReopenActor")
+  verificationRecords       VerificationRecord[]    @relation("VerificationRecordActor")
+  lotAssignments            LotAssignment[]         @relation("LotAssignmentActor")
+  printJobsRequested        PrintJob[]              @relation("PrintJobRequester")
+  shipmentsCreated          Shipment[]              @relation("ShipmentCreator")
+  shipmentsConfirmed        Shipment[]              @relation("ShipmentConfirmer")
+  carrierCredentialsCreated CarrierCredential[]     @relation("CarrierCredentialCreator")
+  pricingRulesCreated       PricingRule[]           @relation("PricingRuleCreator")
+  stageIntervalsActed       OrderStageInterval[]    @relation("StageIntervalActor")
+  packagePhotosCaptured     PackagePhoto[]          @relation("PackagePhotoCapturer")
+  packagePhotoUploadTokens  PackagePhotoUploadToken[] @relation("PackagePhotoUploadTokenUploader")
+  workflowPolicyOverlaysCreated WorkflowPolicyOverlay[] @relation("WorkflowPolicyOverlayCreator")
 
   @@unique([organizationId, email])
   @@index([organizationId, status])
@@ -804,6 +953,16 @@ model UserRole {
 // safety rules. `definition` is JSONB so transitions, SLA defaults, and
 // required reason codes can evolve without a schema migration. The
 // (code, version) unique allows deterministic referencing.
+//
+// Lifecycle: see `WorkflowPolicyStatus` and ADR-0017
+// (`docs/adr/0017-workflow-policy-migration.md`). At most one ACTIVE
+// row per (organizationId, code) is enforced by a partial unique index
+// `workflow_policy_active_unique ON workflow_policy(organizationId,
+// code) WHERE status = 'ACTIVE'`, installed by the migration
+// `20260608000000_workflow_policy_lifecycle`. Prisma schema syntax
+// cannot express partial unique indexes; the index lives in the
+// migration SQL and is mirrored by the `pickPolicyForCreate` pure
+// function in `@pharmax/workflow`.
 model WorkflowPolicy {
   id             String       @id @default(uuid()) @db.Uuid
   organizationId String       @db.Uuid
@@ -819,20 +978,91 @@ model WorkflowPolicy {
   definition Json
 
   publishedAt DateTime?
-  retiredAt   DateTime?
+  // Timestamp set the first time this row LEAVES the ACTIVE state
+  // (the ACTIVE → SUPERSEDED transition). Remains stable through a
+  // subsequent SUPERSEDED → ARCHIVED transition — the canonical
+  // "when did this row stop being current?" marker. NULL for rows
+  // that have never been demoted.
+  retiredAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orders              Order[]
-  orderCancellations       OrderCancellation[]
-  orderHolds               OrderHold[]
-  orderCorrectionReopens   OrderCorrectionReopen[]
-  verificationRecords VerificationRecord[]
+  orders                 Order[]
+  orderCancellations     OrderCancellation[]
+  orderHolds             OrderHold[]
+  orderCorrectionReopens OrderCorrectionReopen[]
+  verificationRecords    VerificationRecord[]
+  overlays               WorkflowPolicyOverlay[]
 
   @@unique([organizationId, code, version])
   @@index([organizationId, status])
   @@map("workflow_policy")
+}
+
+// Per-tenant overlay layered on top of a specific WorkflowPolicy row
+// (Tier 2 of ADR-0019's three-tier extension model).
+//
+// One row per (organizationId, clinicId?, workflowPolicyId, version);
+// an overlay with `clinicId = NULL` applies organization-wide while
+// rows with a non-null `clinicId` apply ONLY to that clinic. The two
+// scopes compose at command-bus dispatch via
+// `resolveEffectivePolicy` (org-wide first, then clinic-specific) so
+// the merged policy is at most as permissive as the base — the
+// tightening invariant is enforced by `mergePolicyWithOverlay`.
+//
+// Lifecycle: DRAFT (authored) → ACTIVE (current canonical row) →
+// SUPERSEDED (replaced by a newer ACTIVE for the same scope) →
+// ARCHIVED (terminal). Mirrors WorkflowPolicy. The activation
+// invariant — at most one ACTIVE row per
+// `(organizationId, COALESCE(clinicId, all-zeros), workflowPolicyId)`
+// — is enforced by the partial unique index installed in the
+// migration (Prisma schema cannot express partial uniques).
+//
+// Grandfather rule: each overlay is bound to a specific
+// `workflowPolicyId` (NOT just code), so an in-flight order born
+// under workflow_policy v1 keeps reading v1's overlays even after
+// v2 ships with its own overlay set. Same scoping logic as
+// ADR-0017's base-policy grandfather rule.
+//
+// PHI invariant: `overlayJson` carries declarative configuration
+// only — `forbidTransitionsFromStates` (state machine narrowing)
+// and `addRequiredAttestations` (extra signers). It MUST NOT
+// contain patient identifiers; the Zod validator in
+// `UpsertWorkflowPolicyOverlay` rejects unknown keys structurally.
+model WorkflowPolicyOverlay {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // NULL = organization-wide overlay; non-null = clinic-scoped.
+  clinicId String? @db.Uuid
+  clinic   Clinic? @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  // Versioned with the base — overlay is replay-correct against
+  // exactly the (orgId, code, version) tuple of the workflow_policy
+  // row it points at. SUPERSEDING the base does NOT auto-supersede
+  // this row; the lifecycle command supersedes one ACTIVE per
+  // scope as part of an UpsertWorkflowPolicyOverlay activation.
+  workflowPolicyId String         @db.Uuid
+  workflowPolicy   WorkflowPolicy @relation(fields: [workflowPolicyId], references: [id], onDelete: Restrict)
+
+  // The declarative WorkflowPolicyOverlay shape from
+  // `@pharmax/workflow`. Validated by the merge function at write
+  // time AND every command dispatch (fail-closed).
+  overlayJson Json
+
+  status  WorkflowPolicyOverlayStatus @default(DRAFT)
+  version Int
+
+  createdByUserId String @db.Uuid
+  createdByUser   User   @relation("WorkflowPolicyOverlayCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, workflowPolicyId, status])
+  @@map("workflow_policy_overlay")
 }
 
 // ===========================================================================
@@ -888,21 +1118,23 @@ model CommandLog {
   targetOrderId String? @db.Uuid
   targetOrder   Order?  @relation(fields: [targetOrderId], references: [id], onDelete: Restrict)
 
-  orderEvents         OrderEvent[]
-  orderCancellations  OrderCancellation[]
-  orderHoldsPlaced         OrderHold[]               @relation("OrderHoldPlaceCommand")
-  orderHoldsReleased       OrderHold[]               @relation("OrderHoldReleaseCommand")
-  orderCorrectionReopens   OrderCorrectionReopen[]   @relation("OrderCorrectionReopenCommand")
-  verificationRecords   VerificationRecord[]
-  lotAssignments        LotAssignment[]
-  inventoryTransactions InventoryTransaction[]
-  printJobs             PrintJob[]
-  shipmentsCreated         Shipment[]              @relation("ShipmentCreateCommand")
-  shipmentsConfirmed       Shipment[]              @relation("ShipmentConfirmCommand")
-  shipmentTrackingEvents   ShipmentTrackingEvent[] @relation("ShipmentTrackingEventCommand")
-  carrierCredentialsCreated CarrierCredential[]    @relation("CarrierCredentialCreateCommand")
-  stageIntervalsOpened     OrderStageInterval[]    @relation("StageIntervalOpenCommand")
-  stageIntervalsClosed     OrderStageInterval[]    @relation("StageIntervalCloseCommand")
+  orderEvents               OrderEvent[]
+  orderCancellations        OrderCancellation[]
+  orderHoldsPlaced          OrderHold[]             @relation("OrderHoldPlaceCommand")
+  orderHoldsReleased        OrderHold[]             @relation("OrderHoldReleaseCommand")
+  orderCorrectionReopens    OrderCorrectionReopen[] @relation("OrderCorrectionReopenCommand")
+  verificationRecords       VerificationRecord[]
+  lotAssignments            LotAssignment[]
+  inventoryTransactions     InventoryTransaction[]
+  printJobs                 PrintJob[]
+  shipmentsCreated          Shipment[]              @relation("ShipmentCreateCommand")
+  shipmentsConfirmed        Shipment[]              @relation("ShipmentConfirmCommand")
+  shipmentTrackingEvents    ShipmentTrackingEvent[] @relation("ShipmentTrackingEventCommand")
+  carrierCredentialsCreated CarrierCredential[]     @relation("CarrierCredentialCreateCommand")
+  pricingRulesCreated       PricingRule[]           @relation("PricingRuleCreateCommandLog")
+  stageIntervalsOpened      OrderStageInterval[]    @relation("StageIntervalOpenCommand")
+  stageIntervalsClosed      OrderStageInterval[]    @relation("StageIntervalCloseCommand")
+  packagePhotos             PackagePhoto[]          @relation("PackagePhotoCaptureCommand")
 
   @@unique([organizationId, commandName, idempotencyKey])
   @@index([organizationId, status])
@@ -1187,6 +1419,52 @@ model EasyPostWebhookEvent {
   @@map("easypost_webhook_event")
 }
 
+// Every signature-verified Clerk webhook delivery (Svix-signed) is
+// recorded here AT INGEST TIME so a redelivery (Clerk retries on 5xx)
+// becomes a no-op insert and the receiver can ack 200 fast without
+// re-running the dispatcher.
+//
+// Idempotency key: `svixMessageId` — the `svix-id` header on the
+// inbound request. Svix guarantees a stable id per logical event;
+// retries reuse the same id. The unique constraint is the dedupe
+// surface; the dispatcher updates the row's status post-dispatch.
+//
+// RLS-exempt for the same reason as `stripe_webhook_event` and
+// `easypost_webhook_event`: events arrive BEFORE Pharmax knows
+// which tenant (if any) they resolve to. The dispatcher resolves
+// the tenancy from the Pharmax `user` row in system context.
+//
+// PHI invariant: Clerk events do not carry PHI. The payload here
+// holds operator identity (id, email, names) only.
+model ClerkWebhookEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  // The `svix-id` header value. Stable across Svix retries.
+  svixMessageId String @unique
+  eventType     String
+
+  // Raw event payload as received from Clerk, AFTER signature
+  // verification. Stored verbatim so a forensic replay can re-run
+  // the dispatcher without re-fetching from Clerk.
+  payload Json
+
+  status         ClerkWebhookEventStatus @default(PENDING)
+  // Dispatcher's discriminated outcome string (e.g. "applied",
+  // "noop_no_link"). Useful for ops triage; never null after the
+  // first dispatch attempt.
+  dispatchOutcome String?
+  attempts        Int     @default(0)
+  lastError       String?
+
+  receivedAt          DateTime  @default(now())
+  signatureVerifiedAt DateTime
+  dispatchedAt        DateTime?
+
+  @@index([eventType, receivedAt])
+  @@index([receivedAt])
+  @@map("clerk_webhook_event")
+}
+
 // Invoices are generated from operational truth (e.g. order shipped →
 // billing event → invoice line) and may be mirrored to Stripe via
 // `stripeInvoiceId`. `version` is the optimistic-lock counter; mutations
@@ -1204,6 +1482,13 @@ model Invoice {
 
   stripeInvoiceId  String? @unique
   stripeCustomerId String?
+  // Captured from the `invoice.paid` Stripe event so refunds can be
+  // issued without an extra Stripe lookup. Stripe refunds accept
+  // either a payment_intent or charge id; we store charge id
+  // (the `latest_charge` field) as the more direct hop. Unique
+  // when present — a single charge maps to at most one Pharmax
+  // invoice. Migration: `20260605000000_phase5_invoice_stripe_charge_id`.
+  stripeChargeId   String? @unique
 
   status   InvoiceStatus @default(DRAFT)
   currency String        @default("usd") @db.VarChar(3)
@@ -1280,6 +1565,57 @@ model InvoiceLine {
   @@index([organizationId, clinicId])
   @@index([orderId])
   @@map("invoice_line")
+}
+
+// Pricing rule lookup table. Resolved by specificity at materialization
+// time — (clinicId + productId) > (clinicId) > (productId) > org-default.
+// `UpsertPricingRule` enforces at-most-one-ACTIVE per scope by
+// transactionally setting the prior rule's `effectiveTo`.
+//
+// `pricingScheme` stamping on invoice lines lets a future re-pricing
+// flow discriminate FLAT_V1 placeholders from rule-derived prices.
+model PricingRule {
+  id String @id @default(uuid()) @db.Uuid
+
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // null ⇒ applies to all clinics in the org
+  clinicId String? @db.Uuid
+  clinic   Clinic? @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  // null ⇒ applies to all products (the typical case for v1's
+  // order-level dispense fee). Product-level pricing is wired
+  // structurally so a future per-line flow can adopt it without
+  // a schema change.
+  productId String?  @db.Uuid
+  product   Product? @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  kind            InvoiceLineKind
+  unitAmountCents Int
+  currency        String          @default("usd") @db.VarChar(3)
+
+  effectiveFrom DateTime          @default(now())
+  effectiveTo   DateTime?
+  status        PricingRuleStatus @default(ACTIVE)
+  notes         String?
+
+  createdByUserId    String     @db.Uuid
+  createdByUser      User       @relation("PricingRuleCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createCommandLogId String     @db.Uuid
+  createCommandLog   CommandLog @relation("PricingRuleCreateCommandLog", fields: [createCommandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The partial-unique on `(org, clinic, product, kind) WHERE status =
+  // 'ACTIVE'` is declared in the migration with COALESCE-on-null so
+  // Postgres treats NULL clinic/product as distinct partial keys.
+  // Prisma's @@unique cannot express that, so it lives at the SQL
+  // layer only.
+  @@index([organizationId, kind, status, effectiveFrom(sort: Desc)])
+  @@index([organizationId, clinicId])
+  @@map("pricing_rule")
 }
 
 // ===========================================================================
@@ -1400,6 +1736,7 @@ model Patient {
 
   prescriptions Prescription[]
   orders        Order[]
+  packagePhotos PackagePhoto[] @relation("PackagePhotoMatchedPatient")
 
   @@index([organizationId, clinicId, status])
   @@index([organizationId, lastNameBi])
@@ -1609,15 +1946,16 @@ model Order {
   orderEvents         OrderEvent[]
   commandLogs         CommandLog[]
   invoiceLines        InvoiceLine[]
-  cancellation             OrderCancellation?
-  holds                    OrderHold[]
-  correctionReopens        OrderCorrectionReopen[]
+  cancellation        OrderCancellation?
+  holds               OrderHold[]
+  correctionReopens   OrderCorrectionReopen[]
   verificationRecords VerificationRecord[]
   lotAssignments      LotAssignment[]
   printJobs           PrintJob[]
   vialLabels          VialLabel[]
-  shipments       Shipment[]
-  stageIntervals  OrderStageInterval[]
+  shipments           Shipment[]
+  stageIntervals      OrderStageInterval[]
+  packagePhotos       PackagePhoto[]          @relation("PackagePhotoMatchedOrder")
 
   // The queue-shaped index. Order matters: scanner filters by
   // bucket+status, sorts by priority desc + SLA asc + receivedAt
@@ -1664,7 +2002,7 @@ model OrderLine {
   lotAssignments        LotAssignment[]
   inventoryTransactions InventoryTransaction[]
   printJobs             PrintJob[]
-  vialLabelRecord       VialLabel? @relation("VialLabelOrderLine")
+  vialLabelRecord       VialLabel?             @relation("VialLabelOrderLine")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1994,7 +2332,8 @@ model Product {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lots Lot[]
+  lots         Lot[]
+  pricingRules PricingRule[]
 
   @@unique([organizationId, ndc])
   @@index([organizationId, name])
@@ -2013,7 +2352,7 @@ model Lot {
   product        Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
 
   lotNumber      String
-  expirationDate DateTime @db.Date
+  expirationDate DateTime  @db.Date
   status         LotStatus @default(ACTIVE)
 
   createdAt DateTime @default(now())
@@ -2062,9 +2401,9 @@ model InventoryTransaction {
   organizationId String       @db.Uuid
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
 
-  lotId       String    @db.Uuid
-  lot         Lot       @relation(fields: [lotId], references: [id], onDelete: Restrict)
-  orderLineId String?   @db.Uuid
+  lotId       String     @db.Uuid
+  lot         Lot        @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  orderLineId String?    @db.Uuid
   orderLine   OrderLine? @relation(fields: [orderLineId], references: [id], onDelete: Restrict)
 
   quantityDelta Decimal                    @db.Decimal(18, 4)
@@ -2100,7 +2439,7 @@ model LabelPrinter {
   connection     LabelPrinterConnection
   labelStock     LabelStockKind
   networkAddress String?
-  status         LabelPrinterStatus @default(ACTIVE)
+  status         LabelPrinterStatus     @default(ACTIVE)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2124,7 +2463,7 @@ model PrintTemplate {
   version    Int
   labelStock LabelStockKind
   zplBody    String
-  isActive   Boolean @default(true)
+  isActive   Boolean        @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2158,9 +2497,9 @@ model PrintJob {
   printTemplate        PrintTemplate @relation(fields: [printTemplateId], references: [id], onDelete: Restrict)
   printTemplateVersion Int
 
-  status       PrintJobStatus @default(PENDING)
-  renderedZpl  String
-  contentHash  Bytes
+  status        PrintJobStatus @default(PENDING)
+  renderedZpl   String
+  contentHash   Bytes
   failureReason String?
 
   isReprint         Boolean @default(false)
@@ -2215,9 +2554,9 @@ model VialLabel {
 // while the order remains `READY_TO_SHIP`; confirmed by
 // `ConfirmShipment` when the package leaves the building.
 model Shipment {
-  id             String         @id @default(uuid()) @db.Uuid
-  organizationId String         @db.Uuid
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
 
   orderId String @db.Uuid
   order   Order  @relation(fields: [orderId], references: [id], onDelete: Restrict)
@@ -2255,6 +2594,7 @@ model Shipment {
   lastTrackingEventKind ShipmentTrackingEventKind?
 
   trackingEvents ShipmentTrackingEvent[]
+  packagePhotos  PackagePhoto[]          @relation("PackagePhotoSourceShipment")
 
   @@unique([organizationId, orderId])
   @@index([organizationId, siteId, status, createdAt])
@@ -2313,7 +2653,7 @@ model CarrierCredential {
   provider ShippingProvider
 
   // Envelope-encrypted API key (CiphertextEnvelope as Json).
-  apiKeyEnc Json
+  apiKeyEnc        Json
   // Envelope-encrypted webhook secret. NULL until the operator
   // pastes a secret returned by the carrier's webhook UI.
   webhookSecretEnc Json?
@@ -2391,4 +2731,118 @@ model OrderStageInterval {
   @@index([organizationId, siteId, kind, startedAt])
   @@index([organizationId, orderId, endedAt])
   @@map("order_stage_interval")
+}
+
+// Pre-shipment package-photo capture record. Written by
+// `CapturePackagePhoto` (in `@pharmax/package-capture`) when the
+// shipping rep snaps a photo of the sealed package on the dock,
+// types the pharmacy's external order number, and (optionally)
+// the carrier tracking number.
+//
+// Photo bytes live in the storage adapter (S3 in prod, in-memory
+// in tests); this row holds only the
+// `(storageBucket, storageKey, sha256, fileSize)` pointer plus
+// match + tracking metadata. The `(organizationId, sha256)`
+// unique index dedupes rep retakes — snapping the same photo
+// twice returns the existing photo id.
+//
+// `notesEnc` is envelope-encrypted because rep notes may carry
+// incidental PHI (e.g. "patient said leave at neighbor's house").
+// The bus's `redactFields` declaration scrubs the plaintext from
+// `command_log.requestPayload`; audit metadata + outbox payload
+// echo only structural fields.
+model PackagePhoto {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // Capture context (operator's tenancy snapshot at capture time).
+  siteId String       @db.Uuid
+  site   PharmacySite @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  // Optional: a rep working multiple clinics' orders has no single
+  // clinic context, and a mobile capture has no workstation.
+  clinicId                String?      @db.Uuid
+  clinic                  Clinic?      @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+  capturedByUserId        String       @db.Uuid
+  capturedByUser          User         @relation("PackagePhotoCapturer", fields: [capturedByUserId], references: [id], onDelete: Restrict)
+  capturedAtWorkstationId String?      @db.Uuid
+  capturedAtWorkstation   Workstation? @relation(fields: [capturedAtWorkstationId], references: [id], onDelete: Restrict)
+
+  // Operator-typed external order number. Always recorded.
+  pharmacyExternalOrderNumber String
+
+  // Match metadata. Both id columns nullable: an unmatched row
+  // stays with matched=false / matchStrategy=UNMATCHED until a
+  // follow-up command resolves it.
+  matched          Boolean                   @default(false)
+  matchStrategy    PackagePhotoMatchStrategy @default(UNMATCHED)
+  matchedOrderId   String?                   @db.Uuid
+  matchedOrder     Order?                    @relation("PackagePhotoMatchedOrder", fields: [matchedOrderId], references: [id], onDelete: Restrict)
+  matchedPatientId String?                   @db.Uuid
+  matchedPatient   Patient?                  @relation("PackagePhotoMatchedPatient", fields: [matchedPatientId], references: [id], onDelete: Restrict)
+  matchedAt        DateTime?
+
+  // Tracking metadata.
+  trackingNumber   String?
+  trackingSource   PackagePhotoTrackingSource?
+  sourceShipmentId String?                     @db.Uuid
+  sourceShipment   Shipment?                   @relation("PackagePhotoSourceShipment", fields: [sourceShipmentId], references: [id], onDelete: Restrict)
+
+  // Storage layer pointer.
+  storageBucket String
+  storageKey    String
+  contentType   String
+  fileSize      Int
+  sha256        String
+
+  // Optional rep notes (PHI-possible; envelope-encrypted).
+  notesEnc Json?
+
+  capturedAt   DateTime
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation("PackagePhotoCaptureCommand", fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@unique([organizationId, sha256])
+  @@index([organizationId, capturedAt])
+  @@index([organizationId, pharmacyExternalOrderNumber])
+  @@index([organizationId, matchedOrderId])
+  @@index([organizationId, matchedPatientId])
+  @@index([organizationId, capturedByUserId, capturedAt])
+  @@index([organizationId, matched])
+  @@index([organizationId, trackingNumber])
+  @@index([organizationId, clinicId, capturedAt])
+  @@index([organizationId, siteId, capturedAt])
+  @@map("package_photo")
+}
+
+// Two-step upload token for the S3PackagePhotoStorage adapter.
+// See migration 20260613000000_phase5_package_photo_upload_token
+// for the lifecycle + RLS reasoning.
+model PackagePhotoUploadToken {
+  token            String       @id @db.Uuid
+  organizationId   String       @db.Uuid
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  uploadedByUserId String       @db.Uuid
+  uploadedByUser   User         @relation("PackagePhotoUploadTokenUploader", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+  siteId           String?       @db.Uuid
+  site             PharmacySite? @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  clinicId         String?       @db.Uuid
+  clinic           Clinic?       @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  storageBucket String
+  storageKey    String
+  sha256        String
+  fileSize      Int
+  contentType   String
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, uploadedByUserId])
+  @@map("package_photo_upload_token")
 }

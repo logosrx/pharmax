@@ -1,0 +1,121 @@
+# Pharmax SLO recording rules.
+#
+# Recording rules pre-compute expensive expressions so alert evaluation
+# stays cheap. The expressions here lean on the metric names documented
+# in observability/README.md ("Planned custom metrics"); when the meters
+# are wired in code, these rules light up. Until then they evaluate to
+# NaN/empty and downstream alerts stay quiet (good — fail closed).
+
+groups:
+  - name: pharmax_command_bus_slo
+    interval: 30s
+    rules:
+      - record: pharmax:command_dispatch_rate:rate5m
+        expr: sum by (command_name) (rate(pharmax_command_dispatched_total[5m]))
+
+      - record: pharmax:command_error_ratio:5m
+        expr: |
+          sum by (command_name) (rate(pharmax_command_dispatched_total{outcome="error"}[5m]))
+          /
+          clamp_min(sum by (command_name) (rate(pharmax_command_dispatched_total[5m])), 1e-9)
+
+      - record: pharmax:command_p99_duration_seconds:5m
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (command_name, le) (rate(pharmax_command_duration_seconds_bucket[5m]))
+          )
+
+  - name: pharmax_http_slo
+    interval: 30s
+    rules:
+      # OTel semantic convention: http.server.request.duration (seconds).
+      # The Prometheus exporter renames dots to underscores.
+      - record: pharmax:http_request_rate:rate5m
+        expr: sum by (service_name, http_route) (rate(http_server_request_duration_seconds_count[5m]))
+
+      - record: pharmax:http_5xx_ratio:5m
+        expr: |
+          sum by (service_name) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m]))
+          /
+          clamp_min(sum by (service_name) (rate(http_server_request_duration_seconds_count[5m])), 1e-9)
+
+      - record: pharmax:http_p99_duration_seconds:5m
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (service_name, le) (rate(http_server_request_duration_seconds_bucket[5m]))
+          )
+
+      - record: pharmax:http_p95_duration_seconds:5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (service_name, le) (rate(http_server_request_duration_seconds_bucket[5m]))
+          )
+
+      - record: pharmax:http_p50_duration_seconds:5m
+        expr: |
+          histogram_quantile(
+            0.50,
+            sum by (service_name, le) (rate(http_server_request_duration_seconds_bucket[5m]))
+          )
+
+  - name: pharmax_audit_slo
+    interval: 30s
+    rules:
+      - record: pharmax:audit_write_rate:rate5m
+        expr: sum by (organization_id) (rate(pharmax_audit_log_rows_total[5m]))
+
+      - record: pharmax:audit_verifier_failure_rate:5m
+        expr: sum by (organization_id) (rate(pharmax_audit_verifier_failures_total[5m]))
+
+      # Age of the most recent signed Merkle manifest, in seconds. Used
+      # for the "manifest stale > 26h" alert.
+      - record: pharmax:audit_manifest_age_seconds
+        expr: time() - max by (organization_id) (pharmax_audit_manifest_latest_signed_at_seconds)
+
+  - name: pharmax_shipping_slo
+    interval: 30s
+    rules:
+      - record: pharmax:shipping_poll_failure_ratio:15m
+        expr: |
+          sum by (carrier) (rate(pharmax_shipping_tracking_poll_failures_total[15m]))
+          /
+          clamp_min(
+            sum by (carrier) (rate(pharmax_shipping_tracking_poll_failures_total[15m]))
+            + sum by (carrier) (rate(pharmax_shipping_tracking_events_recorded_total[15m])),
+            1e-9
+          )
+
+      - record: pharmax:shipping_poll_p99_seconds:5m
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (carrier, le) (rate(pharmax_shipping_tracking_poll_duration_seconds_bucket[5m]))
+          )
+
+  - name: pharmax_billing_slo
+    interval: 30s
+    rules:
+      - record: pharmax:billing_stripe_push_success_ratio:15m
+        expr: |
+          sum (rate(pharmax_billing_stripe_push_total{outcome="success"}[15m]))
+          /
+          clamp_min(sum (rate(pharmax_billing_stripe_push_total[15m])), 1e-9)
+
+      - record: pharmax:billing_invoice_finalized_rate:rate5m
+        expr: sum (rate(pharmax_billing_invoice_finalized_total[5m]))
+
+  - name: pharmax_workflow_slo
+    interval: 30s
+    rules:
+      - record: pharmax:workflow_stage_p95_seconds:5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (kind, le) (rate(pharmax_workflow_stage_duration_seconds_bucket[5m]))
+          )
+
+      - record: pharmax:workflow_sla_breach_rate:rate5m
+        expr: sum by (stage) (rate(pharmax_workflow_sla_breaches_total[5m]))

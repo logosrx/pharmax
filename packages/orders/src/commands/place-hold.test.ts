@@ -27,7 +27,7 @@ import {
   executeCommand,
   resetCommandBusConfigurationForTests,
 } from "@pharmax/command-bus";
-import { HoldReason, Prisma, RoleScope } from "@pharmax/database";
+import { HoldReason, OrderStageIntervalKind, Prisma, RoleScope } from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
 import {
   configureRbac,
@@ -36,6 +36,7 @@ import {
   resetRbacConfigurationForTests,
   type ResolvedGrant,
 } from "@pharmax/rbac";
+import { createOrderStageIntervalTxStub } from "@pharmax/sla/test-utils";
 import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
 import {
@@ -106,6 +107,13 @@ interface FakeOverrides {
    * a fake row. Used to simulate the P2002 partial-unique violation.
    */
   holdCreateError?: Error;
+  /**
+   * Kind of the currently-open `OrderStageInterval` row at lock time.
+   * PlaceHold is multi-from-state, so the open kind varies by source.
+   * The handler closes whatever's open without a kind assertion, so
+   * the default is benign for all tests; per-state tests may override.
+   */
+  initialOpenIntervalKind?: OrderStageIntervalKind;
 }
 
 function buildPrismaFake(overrides: FakeOverrides = {}): {
@@ -132,6 +140,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return policy === null ? null : { id: POLICY_ID, ...policy };
       }),
     },
+    orderStageInterval: createOrderStageIntervalTxStub(
+      (table, op, args) => calls.push({ table, op, args }),
+      overrides.initialOpenIntervalKind ?? OrderStageIntervalKind.WAIT_BEFORE_TYPING
+    ),
     order: {
       update: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "update", args });
@@ -383,6 +395,27 @@ describe("PlaceHold — happy path", () => {
     expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(1);
     expect(callsOf(fake.calls, "eventOutbox", "createMany")).toHaveLength(1);
     expect(callsOf(fake.calls, "idempotencyKey", "create")).toHaveLength(1);
+
+    // SLA: close whatever's open (no kind assertion — PlaceHold is
+    // multi-from-state, so the transition table entry omits `close`)
+    // and open HOLD_ACTIVE with the placer as actor.
+    const slaCloseCalls = callsOf(fake.calls, "orderStageInterval", "updateMany");
+    expect(slaCloseCalls).toHaveLength(1);
+    const slaCloseData = (slaCloseCalls[0]!.args as { data: Record<string, unknown> }).data;
+    expect(slaCloseData["endedAt"]).toEqual(new Date("2026-05-23T19:00:00.000Z"));
+    expect(typeof slaCloseData["closeCommandLogId"]).toBe("string");
+
+    const slaOpenCalls = callsOf(fake.calls, "orderStageInterval", "create");
+    expect(slaOpenCalls).toHaveLength(1);
+    const slaOpenData = (slaOpenCalls[0]!.args as { data: Record<string, unknown> }).data;
+    expect(slaOpenData).toMatchObject({
+      organizationId: ORG_ID,
+      orderId: ORDER_ID,
+      siteId: SITE_ID,
+      kind: OrderStageIntervalKind.HOLD_ACTIVE,
+      startedAt: new Date("2026-05-23T19:00:00.000Z"),
+      actorUserId: USER_ID,
+    });
   });
 
   it.each([

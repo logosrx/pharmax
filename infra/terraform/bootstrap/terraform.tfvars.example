@@ -1,0 +1,19 @@
+# =============================================================================
+# Pharmax — bootstrap values.
+#
+# Copy to `terraform.tfvars` (gitignored) before applying. Run ONCE per
+# (account, env, region) tuple — typically once per env in us-east-1, plus
+# once for the prod-usw2 DR backend.
+# =============================================================================
+
+project        = "pharmax"
+environment    = "dev"
+region         = "us-east-1"
+account_suffix = "REPLACE6"   # last 6 chars of the AWS account id, lowercase
+
+# Adjust if a longer GOVERNANCE window is desired (max 100 years).
+object_lock_governance_retention_days = 7
+
+tags = {
+  CostCenter = "engineering-platform"
+}

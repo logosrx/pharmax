@@ -15,7 +15,9 @@
 export async function register(): Promise<void> {
   // `bootstrap` is server-only; importing it from this file (which is
   // also server-only by virtue of being instrumentation) keeps the
-  // boundary clean.
+  // boundary clean. Awaited so the process does not begin handling
+  // requests until KMS, RBAC, and the command bus are wired (and, in
+  // production, the AwsKmsAdapter's IAM has been verified).
   const { bootstrap } = await import("./src/server/bootstrap.js");
-  bootstrap();
+  await bootstrap();
 }

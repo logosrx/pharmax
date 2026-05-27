@@ -1,0 +1,348 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Command bus health: dispatch rate, error rate, idempotency dedup, CAS retries, separation-of-duties rejections. Backed by pharmax_command_* metrics emitted from packages/command-bus.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Commands per second (overall)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "graphMode": "area",
+        "colorMode": "value",
+        "textMode": "value",
+        "orientation": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pharmax_command_dispatched_total{deployment_environment=~\"$environment\"}[5m]))",
+          "legendFormat": "commands/s"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error rate (%)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "graphMode": "area",
+        "colorMode": "background",
+        "textMode": "value",
+        "orientation": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pharmax_command_dispatched_total{deployment_environment=~\"$environment\", outcome=\"error\"}[5m])) / clamp_min(sum(rate(pharmax_command_dispatched_total{deployment_environment=~\"$environment\"}[5m])), 1e-9)",
+          "legendFormat": "error ratio"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Idempotency dedup rate (per second)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "graphMode": "area",
+        "colorMode": "value",
+        "textMode": "value",
+        "orientation": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pharmax_command_idempotency_dedup_total{deployment_environment=~\"$environment\"}[5m]))",
+          "legendFormat": "dedup/s"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "CAS retry rate (per second)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "graphMode": "area",
+        "colorMode": "background",
+        "textMode": "value",
+        "orientation": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pharmax_command_optimistic_concurrency_retry_total{deployment_environment=~\"$environment\"}[5m]))",
+          "legendFormat": "retries/s"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Commands per second by command_name",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": {
+          "showLegend": true,
+          "placement": "right",
+          "displayMode": "table",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (command_name) (rate(pharmax_command_dispatched_total{deployment_environment=~\"$environment\"}[5m]))",
+          "legendFormat": "{{ command_name }}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Error ratio by command_name",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 5 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "auto" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": {
+          "showLegend": true,
+          "placement": "right",
+          "displayMode": "table",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (command_name) (rate(pharmax_command_dispatched_total{deployment_environment=~\"$environment\", outcome=\"error\"}[5m])) / clamp_min(sum by (command_name) (rate(pharmax_command_dispatched_total{deployment_environment=~\"$environment\"}[5m])), 1e-9)",
+          "legendFormat": "{{ command_name }}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Command duration p95 / p99 (seconds)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 15 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "right",
+          "displayMode": "table",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (command_name, le) (rate(pharmax_command_duration_seconds_bucket{deployment_environment=~\"$environment\"}[5m])))",
+          "legendFormat": "p95 {{ command_name }}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (command_name, le) (rate(pharmax_command_duration_seconds_bucket{deployment_environment=~\"$environment\"}[5m])))",
+          "legendFormat": "p99 {{ command_name }}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Separation-of-duties rejections (per minute)",
+      "description": "Counter pharmax_command_sod_rejection_total. SOD rejections are correctness signals — a non-zero rate means actors are attempting commands they cannot perform (e.g. tech approving their own PV1).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 15 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "auto" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "right",
+          "displayMode": "table",
+          "calcs": ["sum"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (command_name) (rate(pharmax_command_sod_rejection_total{deployment_environment=~\"$environment\"}[5m]))",
+          "legendFormat": "{{ command_name }}"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["pharmax", "command-bus"],
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(deployment_environment)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(deployment_environment)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "options": [],
+        "hide": 0
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(service_name)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(service_name)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "options": [],
+        "hide": 0
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Pharmax · Command Bus",
+  "uid": "pharmax-command-bus",
+  "version": 1,
+  "weekStart": ""
+}

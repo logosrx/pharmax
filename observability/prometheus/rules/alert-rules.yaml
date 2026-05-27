@@ -1,0 +1,278 @@
+# Pharmax Prometheus alert rules.
+#
+# Severity convention:
+#   - critical = page on-call now; SEV1/SEV2 candidate.
+#   - warning  = ticket the on-call team; investigate within 1 business day.
+#
+# Every alert sets a runbook_url annotation that points at the markdown
+# in ../../runbooks/. Half-asleep on-call: open the runbook, follow the
+# steps, do not improvise.
+#
+# Tenant identity in labels is the opaque organization_id UUID. Never a
+# tenant name. Operators look up the human-readable name in the admin
+# tool. This matches the PHI guardrails set in .cursor/rules/02-security-compliance.mdc.
+
+groups:
+  - name: pharmax_audit
+    rules:
+      - alert: AuditChainVerifierFailing
+        expr: sum by (organization_id) (rate(pharmax_audit_verifier_failures_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          domain: audit
+        annotations:
+          summary: Audit chain verifier reporting failures for tenant {{ $labels.organization_id }}
+          description: |
+            The hash-linked audit chain is failing verification. Any non-zero
+            rate is a compliance-critical incident — this means either a bug
+            allowed an out-of-band mutation or someone wrote to the DB
+            outside the command bus.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/audit-chain-broken.md
+
+      - alert: AuditManifestStale
+        # Latest signed Merkle manifest is older than 26h (24h cadence + 2h grace).
+        expr: pharmax:audit_manifest_age_seconds > 26 * 3600
+        for: 10m
+        labels:
+          severity: critical
+          domain: audit
+        annotations:
+          summary: Merkle manifest stale for tenant {{ $labels.organization_id }} ({{ $value | humanizeDuration }} old)
+          description: |
+            The daily Merkle signing loop has not produced a fresh manifest
+            for this tenant in the last 26 hours. Likely causes: KMS error
+            budget exhausted, daily-merkle-root-loop crashed, signing key
+            disabled, scheduler stopped.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/audit-chain-broken.md
+
+  - name: pharmax_command_bus
+    rules:
+      - alert: CommandBusErrorRateHighWarning
+        expr: |
+          (
+            sum (rate(pharmax_command_dispatched_total{outcome="error"}[10m]))
+            /
+            clamp_min(sum (rate(pharmax_command_dispatched_total[10m])), 1e-9)
+          ) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          domain: command-bus
+        annotations:
+          summary: Command bus error rate above 1% over 10m
+          description: |
+            Aggregate command failure rate has been above 1% for the last
+            10 minutes. Use the command-bus Grafana dashboard to find the
+            offending command_name and dig into Sentry / command_log.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/command-bus-failures.md
+
+      - alert: CommandBusErrorRateHighCritical
+        expr: |
+          (
+            sum (rate(pharmax_command_dispatched_total{outcome="error"}[5m]))
+            /
+            clamp_min(sum (rate(pharmax_command_dispatched_total[5m])), 1e-9)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          domain: command-bus
+        annotations:
+          summary: Command bus error rate above 5% over 5m
+          description: |
+            Aggregate command failure rate has been above 5% for the last
+            5 minutes. This is page-on-call territory — pharmacy operations
+            are likely blocked.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/command-bus-failures.md
+
+      - alert: CommandBusConcurrencyRetryStorm
+        expr: sum (rate(pharmax_command_optimistic_concurrency_retry_total[5m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+          domain: command-bus
+        annotations:
+          summary: Optimistic-concurrency CAS retry storm (> 5/s sustained)
+          description: |
+            Sustained CAS retries indicate hot rows or a deploy that is
+            re-issuing the same command on the same order. Look for thundering-herd
+            jobs in the worker.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/command-bus-failures.md
+
+  - name: pharmax_workflow
+    rules:
+      - alert: WorkflowSlaBreaches
+        expr: sum (rate(pharmax_workflow_sla_breaches_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          domain: workflow
+        annotations:
+          summary: New workflow SLA breaches in the last 5 minutes
+          description: |
+            Orders are crossing their SLA deadline. The breaches appear in
+            the emergency bucket; review the workflow-overview dashboard
+            for stage and clinic distribution.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/docs/RUNBOOK.md#sla-breach-storm--emergency-bucket-walkthrough
+
+  - name: pharmax_shipping
+    rules:
+      - alert: ShippingPollFailingForCarrier
+        expr: pharmax:shipping_poll_failure_ratio:15m > 0.10
+        for: 15m
+        labels:
+          severity: warning
+          domain: shipping
+        annotations:
+          summary: Carrier {{ $labels.carrier }} tracking poll failure rate > 10%
+          description: |
+            More than 10% of tracking polls for {{ $labels.carrier }} have
+            failed over the last 15 minutes. Likely causes: carrier API
+            outage, credential rotated incorrectly, or rate limit hit.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/shipping-tracking-stalled.md
+
+      - alert: ShippingExceptionBucketGrowing
+        expr: max (pharmax_shipping_bucket_size{bucket="EXCEPTION"}) > 25
+        for: 30m
+        labels:
+          severity: warning
+          domain: shipping
+        annotations:
+          summary: Shipping EXCEPTION bucket has > 25 orders for > 30m
+          description: |
+            The EXCEPTION bucket is growing or stuck. Operators may need to
+            triage manually if escalations are not draining.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/shipping-tracking-stalled.md
+
+  - name: pharmax_kms
+    rules:
+      - alert: KmsErrorBudgetExhausted
+        expr: sum (rate(pharmax_kms_operation_errors_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          domain: kms
+        annotations:
+          summary: KMS operation errors detected ({{ $labels.operation }})
+          description: |
+            Any KMS failure is investigation-worthy. Causes include: IAM
+            role drift, key disabled / pending deletion, region outage,
+            client clock skew. PHI envelope encryption + audit MAC depend
+            on this; pharmacy work blocks until KMS is healthy.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/kms-misconfig.md
+
+  - name: pharmax_billing
+    rules:
+      - alert: StripePushFailing
+        expr: |
+          (1 - pharmax:billing_stripe_push_success_ratio:15m) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+          domain: billing
+        annotations:
+          summary: Stripe invoice push failure rate above 5% over 15m
+          description: |
+            More than 5% of Stripe invoice pushes have failed over the
+            last 15 minutes. Likely causes: Stripe API outage, invalid
+            customer id on the invoice, or rotated API key. Drained
+            outbox events remain on the failed status until the next
+            tick — they will retry automatically.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/docs/RUNBOOK.md#replaying-a-failed-stripe-webhook
+
+  - name: pharmax_platform_health
+    rules:
+      - alert: HighP99HttpLatency
+        # 1500ms p99 for any web service over 10m — operator-noticeable.
+        expr: max by (service_name) (pharmax:http_p99_duration_seconds:5m) > 1.5
+        for: 10m
+        labels:
+          severity: warning
+          domain: platform
+        annotations:
+          summary: p99 HTTP latency > 1.5s on {{ $labels.service_name }}
+          description: |
+            Slow requests for {{ $labels.service_name }}. Check
+            platform-health for which route + which DB query is hot.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/command-bus-failures.md
+
+      - alert: High5xxErrorRate
+        expr: pharmax:http_5xx_ratio:5m > 0.02
+        for: 5m
+        labels:
+          severity: critical
+          domain: platform
+        annotations:
+          summary: 5xx error rate above 2% on {{ $labels.service_name }}
+          description: |
+            Sustained 5xx error rate. Cross-reference Sentry for the
+            release SHA and the platform-health dashboard for the
+            offending route.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/command-bus-failures.md
+
+      - alert: HighEventLoopLag
+        # nodejs.eventloop.delay is in seconds; 200ms is the
+        # operator-noticeable threshold.
+        expr: avg_over_time(nodejs_eventloop_delay_p99_seconds[5m]) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          domain: platform
+        annotations:
+          summary: Node.js event loop p99 lag > 200ms on {{ $labels.service_name }}
+          description: |
+            CPU-bound work is starving the event loop. Likely a hot
+            synchronous code path; profile with `--cpu-prof` and check
+            recent code for synchronous JSON.parse / crypto / large
+            string ops on the request path.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/command-bus-failures.md
+
+      - alert: HighMemoryUsage
+        # Heap utilization > 85% sustained.
+        expr: |
+          (process_runtime_nodejs_memory_heap_used_bytes
+           / process_runtime_nodejs_memory_heap_limit_bytes) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+          domain: platform
+        annotations:
+          summary: Heap utilization > 85% on {{ $labels.service_name }}
+          description: |
+            Heap is under sustained pressure. Investigate for leaks
+            (retained event listeners, unbounded caches, large response
+            objects accumulating).
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/command-bus-failures.md
+
+      - alert: PgPoolSaturated
+        expr: |
+          (sum by (service_name) (db_client_connections_usage{state="used"})
+           / sum by (service_name) (db_client_connections_usage)) > 0.90
+        for: 10m
+        labels:
+          severity: warning
+          domain: platform
+        annotations:
+          summary: Postgres connection pool > 90% utilized on {{ $labels.service_name }}
+          description: |
+            Connection pool saturation usually means a slow query is
+            holding connections open. Find the long-running query and
+            ship the fix or raise the pool size.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/observability/runbooks/command-bus-failures.md
+
+  - name: pharmax_outbox
+    rules:
+      - alert: OutboxDeadLetters
+        expr: sum by (event_type) (increase(pharmax_outbox_dead_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+          domain: outbox
+        annotations:
+          summary: Outbox events moved to dead-letter for event_type {{ $labels.event_type }}
+          description: |
+            One or more outbox events exceeded the retry budget and were
+            moved to dead-letter status. Operator must triage manually —
+            inspect event_outbox rows where status='DEAD'.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/docs/RUNBOOK.md#outbox-drain-stuck-or-backed-up

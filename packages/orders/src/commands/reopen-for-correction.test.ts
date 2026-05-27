@@ -5,7 +5,7 @@ import {
   executeCommand,
   resetCommandBusConfigurationForTests,
 } from "@pharmax/command-bus";
-import { ReopenReason, RoleScope } from "@pharmax/database";
+import { OrderStageIntervalKind, ReopenReason, RoleScope } from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
 import {
   configureRbac,
@@ -14,6 +14,7 @@ import {
   resetRbacConfigurationForTests,
   type ResolvedGrant,
 } from "@pharmax/rbac";
+import { createOrderStageIntervalTxStub } from "@pharmax/sla/test-utils";
 import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
 import {
@@ -65,6 +66,15 @@ interface FakeOverrides {
   } | null;
   bucket?: { id: string } | null;
   orderUpdateManyCount?: number;
+  /**
+   * Kind of the currently-open `OrderStageInterval` row. ReopenForCorrection
+   * is handler-direct: it closes the interval that corresponds to the
+   * locked row's currentStatus and opens the interval for `reopenToState`.
+   * Tests must pass a value consistent with `lockedRow.currentStatus`.
+   * Defaults to `WAIT_AFTER_FINAL_REJECT` to match the default
+   * `FINAL_VERIFICATION_REJECTED` locked row.
+   */
+  initialOpenIntervalKind?: OrderStageIntervalKind;
 }
 
 function buildPrismaFake(overrides: FakeOverrides = {}) {
@@ -83,6 +93,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}) {
         return { id: POLICY_ID, code: "order.standard", version: 1, status: "ACTIVE" };
       }),
     },
+    orderStageInterval: createOrderStageIntervalTxStub(
+      (table, op, args) => calls.push({ table, op, args }),
+      overrides.initialOpenIntervalKind ?? OrderStageIntervalKind.WAIT_AFTER_FINAL_REJECT
+    ),
     bucket: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "bucket", op: "findFirst", args });
@@ -200,11 +214,33 @@ describe("ReopenForCorrection — happy path", () => {
         currentAssigneeUserId: USER_ID,
       },
     });
+
+    // SLA: close WAIT_AFTER_FINAL_REJECT (the open kind for the
+    // source state FINAL_VERIFICATION_REJECTED, asserted by the
+    // primitive's `expectedKind`) and open FILL_ACTIVE — an ACTIVE
+    // kind, so the reopener becomes the actor and matches the
+    // order row's `currentAssigneeUserId` flip above.
+    const slaCloseCalls = calls.filter(
+      (c) => c.table === "orderStageInterval" && c.op === "updateMany"
+    );
+    expect(slaCloseCalls).toHaveLength(1);
+
+    const slaOpenCalls = calls.filter((c) => c.table === "orderStageInterval" && c.op === "create");
+    expect(slaOpenCalls).toHaveLength(1);
+    const slaOpenData = (slaOpenCalls[0]!.args as { data: Record<string, unknown> }).data;
+    expect(slaOpenData).toMatchObject({
+      organizationId: ORG_ID,
+      orderId: ORDER_ID,
+      siteId: SITE_ID,
+      kind: OrderStageIntervalKind.FILL_ACTIVE,
+      actorUserId: USER_ID,
+    });
   });
 
   it("reopens PV1_REJECTED → TYPED_READY_FOR_PV1 without assignee", async () => {
     const { client, tx } = buildPrismaFake({
       lockedRow: { currentStatus: "PV1_REJECTED", version: 4 },
+      initialOpenIntervalKind: OrderStageIntervalKind.WAIT_AFTER_PV1_REJECT,
     });
     configureBus(client);
 

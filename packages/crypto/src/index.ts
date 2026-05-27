@@ -21,10 +21,16 @@ export {
 } from "./envelope.js";
 
 export {
+  AUDIT_MERKLE_SIGNING_DOMAIN_TAG,
+  buildAuditMerkleSigningPreimage,
   type DeriveSearchKeyInput,
   type GenerateDataKeyResult,
   type KmsAdapter,
+  type SignatureAlgorithm,
+  type SignRootInput,
+  type SignRootOutput,
   type UnwrapDataKeyInput,
+  type VerifyRootInput,
 } from "./kms-adapter.js";
 
 export {
@@ -33,6 +39,23 @@ export {
   timingSafeEqualBuffers,
   type LocalKmsAdapterOptions,
 } from "./local-kms-adapter.js";
+
+export {
+  AwsKmsAdapter,
+  sanitizeKeyIdForLabel,
+  type AwsKmsAdapterOptions,
+  type AwsKmsClient,
+  type AwsKmsDecryptInput,
+  type AwsKmsDecryptOutput,
+  type AwsKmsDescribeKeyInput,
+  type AwsKmsDescribeKeyOutput,
+  type AwsKmsGenerateDataKeyInput,
+  type AwsKmsGenerateDataKeyOutput,
+  type AwsKmsMacInput,
+  type AwsKmsMacOutput,
+} from "./aws-kms-adapter.js";
+
+export { createAwsKmsClient, type CreateAwsKmsClientOptions } from "./aws-kms-client.js";
 
 export { decryptField, encryptField } from "./encrypt.js";
 
@@ -73,18 +96,24 @@ export {
 } from "./errors.js";
 
 import * as aadModule from "./aad.js";
+import * as awsKmsModule from "./aws-kms-adapter.js";
+import * as awsKmsClientModule from "./aws-kms-client.js";
 import * as blindIndexModule from "./blind-index.js";
 import * as configureModule from "./configure.js";
 import * as encryptModule from "./encrypt.js";
 import * as envelopeModule from "./envelope.js";
 import * as errorsModule from "./errors.js";
+import * as kmsAdapterModule from "./kms-adapter.js";
 import * as localKmsModule from "./local-kms-adapter.js";
 import * as shredModule from "./shred.js";
 
 export const crypto = {
   ...aadModule,
   ...envelopeModule,
+  ...kmsAdapterModule,
   ...localKmsModule,
+  ...awsKmsModule,
+  ...awsKmsClientModule,
   ...encryptModule,
   ...blindIndexModule,
   ...shredModule,

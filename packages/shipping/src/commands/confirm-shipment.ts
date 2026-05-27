@@ -219,6 +219,12 @@ export const ConfirmShipment = defineCommand<ConfirmShipmentInput, ConfirmShipme
           payload: {
             orderId: target.id,
             organizationId: ctx.organizationId,
+            // clinicId surfaced so the billing materialization
+            // outbox handler (see apps/worker/src/drains/
+            // materialize-billing-on-order-shipped.ts) can attribute
+            // the invoice line to the right clinic without a
+            // second cross-tenant lookup.
+            clinicId: target.clinicId,
             siteId: target.siteId,
             shipmentId: shipment.id,
             trackingNumber: shipment.trackingNumber,

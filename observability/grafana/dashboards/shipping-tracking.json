@@ -1,0 +1,258 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Per-carrier tracking-poller health. Backed by pharmax_shipping_* metrics from apps/worker/src/drains/{fedex,ups}-tracking-poller.ts and the escalation handler.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Carrier poll latency (p95)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "right",
+          "displayMode": "table",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (carrier, le) (rate(pharmax_shipping_tracking_poll_duration_seconds_bucket{deployment_environment=~\"$environment\"}[5m])))",
+          "legendFormat": "p95 {{ carrier }}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (carrier, le) (rate(pharmax_shipping_tracking_poll_duration_seconds_bucket{deployment_environment=~\"$environment\"}[5m])))",
+          "legendFormat": "p99 {{ carrier }}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Carrier poll failure ratio (rolling 15m)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "auto" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "right",
+          "displayMode": "table",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (carrier) (rate(pharmax_shipping_tracking_poll_failures_total{deployment_environment=~\"$environment\"}[15m])) / clamp_min(sum by (carrier) (rate(pharmax_shipping_tracking_poll_failures_total{deployment_environment=~\"$environment\"}[15m])) + sum by (carrier) (rate(pharmax_shipping_tracking_events_recorded_total{deployment_environment=~\"$environment\"}[15m])), 1e-9)",
+          "legendFormat": "{{ carrier }}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Tracking events recorded (per second, by carrier)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "stacking": { "mode": "normal", "group": "A" },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "right",
+          "displayMode": "table",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (carrier) (rate(pharmax_shipping_tracking_events_recorded_total{deployment_environment=~\"$environment\"}[5m]))",
+          "legendFormat": "{{ carrier }}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Escalations created (per minute)",
+      "description": "Counter pharmax_shipping_escalations_created_total. Sourced from outbox handler escalate-on-shipment-exception.ts. Spikes mean carrier-side issues are reaching ops.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "auto" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "right",
+          "displayMode": "table",
+          "calcs": ["sum"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pharmax_shipping_escalations_created_total{deployment_environment=~\"$environment\"}[5m]))",
+          "legendFormat": "escalations/s"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "EXCEPTION bucket size (current)",
+      "description": "Current count of orders in the EXCEPTION bucket. Threshold red at 25 to match alert ShippingExceptionBucketGrowing.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 18 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 25 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "graphMode": "area",
+        "colorMode": "background",
+        "textMode": "value_and_name",
+        "orientation": "auto",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (organization_id) (pharmax_shipping_bucket_size{deployment_environment=~\"$environment\", bucket=\"EXCEPTION\"})",
+          "legendFormat": "{{ organization_id }}"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["pharmax", "shipping", "carriers"],
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(deployment_environment)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(deployment_environment)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "options": [],
+        "hide": 0
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(service_name)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(service_name)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "options": [],
+        "hide": 0
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Pharmax · Shipping & Tracking",
+  "uid": "pharmax-shipping-tracking",
+  "version": 1,
+  "weekStart": ""
+}

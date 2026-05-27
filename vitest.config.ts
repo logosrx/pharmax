@@ -32,6 +32,13 @@ export default defineConfig({
       // purely to fire Next's compile-time check.
       "server-only": new URL("./test/shims/empty.ts", import.meta.url).pathname,
       "client-only": new URL("./test/shims/empty.ts", import.meta.url).pathname,
+      // `@/` is the apps/web package alias defined in
+      // apps/web/tsconfig.json (`"paths": { "@/*": ["./src/*"] }`).
+      // Vitest doesn't read TS paths by default; routing it here lets
+      // route-handler tests (e.g. apps/web/app/api/webhooks/clerk/
+      // route.test.ts) import the route module without rewriting the
+      // production import graph to use relative paths.
+      "@/": new URL("./apps/web/src/", import.meta.url).pathname,
     },
   },
   test: {
@@ -53,6 +60,7 @@ export default defineConfig({
     environment: "node",
     globals: false,
     reporters: ["default"],
+    setupFiles: ["./test/setup-env.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],

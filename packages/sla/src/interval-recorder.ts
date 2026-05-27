@@ -237,13 +237,26 @@ export async function transitionStageIntervals(
 
 /**
  * Maps workflow commands to the interval pair they close/open.
+ *
+ * `close` is OPTIONAL: when set, the close is asserted against that
+ * exact kind (the static happy-path transitions where the source
+ * stage is single-from-state). When omitted, the close runs without
+ * a kind assertion and terminates whatever interval is currently
+ * open — used by `PlaceHold`, which is multi-from-state and can
+ * close `WAIT_BEFORE_*`, `*_ACTIVE`, `WAIT_AFTER_*_REJECT`, or any
+ * other open kind depending on where the order was when the hold
+ * was placed.
+ *
+ * `open` is REQUIRED — every entry in this table opens a successor
+ * interval. Commands that DON'T open a successor live in
+ * `COMMAND_STAGE_INTERVAL_CLOSE_ONLY` instead.
  */
 export const COMMAND_STAGE_INTERVAL_TRANSITION: Readonly<
   Partial<
     Record<
       string,
       {
-        readonly close: OrderStageIntervalKind;
+        readonly close?: OrderStageIntervalKind;
         readonly open: OrderStageIntervalKind;
       }
     >
@@ -257,6 +270,27 @@ export const COMMAND_STAGE_INTERVAL_TRANSITION: Readonly<
     close: OrderStageIntervalKind.TYPING_ACTIVE,
     open: OrderStageIntervalKind.WAIT_BEFORE_PV1,
   },
+  // Typing paused for missing info. Closes the active typing
+  // interval and opens a fresh WAIT_BEFORE_TYPING — the order
+  // sits in the TYPING bucket with status
+  // TYPING_PENDING_MISSING_INFO until ResumeTyping fires. This
+  // matches the `stage-interval-state-map` claim that
+  // TYPING_PENDING_MISSING_INFO is a WAIT_BEFORE_TYPING state.
+  // Reports break "first-pass typing time" from "time waiting
+  // on missing info" by aggregating the two adjacent intervals
+  // separately.
+  MarkTypingMissingInfo: {
+    close: OrderStageIntervalKind.TYPING_ACTIVE,
+    open: OrderStageIntervalKind.WAIT_BEFORE_TYPING,
+  },
+  // Resume after missing info received. Symmetric with StartTyping
+  // — same close/open pair. The engine guarantees the source state
+  // is TYPING_PENDING_MISSING_INFO; the previous interval (opened
+  // by MarkTypingMissingInfo) is the one being closed.
+  ResumeTyping: {
+    close: OrderStageIntervalKind.WAIT_BEFORE_TYPING,
+    open: OrderStageIntervalKind.TYPING_ACTIVE,
+  },
   StartPV1: {
     close: OrderStageIntervalKind.WAIT_BEFORE_PV1,
     open: OrderStageIntervalKind.PV1_ACTIVE,
@@ -264,6 +298,14 @@ export const COMMAND_STAGE_INTERVAL_TRANSITION: Readonly<
   ApprovePV1: {
     close: OrderStageIntervalKind.PV1_ACTIVE,
     open: OrderStageIntervalKind.WAIT_BEFORE_FILL,
+  },
+  // Rejection: closes the active pharmacist interval and opens a
+  // dedicated rework wait window. ReopenForCorrection eventually
+  // closes the wait window when an operator routes the order
+  // back to an earlier workflow stage.
+  RejectPV1: {
+    close: OrderStageIntervalKind.PV1_ACTIVE,
+    open: OrderStageIntervalKind.WAIT_AFTER_PV1_REJECT,
   },
   StartFill: {
     close: OrderStageIntervalKind.WAIT_BEFORE_FILL,
@@ -281,9 +323,22 @@ export const COMMAND_STAGE_INTERVAL_TRANSITION: Readonly<
     close: OrderStageIntervalKind.FINAL_VERIFICATION_ACTIVE,
     open: OrderStageIntervalKind.WAIT_BEFORE_SHIPPING,
   },
+  RejectFinalVerification: {
+    close: OrderStageIntervalKind.FINAL_VERIFICATION_ACTIVE,
+    open: OrderStageIntervalKind.WAIT_AFTER_FINAL_REJECT,
+  },
   ReleaseToShip: {
     close: OrderStageIntervalKind.WAIT_BEFORE_SHIPPING,
     open: OrderStageIntervalKind.SHIPPING_ACTIVE,
+  },
+  // Hold: multi-from-state — reachable from every non-terminal,
+  // non-hold state including the two rejection states. The open
+  // kind is always HOLD_ACTIVE; the close kind varies, so the
+  // entry omits `close` and closes whatever's open. ReleaseHold
+  // is handler-direct (not in this table) because its open kind
+  // is data-driven by `heldFromStatus`.
+  PlaceHold: {
+    open: OrderStageIntervalKind.HOLD_ACTIVE,
   },
 });
 
@@ -291,13 +346,29 @@ export const COMMAND_STAGE_INTERVAL_TRANSITION: Readonly<
  * Bus commands that close an interval without opening a new one
  * (terminal in SLA terms). Symmetric with
  * `COMMAND_STAGE_INTERVAL_TRANSITION` so the close-only pattern is
- * data, not code — extending it (e.g., closing the active interval
- * when `CancelOrder` lands) is a single-row edit.
+ * data, not code.
+ *
+ * `close` is OPTIONAL: when set, the close is asserted against that
+ * exact kind (`ConfirmShipment` is single-from-state — `SHIPPING_ACTIVE`
+ * is the only legal predecessor); when omitted, the close runs without
+ * a kind assertion and closes whatever interval is currently open
+ * (`CancelOrder` is multi-from-state — reachable from every
+ * non-terminal status, so the open kind varies and a static assertion
+ * would be wrong).
  */
 export const COMMAND_STAGE_INTERVAL_CLOSE_ONLY: Readonly<
-  Partial<Record<string, { readonly close: OrderStageIntervalKind }>>
+  Partial<Record<string, { readonly close?: OrderStageIntervalKind }>>
 > = Object.freeze({
   ConfirmShipment: { close: OrderStageIntervalKind.SHIPPING_ACTIVE },
+  // Multi-from-state terminal: reachable from RECEIVED, TYPING_*,
+  // PV1_*, FILL_*, FINAL_*, READY_TO_SHIP, ON_HOLD, PV1_REJECTED,
+  // FINAL_VERIFICATION_REJECTED, TYPING_PENDING_MISSING_INFO. Each
+  // source state has a different open interval kind, so we close
+  // without an `expectedKind` assertion. The `cancelled while X`
+  // breakdown a manager wants is already on
+  // `OrderCancellation.cancelledFromStatus`; no terminal interval
+  // row is needed.
+  CancelOrder: {},
 });
 
 /**
@@ -318,37 +389,27 @@ export const COMMAND_STAGE_INTERVAL_CLOSE_ONLY: Readonly<
  * decision is ratified the entry moves into the transition or
  * close-only tables and is deleted from here.
  */
-export const KNOWN_NON_SLA_COMMANDS: ReadonlySet<string> = new Set([
-  // Rejection routes the order to an exception state; should the
-  // PV1_ACTIVE / FINAL_VERIFICATION_ACTIVE interval close + open a
-  // new WAIT_AFTER_PV1_REJECT / WAIT_AFTER_FINAL_REJECT enum value,
-  // or stay open through the rework loop? Recommended: close + new
-  // WAIT_AFTER_*_REJECT kinds (un-buries rework cost from
-  // first-pass pharmacist time).
-  "RejectPV1",
-  "RejectFinalVerification",
-  // Hold / release semantics: doing nothing means held orders
-  // accumulate active-stage time and look like SLA breaches the
-  // pharmacy cannot fix. Recommended: add a HOLD_ACTIVE enum value;
-  // PlaceHold closes current + opens HOLD_ACTIVE; ReleaseHold closes
-  // HOLD_ACTIVE + opens whatever stage the release returns to
-  // (handler reads it off `order_hold`).
-  "PlaceHold",
-  "ReleaseHold",
-  // Terminal close. Recommended: join COMMAND_STAGE_INTERVAL_CLOSE_ONLY
-  // (same shape as ConfirmShipment). The "cancelled while X" report
-  // already has its answer in OrderCancellation.cancelledFromStatus
-  // — no terminal interval row needed. Low-risk; can ship even while
-  // (1)/(2) are debated.
-  "CancelOrder",
-  // Reopen routes back into a workflow state parameterized by
-  // `reopenToState`. The next interval is data-driven so it can't
-  // live in the static COMMAND_STAGE_INTERVAL_TRANSITION table.
-  // Recommended: command handler calls transitionStageIntervals
-  // directly with the resolved kind, keeping the lookup tables a
-  // pure command-name → static-pair contract.
-  "ReopenForCorrection",
-]);
+// Empty in v1: every workflow-mutating command now has an explicit
+// SLA decision — either it appears in
+// `COMMAND_STAGE_INTERVAL_TRANSITION`, in
+// `COMMAND_STAGE_INTERVAL_CLOSE_ONLY`, or it makes a handler-direct
+// call to `transitionStageIntervals` / `closeOpenStageInterval` /
+// `openStageInterval` (the two parameterized commands — `ReleaseHold`
+// and `ReopenForCorrection` — fall in this last bucket because
+// their open kind is data-driven by `heldFromStatus` / `reopenToState`
+// and cannot fit the static lookup tables).
+//
+// The constant remains exported (not deleted) so a future command
+// that wants the explicit "no SLA effect" pattern has a designated
+// home. Listing a command here turns the silent no-op into a
+// deliberate, code-reviewed decision: a new bus command that
+// touches an order must EITHER appear in
+// `COMMAND_STAGE_INTERVAL_TRANSITION`, OR in
+// `COMMAND_STAGE_INTERVAL_CLOSE_ONLY`, OR be added here with a
+// comment explaining the rationale — otherwise
+// `applyCommandStageIntervalTransition` throws
+// `SLA_INTERVAL_COMMAND_UNMAPPED`.
+export const KNOWN_NON_SLA_COMMANDS: ReadonlySet<string> = new Set<string>([]);
 
 export async function applyCommandStageIntervalTransition(input: {
   readonly commandName: string;
@@ -362,27 +423,45 @@ export async function applyCommandStageIntervalTransition(input: {
 }): Promise<void> {
   const closeOnly = COMMAND_STAGE_INTERVAL_CLOSE_ONLY[input.commandName];
   if (closeOnly !== undefined) {
+    // `expectedKind` is conditionally included so an undefined entry
+    // (CancelOrder) runs without a kind assertion. Inlining the spread
+    // honors the schema's `exactOptionalPropertyTypes: true` contract,
+    // which rejects passing `undefined` to an optional field.
     await closeOpenStageInterval({
       tx: input.tx,
       organizationId: input.organizationId,
       orderId: input.orderId,
       endedAt: input.at,
       commandLogId: input.commandLogId,
-      expectedKind: closeOnly.close,
+      ...(closeOnly.close !== undefined ? { expectedKind: closeOnly.close } : {}),
     });
     return;
   }
 
   const pair = COMMAND_STAGE_INTERVAL_TRANSITION[input.commandName];
   if (pair !== undefined) {
-    await transitionStageIntervals({
+    // Hand-rolled close + open here (rather than calling
+    // `transitionStageIntervals`) because the close kind is
+    // OPTIONAL on this table — multi-from-state commands like
+    // `PlaceHold` omit it. `transitionStageIntervals` requires a
+    // close kind by design; keeping that primitive strict means
+    // hand-callers (the rejected reopen path, etc.) get the
+    // typed assertion as a safety net.
+    await closeOpenStageInterval({
+      tx: input.tx,
+      organizationId: input.organizationId,
+      orderId: input.orderId,
+      endedAt: input.at,
+      commandLogId: input.commandLogId,
+      ...(pair.close !== undefined ? { expectedKind: pair.close } : {}),
+    });
+    await openStageInterval({
       tx: input.tx,
       organizationId: input.organizationId,
       orderId: input.orderId,
       siteId: input.siteId,
-      closeKind: pair.close,
-      openKind: pair.open,
-      at: input.at,
+      kind: pair.open,
+      startedAt: input.at,
       commandLogId: input.commandLogId,
       actorUserId: input.actorUserId ?? null,
     });

@@ -258,11 +258,40 @@ export {
   type RejectFinalVerificationOutput,
 } from "./commands/reject-final-verification.js";
 
+// MarkTypingMissingInfo + ResumeTyping form the typing-stage
+// exception loop: a typist pauses on a blocker (prescriber
+// callback, illegible Rx, missing field, etc.), the order parks
+// in TYPING_PENDING_MISSING_INFO on the TYPING bucket, and any
+// typist resumes when the info comes back. Reuses the typing-
+// stage error vocabulary from `start-typing.js`. The reasons
+// enum lives in `missing-info-reasons.js` (closed list, queryable
+// for ops reports).
+export {
+  MarkTypingMissingInfo,
+  type MarkTypingMissingInfoInput,
+  type MarkTypingMissingInfoOutput,
+} from "./commands/mark-typing-missing-info.js";
+
+export {
+  ResumeTyping,
+  type ResumeTypingInput,
+  type ResumeTypingOutput,
+} from "./commands/resume-typing.js";
+
+export {
+  MISSING_INFO_REASONS,
+  MISSING_INFO_REASONS_SET,
+  isMissingInfoReason,
+  type MissingInfoReason,
+} from "./missing-info-reasons.js";
+
 import * as approveFinalVerificationModule from "./commands/approve-final-verification.js";
 import * as approvePV1Module from "./commands/approve-pv1.js";
 import * as completeTypingReviewModule from "./commands/complete-typing-review.js";
+import * as markTypingMissingInfoModule from "./commands/mark-typing-missing-info.js";
 import * as rejectFinalVerificationModule from "./commands/reject-final-verification.js";
 import * as rejectPV1Module from "./commands/reject-pv1.js";
+import * as resumeTypingModule from "./commands/resume-typing.js";
 import * as startFinalVerificationModule from "./commands/start-final-verification.js";
 import * as startPV1Module from "./commands/start-pv1.js";
 import * as startTypingModule from "./commands/start-typing.js";
@@ -271,6 +300,8 @@ export const verification = {
   commands: {
     StartTyping: startTypingModule.StartTyping,
     CompleteTypingReview: completeTypingReviewModule.CompleteTypingReview,
+    MarkTypingMissingInfo: markTypingMissingInfoModule.MarkTypingMissingInfo,
+    ResumeTyping: resumeTypingModule.ResumeTyping,
     StartPV1: startPV1Module.StartPV1,
     ApprovePV1: approvePV1Module.ApprovePV1,
     RejectPV1: rejectPV1Module.RejectPV1,

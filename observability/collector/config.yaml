@@ -1,0 +1,212 @@
+# OpenTelemetry Collector — Pharmax pipeline definition
+#
+# Ingest: OTLP/HTTP from every Pharmax Node process via @pharmax/telemetry
+# (port 4318 matches the SDK default and the existing apps' OTel env vars).
+#
+# Fan-out:
+#   - Prometheus  (metrics scrape via Prometheus exporter on :8889)
+#   - Tempo       (traces via OTLP/HTTP push)
+#   - Loki        (logs via the loki exporter)
+#
+# Optional vendor exporters are present but commented; uncomment the
+# `datadog/` exporter (or add `prometheusremotewrite/grafana-cloud`) when
+# the production task definition mounts the corresponding API-key env var
+# from Secrets Manager.
+#
+# Defense in depth: a strict `attributes` processor explicitly drops any
+# attribute key in the PHI sentinel list before the data leaves the
+# collector. See ../runbooks/audit-chain-broken.md for why that defense
+# matters and collector/README.md for the full list.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        # Apps emit on /v1/traces and /v1/metrics — both are handled
+        # by the OTLP/HTTP receiver out of the box.
+        cors:
+          allowed_origins:
+            - "http://localhost:*"
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+  # Collector self-metrics so we can dashboard the collector itself.
+  prometheus/self:
+    config:
+      scrape_configs:
+        - job_name: "otel-collector"
+          scrape_interval: 30s
+          static_configs:
+            - targets: ["0.0.0.0:8888"]
+
+processors:
+  # Order matters: memory_limiter MUST be first; batch MUST be last.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  # Defensive PHI scrub. Emit-side should never produce these, but a
+  # bug in instrumentation or a third-party library could attach one
+  # as a span attribute. We strip any attribute whose KEY matches the
+  # PHI sentinel list. Span/metric data still flows; the attribute
+  # just gets dropped. See collector/README.md.
+  attributes/phi_scrub:
+    actions:
+      - key: first_name
+        action: delete
+      - key: last_name
+        action: delete
+      - key: full_name
+        action: delete
+      - key: patient_name
+        action: delete
+      - key: patient.first_name
+        action: delete
+      - key: patient.last_name
+        action: delete
+      - key: dob
+        action: delete
+      - key: date_of_birth
+        action: delete
+      - key: ssn
+        action: delete
+      - key: ssn_last4
+        action: delete
+      - key: mrn
+        action: delete
+      - key: medical_record_number
+        action: delete
+      - key: phone
+        action: delete
+      - key: phone_number
+        action: delete
+      - key: mobile
+        action: delete
+      - key: email
+        action: delete
+      - key: email_address
+        action: delete
+      - key: address
+        action: delete
+      - key: street_address
+        action: delete
+      - key: address_line_1
+        action: delete
+      - key: address_line_2
+        action: delete
+      - key: postal_code
+        action: delete
+      - key: zip
+        action: delete
+      - key: rx_number
+        action: delete
+      - key: prescription_number
+        action: delete
+      - key: drug_name
+        action: delete
+      - key: medication
+        action: delete
+      - key: diagnosis
+        action: delete
+      - key: icd10
+        action: delete
+      - key: notes
+        action: delete
+      # Pattern-based drop for any "patient.*" subkey we forgot to
+      # enumerate above. Safe because there is no non-PHI attribute
+      # we expect to start with "patient.".
+      - key: patient
+        action: delete
+
+  # Resource detection enriches every signal with host / cloud
+  # metadata (instance id, region, k8s pod name when running in EKS).
+  resourcedetection:
+    detectors: [env, system, ec2, ecs]
+    timeout: 5s
+    override: false
+
+  # Batch must be last for efficiency.
+  batch:
+    timeout: 10s
+    send_batch_size: 8192
+    send_batch_max_size: 8192
+
+exporters:
+  # ---------- Metrics ----------
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: "" # metric names already include pharmax_ prefix
+    send_timestamps: true
+    metric_expiration: 5m
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  # ---------- Traces ----------
+  otlphttp/tempo:
+    endpoint: http://tempo:4318
+    tls:
+      insecure: true # in-cluster traffic; mTLS recommended in prod
+    compression: gzip
+
+  # ---------- Logs ----------
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+    default_labels_enabled:
+      exporter: false
+      job: true
+
+  # ---------- Optional: Datadog (uncomment + set env var in prod) ----------
+  # datadog/all:
+  #   api:
+  #     site: datadoghq.com
+  #     key: ${env:DD_API_KEY}
+  #   hostname_source: config_or_system
+  #
+  # ---------- Optional: Grafana Cloud remote write ----------
+  # prometheusremotewrite/grafana_cloud:
+  #   endpoint: ${env:GC_PROM_REMOTE_WRITE_URL}
+  #   headers:
+  #     Authorization: "Bearer ${env:GC_PROM_TOKEN}"
+
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  pprof:
+    endpoint: 0.0.0.0:1777
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  extensions: [health_check, pprof, zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/phi_scrub, resourcedetection, batch]
+      exporters: [otlphttp/tempo]
+      # Add datadog/all and any other vendor exporter to this list.
+
+    metrics:
+      receivers: [otlp, prometheus/self]
+      processors: [memory_limiter, attributes/phi_scrub, resourcedetection, batch]
+      exporters: [prometheus]
+      # Add prometheusremotewrite/grafana_cloud or datadog/all here.
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/phi_scrub, resourcedetection, batch]
+      exporters: [loki]
+
+  telemetry:
+    logs:
+      level: info
+      encoding: json
+    metrics:
+      level: detailed
+      address: 0.0.0.0:8888

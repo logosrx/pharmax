@@ -1,0 +1,71 @@
+# =============================================================================
+# Pharmax — prod / us-west-2 values. DR region (warm standby).
+#
+# Sized smaller than us-east-1: the DR region runs at "minimum viable"
+# capacity day-to-day and scales up via `desired_count` overrides during
+# an actual failover (the `Makefile` has a `dr-promote` target that bumps
+# desired_count and adjusts auto-scaling floors).
+#
+# Multi-AZ RDS is ON because we want HA inside the DR region too — a
+# region-level failure into a non-HA DR is just trading one outage for
+# another.
+# =============================================================================
+
+project     = "pharmax"
+environment = "prod"
+region      = "us-west-2"
+
+# ---- Network ----------------------------------------------------------------
+# Use a NON-OVERLAPPING CIDR with us-east-1 (10.42.0.0/16) so future VPC
+# peering / TGW routing across regions does not conflict.
+vpc_cidr                     = "10.142.0.0/16"
+availability_zone_count      = 3
+nat_gateway_strategy         = "per_az"
+vpc_flow_logs_retention_days = 365
+
+# ---- ALB --------------------------------------------------------------------
+acm_certificate_domain   = "dr.pharmax.example.com"
+alb_idle_timeout_seconds = 60
+
+# ---- KMS --------------------------------------------------------------------
+asymm_sign_key_spec = "ECC_NIST_P384"
+
+# ---- RDS --------------------------------------------------------------------
+rds_instance_class                      = "db.r6g.large"
+rds_allocated_storage_gb                = 200
+rds_max_allocated_storage_gb            = 2000
+rds_backup_retention_days               = 35
+rds_engine_version                      = "16.4"
+rds_parameter_group_family              = "postgres16"
+rds_multi_az                            = true
+rds_deletion_protection                 = true
+rds_performance_insights_retention_days = 7
+
+# ---- ECS --------------------------------------------------------------------
+# Warm-standby sizing. Scale up via `make dr-promote` during failover.
+ecs_web_cpu                    = 1024
+ecs_web_memory                 = 2048
+ecs_web_desired_count          = 1
+ecs_web_min_count              = 1
+ecs_web_max_count              = 20
+ecs_worker_cpu                 = 1024
+ecs_worker_memory              = 2048
+ecs_worker_desired_count       = 1
+ecs_print_agent_cpu            = 512
+ecs_print_agent_memory         = 1024
+ecs_print_agent_desired_count  = 0
+ecs_log_retention_days         = 365
+ecs_container_insights_enabled = true
+
+# ---- WAF / Alarms -----------------------------------------------------------
+waf_rate_limit_per_5min = 2000
+alarm_sns_topic_arn     = "REPLACE_arn:aws:sns:us-west-2:<account>:pharmax-prod-dr-alerts"
+
+# ---- Audit archive ----------------------------------------------------------
+audit_archive_retention_years         = 7
+audit_archive_glacier_transition_days = 90
+
+tags = {
+  CostCenter = "engineering-prod"
+  DrRole     = "warm-standby"
+}

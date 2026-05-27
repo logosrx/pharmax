@@ -1,0 +1,14 @@
+# Pharmax — staging / us-east-1 backend.
+# COPY TO `backend.tf`. Substitute REPLACE_* placeholders with the values
+# produced by the bootstrap module run.
+
+terraform {
+  backend "s3" {
+    bucket         = "REPLACE_pharmax-tfstate-staging-<account-suffix>"
+    key            = "pharmax/staging/us-east-1/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "REPLACE_pharmax-tfstate-locks-staging"
+    encrypt        = true
+    kms_key_id     = "REPLACE_arn:aws:kms:us-east-1:<account>:key/<state-cmk-id>"
+  }
+}

@@ -44,3 +44,11 @@ stripe_webhook_event
 # shipment by tracking number (in system context) and enters that
 # org's tenancy to execute RecordShipmentTrackingEvent.
 easypost_webhook_event
+
+# Inbound Clerk (identity) webhook events. Arrive BEFORE the platform
+# resolves them to a Pharmax user row (and thus an organization). The
+# dispatcher in apps/web/src/server/auth/clerk-webhook-handlers.ts
+# resolves the tenancy from `user.clerkUserId` inside a system-context
+# frame. The raw delivery ledger (svix-id idempotency key) is
+# platform-level by construction.
+clerk_webhook_event

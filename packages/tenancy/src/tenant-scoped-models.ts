@@ -50,6 +50,7 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
 
   // Workflow policy.
   ["WorkflowPolicy", { kind: "organizationId" }] as const,
+  ["WorkflowPolicyOverlay", { kind: "organizationId" }] as const,
 
   // Audit primitives (every write to these is also tenant-scoped).
   ["CommandLog", { kind: "organizationId" }] as const,
@@ -68,6 +69,7 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["StripeCustomer", { kind: "organizationId" }] as const,
   ["Invoice", { kind: "organizationId" }] as const,
   ["InvoiceLine", { kind: "organizationId" }] as const,
+  ["PricingRule", { kind: "organizationId" }] as const,
 
   // Phase 2 — PHI domain entities. PHI columns themselves are
   // envelope-encrypted (see `@pharmax/crypto`); auto-scoping at the
@@ -123,6 +125,19 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // UPS). Standard `{ organizationId }` filter.
   ["CarrierCredential", { kind: "organizationId" }] as const,
   ["OrderStageInterval", { kind: "organizationId" }] as const,
+  // PackagePhoto is the pre-shipment package-photo capture record
+  // (rep snaps a photo on the dock + types the external order
+  // number; CapturePackagePhoto in `@pharmax/package-capture`
+  // creates the row). Tenant-scoped on `organizationId` like every
+  // other domain row; clinic isolation lives in RBAC + UI.
+  ["PackagePhoto", { kind: "organizationId" }] as const,
+  // PackagePhotoUploadToken is the bridge row between the
+  // multipart-upload endpoint and the CapturePackagePhoto command
+  // dispatch (the S3 adapter persists upload metadata here so the
+  // command can resolve the opaque token to a storage tuple). RLS
+  // and the Prisma extension's anti-leak guard treat it identically
+  // to every other organization-scoped domain row.
+  ["PackagePhotoUploadToken", { kind: "organizationId" }] as const,
 ]);
 
 /**
@@ -154,6 +169,13 @@ export const TENANT_EXCLUDED_MODELS: ReadonlySet<string> = new Set([
   // shipment by tracking number and enters that org's tenancy to
   // execute RecordShipmentTrackingEvent.
   "EasyPostWebhookEvent",
+  // Inbound Clerk (identity) webhook events. Same reason as the two
+  // above — the platform does not know which tenant a Clerk event
+  // resolves to until the dispatcher (apps/web/src/server/auth/
+  // clerk-webhook-handlers.ts) looks the Pharmax user row up by
+  // `clerkUserId` in system context. The svix-id-keyed idempotency
+  // ledger is platform-level by construction.
+  "ClerkWebhookEvent",
 ]);
 
 /**

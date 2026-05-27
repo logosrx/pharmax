@@ -265,12 +265,53 @@ export const ORDER_STANDARD_V1_TRANSITIONS: ReadonlyArray<OrderTransitionRow> = 
   ...CANCEL_TRANSITIONS,
 ]);
 
+/**
+ * Per-transition attestation requirement.
+ *
+ * v1 base policies declare ZERO attestations — the engine validates
+ * `(state, command)` pairs only and the actor identity comes from the
+ * tenancy context. Overlays (see `policy-overlay.ts`, ADR-0019) layer
+ * additional attestations on top of a transition; e.g. "ApprovePV1 on
+ * a controlled-substance order requires a second pharmacist signature".
+ *
+ * The engine in `engine.ts` IGNORES this field today — pinning it is a
+ * Tier-2 wiring task that the bus will perform inside the command-bus
+ * tx (deferred per ADR-0019). Storing it on the policy contract keeps
+ * the surface declarative and lets static tools (UI affordance checks,
+ * admin policy editors) read the requirement without a runtime hook.
+ */
+export interface AttestationRequirement {
+  /** Stable id for audit metadata (e.g. "controlled-substance-second-pv1"). */
+  readonly id: string;
+  /**
+   * Total signatures required to satisfy this requirement, INCLUDING the
+   * acting user. `1` is a no-op (the acting user is always one signer);
+   * `2` means "second pharmacist must also approve"; etc.
+   */
+  readonly minSignatures: number;
+  /** Permission the additional signer(s) must hold. PermissionCode-typed string. */
+  readonly permission: string;
+  /** Optional admin-facing description. Non-PHI. */
+  readonly description?: string;
+}
+
 export interface OrderWorkflowPolicy {
   readonly code: "order.standard";
   readonly version: 1;
   readonly states: ReadonlyArray<OrderState>;
   readonly terminalStates: ReadonlyArray<OrderState>;
   readonly transitions: ReadonlyArray<OrderTransitionRow>;
+  /**
+   * Optional per-transition attestation requirements, keyed by
+   * `OrderTransitionRow.transitionId`. Populated by
+   * `mergePolicyWithOverlay` (Tier 2 — see ADR-0019); base policies
+   * leave this undefined. Engine ignores it; future Tier-2 wiring
+   * inside the command bus will read it after policy load and
+   * before the handler's `exec`.
+   */
+  readonly attestationsByTransitionId?: Readonly<
+    Record<string, ReadonlyArray<AttestationRequirement>>
+  >;
 }
 
 export const ORDER_STANDARD_V1: OrderWorkflowPolicy = Object.freeze({

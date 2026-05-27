@@ -1,0 +1,395 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Service-level golden signals: request rate, error rate, latency, CPU, memory, event-loop lag, DB pool, Redis. Backed by OTel auto-instrumentation (no custom code needed).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Request golden signals",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Request rate (per second, by service)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom",
+          "displayMode": "list",
+          "calcs": ["mean"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service_name) (rate(http_server_request_duration_seconds_count{deployment_environment=~\"$environment\", service_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{ service_name }}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "5xx error ratio (by service)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "auto" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.02 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom",
+          "displayMode": "list",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service_name) (rate(http_server_request_duration_seconds_count{deployment_environment=~\"$environment\", service_name=~\"$service\", http_response_status_code=~\"5..\"}[5m])) / clamp_min(sum by (service_name) (rate(http_server_request_duration_seconds_count{deployment_environment=~\"$environment\", service_name=~\"$service\"}[5m])), 1e-9)",
+          "legendFormat": "{{ service_name }}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Latency p50 / p95 / p99 (by service)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom",
+          "displayMode": "list",
+          "calcs": ["mean"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (service_name, le) (rate(http_server_request_duration_seconds_bucket{deployment_environment=~\"$environment\", service_name=~\"$service\"}[5m])))",
+          "legendFormat": "p50 {{ service_name }}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_request_duration_seconds_bucket{deployment_environment=~\"$environment\", service_name=~\"$service\"}[5m])))",
+          "legendFormat": "p95 {{ service_name }}"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (service_name, le) (rate(http_server_request_duration_seconds_bucket{deployment_environment=~\"$environment\", service_name=~\"$service\"}[5m])))",
+          "legendFormat": "p99 {{ service_name }}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "row",
+      "title": "Saturation",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "panels": []
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "CPU usage (process_cpu_utilization)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom",
+          "displayMode": "list",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (service_name) (process_cpu_utilization{deployment_environment=~\"$environment\", service_name=~\"$service\"})",
+          "legendFormat": "{{ service_name }}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Heap utilization (used / limit)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.75 },
+              { "color": "red", "value": 0.85 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom",
+          "displayMode": "list",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (service_name) (process_runtime_nodejs_memory_heap_used_bytes{deployment_environment=~\"$environment\", service_name=~\"$service\"} / clamp_min(process_runtime_nodejs_memory_heap_limit_bytes{deployment_environment=~\"$environment\", service_name=~\"$service\"}, 1))",
+          "legendFormat": "{{ service_name }}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Event-loop p99 lag (seconds)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.1 },
+              { "color": "red", "value": 0.2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom",
+          "displayMode": "list",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (service_name) (nodejs_eventloop_delay_p99_seconds{deployment_environment=~\"$environment\", service_name=~\"$service\"})",
+          "legendFormat": "{{ service_name }}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Datastore",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Postgres pool utilization",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.75 },
+              { "color": "red", "value": 0.9 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom",
+          "displayMode": "list",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service_name) (db_client_connections_usage{deployment_environment=~\"$environment\", service_name=~\"$service\", state=\"used\"}) / clamp_min(sum by (service_name) (db_client_connections_usage{deployment_environment=~\"$environment\", service_name=~\"$service\"}), 1e-9)",
+          "legendFormat": "{{ service_name }}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Redis command rate (per second)",
+      "description": "Auto-instrumentation surfaces Redis commands as standard OTel spans; this panel uses the derived `db.client.operation.duration` count metric.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom",
+          "displayMode": "list",
+          "calcs": ["mean", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service_name) (rate(db_client_operation_duration_seconds_count{deployment_environment=~\"$environment\", service_name=~\"$service\", db_system=\"redis\"}[5m]))",
+          "legendFormat": "{{ service_name }}"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["pharmax", "platform"],
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(deployment_environment)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(deployment_environment)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "options": [],
+        "hide": 0
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(service_name)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(service_name)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "options": [],
+        "hide": 0
+      }
+    ]
+  },
+  "time": { "from": "now-3h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Pharmax · Platform Health",
+  "uid": "pharmax-platform-health",
+  "version": 1,
+  "weekStart": ""
+}

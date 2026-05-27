@@ -8,6 +8,7 @@ Before editing, follow the rules in:
 - .cursor/rules/01-workflow-safety.mdc
 - .cursor/rules/02-security-compliance.mdc
 - .cursor/rules/03-sla-performance.mdc
+- .cursor/rules/04-clean-room-policy.mdc
 
 Critical rules:
 
@@ -20,3 +21,4 @@ Critical rules:
 - No ship before final verification.
 - No PHI in logs.
 - No unscoped clinic data access.
+- No ingestion of competing pharmacy products' source, JS bundles, network traces, or session-gated material. Design inputs come from docs/governance/public-sources-reference.md only.

@@ -46,8 +46,18 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
   { code: "orgs.read", description: "Read organization details" },
   { code: "users.manage", description: "Create / suspend / restore users" },
   { code: "roles.manage", description: "Create / edit roles" },
+  {
+    code: "org.manage_sites",
+    description:
+      "Edit pharmacy site profile and ship-from address used by the carrier auto-purchase flow",
+  },
   { code: "patients.create", description: "Register a new patient at a clinic" },
   { code: "patients.read", description: "Read patient identity (PHI access)" },
+  {
+    code: "patients.update",
+    description:
+      "Edit patient identity, contact, address, or MRN (re-encrypts and re-indexes touched columns)",
+  },
   {
     code: "patients.crypto_shred",
     description:
@@ -55,6 +65,21 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
   },
   { code: "providers.create", description: "Register a new prescribing provider" },
   { code: "providers.read", description: "Read provider directory" },
+  {
+    code: "providers.update",
+    description:
+      "Edit provider directory entry (name, credential, DEA, contact, address). NPI is immutable; status changes require DeactivateProvider",
+  },
+  {
+    code: "providers.deactivate",
+    description:
+      "Deactivate a provider (ACTIVE -> INACTIVE) with a reason code. Blocks new orders against the prescriber",
+  },
+  {
+    code: "providers.reactivate",
+    description:
+      "Reactivate a provider (INACTIVE -> ACTIVE) with a reason code. Re-enables new orders against the prescriber",
+  },
   { code: "orders.create", description: "Create new orders" },
   { code: "orders.read", description: "View orders within scope" },
   {
@@ -79,6 +104,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
   },
   { code: "typing.start", description: "Start typing on an order" },
   { code: "typing.complete", description: "Complete typing review" },
+  {
+    code: "typing.mark_missing_info",
+    description:
+      "Pause typing on an order with a structured missing-info reason; parks the order in TYPING_PENDING_MISSING_INFO until ResumeTyping is dispatched",
+  },
   { code: "pv1.start", description: "Start PV1 verification" },
   { code: "pv1.approve", description: "Approve PV1" },
   { code: "pv1.reject", description: "Reject PV1" },
@@ -109,7 +139,47 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     description:
       "Register, rotate, or disable per-organization carrier API credentials (EasyPost / FedEx / UPS)",
   },
+  {
+    code: "ship.escalate_to_emergency",
+    description:
+      "Move an order into the EMERGENCY bucket (worker dispatch on shipment exception / failed delivery / return-to-sender)",
+  },
+  {
+    code: "ship.resolve_escalation",
+    description:
+      "Disposition an order out of the EMERGENCY bucket back into a workflow bucket (operator action after carrier exception triage)",
+  },
+  {
+    code: "ship.capture_package_photo",
+    description:
+      "Capture a pre-shipment package photo at the dock and link it to the matched order/patient (writes a PackagePhoto row via CapturePackagePhoto)",
+  },
+  {
+    code: "ship.resolve_package_photo_match",
+    description:
+      "Resolve an unmatched PackagePhoto by linking it to a specific order (operator triage of dock captures that did not auto-match)",
+  },
   { code: "billing.read", description: "View billing data" },
+  {
+    code: "billing.finalize_invoice",
+    description:
+      "Finalize a DRAFT invoice (DRAFT → OPEN), locking it for further line appends and triggering downstream Stripe push",
+  },
+  {
+    code: "billing.manage_pricing",
+    description:
+      "Create, update, or supersede per-(org, clinic, product) pricing rules that determine invoice-line unit amounts",
+  },
+  {
+    code: "billing.credit_invoice",
+    description:
+      "Apply a manual credit / discount / adjustment to an invoice (negative-amount line; preserves the original line audit trail)",
+  },
+  {
+    code: "billing.issue_refund",
+    description:
+      "Issue a Stripe refund against a paid invoice; writes the corresponding negative-amount line on the Pharmax ledger",
+  },
   { code: "billing.manage", description: "Manage invoices and pricing" },
   { code: "audit.read", description: "Read audit log" },
 ];
@@ -414,17 +484,20 @@ async function seedDemoOrganization(): Promise<{ orgId: string }> {
       status: UserStatus.ACTIVE,
     },
   });
-  // Grant via the OrgAdmin role (which already includes
-  // ship.record_tracking_event because it has ALL_PERMS). A dedicated
-  // narrower role with only the single permission would be ideal in
-  // production; the OrgAdmin grant is the minimum-friction seed.
-  const orgAdminForWebhook = await prisma.role.findUniqueOrThrow({
-    where: { organizationId_code: { organizationId: org.id, code: "OrgAdmin" } },
+  // Grant via the dedicated `WebhookService` role. Replaces the
+  // prior `OrgAdmin` shortcut — least-privilege for the machine
+  // identity that handles inbound carrier traffic. The role
+  // template grants exactly `ship.record_tracking_event` +
+  // `ship.escalate_to_emergency`; a compromised webhook signing
+  // secret can record telemetry and route to EMERGENCY, nothing
+  // else (no PHI exposure, no terminal-state writes).
+  const webhookServiceRole = await prisma.role.findUniqueOrThrow({
+    where: { organizationId_code: { organizationId: org.id, code: "WebhookService" } },
   });
   const existingShippingWebhookGrant = await prisma.userRole.findFirst({
     where: {
       userId: shippingWebhookUser.id,
-      roleId: orgAdminForWebhook.id,
+      roleId: webhookServiceRole.id,
       siteId: null,
       clinicId: null,
       teamId: null,
@@ -434,7 +507,7 @@ async function seedDemoOrganization(): Promise<{ orgId: string }> {
     await prisma.userRole.create({
       data: {
         userId: shippingWebhookUser.id,
-        roleId: orgAdminForWebhook.id,
+        roleId: webhookServiceRole.id,
         organizationId: org.id,
       },
     });

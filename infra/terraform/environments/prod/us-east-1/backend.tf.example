@@ -1,0 +1,12 @@
+# Pharmax — prod / us-east-1 backend (PRIMARY region).
+
+terraform {
+  backend "s3" {
+    bucket         = "REPLACE_pharmax-tfstate-prod-<account-suffix>"
+    key            = "pharmax/prod/us-east-1/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "REPLACE_pharmax-tfstate-locks-prod"
+    encrypt        = true
+    kms_key_id     = "REPLACE_arn:aws:kms:us-east-1:<account>:key/<state-cmk-id>"
+  }
+}

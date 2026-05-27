@@ -42,11 +42,15 @@ import {
 } from "node:crypto";
 
 import { cryptoValidationError, kmsKeyNotFoundError } from "./errors.js";
-import type {
-  DeriveSearchKeyInput,
-  GenerateDataKeyResult,
-  KmsAdapter,
-  UnwrapDataKeyInput,
+import {
+  buildAuditMerkleSigningPreimage,
+  type DeriveSearchKeyInput,
+  type GenerateDataKeyResult,
+  type KmsAdapter,
+  type SignRootInput,
+  type SignRootOutput,
+  type UnwrapDataKeyInput,
+  type VerifyRootInput,
 } from "./kms-adapter.js";
 
 const KEK_BYTES = 32;
@@ -145,6 +149,43 @@ export class LocalKmsAdapter implements KmsAdapter {
     return Buffer.from(hkdfSync("sha256", this.seed, Buffer.alloc(0), info, 32));
   }
 
+  /**
+   * Sign an audit-Merkle root via HMAC-SHA-256 against a per-tenant
+   * key derived from the master seed. Symmetric — verification uses
+   * the same adapter and the same seed. Sufficient for dev and
+   * tests; production binds the AwsKmsAdapter's asymmetric path.
+   */
+  public async signRoot(input: SignRootInput): Promise<SignRootOutput> {
+    validateSignRootInput(input);
+    const preimage = buildAuditMerkleSigningPreimage(input);
+    const key = this.deriveAuditMerkleKey(input.tenantId);
+    const signature = createHmac("sha256", key).update(preimage).digest();
+    return {
+      signature,
+      kmsKeyId: this.auditMerkleKidFor(input.tenantId),
+      signatureAlgorithm: "HMAC_SHA_256",
+      signedAt: new Date(),
+    };
+  }
+
+  /**
+   * Recompute the HMAC-SHA-256 over the same preimage and compare
+   * in constant time. Returns false (rather than throwing) on any
+   * algorithm or kmsKeyId mismatch so verifier loops can iterate
+   * many manifests without try/catch noise.
+   */
+  public async verifyRoot(input: VerifyRootInput): Promise<boolean> {
+    validateSignRootInput(input);
+    if (input.signatureAlgorithm !== "HMAC_SHA_256") return false;
+    if (input.kmsKeyId !== this.auditMerkleKidFor(input.tenantId)) return false;
+
+    const preimage = buildAuditMerkleSigningPreimage(input);
+    const key = this.deriveAuditMerkleKey(input.tenantId);
+    const expected = createHmac("sha256", key).update(preimage).digest();
+    if (expected.length !== input.signature.length) return false;
+    return timingSafeEqual(expected, input.signature);
+  }
+
   // ---- private helpers ----
 
   private ensureTenant(tenantId: string): TenantState {
@@ -163,6 +204,53 @@ export class LocalKmsAdapter implements KmsAdapter {
   private deriveKek(tenantId: string, version: number): Buffer {
     const info = Buffer.from(`pharmax.kek.v1.${tenantId}.v${version}`, "utf8");
     return Buffer.from(hkdfSync("sha256", this.seed, Buffer.alloc(0), info, KEK_BYTES));
+  }
+
+  private deriveAuditMerkleKey(tenantId: string): Buffer {
+    const info = Buffer.from(`pharmax.audit-merkle.v1.${tenantId}`, "utf8");
+    return Buffer.from(hkdfSync("sha256", this.seed, Buffer.alloc(0), info, 32));
+  }
+
+  private auditMerkleKidFor(tenantId: string): string {
+    // Stable per-(seed, tenant) identifier. The seed-hash prefix
+    // lets a verifier confirm the local adapter holds the same
+    // master seed that produced the manifest; a different seed
+    // yields a different kid and verification short-circuits to
+    // `false` before any HMAC compute.
+    const seedFingerprint = createHmac("sha256", this.seed)
+      .update("pharmax.audit-merkle.kid.v1")
+      .digest()
+      .subarray(0, 8)
+      .toString("hex");
+    return `local-hmac-sha256:${seedFingerprint}:${tenantId}`;
+  }
+}
+
+function validateSignRootInput(input: SignRootInput): void {
+  requireTenantId(input.tenantId);
+  if (!(input.windowStart instanceof Date) || Number.isNaN(input.windowStart.getTime())) {
+    throw cryptoValidationError({ field: "windowStart", reason: "must be a valid Date" });
+  }
+  if (!(input.windowEnd instanceof Date) || Number.isNaN(input.windowEnd.getTime())) {
+    throw cryptoValidationError({ field: "windowEnd", reason: "must be a valid Date" });
+  }
+  if (input.windowEnd.getTime() <= input.windowStart.getTime()) {
+    throw cryptoValidationError({
+      field: "windowEnd",
+      reason: "must be strictly after windowStart",
+    });
+  }
+  if (!Buffer.isBuffer(input.root) || input.root.length !== 32) {
+    throw cryptoValidationError({
+      field: "root",
+      reason: "must be a 32-byte Buffer (SHA-256 Merkle root)",
+    });
+  }
+  if (!Number.isInteger(input.leafCount) || input.leafCount < 0) {
+    throw cryptoValidationError({
+      field: "leafCount",
+      reason: "must be a non-negative integer",
+    });
   }
 }
 

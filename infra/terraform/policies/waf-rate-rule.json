@@ -1,0 +1,15 @@
+{
+  "_comment": "Reference document — not consumed directly by Terraform. The active rate rule lives in modules/waf/main.tf. Sync changes manually.",
+  "name": "RateLimitPerIp",
+  "priority": 50,
+  "action": "Block",
+  "aggregateKey": "IP",
+  "evaluationWindowSeconds": 300,
+  "defaultLimit": 2000,
+  "rationale": "An unauthenticated client should never need more than ~6.7 req/s sustained. Real users with bursty SPA navigation peak at ~30 req in a few seconds, well under 2000/5min. The number gives generous headroom for legitimate operators on the operations console while shutting down obvious scrapers and credential-stuffing bots.",
+  "tuningGuidance": [
+    "Watch the `<name_prefix>-RateLimit` CloudWatch metric. Sustained > 0 = active blocking; investigate the source IPs.",
+    "If a legit office NAT is being rate-limited, prefer adding an IP set allowlist rule with a higher priority instead of raising the global limit.",
+    "Authenticated API rate limits (per-org / per-user) live in the application layer — Clerk + custom middleware — NOT here. WAF is the perimeter; the app enforces tenancy-aware quotas."
+  ]
+}

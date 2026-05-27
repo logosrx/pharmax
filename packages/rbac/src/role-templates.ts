@@ -65,8 +65,12 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
     permissions: [
       PERMISSIONS.PATIENTS_CREATE,
       PERMISSIONS.PATIENTS_READ,
+      PERMISSIONS.PATIENTS_UPDATE,
       PERMISSIONS.PROVIDERS_CREATE,
       PERMISSIONS.PROVIDERS_READ,
+      PERMISSIONS.PROVIDERS_UPDATE,
+      PERMISSIONS.PROVIDERS_DEACTIVATE,
+      PERMISSIONS.PROVIDERS_REACTIVATE,
       PERMISSIONS.ORDERS_CREATE,
       PERMISSIONS.ORDERS_READ,
       PERMISSIONS.ORDERS_ADD_PRESCRIPTION,
@@ -76,26 +80,82 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       PERMISSIONS.ORDERS_REOPEN_FOR_CORRECTION,
       PERMISSIONS.TYPING_START,
       PERMISSIONS.TYPING_COMPLETE,
+      PERMISSIONS.TYPING_MARK_MISSING_INFO,
       PERMISSIONS.FILL_START,
       PERMISSIONS.FILL_ASSIGN_LOT,
       PERMISSIONS.FILL_PRINT_VIAL_LABEL,
       PERMISSIONS.FILL_REPRINT_VIAL_LABEL,
       PERMISSIONS.FILL_COMPLETE,
       PERMISSIONS.LABELS_CONFIRM_PRINT,
+      // Smaller sites have technicians do prep-and-ship in one
+      // motion (typing → fill → final → dock). The dock leg
+      // includes the package-photo capture, so the tech role
+      // carries the same permission as the dedicated
+      // ShippingClerk role above.
+      PERMISSIONS.SHIP_CAPTURE_PACKAGE_PHOTO,
     ],
   },
   {
     code: "ShippingClerk",
     name: "Shipping Clerk",
     scope: RoleScope.SITE,
-    description: "Releases verified orders to shipping.",
+    description: "Releases verified orders to shipping and dispositions shipment exceptions.",
     permissions: [
       PERMISSIONS.ORDERS_READ,
       PERMISSIONS.SHIP_RELEASE,
       PERMISSIONS.SHIP_CREATE,
       PERMISSIONS.SHIP_CONFIRM,
       PERMISSIONS.SHIP_PURCHASE_LABEL,
+      // Operator disposition path: when an inbound carrier
+      // tracking event lands in EMERGENCY, the shipping clerk
+      // triages and either re-ships or moves the order back to
+      // the next-stage workflow bucket via `ResolveOrderEscalation`.
+      PERMISSIONS.SHIP_RESOLVE_ESCALATION,
+      // Pre-shipment package-photo capture (dock workflow).
+      // Shipping clerks operate the dock; they're the canonical
+      // capturers. PharmacyTechnician also carries this — techs
+      // doing prep-and-ship in smaller sites need it too.
+      PERMISSIONS.SHIP_CAPTURE_PACKAGE_PHOTO,
+      // Operator triage for captures that did NOT auto-match. Held
+      // separately from `SHIP_CAPTURE_PACKAGE_PHOTO` because
+      // resolving a match retroactively rewrites the audit anchor
+      // (which patient/order does this dock photo prove was
+      // packed?). Pharmacy techs DO NOT carry this — a different
+      // operator should triage their captures, mirroring the
+      // workflow-safety pattern where producers and dispositioners
+      // are different roles.
+      PERMISSIONS.SHIP_RESOLVE_PACKAGE_PHOTO_MATCH,
     ],
+  },
+  {
+    // ---------------------------------------------------------------
+    // WebhookService — narrow, machine-only role for the worker
+    // shipping pipeline (per-org `shipping-webhook@<org-slug>.test`
+    // service user). Replaces the prior `OrgAdmin` shortcut.
+    //
+    // Why ORGANIZATION scope: tracking events resolve to ANY
+    // shipment in the org (the carrier doesn't know which site a
+    // shipment belongs to), so the service user can't be constrained
+    // to a single site.
+    //
+    // Permission set is intentionally minimal — just the two
+    // machine-dispatched commands. Anything else (carrier
+    // credential management, manual cancellations, label purchase)
+    // belongs on a human role and would be a least-privilege
+    // violation here.
+    //
+    // SOC 2 / HIPAA: a compromised webhook signing secret can only
+    // (a) record a tracking event, (b) escalate the related order to
+    // EMERGENCY. Neither path discloses PHI or moves an order to a
+    // terminal state. Recovery is "rotate the carrier webhook secret
+    // + force-disable the credential row"; no PHI exposure to wash.
+    // ---------------------------------------------------------------
+    code: "WebhookService",
+    name: "Webhook Service (machine)",
+    scope: RoleScope.ORGANIZATION,
+    description:
+      "Per-org service identity for inbound carrier webhook + tracking-poller dispatch. Machine-only; not assignable to human users.",
+    permissions: [PERMISSIONS.SHIP_RECORD_TRACKING_EVENT, PERMISSIONS.SHIP_ESCALATE_TO_EMERGENCY],
   },
   {
     code: "ClinicViewer",
@@ -109,7 +169,14 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
     name: "Billing Manager",
     scope: RoleScope.ORGANIZATION,
     description: "Invoice and pricing administration.",
-    permissions: [PERMISSIONS.BILLING_READ, PERMISSIONS.BILLING_MANAGE],
+    permissions: [
+      PERMISSIONS.BILLING_READ,
+      PERMISSIONS.BILLING_MANAGE,
+      PERMISSIONS.BILLING_FINALIZE_INVOICE,
+      PERMISSIONS.BILLING_MANAGE_PRICING,
+      PERMISSIONS.BILLING_CREDIT_INVOICE,
+      PERMISSIONS.BILLING_ISSUE_REFUND,
+    ],
   },
 ]);
 

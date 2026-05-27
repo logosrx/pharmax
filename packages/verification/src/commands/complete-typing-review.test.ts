@@ -529,9 +529,19 @@ describe("CompleteTypingReview — workflow + scope failures", () => {
     expect(callsOf(fake.calls, "order", "update")).toHaveLength(0);
   });
 
-  it("policy not ACTIVE → WORKFLOW_POLICY_INACTIVE, no order update", async () => {
+  it("policy ARCHIVED → WORKFLOW_POLICY_INACTIVE, no order update", async () => {
+    // Per ADR-0017 the in-flight selector (`loadPolicy: { from:
+    // "target" }`) ACCEPTS ACTIVE and SUPERSEDED (grandfather
+    // rule) and REJECTS DRAFT and ARCHIVED. ARCHIVED is the
+    // operator asserting that no in-flight order should still
+    // reference this row; if a command lands referencing an
+    // ARCHIVED row, the archival was premature and the command
+    // must fail loudly rather than silently advancing state on
+    // an unsupported policy. The grandfather-readable case
+    // (SUPERSEDED → command succeeds) is covered by the
+    // dedicated test in `@pharmax/command-bus` define-command.test.ts.
     const fake = buildPrismaFake({
-      policy: { code: "order.standard", version: 1, status: "RETIRED" },
+      policy: { code: "order.standard", version: 1, status: "ARCHIVED" },
     });
     configureBus(fake.client);
 

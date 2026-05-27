@@ -30,8 +30,10 @@ import {
   WORKFLOW_UNKNOWN_COMMAND,
   type WorkflowErrorCode,
 } from "./errors.js";
+import type { MergedWorkflowPolicy } from "./policy-overlay.js";
 import {
   REOPEN_TARGETS_BY_SOURCE,
+  type AttestationRequirement,
   type OrderTransitionRow,
   type OrderWorkflowPolicy,
 } from "./policy-v1.js";
@@ -219,4 +221,136 @@ export function getReachableCommands(input: {
     }
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Tier-2 helpers (overlay-aware command-bus integration).
+//
+// These thin wrappers exist so the bus, command handlers, and UI
+// affordance code all consume the SAME `MergedWorkflowPolicy`
+// shape. Without them, callers would have to reach into
+// `merged.merged` to get the underlying `OrderWorkflowPolicy` —
+// a leaky-abstraction tax that would invite drift across call
+// sites. Each wrapper is a one-liner over the existing engine
+// API; the value is in the typed surface, not the work.
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the transition row for `(currentState, command)`
+ * against a merged policy. Same signature as `applyTransition`
+ * but typed to the merged shape and returning the transition
+ * row directly when the lookup succeeds.
+ *
+ * The bus uses this in step 11 (validate current state) and
+ * step 12 (validate prerequisites) — it surfaces the typed
+ * `transitionId` that handlers need to stamp on verification
+ * records and the `transition` row that step 14 (update order
+ * status) consults for the target state.
+ */
+export function validateTransition(input: {
+  readonly merged: MergedWorkflowPolicy;
+  readonly currentState: OrderState;
+  readonly command: OrderWorkflowCommand;
+  readonly releaseToState?: OrderState;
+  readonly reopenToState?: OrderState;
+}): ApplyTransitionResult {
+  return applyTransition({
+    policy: input.merged.merged,
+    currentState: input.currentState,
+    command: input.command,
+    ...(input.releaseToState === undefined ? {} : { releaseToState: input.releaseToState }),
+    ...(input.reopenToState === undefined ? {} : { reopenToState: input.reopenToState }),
+  });
+}
+
+/**
+ * Derive the target state for `(currentState, command)` under
+ * the merged policy. Step 14 of the 20-step contract reads this
+ * to issue the order status update.
+ *
+ * Returns `null` when no transition row matches — the bus is
+ * expected to have already called `validateTransition` and
+ * surfaced the typed error before reaching this helper, so a
+ * `null` here is a programming bug (handler asked for a target
+ * before validating).
+ */
+export function nextStatusFor(input: {
+  readonly merged: MergedWorkflowPolicy;
+  readonly currentState: OrderState;
+  readonly command: OrderWorkflowCommand;
+  readonly releaseToState?: OrderState;
+  readonly reopenToState?: OrderState;
+}): OrderState | null {
+  const result = validateTransition(input);
+  return result.ok ? result.toState : null;
+}
+
+/**
+ * Descriptor for one declarative "extra write" the merged policy
+ * declares for a transition. Today the only kind is
+ * "attestation-required" (overlay's `addRequiredAttestations`
+ * surface). Future expansion (e.g. extra audit fingerprint,
+ * extra structured note) lands as a new kind without breaking
+ * existing handlers — they ignore unknown kinds (forward-compat).
+ */
+export type ExtraWriteDescriptor = {
+  readonly kind: "attestation-required";
+  readonly transitionId: string;
+  readonly requirements: ReadonlyArray<AttestationRequirement>;
+};
+
+/**
+ * Returns the extra writes the merged policy demands for a given
+ * transition. Step 13 of the 20-step contract consults this so
+ * verification records can persist the resolved attestation set
+ * (the `id` of every requirement that fired).
+ *
+ * For base v1 with no overlay, this is always an empty array.
+ * Tier-2 overlays that add attestation requirements surface them
+ * here; the handler's responsibility is to (a) collect the
+ * required signatures and (b) record which requirement ids were
+ * satisfied on the verification record.
+ */
+export function extraWritesFor(input: {
+  readonly merged: MergedWorkflowPolicy;
+  readonly transitionId: string;
+}): ReadonlyArray<ExtraWriteDescriptor> {
+  const map = input.merged.merged.attestationsByTransitionId;
+  if (map === undefined) return [];
+  const reqs = map[input.transitionId];
+  if (reqs === undefined || reqs.length === 0) return [];
+  return [
+    {
+      kind: "attestation-required",
+      transitionId: input.transitionId,
+      requirements: reqs,
+    },
+  ];
+}
+
+/**
+ * Returns extra outbox events an overlay declares for a
+ * transition. v1 overlays have NO event-emit surface (the
+ * declarative shape is `forbid` + `addRequiredAttestations`
+ * only); this function is the reserved seam for a future v2
+ * overlay shape that would add e.g. "after-hours alert" or
+ * "extra clinic-side notification" events.
+ *
+ * Returning `[]` today keeps the bus's step 18 (write
+ * event_outbox) deterministic — the handler still controls the
+ * canonical event set; overlays only ADD to it. When the v2
+ * shape lands, this function adds the overlay-derived events to
+ * the handler's emits.
+ */
+export function extraEventsFor(_input: {
+  readonly merged: MergedWorkflowPolicy;
+  readonly transitionId: string;
+  readonly command: OrderWorkflowCommand;
+}): ReadonlyArray<{
+  readonly eventType: string;
+  readonly aggregateType: string;
+  readonly aggregateId: string;
+  readonly payload: Readonly<Record<string, unknown>>;
+}> {
+  return [];
 }

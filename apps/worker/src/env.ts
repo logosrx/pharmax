@@ -63,6 +63,14 @@ const schema = z.object({
     .positive()
     .default(2 * 60 * 60_000),
 
+  // ---- Stripe outbound (finalized invoice push) -------------------
+  // OPTIONAL. When unset, the outbox handler for
+  // `billing.invoice.finalized.v1` no-ops (logs that Stripe is not
+  // configured) and the invoice stays in OPEN status without a
+  // `stripeInvoiceId`. Wire this for environments that should
+  // mirror invoices to Stripe.
+  STRIPE_SECRET_KEY: z.string().min(1).optional(),
+
   // ---- Lifecycle ---------------------------------------------------
   // Maximum time the process waits for in-flight work after SIGTERM
   // before force-exiting. Should be larger than the longest expected
@@ -75,12 +83,22 @@ const schema = z.object({
   //   - The SAME value across processes that share the database
   //     (apps/web + apps/worker), or rows encrypted by one process
   //     are undecryptable by the other.
-  //   - REPLACED by `AWS_KMS_KEY_ARN` + an `AwsKmsAdapter` in
-  //     production — `LocalKmsAdapter` is a dev convenience and
-  //     MUST NOT run against production data.
+  //   - Optional in production — the AwsKmsAdapter takes over and
+  //     this value is ignored.
   // Length-validated to reject obviously-too-short values that
   // would indicate a misconfigured environment.
-  PHARMAX_LOCAL_KMS_SEED: z.string().min(32),
+  PHARMAX_LOCAL_KMS_SEED: z.string().min(32).optional(),
+
+  // ---- AWS KMS (production envelope encryption) -------------------
+  // See apps/web/src/server/env.ts for the full rationale. Both
+  // processes MUST point at the SAME pair of KMS keys; a wrap by
+  // one and a decrypt by the other would otherwise fail. Optional
+  // at the schema level so dev/test clones don't require AWS
+  // credentials; bootstrap enforces presence under NODE_ENV=production.
+  AWS_REGION: z.string().min(1).optional(),
+  AWS_KMS_DATA_KEY_ID: z.string().min(1).optional(),
+  AWS_KMS_SEARCH_KEY_ID: z.string().min(1).optional(),
+  AWS_KMS_KEY_LABEL: z.string().min(1).optional(),
 
   // ---- Error tracking (Sentry) ------------------------------------
   // When SENTRY_DSN is unset the SDK no-ops and `Logger.error` only
@@ -89,6 +107,39 @@ const schema = z.object({
   SENTRY_ENVIRONMENT: z.string().min(1).optional(),
   SENTRY_RELEASE: z.string().min(1).optional(),
   SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0),
+
+  // ---- Audit-archive Object Lock bucket (ADR-0024) ----------------
+  // S3 bucket configured with Object Lock COMPLIANCE retention. The
+  // worker writes one signed Merkle manifest per org per UTC day
+  // under this bucket; the bucket's lock prevents any later edit or
+  // delete inside the retention window. Required in production —
+  // see bootstrap hard-fail in main.ts.
+  AUDIT_ARCHIVE_S3_BUCKET: z.string().min(1).optional(),
+  // KMS CMK ARN (or alias) used for SSE-KMS on the manifest object.
+  // MUST be a customer-managed key so CloudTrail attributes every
+  // read of an audit manifest back to a discrete principal.
+  AUDIT_ARCHIVE_S3_KMS_KEY_ID: z.string().min(1).optional(),
+  // Object Lock retention duration in years. COMPLIANCE-mode lock is
+  // a one-way ratchet — values shorter than the regulator's
+  // retention floor (HIPAA § 164.316(b)(2): 6 years) would silently
+  // shrink the evidence horizon. Default 7y matches the SOC 2
+  // retention policy.
+  AUDIT_ARCHIVE_RETENTION_YEARS: z.coerce.number().int().min(1).max(100).default(7),
+
+  // ---- Merkle root signing key (ADR-0024) -------------------------
+  // KMS asymmetric key (KeySpec=ECC_NIST_P256, KeyUsage=SIGN_VERIFY)
+  // used by `KmsAsymmetricSigner` to sign the daily Merkle root.
+  // The worker's IAM role MUST hold `kms:Sign` + `kms:GetPublicKey`
+  // on this ARN only. Required in production.
+  MERKLE_SIGNER_KMS_KEY_ID: z.string().min(1).optional(),
+
+  // ---- Daily Merkle scheduler -------------------------------------
+  // UTC hour the daily-merkle-root job fires. 02:00 UTC sits after
+  // the last possible audit_log row for yesterday's window and
+  // before the morning's traffic warms up; override only for
+  // staging where you want a faster reproduction cycle.
+  DAILY_MERKLE_ROOT_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(2),
+  DAILY_MERKLE_ROOT_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(0),
 });
 
 export const env = envNs.defineEnv(schema, {

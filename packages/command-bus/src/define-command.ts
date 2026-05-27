@@ -86,6 +86,11 @@
 import type { Prisma } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import type { PermissionCode } from "@pharmax/rbac";
+import {
+  CREATE_READABLE_STATUSES,
+  IN_FLIGHT_READABLE_STATUSES,
+  type WorkflowPolicyStatusValue,
+} from "@pharmax/workflow";
 import type { ZodType } from "zod";
 
 import { requireNoSoDViolationForOrder, type EventTypeToPermission } from "./sod.js";
@@ -128,6 +133,18 @@ export interface LockedOrderTarget {
   readonly organizationId: string;
   readonly clinicId: string;
   readonly siteId: string;
+  /**
+   * The bucket the order is currently sitting in. Exposed to the
+   * handler so commands that need to know "what queue is this in
+   * right now?" (notably `EscalateOrderToEmergencyBucket`, which
+   * short-circuits when the order is already in EMERGENCY) can
+   * read it off the lock without a second roundtrip.
+   *
+   * Bucket id is non-PHI by design — it's an organizational
+   * queue identifier, not patient data. Same rationale as
+   * exposing `siteId` / `clinicId` on this row.
+   */
+  readonly currentBucketId: string;
   readonly currentStatus: string;
   readonly version: number;
   readonly workflowPolicyId: string;
@@ -482,12 +499,13 @@ async function lockOrderRow(input: LockOrderInput): Promise<LockedOrderTarget> {
       organizationId: string;
       clinicId: string;
       siteId: string;
+      currentBucketId: string;
       currentStatus: string;
       version: number;
       workflowPolicyId: string;
       workflowPolicyVersion: number;
     }>
-  >`SELECT id, "organizationId", "clinicId", "siteId", "currentStatus"::text AS "currentStatus", version, "workflowPolicyId", "workflowPolicyVersion"
+  >`SELECT id, "organizationId", "clinicId", "siteId", "currentBucketId", "currentStatus"::text AS "currentStatus", version, "workflowPolicyId", "workflowPolicyVersion"
     FROM "order"
     WHERE id = ${input.id}::uuid AND "organizationId" = ${input.organizationId}::uuid
     FOR UPDATE`;
@@ -505,6 +523,7 @@ async function lockOrderRow(input: LockOrderInput): Promise<LockedOrderTarget> {
     organizationId: row.organizationId,
     clinicId: row.clinicId,
     siteId: row.siteId,
+    currentBucketId: row.currentBucketId,
     currentStatus: row.currentStatus,
     version: row.version,
     workflowPolicyId: row.workflowPolicyId,
@@ -534,14 +553,19 @@ async function resolvePolicy(input: ResolvePolicyInput): Promise<LoadedPolicy> {
     }
     // The locked target row already carries the policy id +
     // version. We still verify the policy row exists and is
-    // active, because an admin may have retired the policy
-    // between the order's creation and this command's dispatch.
+    // readable. The accepted statuses widen to ACTIVE | SUPERSEDED
+    // here per the grandfather rule (ADR-0017): an in-flight order
+    // that was born under v1 must continue to evaluate against v1
+    // even after v1 has been demoted by an activation of v2.
+    // DRAFT and ARCHIVED are still rejected; see
+    // `assertReadablePolicy` below for the per-mode allowlist.
     const policy = await input.tx.workflowPolicy.findUnique({
       where: { id: input.target.workflowPolicyId },
       select: { id: true, code: true, version: true, status: true },
     });
-    return assertActivePolicy({
+    return assertReadablePolicy({
       policy,
+      acceptedStatuses: IN_FLIGHT_READABLE_STATUSES,
       lookup: {
         organizationId: input.organizationId,
         id: input.target.workflowPolicyId,
@@ -550,7 +574,16 @@ async function resolvePolicy(input: ResolvePolicyInput): Promise<LoadedPolicy> {
     });
   }
 
-  // Hardcoded code+version lookup.
+  // Hardcoded code+version lookup — the CREATE-side path. Used by
+  // `CreateOrder` (and any future create command that wants to pin
+  // a specific version). Only ACTIVE is accepted here: creating a
+  // new order against a SUPERSEDED policy would birth an in-flight
+  // order whose first command would succeed under the grandfather
+  // rule but whose entire lifetime would be governed by a policy
+  // operators have already moved past — there is no use case this
+  // serves. Mismatch surfaces `WORKFLOW_POLICY_INACTIVE` (the
+  // existing error code is preserved so downstream HTTP mappings
+  // and dashboards don't have to change).
   const policy = await input.tx.workflowPolicy.findUnique({
     where: {
       organizationId_code_version: {
@@ -561,8 +594,9 @@ async function resolvePolicy(input: ResolvePolicyInput): Promise<LoadedPolicy> {
     },
     select: { id: true, code: true, version: true, status: true },
   });
-  return assertActivePolicy({
+  return assertReadablePolicy({
     policy,
+    acceptedStatuses: CREATE_READABLE_STATUSES,
     lookup: {
       organizationId: input.organizationId,
       code: spec.code,
@@ -571,13 +605,25 @@ async function resolvePolicy(input: ResolvePolicyInput): Promise<LoadedPolicy> {
   });
 }
 
-function assertActivePolicy(input: {
+/**
+ * Workflow-policy admissibility guard.
+ *
+ *   - `acceptedStatuses` is the per-mode allowlist (sourced from
+ *     `@pharmax/workflow`'s `CREATE_READABLE_STATUSES` and
+ *     `IN_FLIGHT_READABLE_STATUSES` registries).
+ *   - Missing row → `WORKFLOW_POLICY_NOT_FOUND` (NotFoundError).
+ *   - Row exists but status not in allowlist →
+ *     `WORKFLOW_POLICY_INACTIVE` (ConflictError). Same error code
+ *     for both modes — the metadata distinguishes them.
+ */
+function assertReadablePolicy(input: {
   readonly policy: {
     readonly id: string;
     readonly code: string;
     readonly version: number;
     readonly status: string;
   } | null;
+  readonly acceptedStatuses: ReadonlyArray<WorkflowPolicyStatusValue>;
   readonly lookup: Record<string, unknown>;
 }): LoadedPolicy {
   if (input.policy === null) {
@@ -587,11 +633,16 @@ function assertActivePolicy(input: {
       metadata: input.lookup,
     });
   }
-  if (input.policy.status !== "ACTIVE") {
+  if (!(input.acceptedStatuses as ReadonlyArray<string>).includes(input.policy.status)) {
     throw new errors.ConflictError({
       code: WORKFLOW_POLICY_INACTIVE,
-      message: `Workflow policy ${input.policy.code} v${input.policy.version} is not ACTIVE (current status: ${input.policy.status}).`,
-      metadata: { ...input.lookup, policyId: input.policy.id, status: input.policy.status },
+      message: `Workflow policy ${input.policy.code} v${input.policy.version} is not readable in this mode (status: ${input.policy.status}; accepted: ${input.acceptedStatuses.join(", ")}).`,
+      metadata: {
+        ...input.lookup,
+        policyId: input.policy.id,
+        status: input.policy.status,
+        acceptedStatuses: [...input.acceptedStatuses],
+      },
     });
   }
   return { id: input.policy.id, code: input.policy.code, version: input.policy.version };

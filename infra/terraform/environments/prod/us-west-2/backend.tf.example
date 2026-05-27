@@ -1,0 +1,14 @@
+# Pharmax — prod / us-west-2 backend (DR region).
+# State bucket lives IN us-west-2 (NOT in us-east-1) so an outage in
+# us-east-1 does not also brick our DR Terraform.
+
+terraform {
+  backend "s3" {
+    bucket         = "REPLACE_pharmax-tfstate-prod-usw2-<account-suffix>"
+    key            = "pharmax/prod/us-west-2/terraform.tfstate"
+    region         = "us-west-2"
+    dynamodb_table = "REPLACE_pharmax-tfstate-locks-prod-usw2"
+    encrypt        = true
+    kms_key_id     = "REPLACE_arn:aws:kms:us-west-2:<account>:key/<state-cmk-id>"
+  }
+}

@@ -92,6 +92,7 @@ import { defineCommand, ORDER_VERSION_MISMATCH } from "@pharmax/command-bus";
 import { OrderStatus, VerificationDecision, VerificationStage } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
+import { applyCommandStageIntervalTransition } from "@pharmax/sla";
 import {
   applyTransition,
   BUCKET_CODE_FOR_EXCEPTION_STATE,
@@ -267,6 +268,7 @@ export const RejectPV1 = defineCommand<RejectPV1Input, RejectPV1Output>({
     }
 
     const rejectingPharmacistUserId = ctx.actor.userId;
+    const now = clock.now();
 
     // Write the verification_record row FIRST (before the
     // order.update), so a downstream constraint violation on the
@@ -308,7 +310,33 @@ export const RejectPV1 = defineCommand<RejectPV1Input, RejectPV1Output>({
       },
     });
 
-    const now = clock.now();
+    // ---- SLA: close PV1_ACTIVE + open WAIT_AFTER_PV1_REJECT ----
+    //
+    // The static lookup table handles this — `RejectPV1` is
+    // single-from-state (engine enforces source = PV1_IN_PROGRESS),
+    // so the close kind asserts `PV1_ACTIVE`. The open kind
+    // (`WAIT_AFTER_PV1_REJECT`) is a WAIT_* state and the SLA
+    // primitive coerces actor to null on WAIT_* rows regardless
+    // of what we pass — we still forward the rejecting pharmacist
+    // for consistency (it's silently dropped on the wait row, but
+    // matches the audit metadata's identity story).
+    //
+    // The rework wait window stays open until a separate command
+    // (ReopenForCorrection, MarkTypingRework, or a future
+    // explicit "start rework" command) routes the order back to
+    // an earlier workflow stage and opens the corresponding
+    // active interval. Reports break rework cost out from
+    // first-pass pharmacist time by the open kind.
+    await applyCommandStageIntervalTransition({
+      commandName: "RejectPV1",
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+      siteId: target.siteId,
+      at: now,
+      commandLogId,
+      actorUserId: rejectingPharmacistUserId,
+    });
 
     return {
       output: {

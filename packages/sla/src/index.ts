@@ -19,3 +19,9 @@ export {
   type OpenStageIntervalInput,
   type TransitionStageIntervalsInput,
 } from "./interval-recorder.js";
+
+export {
+  intervalKindForOrderState,
+  STAGE_INTERVAL_KIND_FOR_EXCEPTION_STATE,
+  STAGE_INTERVAL_KIND_FOR_PRIMARY_STATE,
+} from "./stage-interval-state-map.js";

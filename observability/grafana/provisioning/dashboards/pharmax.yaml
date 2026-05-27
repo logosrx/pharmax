@@ -1,0 +1,14 @@
+apiVersion: 1
+
+providers:
+  - name: pharmax
+    orgId: 1
+    folder: Pharmax
+    folderUid: pharmax
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

@@ -1,4 +1,9 @@
 import { prisma } from "@pharmax/database";
+import {
+  initTelemetry,
+  resolveTelemetryConfigFromEnv,
+  type TelemetryHandle,
+} from "@pharmax/telemetry";
 
 import { bootstrap } from "./bootstrap.js";
 import { env } from "./env.js";
@@ -12,7 +17,24 @@ import {
   type PrintAgentRuntimeContext,
 } from "./resolve-runtime-context.js";
 
+let telemetryHandle: TelemetryHandle | null = null;
+
 async function main(): Promise<void> {
+  // 0. OpenTelemetry first — patches the network primitives the
+  // ZPL transport uses (tcp net + http for ZPL-over-HTTP modes).
+  // Failure is non-fatal; the agent prints labels with or without
+  // tracing.
+  const telemetryConfig = resolveTelemetryConfigFromEnv({
+    serviceName: "pharmacy-print-agent",
+    nodeEnv: env.NODE_ENV,
+  });
+  telemetryHandle = await initTelemetry({
+    config: telemetryConfig,
+    onBootDiagnostic: (level, event, details) => {
+      logger[level](event, details);
+    },
+  });
+
   bootstrap();
 
   const runtime = await resolvePrintAgentRuntimeContext(prisma, {
@@ -100,6 +122,9 @@ async function waitForShutdown(input: {
         clearTimeout(forceExit);
         await prisma.$disconnect();
         await flushSentry(2_000);
+        if (telemetryHandle !== null) {
+          await telemetryHandle.shutdown();
+        }
         logger.info("print-agent.shutdown.complete");
         resolve();
       });

@@ -46,6 +46,27 @@ export {
   SHIPMENT_TRACKING_DUPLICATE_EVENT,
 } from "./commands/record-shipment-tracking-event.js";
 
+export {
+  EscalateOrderToEmergencyBucket,
+  type EscalateOrderToEmergencyBucketInput,
+  type EscalateOrderToEmergencyBucketOutput,
+  type EscalationReason,
+  ESCALATION_REASONS,
+  ESCALATE_ORDER_BUCKET_NOT_CONFIGURED,
+  ESCALATE_ORDER_VERSION_MISMATCH,
+} from "./commands/escalate-order-to-emergency-bucket.js";
+
+export {
+  ResolveOrderEscalation,
+  type ResolveOrderEscalationInput,
+  type ResolveOrderEscalationOutput,
+  type EscalationDisposition,
+  ESCALATION_DISPOSITIONS,
+  RESOLVE_ESCALATION_NOT_IN_EMERGENCY,
+  RESOLVE_ESCALATION_TARGET_BUCKET_NOT_FOUND,
+  RESOLVE_ESCALATION_TARGET_BUCKET_INVALID_KIND,
+} from "./commands/resolve-order-escalation.js";
+
 export { SHIP_NOT_ASSIGNED_TO_ACTOR, SHIP_WRONG_STATUS } from "./shipping-guards.js";
 
 export {

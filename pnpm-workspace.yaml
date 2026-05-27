@@ -13,3 +13,8 @@ allowBuilds:
   # not used at runtime. Approving it here so the install completes
   # without manual intervention on every clone.
   "@sentry/cli": true
+  # @clerk/shared runs a postinstall to wire the Clerk SDK; safe to
+  # approve. protobufjs is a transitive dep of @sentry/cli's source-map
+  # upload pipeline and also needs build approval.
+  "@clerk/shared": true
+  protobufjs: true

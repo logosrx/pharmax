@@ -119,6 +119,14 @@ export const BUCKET_CODE_FOR_STATUS: Record<OrderPrimaryState, string> = {
 export const BUCKET_CODE_FOR_EXCEPTION_STATE: Partial<Record<OrderExceptionState, string>> = {
   PV1_REJECTED: "TYPING",
   FINAL_VERIFICATION_REJECTED: "FILL",
+  // Typing paused on a structured missing-info reason (prescriber
+  // callback, illegible Rx, missing field, etc.). The order stays
+  // in the TYPING bucket as an exception-styled row so any typist
+  // can resume it via ResumeTyping when the info comes back. A
+  // future per-org policy slice may move these into a dedicated
+  // `MISSING_INFO` bucket; defaulting to TYPING avoids a per-org
+  // bucket-seeding migration today.
+  TYPING_PENDING_MISSING_INFO: "TYPING",
 };
 
 /**

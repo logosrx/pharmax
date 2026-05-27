@@ -1,7 +1,7 @@
 // Typed permission registry.
 //
 // This file is the SINGLE source of truth for the action vocabulary
-// of the platform. It mirrors the 38 codes seeded by `prisma/seed.ts`
+// of the platform. It mirrors the 51 codes seeded by `prisma/seed.ts`
 // — that mirror is verified by a test in `permissions.test.ts`.
 //
 // Why a typed constant object instead of a loose string enum:
@@ -28,15 +28,20 @@ export const PERMISSIONS = Object.freeze({
   ORGS_READ: "orgs.read",
   USERS_MANAGE: "users.manage",
   ROLES_MANAGE: "roles.manage",
+  ORG_MANAGE_SITES: "org.manage_sites",
 
   // Patient roster.
   PATIENTS_CREATE: "patients.create",
   PATIENTS_READ: "patients.read",
+  PATIENTS_UPDATE: "patients.update",
   PATIENTS_CRYPTO_SHRED: "patients.crypto_shred",
 
   // Provider (prescriber) roster.
   PROVIDERS_CREATE: "providers.create",
   PROVIDERS_READ: "providers.read",
+  PROVIDERS_UPDATE: "providers.update",
+  PROVIDERS_DEACTIVATE: "providers.deactivate",
+  PROVIDERS_REACTIVATE: "providers.reactivate",
 
   // Order lifecycle.
   ORDERS_CREATE: "orders.create",
@@ -50,6 +55,7 @@ export const PERMISSIONS = Object.freeze({
   // Typing.
   TYPING_START: "typing.start",
   TYPING_COMPLETE: "typing.complete",
+  TYPING_MARK_MISSING_INFO: "typing.mark_missing_info",
 
   // PV1 (first pharmacist verification).
   PV1_START: "pv1.start",
@@ -78,10 +84,18 @@ export const PERMISSIONS = Object.freeze({
   SHIP_PURCHASE_LABEL: "ship.purchase_label",
   SHIP_RECORD_TRACKING_EVENT: "ship.record_tracking_event",
   SHIP_MANAGE_CARRIER_CREDENTIALS: "ship.manage_carrier_credentials",
+  SHIP_ESCALATE_TO_EMERGENCY: "ship.escalate_to_emergency",
+  SHIP_RESOLVE_ESCALATION: "ship.resolve_escalation",
+  SHIP_CAPTURE_PACKAGE_PHOTO: "ship.capture_package_photo",
+  SHIP_RESOLVE_PACKAGE_PHOTO_MATCH: "ship.resolve_package_photo_match",
 
   // Billing.
   BILLING_READ: "billing.read",
   BILLING_MANAGE: "billing.manage",
+  BILLING_FINALIZE_INVOICE: "billing.finalize_invoice",
+  BILLING_MANAGE_PRICING: "billing.manage_pricing",
+  BILLING_CREDIT_INVOICE: "billing.credit_invoice",
+  BILLING_ISSUE_REFUND: "billing.issue_refund",
 
   // Audit.
   AUDIT_READ: "audit.read",
@@ -118,12 +132,22 @@ export const PERMISSION_METADATA: Readonly<
     description: "Create and edit roles and grants.",
     category: "Administration",
   },
+  [PERMISSIONS.ORG_MANAGE_SITES]: {
+    description:
+      "Edit pharmacy site profile and ship-from address used by the carrier auto-purchase flow.",
+    category: "Administration",
+  },
   [PERMISSIONS.PATIENTS_CREATE]: {
     description: "Register a new patient at a clinic.",
     category: "Patients",
   },
   [PERMISSIONS.PATIENTS_READ]: {
     description: "Read patient identity (PHI access).",
+    category: "Patients",
+  },
+  [PERMISSIONS.PATIENTS_UPDATE]: {
+    description:
+      "Edit patient identity, contact, address, or MRN (re-encrypts the touched columns and refreshes their blind indexes).",
     category: "Patients",
   },
   [PERMISSIONS.PATIENTS_CRYPTO_SHRED]: {
@@ -137,6 +161,21 @@ export const PERMISSION_METADATA: Readonly<
   },
   [PERMISSIONS.PROVIDERS_READ]: {
     description: "Read provider directory.",
+    category: "Providers",
+  },
+  [PERMISSIONS.PROVIDERS_UPDATE]: {
+    description:
+      "Edit provider directory entry (name, credential, DEA, contact, address). NPI is immutable; status changes require DeactivateProvider.",
+    category: "Providers",
+  },
+  [PERMISSIONS.PROVIDERS_DEACTIVATE]: {
+    description:
+      "Deactivate a provider (status: ACTIVE \u2192 INACTIVE) with a reason code. Blocks new orders against the prescriber; in-flight orders are handled by downstream workers based on reason severity.",
+    category: "Providers",
+  },
+  [PERMISSIONS.PROVIDERS_REACTIVATE]: {
+    description:
+      "Reactivate a provider (status: INACTIVE \u2192 ACTIVE) with a reason code (license restored, sanction lifted, erroneous deactivation, etc.). Re-enables new orders against the prescriber. Distinct from PROVIDERS_DEACTIVATE so the audit and approval surfaces stay separable.",
     category: "Providers",
   },
   [PERMISSIONS.ORDERS_CREATE]: { description: "Create new orders.", category: "Orders" },
@@ -167,6 +206,11 @@ export const PERMISSION_METADATA: Readonly<
   [PERMISSIONS.TYPING_START]: { description: "Start typing on an order.", category: "Typing" },
   [PERMISSIONS.TYPING_COMPLETE]: {
     description: "Complete typing review.",
+    category: "Typing",
+  },
+  [PERMISSIONS.TYPING_MARK_MISSING_INFO]: {
+    description:
+      "Pause typing on an order with a structured missing-info reason (prescriber callback, patient contact, illegible Rx, etc.); the order parks in TYPING_PENDING_MISSING_INFO until ResumeTyping is dispatched.",
     category: "Typing",
   },
   [PERMISSIONS.PV1_START]: { description: "Start PV1 verification.", category: "PV1" },
@@ -229,9 +273,49 @@ export const PERMISSION_METADATA: Readonly<
       "Register, rotate, or disable per-organization carrier API credentials (EasyPost / FedEx / UPS).",
     category: "Shipping",
   },
+  [PERMISSIONS.SHIP_ESCALATE_TO_EMERGENCY]: {
+    description:
+      "Move an order into the EMERGENCY bucket (worker dispatch on shipment exception / failed delivery / return-to-sender).",
+    category: "Shipping",
+  },
+  [PERMISSIONS.SHIP_RESOLVE_ESCALATION]: {
+    description:
+      "Disposition an order out of the EMERGENCY bucket back into a workflow bucket (operator action after carrier exception triage).",
+    category: "Shipping",
+  },
+  [PERMISSIONS.SHIP_CAPTURE_PACKAGE_PHOTO]: {
+    description:
+      "Capture a pre-shipment package photo at the dock and link it to the matched order/patient (writes a PackagePhoto row via CapturePackagePhoto).",
+    category: "Shipping",
+  },
+  [PERMISSIONS.SHIP_RESOLVE_PACKAGE_PHOTO_MATCH]: {
+    description:
+      "Resolve an unmatched PackagePhoto by linking it to a specific order (operator triage of dock captures that did not auto-match).",
+    category: "Shipping",
+  },
   [PERMISSIONS.BILLING_READ]: { description: "View billing data.", category: "Billing" },
   [PERMISSIONS.BILLING_MANAGE]: {
     description: "Manage invoices and pricing.",
+    category: "Billing",
+  },
+  [PERMISSIONS.BILLING_FINALIZE_INVOICE]: {
+    description:
+      "Finalize a DRAFT invoice (DRAFT → OPEN), locking it for further line appends and triggering downstream Stripe push.",
+    category: "Billing",
+  },
+  [PERMISSIONS.BILLING_MANAGE_PRICING]: {
+    description:
+      "Create, update, or supersede per-(org, clinic, product) pricing rules that determine invoice-line unit amounts.",
+    category: "Billing",
+  },
+  [PERMISSIONS.BILLING_CREDIT_INVOICE]: {
+    description:
+      "Apply a manual credit / discount / adjustment to an invoice (negative-amount line; preserves the original line audit trail).",
+    category: "Billing",
+  },
+  [PERMISSIONS.BILLING_ISSUE_REFUND]: {
+    description:
+      "Issue a Stripe refund against a paid invoice; writes the corresponding negative-amount line on the Pharmax ledger.",
     category: "Billing",
   },
   [PERMISSIONS.AUDIT_READ]: { description: "Read audit log.", category: "Audit" },

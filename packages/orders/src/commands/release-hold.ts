@@ -93,6 +93,13 @@ import { HoldReleaseReason, OrderStatus } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import {
+  closeOpenStageInterval,
+  intervalKindForOrderState,
+  isActiveIntervalKind,
+  openStageInterval,
+  OrderStageIntervalKind,
+} from "@pharmax/sla";
+import {
   applyTransition,
   isOrderState,
   ORDER_STANDARD_V1,
@@ -368,6 +375,64 @@ export const ReleaseHold = defineCommand<ReleaseHoldInput, ReleaseHoldOutput>({
       data: {
         currentStatus: releaseToState as OrderStatus,
       },
+    });
+
+    // ---- SLA: close HOLD_ACTIVE + open the restored stage ----
+    //
+    // ReleaseHold cannot live in the static
+    // `COMMAND_STAGE_INTERVAL_TRANSITION` table because the open
+    // kind is parameterized by `heldFromStatus` (a hold placed
+    // mid-typing reopens `TYPING_ACTIVE`; a hold placed during
+    // `WAIT_BEFORE_FILL` reopens that wait window; etc.).
+    //
+    // `intervalKindForOrderState(releaseToState)` resolves the
+    // canonical SLA kind for the restored state. It returns
+    // `null` only for terminal states; `releaseToState` is the
+    // hold row's `heldFromStatus`, which by construction is a
+    // non-terminal, non-ON_HOLD state (the engine's
+    // HOLD_FROM_STATES guard at place time + the param check on
+    // RELEASE_HOLD above). A `null` here is a programmer error,
+    // not a runtime data error — surface InternalError so the
+    // breach evaluator and dashboards can alert.
+    //
+    // `actorUserId`: the releaser owns the restored work UNTIL a
+    // fresh queue claim happens — but the assignee is nulled on
+    // the order row by intent (operators pick released orders up
+    // fresh). For consistency with WAIT_* intervals (no actor)
+    // and ACTIVE intervals (actor = current owner), the schema
+    // invariant `isActiveIntervalKind → actorUserId required`
+    // is honored here: if the restored kind is ACTIVE we store
+    // the releaser as the actor; if it's WAIT_* we pass null.
+    // `openStageInterval` re-applies this coercion as defense
+    // in depth, but doing it here keeps the audit metadata
+    // accurate.
+    const restoredKind = intervalKindForOrderState(releaseToState);
+    if (restoredKind === null) {
+      throw new errors.InternalError({
+        code: ORDER_RELEASE_STATE_UNKNOWN,
+        message:
+          "Active hold restored to a terminal state — `intervalKindForOrderState` returned null. " +
+          "This indicates a workflow-policy / SLA-map drift; do not retry.",
+        metadata: { orderId: target.id, releaseToState },
+      });
+    }
+    await closeOpenStageInterval({
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+      endedAt: now,
+      commandLogId,
+      expectedKind: OrderStageIntervalKind.HOLD_ACTIVE,
+    });
+    await openStageInterval({
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+      siteId: target.siteId,
+      kind: restoredKind,
+      startedAt: now,
+      commandLogId,
+      actorUserId: isActiveIntervalKind(restoredKind) ? ctx.actor.userId : null,
     });
 
     const nextVersion = target.version + 1;

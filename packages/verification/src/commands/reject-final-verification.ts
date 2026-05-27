@@ -118,6 +118,7 @@ import { defineCommand, ORDER_VERSION_MISMATCH } from "@pharmax/command-bus";
 import { OrderStatus, VerificationDecision, VerificationStage } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
+import { applyCommandStageIntervalTransition } from "@pharmax/sla";
 import {
   applyTransition,
   BUCKET_CODE_FOR_EXCEPTION_STATE,
@@ -297,6 +298,7 @@ export const RejectFinalVerification = defineCommand<
     }
 
     const rejectingPharmacistUserId = ctx.actor.userId;
+    const now = clock.now();
 
     // Write the verification_record row FIRST (before the
     // order.update). Same constraint-failure ordering rationale
@@ -335,7 +337,31 @@ export const RejectFinalVerification = defineCommand<
       },
     });
 
-    const now = clock.now();
+    // ---- SLA: close FINAL_VERIFICATION_ACTIVE + open WAIT_AFTER_FINAL_REJECT ----
+    //
+    // Single-from-state (engine enforces source =
+    // FINAL_VERIFICATION_IN_PROGRESS), so the static lookup table
+    // asserts the close kind. The open kind is WAIT_* — actor
+    // forwarded for consistency but silently nulled by the
+    // primitive per the schema invariant.
+    //
+    // Rework cost separation: WAIT_AFTER_FINAL_REJECT is a
+    // distinct interval kind from WAIT_BEFORE_FINAL_VERIFICATION
+    // so dashboards never roll first-pass wait into rework wait.
+    // The wait window closes when a future command routes the
+    // order back into the fill queue (today: an operator opens
+    // a fresh fill via the standard flow, which we treat as a
+    // separate workflow leg).
+    await applyCommandStageIntervalTransition({
+      commandName: "RejectFinalVerification",
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+      siteId: target.siteId,
+      at: now,
+      commandLogId,
+      actorUserId: rejectingPharmacistUserId,
+    });
 
     return {
       output: {

@@ -5,8 +5,8 @@
 //     namespace for ergonomic batch imports.
 //   - Each command file owns its input/output types and is the only
 //     place that imports `@pharmax/crypto` for that aggregate's PHI.
-//   - Future patient aggregates (UpdatePatient, MergePatients,
-//     CryptoShredPatient) land alongside RegisterPatient in
+//   - Future patient aggregates (MergePatients) land alongside
+//     RegisterPatient/UpdatePatient/CryptoShredPatient in
 //     `src/commands/` and re-export here.
 //
 // The package also ships read-path primitives — redaction projection,
@@ -50,14 +50,31 @@ export {
 } from "./commands/register-patient.js";
 
 export {
+  UpdatePatient,
+  type UpdatePatientInput,
+  type UpdatePatientOutput,
+} from "./commands/update-patient.js";
+
+export {
   CryptoShredPatient,
   type CryptoShredPatientInput,
   type CryptoShredPatientOutput,
 } from "./commands/crypto-shred-patient.js";
 
+export {
+  ViewPatient,
+  PATIENT_NOT_FOUND,
+  VIEW_PATIENT_SURFACES,
+  type ViewPatientInput,
+  type ViewPatientOutput,
+  type ViewPatientSurface,
+} from "./commands/view-patient.js";
+
 import * as blindIndexesModule from "./blind-indexes.js";
 import * as cryptoShredPatientModule from "./commands/crypto-shred-patient.js";
 import * as registerPatientModule from "./commands/register-patient.js";
+import * as updatePatientModule from "./commands/update-patient.js";
+import * as viewPatientModule from "./commands/view-patient.js";
 import * as patientRepositoryModule from "./patient-repository.js";
 import * as redactPatientModule from "./redact-patient.js";
 import * as searchPatientsModule from "./search-patients.js";
@@ -69,6 +86,8 @@ export const patients = {
   ...patientRepositoryModule,
   commands: {
     RegisterPatient: registerPatientModule.RegisterPatient,
+    UpdatePatient: updatePatientModule.UpdatePatient,
     CryptoShredPatient: cryptoShredPatientModule.CryptoShredPatient,
+    ViewPatient: viewPatientModule.ViewPatient,
   },
 } as const;

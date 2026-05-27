@@ -362,12 +362,17 @@ describe("defineCommand — loadPolicy", () => {
     });
   });
 
-  it("throws WORKFLOW_POLICY_INACTIVE when the policy row exists but is not ACTIVE", async () => {
+  it("throws WORKFLOW_POLICY_INACTIVE when {code, version} resolves to SUPERSEDED (CREATE-side strictness)", async () => {
+    // CREATE-side path ({code, version}) accepts ACTIVE only per
+    // ADR-0017. SUPERSEDED is readable for IN-FLIGHT commands but
+    // never for new orders — birthing a new order under a
+    // demoted policy is the explicit anti-pattern the rule
+    // forbids.
     prisma.setWorkflowPolicyRow({
       id: POLICY_ID,
       code: "order.standard",
       version: 1,
-      status: "RETIRED",
+      status: "SUPERSEDED",
     });
 
     const cmd = defineCommand({
@@ -384,7 +389,157 @@ describe("defineCommand — loadPolicy", () => {
 
     await withTenancyContext(ctxFor(), async () => {
       await expect(
-        executeCommand(cmd, {}, { idempotencyKey: "policy-retired" })
+        executeCommand(cmd, {}, { idempotencyKey: "policy-superseded" })
+      ).rejects.toMatchObject({ code: "WORKFLOW_POLICY_INACTIVE" });
+    });
+  });
+
+  it("throws WORKFLOW_POLICY_INACTIVE when {code, version} resolves to DRAFT", async () => {
+    prisma.setWorkflowPolicyRow({
+      id: POLICY_ID,
+      code: "order.standard",
+      version: 2,
+      status: "DRAFT",
+    });
+
+    const cmd = defineCommand({
+      name: "PolicyDraft",
+      inputSchema: z.object({}),
+      permission: PERMISSIONS.ORDERS_CREATE,
+      loadPolicy: { code: "order.standard", version: 2 },
+      exec: async () => ({
+        output: {},
+        audit: { action: "x", resourceType: "Order" },
+        emits: [],
+      }),
+    });
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(cmd, {}, { idempotencyKey: "policy-draft" })
+      ).rejects.toMatchObject({ code: "WORKFLOW_POLICY_INACTIVE" });
+    });
+  });
+
+  it("from: 'target' ACCEPTS a SUPERSEDED policy (grandfather rule — ADR-0017)", async () => {
+    // The load-bearing in-flight rule: an order born under v1 must
+    // continue to evaluate against v1's policy row even after v1
+    // has been demoted to SUPERSEDED by an activation of v2.
+    // Without this, every in-flight order would fail every
+    // command the moment v2 activated.
+    prisma.setOrderRowForLock({
+      id: ORDER_ID,
+      organizationId: "org-1",
+      clinicId: "clinic-1",
+      siteId: "site-1",
+      currentStatus: "RECEIVED",
+      version: 0,
+      workflowPolicyId: POLICY_ID,
+      workflowPolicyVersion: 1,
+    });
+    prisma.setWorkflowPolicyRow({
+      id: POLICY_ID,
+      code: "order.standard",
+      version: 1,
+      status: "SUPERSEDED",
+    });
+
+    let observedPolicy: { id: string; version: number } | null = null;
+    const cmd = defineCommand({
+      name: "GrandfatherInFlight",
+      inputSchema: z.object({ orderId: z.string().uuid() }),
+      permission: PERMISSIONS.ORDERS_READ,
+      lockTarget: { table: "order", by: (i) => ({ id: i.orderId }) },
+      loadPolicy: { from: "target" },
+      exec: async ({ policy }) => {
+        observedPolicy = policy ? { id: policy.id, version: policy.version } : null;
+        return {
+          output: {},
+          audit: { action: "x", resourceType: "Order", resourceId: ORDER_ID },
+          emits: [],
+        };
+      },
+    });
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(cmd, { orderId: ORDER_ID }, { idempotencyKey: "gf-1" })
+    );
+
+    expect(observedPolicy).toEqual({ id: POLICY_ID, version: 1 });
+  });
+
+  it("from: 'target' REJECTS a DRAFT policy (defensive — never expected in practice)", async () => {
+    prisma.setOrderRowForLock({
+      id: ORDER_ID,
+      organizationId: "org-1",
+      clinicId: "clinic-1",
+      siteId: "site-1",
+      currentStatus: "RECEIVED",
+      version: 0,
+      workflowPolicyId: POLICY_ID,
+      workflowPolicyVersion: 1,
+    });
+    prisma.setWorkflowPolicyRow({
+      id: POLICY_ID,
+      code: "order.standard",
+      version: 1,
+      status: "DRAFT",
+    });
+
+    const cmd = defineCommand({
+      name: "InFlightRejectsDraft",
+      inputSchema: z.object({ orderId: z.string().uuid() }),
+      permission: PERMISSIONS.ORDERS_READ,
+      lockTarget: { table: "order", by: (i) => ({ id: i.orderId }) },
+      loadPolicy: { from: "target" },
+      exec: async () => ({
+        output: {},
+        audit: { action: "x", resourceType: "Order", resourceId: ORDER_ID },
+        emits: [],
+      }),
+    });
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(cmd, { orderId: ORDER_ID }, { idempotencyKey: "gf-draft" })
+      ).rejects.toMatchObject({ code: "WORKFLOW_POLICY_INACTIVE" });
+    });
+  });
+
+  it("from: 'target' REJECTS an ARCHIVED policy (archival is the operator asserting no in-flight references)", async () => {
+    prisma.setOrderRowForLock({
+      id: ORDER_ID,
+      organizationId: "org-1",
+      clinicId: "clinic-1",
+      siteId: "site-1",
+      currentStatus: "RECEIVED",
+      version: 0,
+      workflowPolicyId: POLICY_ID,
+      workflowPolicyVersion: 1,
+    });
+    prisma.setWorkflowPolicyRow({
+      id: POLICY_ID,
+      code: "order.standard",
+      version: 1,
+      status: "ARCHIVED",
+    });
+
+    const cmd = defineCommand({
+      name: "InFlightRejectsArchived",
+      inputSchema: z.object({ orderId: z.string().uuid() }),
+      permission: PERMISSIONS.ORDERS_READ,
+      lockTarget: { table: "order", by: (i) => ({ id: i.orderId }) },
+      loadPolicy: { from: "target" },
+      exec: async () => ({
+        output: {},
+        audit: { action: "x", resourceType: "Order", resourceId: ORDER_ID },
+        emits: [],
+      }),
+    });
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(cmd, { orderId: ORDER_ID }, { idempotencyKey: "gf-archived" })
       ).rejects.toMatchObject({ code: "WORKFLOW_POLICY_INACTIVE" });
     });
   });

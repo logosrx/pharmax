@@ -271,7 +271,7 @@ describe("CreateOrganization — happy path", () => {
     expect(out.organizationId).toMatch(/^[0-9a-f-]{36}$/);
     expect(out.adminUserId).toMatch(/^[0-9a-f-]{36}$/);
     expect(out.roleCount).toBe(ROLE_TEMPLATES.length);
-    expect(ROLE_TEMPLATES.length).toBe(6);
+    expect(ROLE_TEMPLATES.length).toBe(7);
 
     // Organization create.
     const orgCreate = findOnly(fake.calls, "organization", "create");
@@ -280,11 +280,11 @@ describe("CreateOrganization — happy path", () => {
     // Permission lookup.
     expect(callsOf(fake.calls, "permission", "findMany")).toHaveLength(1);
 
-    // 6 role.create calls.
-    expect(callsOf(fake.calls, "role", "create")).toHaveLength(6);
+    // ROLE_TEMPLATES.length role.create calls (one per template).
+    expect(callsOf(fake.calls, "role", "create")).toHaveLength(ROLE_TEMPLATES.length);
 
-    // 6 rolePermission.createMany calls.
-    expect(callsOf(fake.calls, "rolePermission", "createMany")).toHaveLength(6);
+    // …and one rolePermission.createMany per role.
+    expect(callsOf(fake.calls, "rolePermission", "createMany")).toHaveLength(ROLE_TEMPLATES.length);
 
     // 1 user.create.
     const userCreate = findOnly(fake.calls, "user", "create");

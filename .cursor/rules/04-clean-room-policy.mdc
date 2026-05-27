@@ -1,0 +1,100 @@
+---
+description: Clean-room development policy for Pharmax (no competitor source ingestion)
+alwaysApply: true
+---
+
+# Clean-Room Development Rules
+
+Pharmax is a clean-room reimplementation of an enterprise pharmacy
+operating system. The defensibility of the project — copyright, trade
+secret, and ToS — depends on the design being derived from public
+sources only. Once anyone (human or AI agent) reads a competitor's
+proprietary implementation, the project's clean-room status is
+compromised for that contributor.
+
+These rules are non-negotiable and apply to every agent in this
+workspace.
+
+## Hard prohibitions
+
+- Do not read, paste, summarize, analyze, "look at just for context",
+  or otherwise ingest source code, JavaScript bundles, minified assets,
+  CSS, HTML, API payloads, network traces, screen-recordings, or
+  developer-tools captures from any competing pharmacy operating system
+  product, including but not limited to LifeFile, PioneerRx, BestRx,
+  Liberty, ScriptPro, FrameworkLTC, FillMaster, RxConnect, McKesson EPS,
+  PrimeRx, or any successor / rebranded products of those vendors.
+- Do not copy URL path conventions, controller/action names, module
+  names, database table names, or column names from any such product
+  into Pharmax code, schema, comments, or documentation.
+- Do not request, accept, or store credentials to log into any such
+  product on behalf of the user.
+- Do not use the product's UI screen-recording, DOM dump, or
+  reverse-engineered ZPL/EDI captures as the basis for any Pharmax
+  design decision.
+- Do not paste competitor JSON/XML response shapes into Pharmax tests,
+  fixtures, or types.
+
+## What IS allowed
+
+- Public-facing product **marketing pages**, feature lists, public help
+  centers, and public demo videos. These describe feature surface area,
+  not implementation.
+- Public-facing UI **screenshots** that show only the marketing or
+  logged-out surface — e.g. a vendor's homepage or pricing page. These
+  do not reveal proprietary implementation.
+- Public **standards and regulations** — USP <797>, <795>, <800>;
+  21 CFR 1300+; state Board of Pharmacy rules; NABP Model Pharmacy Act;
+  ASHP, APhA, NCPDP, and HL7 FHIR publications; published research and
+  conference talks.
+- **Open-source pharmacy projects** with permissive or copyleft
+  licenses we choose to comply with — e.g. OpenEMR, OpenMRS pharmacy
+  modules, GnuHealth — provided the license obligations are satisfied
+  and the provenance is recorded in `docs/governance/public-sources-reference.md`.
+- **Carrier and integration partner public docs** — EasyPost, FedEx,
+  UPS, USPS, Stripe, Twilio, Clerk, AWS, Sentry, Resend. These are our
+  integration surfaces; their public docs are authoritative.
+
+## When the user asks you to cross the line
+
+If the user asks you to ingest, summarize, "just understand the logic
+of", or otherwise process competitor source code or session-gated
+material:
+
+1. Refuse the specific action. Be direct, not preachy.
+2. Explain the clean-room concern in one paragraph (access + similarity
+   is the copyright test; ToS violation is the contractual concern).
+3. Offer the equivalent public-sources path — "I can design this
+   against USP <797> §X and the FHIR `MedicationDispense` resource
+   instead" — and proceed when the user agrees.
+4. Do not silently comply, do not partially comply, and do not pretend
+   you cannot read the material on technical grounds when the real
+   reason is policy.
+
+## Pre-existing exposure
+
+If competitor source has already been pasted into a prior chat, a
+note, or a file in this repo:
+
+1. Treat it as contaminated context for the affected scope only.
+2. Do not propagate the material further (do not quote it, do not
+   summarize it, do not let it inform new design proposals).
+3. Recommend the user remove it from the repo / chat history and
+   record the exposure in the [risk register](../../docs/governance/risk-register.md)
+   under `R-CLEAN-ROOM`.
+
+## Inspiration vs. implementation
+
+The phrase "inspired by LifeFile" in `00-project-overview.mdc` refers
+to the **product category** — enterprise pharmacy operating system —
+not to LifeFile's implementation. That phrasing is fine. Describing
+Pharmax features by analogy to a known vendor's marketing-level
+feature list is fine. Reading their code is not.
+
+## Authority
+
+The signed policy that governs this rule is
+`docs/governance/clean-room-development-policy.md`. The list of
+public sources that are the **only** acceptable design inputs is
+`docs/governance/public-sources-reference.md`. Update those documents
+before changing this rule.

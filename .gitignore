@@ -40,3 +40,37 @@ yarn-debug.log*
 # test artifacts
 playwright-report/
 test-results/
+
+# Terraform — never commit state, .tfvars, or filled backend configs.
+# Only the *.example templates are checked in. Patterns cover both the
+# top-level `terraform/` tree (the canonical IaC location) and the
+# legacy `infra/terraform/` tree.
+terraform/**/.terraform/
+terraform/**/.terraform.lock.hcl
+terraform/**/terraform.tfstate
+terraform/**/terraform.tfstate.*
+terraform/**/*.tfstate
+terraform/**/*.tfstate.*
+terraform/**/*.tfplan
+terraform/**/tfplan
+terraform/**/terraform.tfvars
+terraform/**/*.auto.tfvars
+terraform/**/*.auto.tfvars.json
+terraform/**/backend.tf
+!terraform/**/backend.tf.example
+!terraform/**/terraform.tfvars.example
+!terraform/backend.tf.example
+infra/terraform/**/.terraform/
+infra/terraform/**/.terraform.lock.hcl
+infra/terraform/**/terraform.tfstate
+infra/terraform/**/terraform.tfstate.*
+infra/terraform/**/*.tfstate
+infra/terraform/**/*.tfstate.*
+infra/terraform/**/*.tfplan
+infra/terraform/**/tfplan
+infra/terraform/**/terraform.tfvars
+infra/terraform/**/*.auto.tfvars
+infra/terraform/**/backend.tf
+!infra/terraform/**/backend.tf.example
+!infra/terraform/**/terraform.tfvars.example
+!infra/terraform/backend.tf.example

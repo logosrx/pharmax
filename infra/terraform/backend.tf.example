@@ -1,0 +1,44 @@
+# =============================================================================
+# Remote state — S3 backend with DynamoDB lock table.
+#
+# Copy this file to `backend.tf` for the environment that owns this state.
+# DO NOT commit a populated `backend.tf` — it varies per environment.
+# A common pattern is to symlink one of:
+#
+#   environments/dev/backend.tf
+#   environments/staging/backend.tf
+#   environments/prod/backend.tf
+#
+# into this directory at `terraform init` time, or to pass
+# `-backend-config=...` flags from CI.
+#
+# Bootstrap (one-time, BEFORE terraform init on this stack):
+#
+#   1. Create an S3 bucket: pharmax-tfstate-<env>-<account-suffix>
+#      - Versioning enabled
+#      - SSE-KMS with a CMK whose policy grants the deploy IAM principal
+#      - Public access blocked
+#      - Bucket policy denies any non-TLS request
+#      - Object Lock NOT required (state needs to be re-writable)
+#
+#   2. Create a DynamoDB lock table:
+#      - Name: pharmax-tfstate-locks-<env>
+#      - Partition key: LockID (String)
+#      - Encryption: AWS-owned key is fine
+#      - On-demand capacity
+#
+# The bootstrap itself lives outside this repo (a tiny bootstrap module in a
+# separate state, or `aws s3api`/`aws dynamodb create-table` from a runbook),
+# because Terraform can't create the bucket it stores its state in.
+# =============================================================================
+
+terraform {
+  backend "s3" {
+    bucket         = "REPLACE-pharmax-tfstate-<env>-<account-suffix>"
+    key            = "pharmax/<env>/terraform.tfstate"
+    region         = "REPLACE-us-east-1"
+    dynamodb_table = "REPLACE-pharmax-tfstate-locks-<env>"
+    encrypt        = true
+    kms_key_id     = "REPLACE-arn:aws:kms:<region>:<account>:key/<key-id>"
+  }
+}

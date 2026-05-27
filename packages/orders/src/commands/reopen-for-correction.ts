@@ -16,6 +16,12 @@ import { ReopenReason, type OrderStatus } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import {
+  closeOpenStageInterval,
+  intervalKindForOrderState,
+  isActiveIntervalKind,
+  openStageInterval,
+} from "@pharmax/sla";
+import {
   applyTransition,
   BUCKET_CODE_FOR_STATUS,
   isOrderState,
@@ -223,6 +229,68 @@ export const ReopenForCorrection = defineCommand<
         currentBucketId: bucket.id,
         currentAssigneeUserId: assigneeForReopenTarget(input.reopenToState, ctx.actor.userId),
       },
+    });
+
+    // ---- SLA: close WAIT_AFTER_*_REJECT + open reopen target ----
+    //
+    // Handler-direct (not in `COMMAND_STAGE_INTERVAL_TRANSITION`)
+    // because the open kind is data-driven by `reopenToState`,
+    // which is bounded by `REOPEN_TARGET_STATES`:
+    //
+    //   TYPING_IN_PROGRESS              → TYPING_ACTIVE
+    //   TYPED_READY_FOR_PV1             → WAIT_BEFORE_PV1
+    //   FILL_IN_PROGRESS                → FILL_ACTIVE
+    //   FILL_COMPLETED_READY_FOR_FINAL  → WAIT_BEFORE_FINAL_VERIFICATION
+    //
+    // The close kind is derived from the source state — engine
+    // already validated `fromState ∈ {PV1_REJECTED,
+    // FINAL_VERIFICATION_REJECTED}`, so the map resolves the
+    // close to `WAIT_AFTER_PV1_REJECT` or `WAIT_AFTER_FINAL_REJECT`.
+    // A `null` from either lookup is a programmer error (the
+    // engine accepted a state the SLA map doesn't recognize) —
+    // surface InternalError instead of swallowing it.
+    //
+    // The reopener becomes the active actor when the reopen
+    // target is an ACTIVE interval (TYPING/FILL_ACTIVE — the
+    // same operator who clicked "Reopen for correction" is
+    // actively reworking the order, mirrored on
+    // `currentAssigneeUserId` above). For WAIT_* reopen targets
+    // (TYPED_READY_FOR_PV1, FILL_COMPLETED_READY_FOR_FINAL) the
+    // SLA primitive forces actor to null per the schema invariant.
+    const closeKind = intervalKindForOrderState(fromState);
+    const openKind = intervalKindForOrderState(input.reopenToState);
+    if (closeKind === null || openKind === null) {
+      throw new errors.InternalError({
+        code: "REOPEN_FOR_CORRECTION_SLA_MAP_DRIFT",
+        message:
+          "ReopenForCorrection encountered a state without an SLA interval-kind mapping. " +
+          "Workflow policy and stage-interval-state-map are out of sync.",
+        metadata: {
+          orderId: target.id,
+          fromState,
+          reopenToState: input.reopenToState,
+          closeKind,
+          openKind,
+        },
+      });
+    }
+    await closeOpenStageInterval({
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+      endedAt: now,
+      commandLogId,
+      expectedKind: closeKind,
+    });
+    await openStageInterval({
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+      siteId: target.siteId,
+      kind: openKind,
+      startedAt: now,
+      commandLogId,
+      actorUserId: isActiveIntervalKind(openKind) ? ctx.actor.userId : null,
     });
 
     const nextVersion = target.version + 1;

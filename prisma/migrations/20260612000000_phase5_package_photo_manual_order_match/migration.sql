@@ -1,0 +1,38 @@
+-- migration: 20260612000000_phase5_package_photo_manual_order_match
+--
+-- Add MANUAL_ORDER_ID to PackagePhotoMatchStrategy.
+--
+-- Why a new enum value instead of reusing MANUAL_PATIENT_ID:
+--
+--   The strategy column is the audit anchor for "how did this
+--   photo get linked to a patient/order?" Reporting and forensic
+--   review both need to distinguish the operator paths:
+--
+--     EXTERNAL_ORDER_NUMBER  — auto-matched at capture time on the
+--                              rep-typed external order number.
+--     MANUAL_PATIENT_ID      — operator searched for the patient
+--                              and selected a candidate order
+--                              (UI flow: "I know the patient, find
+--                              the order").
+--     MANUAL_ORDER_ID        — operator searched for the order
+--                              directly by id / external order
+--                              number / scan (UI flow: "I have the
+--                              order, just attach this photo").
+--                              ResolvePackagePhotoMatch (Phase 5b)
+--                              writes this strategy.
+--     UNMATCHED              — capture happened, no match resolved.
+--
+-- Conflating the two manual paths would weaken the audit anchor
+-- and make it impossible to distinguish a clerical fix
+-- (operator searches by order) from a clinical fix (operator
+-- searches by patient). The two have different SOC 2 review
+-- weights — the patient-search path is the one a fraud reviewer
+-- would scrutinize first.
+--
+-- PostgreSQL note: `ALTER TYPE … ADD VALUE` cannot run in the
+-- same transaction as queries that reference the new value, so
+-- this migration ONLY adds the value. Code that writes the new
+-- strategy ships in the same release but executes against the
+-- already-committed enum.
+
+ALTER TYPE "PackagePhotoMatchStrategy" ADD VALUE 'MANUAL_ORDER_ID';

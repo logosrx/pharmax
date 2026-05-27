@@ -16,6 +16,7 @@
     "@pharmax/labels": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",
+    "@pharmax/telemetry": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
     "@sentry/node": "^8.55.2",
     "ulid": "^2.3.0",

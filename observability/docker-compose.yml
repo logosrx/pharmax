@@ -1,0 +1,112 @@
+# Pharmax observability — local dev stack.
+#
+# Brings up the full OTel pipeline (collector + Prometheus + Tempo +
+# Loki + Grafana) on a single docker network. Apps connect via
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318.
+#
+# To start:
+#   docker compose -f observability/docker-compose.yml up -d
+#
+# To tear down (and wipe volumes):
+#   docker compose -f observability/docker-compose.yml down -v
+#
+# Ports exposed on localhost:
+#   4317  otel-collector OTLP/gRPC
+#   4318  otel-collector OTLP/HTTP (matches @pharmax/telemetry default)
+#   8889  collector → Prometheus exposer (scrape target)
+#   13133 collector healthcheck
+#   9090  Prometheus UI / API
+#   3001  Grafana UI (admin/admin)
+#   3100  Loki HTTP
+#   3200  Tempo HTTP API
+#
+# This file is for **local development only**. Production wiring is a
+# Terraform follow-up; see observability/README.md.
+
+name: pharmax-observability
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    container_name: pharmax-otel-collector
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+      - "13133:13133"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: pharmax-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.6.0
+    container_name: pharmax-tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"
+    restart: unless-stopped
+    # Tempo config is inlined below via the named volume; the file
+    # lives next to this compose file so it is part of the artifact.
+
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: pharmax-loki
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:11.3.0
+    container_name: pharmax-grafana
+    environment:
+      # Local dev only. Production uses SSO; never expose admin/admin
+      # outside a developer laptop.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: ""
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+  tempo_data:
+  loki_data:
+  grafana_data:

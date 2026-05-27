@@ -54,7 +54,7 @@ import {
   executeCommand,
   resetCommandBusConfigurationForTests,
 } from "@pharmax/command-bus";
-import { RoleScope } from "@pharmax/database";
+import { OrderStageIntervalKind, RoleScope } from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
 import {
   configureRbac,
@@ -64,6 +64,7 @@ import {
   type PermissionCode,
   type ResolvedGrant,
 } from "@pharmax/rbac";
+import { createOrderStageIntervalTxStub } from "@pharmax/sla/test-utils";
 import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
 import { RejectFinalVerification } from "./reject-final-verification.js";
@@ -128,6 +129,13 @@ interface FakeOverrides {
   orderUpdateManyCount?: number;
   orderEventHead?: { sequenceNumber: number } | null;
   verificationRecordCreate?: { id: string };
+  /**
+   * Kind of the currently-open `OrderStageInterval` row at lock time.
+   * RejectFinalVerification closes `FINAL_VERIFICATION_ACTIVE` and opens
+   * `WAIT_AFTER_FINAL_REJECT` per the SLA transition table, so the
+   * default reflects the canonical pre-state.
+   */
+  initialOpenIntervalKind?: OrderStageIntervalKind;
 }
 
 function buildPrismaFake(overrides: FakeOverrides = {}): {
@@ -159,6 +167,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return policy === null ? null : { id: POLICY_ID, ...policy };
       }),
     },
+    orderStageInterval: createOrderStageIntervalTxStub(
+      (table, op, args) => calls.push({ table, op, args }),
+      overrides.initialOpenIntervalKind ?? OrderStageIntervalKind.FINAL_VERIFICATION_ACTIVE
+    ),
     order: {
       update: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "update", args });
@@ -452,6 +464,24 @@ describe("RejectFinalVerification — happy path", () => {
     expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(1);
     expect(callsOf(fake.calls, "eventOutbox", "createMany")).toHaveLength(1);
     expect(callsOf(fake.calls, "idempotencyKey", "create")).toHaveLength(1);
+
+    // SLA: close FINAL_VERIFICATION_ACTIVE + open
+    // WAIT_AFTER_FINAL_REJECT. Single-from-state; the static
+    // transition table asserts the close kind. The open kind is
+    // WAIT_* → no actor on the row.
+    const slaCloseCalls = callsOf(fake.calls, "orderStageInterval", "updateMany");
+    expect(slaCloseCalls).toHaveLength(1);
+
+    const slaOpenCalls = callsOf(fake.calls, "orderStageInterval", "create");
+    expect(slaOpenCalls).toHaveLength(1);
+    const slaOpenData = (slaOpenCalls[0]!.args as { data: Record<string, unknown> }).data;
+    expect(slaOpenData).toMatchObject({
+      organizationId: ORG_ID,
+      orderId: ORDER_ID,
+      siteId: SITE_ID,
+      kind: OrderStageIntervalKind.WAIT_AFTER_FINAL_REJECT,
+      actorUserId: null,
+    });
   });
 
   it("writes verification_record BEFORE order.update (constraint-failure ordering)", async () => {

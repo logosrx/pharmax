@@ -12,13 +12,34 @@
 // Any uncaught throw at startup exits 1 immediately (no Prisma
 // disconnect needed since the connection wasn't used yet).
 
+import { configureBilling, type StripeInvoicePort } from "@pharmax/billing";
 import { configureCommandBus } from "@pharmax/command-bus";
-import { configureCrypto, LocalKmsAdapter } from "@pharmax/crypto";
+import {
+  AwsKmsAdapter,
+  configureCrypto,
+  createAwsKmsClient,
+  LocalKmsAdapter,
+  type KmsAdapter,
+} from "@pharmax/crypto";
 import { billing, clock } from "@pharmax/platform-core";
 import { billing as databaseBilling, prisma } from "@pharmax/database";
 import { configureRbac, PrismaPermissionLoader } from "@pharmax/rbac";
-import { PrismaEasyPostWebhookEventStore } from "@pharmax/shipping";
+import {
+  configureShipping,
+  createEasyPostFactory,
+  createFedExFactory,
+  createUpsFactory,
+  PrismaEasyPostWebhookEventStore,
+} from "@pharmax/shipping";
+import {
+  initTelemetry,
+  resolveTelemetryConfigFromEnv,
+  type TelemetryHandle,
+} from "@pharmax/telemetry";
+import Stripe from "stripe";
 
+import { createStripeInvoiceAdapter } from "./billing/stripe-invoice-adapter.js";
+import { createStripeRefundAdapter } from "./billing/stripe-refund-adapter.js";
 import { createEasyPostWebhookDrainer } from "./drains/easypost-webhook-event-drainer.js";
 import { createOutboxDrainer } from "./drains/event-outbox-drainer.js";
 import { createFedExTrackingPoller } from "./drains/fedex-tracking-poller.js";
@@ -26,14 +47,38 @@ import { createOutboxHandlers } from "./drains/outbox-handlers.js";
 import { createEasyPostTargetResolver } from "./drains/shipping-lookups.js";
 import { createUpsTrackingPoller } from "./drains/ups-tracking-poller.js";
 import { createStripeWebhookDrainer } from "./drains/stripe-webhook-event-drainer.js";
-import { stripeEventHandlers } from "./drains/stripe-handlers.js";
+import { createStripeEventHandlers } from "./drains/stripe-handlers.js";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
 import { flushSentry, initSentry } from "./observability/sentry-init.js";
 import { createPollLoop } from "./runtime/poll-loop.js";
+import { createNightlyMerkleRootLoopFromEnv } from "./security/daily-merkle-root-loop.js";
+
+let workerTelemetryHandle: TelemetryHandle | null = null;
 
 async function main(): Promise<void> {
-  // 1. Sentry FIRST — uncaughtException / unhandledRejection hooks
+  // 0. OpenTelemetry. Must run before subsequent imports load any
+  // instrumented module surface (http / pg / aws-sdk). The drainers
+  // perform Prisma + outbound HTTP + AWS calls every tick, so OTel
+  // hooks must be active before the first drainer is constructed.
+  // Failure is non-fatal — observability never blocks safety.
+  const telemetryConfig = resolveTelemetryConfigFromEnv({
+    serviceName: "pharmacy-worker",
+    nodeEnv: env.NODE_ENV,
+  });
+  workerTelemetryHandle = await initTelemetry({
+    config: telemetryConfig,
+    onBootDiagnostic: (level, event, details) => {
+      logger[level](event, details);
+    },
+  });
+  if (env.NODE_ENV === "production" && !workerTelemetryHandle.enabled) {
+    logger.warn("worker.booted_without_telemetry", {
+      reason: "OTEL_ENABLED is not truthy or SDK init failed",
+    });
+  }
+
+  // 1. Sentry — uncaughtException / unhandledRejection hooks
   // are registered as a side effect, so a misconfig in subsequent
   // init steps still surfaces as a reported error.
   const sentryReady = initSentry({
@@ -50,15 +95,18 @@ async function main(): Promise<void> {
   // 2. Configure process-wide singletons BEFORE any drainer can run.
   // The outbox drainer dispatches handlers that may decrypt PHI
   // fields; @pharmax/crypto MUST be wired before the first tick.
-  // Production refuses LocalKmsAdapter — same guard as apps/web.
-  if (env.NODE_ENV === "production") {
-    throw new Error(
-      "Refusing to boot apps/worker in production with LocalKmsAdapter. Implement and wire AwsKmsAdapter before promoting."
-    );
-  }
-  configureCrypto({
-    kms: new LocalKmsAdapter({ seed: env.PHARMAX_LOCAL_KMS_SEED }),
-  });
+  //
+  // Production: AwsKmsAdapter against customer-managed KMS keys.
+  // The worker calls `kms.validate()` at boot to surface IAM
+  // misconfig (most common: ECS task role missing kms:DescribeKey)
+  // BEFORE the first drain tick, not as a per-tick failure
+  // cascade.
+  //
+  // Dev / test: LocalKmsAdapter. MUST share the same
+  // PHARMAX_LOCAL_KMS_SEED as apps/web, or rows wrapped by one
+  // process are undecryptable by the other.
+  const { kms, adapterName } = await buildWorkerKmsAdapter();
+  configureCrypto({ kms });
 
   // The EasyPost webhook drain executes `RecordShipmentTrackingEvent`
   // through the standard command bus inside per-org tenancy. Wire
@@ -71,10 +119,26 @@ async function main(): Promise<void> {
     logger: logger.child({ component: "command-bus" }),
   });
 
+  // @pharmax/shipping factory registry. The FedEx + UPS tracking
+  // pollers instantiate clients directly (they decrypt the
+  // credential then build a typed client), but `PurchaseShipmentLabel`
+  // and `RecordShipmentTrackingEvent` reach for `getShippingAdapterFactory`
+  // and would throw `SHIPPING_NOT_CONFIGURED` without this call.
+  // Listing all three providers here keeps factory registration as
+  // the single source of truth — adding a fourth carrier means one
+  // line here, not a hunt across packages.
+  configureShipping({
+    factories: {
+      EASYPOST: createEasyPostFactory(),
+      FEDEX: createFedExFactory(),
+      UPS: createUpsFactory(),
+    },
+  });
+
   logger.info("worker.boot", {
     nodeEnv: env.NODE_ENV,
     pid: process.pid,
-    cryptoAdapter: "LocalKmsAdapter",
+    cryptoAdapter: adapterName,
     stripeDrain: {
       batchSize: env.STRIPE_DRAIN_BATCH_SIZE,
       intervalMs: env.STRIPE_DRAIN_INTERVAL_MS,
@@ -101,6 +165,13 @@ async function main(): Promise<void> {
       intervalMs: env.UPS_TRACKING_POLL_INTERVAL_MS,
       staleThresholdMs: env.UPS_TRACKING_POLL_STALE_THRESHOLD_MS,
     },
+    shippingProviders: ["EASYPOST", "FEDEX", "UPS"],
+    merkleRootJob: {
+      utcHour: env.DAILY_MERKLE_ROOT_HOUR_UTC,
+      utcMinute: env.DAILY_MERKLE_ROOT_MINUTE_UTC,
+      auditArchiveConfigured: typeof env.AUDIT_ARCHIVE_S3_BUCKET === "string",
+      kmsSignerConfigured: typeof env.MERKLE_SIGNER_KMS_KEY_ID === "string",
+    },
   });
 
   // Construct the dispatcher with whatever handlers are currently
@@ -108,7 +179,7 @@ async function main(): Promise<void> {
   // dispatcher gracefully no-ops unknown event types.
   const stripeEventStore = new databaseBilling.PrismaStripeWebhookEventStore(prisma);
   const stripeDispatcher = billing.createStripeWebhookEventDispatcher({
-    handlers: stripeEventHandlers,
+    handlers: createStripeEventHandlers({ client: prisma }),
   });
 
   const stripeDrainer = createStripeWebhookDrainer(
@@ -124,12 +195,33 @@ async function main(): Promise<void> {
     }
   );
 
+  // Stripe SDK construction is lazy + optional: when
+  // STRIPE_SECRET_KEY is unset, we hand the outbox handler a null
+  // port so it logs-and-no-ops instead of producing per-event
+  // retries against an unconfigured Stripe. The SAME SDK instance
+  // powers both the invoice-push port (worker-side outbox handler)
+  // and the refund port (configureBilling, used by the
+  // RecordRefundReceived reconciliation path that may run inside
+  // a chained system command).
+  const stripeSdk =
+    typeof env.STRIPE_SECRET_KEY === "string" && env.STRIPE_SECRET_KEY.length > 0
+      ? new Stripe(env.STRIPE_SECRET_KEY, {
+          typescript: true,
+          appInfo: { name: "pharmacy-worker", version: "0.1.0" },
+        })
+      : null;
+  const stripePort: StripeInvoicePort | null =
+    stripeSdk !== null ? createStripeInvoiceAdapter({ stripe: stripeSdk }) : null;
+  configureBilling({
+    stripeRefundPort: stripeSdk !== null ? createStripeRefundAdapter({ stripe: stripeSdk }) : null,
+  });
+
   const outboxDrainer = createOutboxDrainer(
     {
       client: prisma,
       logger,
       maxAttempts: env.OUTBOX_DRAIN_MAX_ATTEMPTS,
-      handlers: createOutboxHandlers({ client: prisma }),
+      handlers: createOutboxHandlers({ client: prisma, prisma, stripePort }),
     },
     {
       batchSize: env.OUTBOX_DRAIN_BATCH_SIZE,
@@ -166,6 +258,26 @@ async function main(): Promise<void> {
       staleThresholdMs: env.UPS_TRACKING_POLL_STALE_THRESHOLD_MS,
     }
   );
+
+  // Daily Merkle root signing loop (ADR-0024). Resolves the signer +
+  // publisher from env via dynamic AWS SDK imports. In production
+  // the env validation in env.ts + the hard-fail inside the
+  // factories guarantees both KMS keys + the audit-archive bucket
+  // are configured before the first run fires.
+  const merkleRootLoop = await createNightlyMerkleRootLoopFromEnv({
+    prisma,
+    logger,
+    utcHour: env.DAILY_MERKLE_ROOT_HOUR_UTC,
+    utcMinute: env.DAILY_MERKLE_ROOT_MINUTE_UTC,
+    env: {
+      NODE_ENV: env.NODE_ENV,
+      AWS_REGION: env.AWS_REGION,
+      AUDIT_ARCHIVE_S3_BUCKET: env.AUDIT_ARCHIVE_S3_BUCKET,
+      AUDIT_ARCHIVE_S3_KMS_KEY_ID: env.AUDIT_ARCHIVE_S3_KMS_KEY_ID,
+      AUDIT_ARCHIVE_RETENTION_YEARS: env.AUDIT_ARCHIVE_RETENTION_YEARS,
+      MERKLE_SIGNER_KMS_KEY_ID: env.MERKLE_SIGNER_KMS_KEY_ID,
+    },
+  });
 
   // Wrap each drainer's `tick` so its tally result is discarded — the
   // poll-loop contract is `() => Promise<void>` and TypeScript is
@@ -221,6 +333,7 @@ async function main(): Promise<void> {
   easyPostLoop.start();
   fedexTrackingLoop.start();
   upsTrackingLoop.start();
+  merkleRootLoop.start();
 
   await waitForShutdown();
 
@@ -237,6 +350,7 @@ async function main(): Promise<void> {
     easyPostLoop.stop(),
     fedexTrackingLoop.stop(),
     upsTrackingLoop.stop(),
+    merkleRootLoop.stop(),
   ]);
   await prisma.$disconnect();
 
@@ -245,9 +359,84 @@ async function main(): Promise<void> {
   // expectations.
   await flushSentry(2_000);
 
+  // Flush OTel exporters in parallel with the Sentry flush window.
+  // `shutdown()` already swallows its own errors and logs them; we
+  // just need to await before exit so spans actually leave.
+  if (workerTelemetryHandle !== null) {
+    await workerTelemetryHandle.shutdown();
+  }
+
   clearTimeout(shutdownTimer);
   logger.info("worker.shutdown.complete");
   process.exit(0);
+}
+
+/**
+ * Build and validate the KMS adapter for the worker process. Mirror
+ * of the web equivalent in `apps/web/src/server/bootstrap.ts`. Kept
+ * separate so the two boot paths can diverge later (e.g. if the
+ * worker ever needs a different KMS profile from the request tier)
+ * without back-references between the apps.
+ */
+async function buildWorkerKmsAdapter(): Promise<{
+  readonly kms: KmsAdapter;
+  readonly adapterName: "AwsKmsAdapter" | "LocalKmsAdapter";
+}> {
+  const region = env.AWS_REGION;
+  const dataKeyId = env.AWS_KMS_DATA_KEY_ID;
+  const searchKeyId = env.AWS_KMS_SEARCH_KEY_ID;
+  const label = env.AWS_KMS_KEY_LABEL ?? "app-phi";
+
+  const allAwsPresent =
+    typeof region === "string" &&
+    region.length > 0 &&
+    typeof dataKeyId === "string" &&
+    dataKeyId.length > 0 &&
+    typeof searchKeyId === "string" &&
+    searchKeyId.length > 0;
+
+  if (env.NODE_ENV === "production") {
+    if (!allAwsPresent) {
+      throw new Error(
+        "Refusing to boot apps/worker in production: AWS_REGION, AWS_KMS_DATA_KEY_ID, and AWS_KMS_SEARCH_KEY_ID must all be set. " +
+          "Provision the KMS keys via infra/terraform/modules/kms and inject the ARNs through Secrets Manager."
+      );
+    }
+    const kms = new AwsKmsAdapter({
+      client: createAwsKmsClient({ region }),
+      dataKeyKeyId: dataKeyId,
+      searchKeyKeyId: searchKeyId,
+      keyIdLabel: label,
+    });
+    await kms.validate();
+    return { kms, adapterName: "AwsKmsAdapter" };
+  }
+
+  if (allAwsPresent) {
+    const kms = new AwsKmsAdapter({
+      client: createAwsKmsClient({ region }),
+      dataKeyKeyId: dataKeyId,
+      searchKeyKeyId: searchKeyId,
+      keyIdLabel: label,
+    });
+    await kms.validate();
+    logger.warn("worker.aws_kms_in_non_production", {
+      reason: "AWS_KMS_* env present in non-prod environment",
+    });
+    return { kms, adapterName: "AwsKmsAdapter" };
+  }
+
+  const seed = env.PHARMAX_LOCAL_KMS_SEED;
+  if (typeof seed !== "string" || seed.length < 32) {
+    throw new Error(
+      "Refusing to boot apps/worker: neither AWS KMS config nor PHARMAX_LOCAL_KMS_SEED is present. " +
+        "Set PHARMAX_LOCAL_KMS_SEED (>=32 chars) for local dev, or wire AWS_KMS_DATA_KEY_ID / AWS_KMS_SEARCH_KEY_ID."
+    );
+  }
+  return {
+    kms: new LocalKmsAdapter({ seed }),
+    adapterName: "LocalKmsAdapter",
+  };
 }
 
 function waitForShutdown(): Promise<NodeJS.Signals> {

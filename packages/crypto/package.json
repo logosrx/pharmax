@@ -9,7 +9,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@pharmax/platform-core": "workspace:*"
+    "@aws-sdk/client-kms": "^3.703.0",
+    "@pharmax/platform-core": "workspace:*",
+    "@pharmax/telemetry": "workspace:*",
+    "@smithy/node-http-handler": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

@@ -13,7 +13,9 @@
     "@pharmax/database": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",
+    "@pharmax/telemetry": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
+    "@pharmax/workflow": "workspace:*",
     "ulid": "^2.3.0",
     "zod": "^4.4.3"
   },

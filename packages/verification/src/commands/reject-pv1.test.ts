@@ -42,7 +42,7 @@ import {
   executeCommand,
   resetCommandBusConfigurationForTests,
 } from "@pharmax/command-bus";
-import { RoleScope } from "@pharmax/database";
+import { OrderStageIntervalKind, RoleScope } from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
 import {
   configureRbac,
@@ -52,6 +52,7 @@ import {
   type PermissionCode,
   type ResolvedGrant,
 } from "@pharmax/rbac";
+import { createOrderStageIntervalTxStub } from "@pharmax/sla/test-utils";
 import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
 import { RejectPV1 } from "./reject-pv1.js";
@@ -116,6 +117,15 @@ interface FakeOverrides {
   /** Head of `order_event` for sequence numbering (head + 1 is the next seq). */
   orderEventHead?: { sequenceNumber: number } | null;
   verificationRecordCreate?: { id: string };
+  /**
+   * Kind of the currently-open `OrderStageInterval` row at lock
+   * time. Default `PV1_ACTIVE` — RejectPV1's static SLA entry
+   * asserts the close kind, so getting this wrong in a non-default
+   * test surfaces as `SLA_INTERVAL_KIND_MISMATCH`. The
+   * non-PV1_IN_PROGRESS workflow-failure tests bail out BEFORE the
+   * SLA transition, so the default is benign for them too.
+   */
+  initialOpenIntervalKind?: OrderStageIntervalKind;
 }
 
 function buildPrismaFake(overrides: FakeOverrides = {}): {
@@ -147,6 +157,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return policy === null ? null : { id: POLICY_ID, ...policy };
       }),
     },
+    orderStageInterval: createOrderStageIntervalTxStub(
+      (table, op, args) => calls.push({ table, op, args }),
+      overrides.initialOpenIntervalKind ?? OrderStageIntervalKind.PV1_ACTIVE
+    ),
     order: {
       update: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "update", args });
@@ -434,6 +448,28 @@ describe("RejectPV1 — happy path", () => {
     expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(1);
     expect(callsOf(fake.calls, "eventOutbox", "createMany")).toHaveLength(1);
     expect(callsOf(fake.calls, "idempotencyKey", "create")).toHaveLength(1);
+
+    // SLA: close PV1_ACTIVE + open WAIT_AFTER_PV1_REJECT.
+    // Single-from-state, so the static transition table asserts
+    // the close kind. The open kind is WAIT_*, which the SLA
+    // primitive coerces to actorUserId=null regardless of what
+    // the caller passes — the rework wait window is not "owned"
+    // by any user. Reports separate first-pass pharmacist time
+    // (PV1_ACTIVE) from rework wait (WAIT_AFTER_PV1_REJECT) by
+    // the open kind alone.
+    const slaCloseCalls = callsOf(fake.calls, "orderStageInterval", "updateMany");
+    expect(slaCloseCalls).toHaveLength(1);
+
+    const slaOpenCalls = callsOf(fake.calls, "orderStageInterval", "create");
+    expect(slaOpenCalls).toHaveLength(1);
+    const slaOpenData = (slaOpenCalls[0]!.args as { data: Record<string, unknown> }).data;
+    expect(slaOpenData).toMatchObject({
+      organizationId: ORG_ID,
+      orderId: ORDER_ID,
+      siteId: SITE_ID,
+      kind: OrderStageIntervalKind.WAIT_AFTER_PV1_REJECT,
+      actorUserId: null,
+    });
   });
 
   it("writes verification_record BEFORE order.update (constraint-failure ordering)", async () => {

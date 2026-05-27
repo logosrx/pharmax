@@ -108,6 +108,7 @@ import { defineCommand } from "@pharmax/command-bus";
 import { CancellationDisposition, OrderStatus, Prisma } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
+import { applyCommandStageIntervalTransition } from "@pharmax/sla";
 import {
   applyTransition,
   isOrderState,
@@ -341,6 +342,28 @@ export const CancelOrder = defineCommand<CancelOrderInput, CancelOrderOutput>({
         currentStatus: OrderStatus.CANCELLED,
         currentAssigneeUserId: null,
       },
+    });
+
+    // ---- Close the currently-open SLA stage interval ----
+    // CancelOrder is multi-from-state (RECEIVED, TYPING_*, PV1_*,
+    // FILL_*, FINAL_*, READY_TO_SHIP, ON_HOLD, PV1_REJECTED,
+    // FINAL_VERIFICATION_REJECTED, TYPING_PENDING_MISSING_INFO).
+    // The open interval kind varies per source state, so the
+    // close-only entry in COMMAND_STAGE_INTERVAL_CLOSE_ONLY runs
+    // without an `expectedKind` assertion — it closes whatever is
+    // currently open. The "cancelled while in stage X" breakdown
+    // a manager needs is already on
+    // `OrderCancellation.cancelledFromStatus`; no terminal interval
+    // row is required.
+    await applyCommandStageIntervalTransition({
+      commandName: "CancelOrder",
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+      siteId: target.siteId,
+      at: now,
+      commandLogId,
+      actorUserId: ctx.actor.userId,
     });
 
     const nextVersion = target.version + 1;

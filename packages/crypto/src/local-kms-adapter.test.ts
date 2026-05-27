@@ -221,3 +221,233 @@ describe("hmacSha256 helper", () => {
     expect(timingSafeEqualBuffers(a, b)).toBe(true);
   });
 });
+
+describe("LocalKmsAdapter — signRoot / verifyRoot", () => {
+  const TENANT = "00000000-0000-4000-8000-000000000001";
+  const WINDOW_START = new Date("2026-05-25T00:00:00.000Z");
+  const WINDOW_END = new Date("2026-05-26T00:00:00.000Z");
+  const ROOT = Buffer.alloc(32, 0x42);
+
+  it("signs and verifies a Merkle root round-trip", async () => {
+    const kms = freshAdapter();
+    const out = await kms.signRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+    });
+    expect(out.signature.length).toBe(32);
+    expect(out.signatureAlgorithm).toBe("HMAC_SHA_256");
+    expect(out.kmsKeyId.startsWith("local-hmac-sha256:")).toBe(true);
+    expect(out.kmsKeyId.endsWith(`:${TENANT}`)).toBe(true);
+
+    const ok = await kms.verifyRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+      signature: out.signature,
+      kmsKeyId: out.kmsKeyId,
+      signatureAlgorithm: out.signatureAlgorithm,
+    });
+    expect(ok).toBe(true);
+  });
+
+  it("verification fails when the root bytes are tampered", async () => {
+    const kms = freshAdapter();
+    const out = await kms.signRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+    });
+    const tampered = Buffer.from(ROOT);
+    tampered[0] = (tampered[0]! + 1) & 0xff;
+    const ok = await kms.verifyRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: tampered,
+      leafCount: 5,
+      signature: out.signature,
+      kmsKeyId: out.kmsKeyId,
+      signatureAlgorithm: out.signatureAlgorithm,
+    });
+    expect(ok).toBe(false);
+  });
+
+  it("verification fails when the leafCount is tampered", async () => {
+    const kms = freshAdapter();
+    const out = await kms.signRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+    });
+    const ok = await kms.verifyRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 6,
+      signature: out.signature,
+      kmsKeyId: out.kmsKeyId,
+      signatureAlgorithm: out.signatureAlgorithm,
+    });
+    expect(ok).toBe(false);
+  });
+
+  it("verification fails when the window changes", async () => {
+    const kms = freshAdapter();
+    const out = await kms.signRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+    });
+    const ok = await kms.verifyRoot({
+      tenantId: TENANT,
+      windowStart: new Date("2026-05-24T00:00:00.000Z"),
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+      signature: out.signature,
+      kmsKeyId: out.kmsKeyId,
+      signatureAlgorithm: out.signatureAlgorithm,
+    });
+    expect(ok).toBe(false);
+  });
+
+  it("verification fails when a different tenant claims the signature", async () => {
+    const kms = freshAdapter();
+    const out = await kms.signRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+    });
+    const otherTenant = "00000000-0000-4000-8000-000000000002";
+    const ok = await kms.verifyRoot({
+      tenantId: otherTenant,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+      signature: out.signature,
+      kmsKeyId: out.kmsKeyId,
+      signatureAlgorithm: out.signatureAlgorithm,
+    });
+    expect(ok).toBe(false);
+  });
+
+  it("verification fails when the kmsKeyId does not match (different seed)", async () => {
+    const a = freshAdapter("seed-A");
+    const b = freshAdapter("seed-B");
+    const signedByA = await a.signRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+    });
+    const ok = await b.verifyRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+      signature: signedByA.signature,
+      kmsKeyId: signedByA.kmsKeyId,
+      signatureAlgorithm: signedByA.signatureAlgorithm,
+    });
+    expect(ok).toBe(false);
+  });
+
+  it("verification fails when the algorithm tag does not match the adapter", async () => {
+    const kms = freshAdapter();
+    const out = await kms.signRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+    });
+    const ok = await kms.verifyRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+      signature: out.signature,
+      kmsKeyId: out.kmsKeyId,
+      signatureAlgorithm: "ECDSA_SHA_256",
+    });
+    expect(ok).toBe(false);
+  });
+
+  it("rejects roots that are not 32 bytes", async () => {
+    const kms = freshAdapter();
+    await expect(
+      kms.signRoot({
+        tenantId: TENANT,
+        windowStart: WINDOW_START,
+        windowEnd: WINDOW_END,
+        root: Buffer.alloc(16),
+        leafCount: 0,
+      })
+    ).rejects.toMatchObject({ code: "CRYPTO_VALIDATION" });
+  });
+
+  it("rejects negative or non-integer leafCount", async () => {
+    const kms = freshAdapter();
+    await expect(
+      kms.signRoot({
+        tenantId: TENANT,
+        windowStart: WINDOW_START,
+        windowEnd: WINDOW_END,
+        root: ROOT,
+        leafCount: -1,
+      })
+    ).rejects.toMatchObject({ code: "CRYPTO_VALIDATION" });
+  });
+
+  it("rejects an inverted window", async () => {
+    const kms = freshAdapter();
+    await expect(
+      kms.signRoot({
+        tenantId: TENANT,
+        windowStart: WINDOW_END,
+        windowEnd: WINDOW_START,
+        root: ROOT,
+        leafCount: 0,
+      })
+    ).rejects.toMatchObject({ code: "CRYPTO_VALIDATION" });
+  });
+
+  it("two adapters with the same seed produce identical signatures (deterministic across processes)", async () => {
+    const a = freshAdapter("identical-seed-for-determinism-test");
+    const b = freshAdapter("identical-seed-for-determinism-test");
+    const sigA = await a.signRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+    });
+    const sigB = await b.signRoot({
+      tenantId: TENANT,
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+      root: ROOT,
+      leafCount: 5,
+    });
+    expect(sigA.signature.equals(sigB.signature)).toBe(true);
+    expect(sigA.kmsKeyId).toBe(sigB.kmsKeyId);
+  });
+});

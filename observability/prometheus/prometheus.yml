@@ -1,0 +1,47 @@
+# Prometheus configuration for the Pharmax local + reference stack.
+#
+# Scrape targets:
+#   - otel-collector :8889   — fanned-in metrics from every Pharmax service
+#   - otel-collector :8888   — collector's own self-metrics
+#   - prometheus self        — for completeness
+#
+# Recording + alerting rule files are loaded from /etc/prometheus/rules.
+# Alertmanager target is left commented in dev; production wires it via
+# Terraform.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: pharmax-local
+    environment: development
+
+rule_files:
+  - /etc/prometheus/rules/slo-rules.yaml
+  - /etc/prometheus/rules/alert-rules.yaml
+
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#             - alertmanager:9093
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
+  - job_name: otel-collector
+    static_configs:
+      - targets:
+          - otel-collector:8889
+        labels:
+          source: otel-collector-fanin
+
+  - job_name: otel-collector-self
+    static_configs:
+      - targets:
+          - otel-collector:8888
+        labels:
+          source: otel-collector-self

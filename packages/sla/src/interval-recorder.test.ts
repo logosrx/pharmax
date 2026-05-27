@@ -352,12 +352,18 @@ describe("transitionStageIntervals", () => {
 // breaks the suffix (or vice versa) this fails before the production
 // write path silently loses an actor id.
 describe("isActiveIntervalKind", () => {
+  // Every enum member whose name ends in `_ACTIVE` is in scope —
+  // the predicate uses the suffix as its single source of truth.
+  // HOLD_ACTIVE is included: while a held order is not consuming its
+  // stage SLA budget, the PlaceHold command DOES stamp an actor on
+  // the row, so the predicate must classify it as user-owned.
   const ACTIVE_KINDS: ReadonlySet<OrderStageIntervalKind> = new Set([
     OrderStageIntervalKind.TYPING_ACTIVE,
     OrderStageIntervalKind.PV1_ACTIVE,
     OrderStageIntervalKind.FILL_ACTIVE,
     OrderStageIntervalKind.FINAL_VERIFICATION_ACTIVE,
     OrderStageIntervalKind.SHIPPING_ACTIVE,
+    OrderStageIntervalKind.HOLD_ACTIVE,
   ]);
 
   it("returns the canonical user-owned membership for every enum member", () => {
@@ -374,6 +380,43 @@ describe("applyCommandStageIntervalTransition", () => {
     const fake = buildTx({ id: "open-1", kind: OrderStageIntervalKind.SHIPPING_ACTIVE });
     await applyCommandStageIntervalTransition({
       commandName: "ConfirmShipment",
+      tx: fake.tx as never,
+      organizationId: ORG_ID,
+      orderId: ORDER_ID,
+      siteId: SITE_ID,
+      at: AT,
+      commandLogId: CMD_ID,
+      actorUserId: USER_ID,
+    });
+    expect(fake.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          endedAt: AT,
+          closeCommandLogId: CMD_ID,
+        }),
+      })
+    );
+    expect(fake.create).not.toHaveBeenCalled();
+  });
+
+  // CancelOrder is multi-from-state (RECEIVED, TYPING_*, PV1_*,
+  // FILL_*, FINAL_*, READY_TO_SHIP, ON_HOLD, …) — the open kind
+  // varies per source, so the close-only entry omits `close` and
+  // runs without an `expectedKind` assertion. Two regressions to
+  // pin: (i) the close fires regardless of what's open, and (ii)
+  // a stage-kind that would FAIL ConfirmShipment's strict
+  // assertion passes for CancelOrder.
+  it.each([
+    OrderStageIntervalKind.WAIT_BEFORE_TYPING,
+    OrderStageIntervalKind.TYPING_ACTIVE,
+    OrderStageIntervalKind.PV1_ACTIVE,
+    OrderStageIntervalKind.FILL_ACTIVE,
+    OrderStageIntervalKind.FINAL_VERIFICATION_ACTIVE,
+    OrderStageIntervalKind.WAIT_BEFORE_SHIPPING,
+  ])("routes CancelOrder through close-only regardless of open kind (%s)", async (openKind) => {
+    const fake = buildTx({ id: "open-1", kind: openKind });
+    await applyCommandStageIntervalTransition({
+      commandName: "CancelOrder",
       tx: fake.tx as never,
       organizationId: ORG_ID,
       orderId: ORDER_ID,
@@ -415,7 +458,136 @@ describe("applyCommandStageIntervalTransition", () => {
     );
   });
 
+  // PlaceHold is multi-from-state (reachable from every active,
+  // non-hold, non-terminal status) so the transition table entry
+  // omits `close`. The mechanics differ from `CancelOrder`'s
+  // close-only treatment because PlaceHold ALSO opens a successor
+  // (HOLD_ACTIVE), and from `CompleteFill`'s strict close because
+  // the source kind varies. Two regressions pinned here: the
+  // close runs against any open kind, and the successor opens
+  // with the placer as actor on the ACTIVE row.
+  it.each([
+    OrderStageIntervalKind.WAIT_BEFORE_TYPING,
+    OrderStageIntervalKind.TYPING_ACTIVE,
+    OrderStageIntervalKind.WAIT_BEFORE_PV1,
+    OrderStageIntervalKind.PV1_ACTIVE,
+    OrderStageIntervalKind.WAIT_AFTER_PV1_REJECT,
+    OrderStageIntervalKind.FILL_ACTIVE,
+    OrderStageIntervalKind.WAIT_AFTER_FINAL_REJECT,
+    OrderStageIntervalKind.SHIPPING_ACTIVE,
+  ])("PlaceHold closes any open kind (%s) and opens HOLD_ACTIVE", async (openKind) => {
+    const fake = buildTx({ id: "open-1", kind: openKind });
+    await applyCommandStageIntervalTransition({
+      commandName: "PlaceHold",
+      tx: fake.tx as never,
+      organizationId: ORG_ID,
+      orderId: ORDER_ID,
+      siteId: SITE_ID,
+      at: AT,
+      commandLogId: CMD_ID,
+      actorUserId: USER_ID,
+    });
+    expect(fake.updateMany).toHaveBeenCalledTimes(1);
+    expect(fake.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          kind: OrderStageIntervalKind.HOLD_ACTIVE,
+          actorUserId: USER_ID,
+        }),
+      })
+    );
+  });
+
+  it("RejectPV1 closes PV1_ACTIVE and opens WAIT_AFTER_PV1_REJECT without actor on the wait row", async () => {
+    const fake = buildTx({ id: "open-1", kind: OrderStageIntervalKind.PV1_ACTIVE });
+    await applyCommandStageIntervalTransition({
+      commandName: "RejectPV1",
+      tx: fake.tx as never,
+      organizationId: ORG_ID,
+      orderId: ORDER_ID,
+      siteId: SITE_ID,
+      at: AT,
+      commandLogId: CMD_ID,
+      actorUserId: USER_ID,
+    });
+    expect(fake.updateMany).toHaveBeenCalledTimes(1);
+    expect(fake.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          kind: OrderStageIntervalKind.WAIT_AFTER_PV1_REJECT,
+          // WAIT_* invariant: SLA primitive coerces actor to null
+          // regardless of what the caller passes.
+          actorUserId: null,
+        }),
+      })
+    );
+  });
+
+  it("RejectFinalVerification closes FINAL_VERIFICATION_ACTIVE and opens WAIT_AFTER_FINAL_REJECT without actor", async () => {
+    const fake = buildTx({
+      id: "open-1",
+      kind: OrderStageIntervalKind.FINAL_VERIFICATION_ACTIVE,
+    });
+    await applyCommandStageIntervalTransition({
+      commandName: "RejectFinalVerification",
+      tx: fake.tx as never,
+      organizationId: ORG_ID,
+      orderId: ORDER_ID,
+      siteId: SITE_ID,
+      at: AT,
+      commandLogId: CMD_ID,
+      actorUserId: USER_ID,
+    });
+    expect(fake.updateMany).toHaveBeenCalledTimes(1);
+    expect(fake.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          kind: OrderStageIntervalKind.WAIT_AFTER_FINAL_REJECT,
+          actorUserId: null,
+        }),
+      })
+    );
+  });
+
+  it("RejectPV1 fails loud when the source interval is not PV1_ACTIVE (single-from-state contract)", async () => {
+    // The static transition table asserts the close kind. A stale
+    // open row with the wrong kind (eg. WAIT_BEFORE_PV1) must
+    // surface as SLA_INTERVAL_KIND_MISMATCH so the operator
+    // investigates the inconsistency instead of silently writing
+    // an unrelated close.
+    const fake = buildTx({ id: "open-1", kind: OrderStageIntervalKind.WAIT_BEFORE_PV1 });
+    await expect(
+      applyCommandStageIntervalTransition({
+        commandName: "RejectPV1",
+        tx: fake.tx as never,
+        organizationId: ORG_ID,
+        orderId: ORDER_ID,
+        siteId: SITE_ID,
+        at: AT,
+        commandLogId: CMD_ID,
+        actorUserId: USER_ID,
+      })
+    ).rejects.toMatchObject({ code: SLA_INTERVAL_KIND_MISMATCH });
+    expect(fake.create).not.toHaveBeenCalled();
+  });
+
+  // v1 contract: every bus command that mutates an order has an
+  // explicit SLA decision in one of the two static tables OR
+  // makes a handler-direct call (ReleaseHold + ReopenForCorrection
+  // — their open kind is parameterized). Nothing routes through
+  // the no-op set today. A future command that genuinely has zero
+  // SLA effect may be added here, but it MUST land with a comment
+  // explaining the rationale.
+  it("KNOWN_NON_SLA_COMMANDS is empty (every command has a deliberate SLA decision)", () => {
+    expect(Array.from(KNOWN_NON_SLA_COMMANDS)).toEqual([]);
+  });
+
   it("is a deliberate no-op for commands in KNOWN_NON_SLA_COMMANDS", async () => {
+    // The set is empty in v1 (asserted above) — this test stays
+    // wired so that the moment a future maintainer adds an entry
+    // to KNOWN_NON_SLA_COMMANDS, the no-op behavior is regression-
+    // covered. If KNOWN_NON_SLA_COMMANDS is empty, the loop is a
+    // trivially-passing no-op.
     for (const commandName of KNOWN_NON_SLA_COMMANDS) {
       const fake = buildTx({ id: "open-1", kind: OrderStageIntervalKind.PV1_ACTIVE });
       await applyCommandStageIntervalTransition({

@@ -15,7 +15,9 @@
   "dependencies": {
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/database": "workspace:*",
-    "@pharmax/platform-core": "workspace:*"
+    "@pharmax/platform-core": "workspace:*",
+    "@pharmax/telemetry": "workspace:*",
+    "@pharmax/workflow": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

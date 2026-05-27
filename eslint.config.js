@@ -46,18 +46,45 @@ const PRISMA_CLIENT_RESTRICTION = {
 //
 //   - @pharmax/tenancy   — definition + re-export
 //   - @pharmax/command-bus — executeSystemCommand orchestrator
-//   - apps/worker        — webhook drainers that bridge from
-//                          tenant-less external systems (Stripe,
-//                          EasyPost) to per-tenant commands. The
-//                          system-context read resolves the
-//                          (org, actor) pair; the subsequent
-//                          command runs through the normal bus.
+//   - apps/worker/src/drains/   — webhook drainers that bridge from
+//                                 tenant-less external systems
+//                                 (Stripe, EasyPost) to per-tenant
+//                                 commands. The system-context read
+//                                 resolves the (org, actor) pair;
+//                                 the subsequent command runs
+//                                 through the normal bus.
+//   - apps/worker/src/security/ — cross-tenant integrity/security
+//                                 cron jobs (daily Merkle root,
+//                                 digest probes) that must fan
+//                                 out across ALL organizations.
+//                                 By definition cannot enter any
+//                                 single tenancy frame because the
+//                                 job itself is the enumeration.
+//                                 Same shape as drains/: bridge
+//                                 layer, not business logic.
+//   - apps/worker/src/compliance/ — quarterly access-review job and
+//                                 supporting aggregators. SOC 2
+//                                 CC6.2 + HIPAA § 164.308(a)(4)
+//                                 require periodic cross-org review
+//                                 of who has access to what. Reads
+//                                 are aggregate-only (counts, never
+//                                 PHI payloads); the enumeration of
+//                                 ALL organizations is the job.
+//                                 Same shape as security/: bridge
+//                                 layer, infrastructure output (an
+//                                 evidence artifact + notification),
+//                                 no per-tenant actor and no order
+//                                 aggregate to gate through a
+//                                 command handler.
+//   - apps/web/src/server/auth/ — Clerk identity → Pharmax tenancy
+//                                 resolution (see Override 3c).
 //   - scripts/           — operator CLIs (e.g. bootstrap-org)
 //   - **/*.test.ts       — test fixtures
 //
-// Application **business logic** (apps/web, every domain package,
-// every apps/worker file outside the drains/ bridge layer) MUST go
-// through a command handler. A command handler in turn uses
+// Application **business logic** (apps/web outside auth/, every
+// domain package, every apps/worker file outside the drains/,
+// security/, and compliance/ bridge layers) MUST go through a
+// command handler. A command handler in turn uses
 // executeSystemCommand if it is a system command; the orchestrator
 // is the one place that calls withSystemContext.
 const SYSTEM_CONTEXT_RESTRICTION = {
@@ -163,10 +190,35 @@ export default tseslint.config(
   },
 
   // Override 3: scripts/ are operator CLIs that legitimately drive
-  // the bus from system context (bootstrap-org, etc.). Keep the
-  // Prisma ban.
+  // the bus from system context (bootstrap-org, validate-registry,
+  // migrate-allowlist, etc.). Two relaxations apply here:
+  //   - `no-restricted-imports`: scripts may import @pharmax/tenancy
+  //     and call withSystemContext directly (that's the whole point
+  //     — they're tenant-less operator tooling).
+  //   - `no-console`: scripts produce human-readable stdout (progress
+  //     messages, summary tables, exit-code rationale). Replacing
+  //     console.log with a structured logger here would hurt the
+  //     CLI UX without buying any safety, since these binaries
+  //     never run in a production request path. The Prisma ban is
+  //     preserved so scripts still go through the repository layer.
   {
     files: ["scripts/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+      "no-console": "off",
+    },
+  },
+
+  // Override 3c: apps/web/src/server/auth/** is the system-context
+  // bridge layer for the Clerk identity → Pharmax tenancy hop.
+  // Same shape as the worker drain bridge (3b): a tenant-less
+  // external identifier (Clerk userId) resolves to the Pharmax
+  // user row inside a system-context frame, then every downstream
+  // call runs inside the resolved tenancy. Without this override,
+  // the resolver can't read the `user` table because there is
+  // no tenancy frame established yet by definition.
+  {
+    files: ["apps/web/src/server/auth/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
     },
@@ -184,6 +236,52 @@ export default tseslint.config(
   // logic. Keep the Prisma ban; drop the system-context ban.
   {
     files: ["apps/worker/src/drains/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
+  // Override 3d: apps/worker/src/security/** are cross-tenant
+  // integrity and security cron jobs. The flow is:
+  //   1. Scheduler tick fires (tenant-less by definition).
+  //   2. Job enumerates ALL organizations via withSystemContext
+  //      (`prisma.organization.findMany`) — the enumeration IS
+  //      the job; entering one tenancy frame would defeat it.
+  //   3. For each org, the job reads chain rows / verifies the
+  //      Merkle root / fetches outbox-dead counts under
+  //      withSystemContext so the Prisma tenancy extension
+  //      passes the per-org filter through unmodified.
+  // Same shape as drains/: bridge layer, not business logic — the
+  // signed Merkle manifest and digest report are infrastructure
+  // outputs, not state transitions. No domain command pattern
+  // applies because there is no per-tenant actor and no order
+  // aggregate. Keep the Prisma ban; drop the system-context ban.
+  {
+    files: ["apps/worker/src/security/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
+  // Override 3e: apps/worker/src/compliance/** is the quarterly
+  // access-review job and its aggregators (command_log / audit_log
+  // counts, anomaly detection, evidence publisher, notifier). The
+  // flow mirrors security/:
+  //   1. Daily scheduler tick fires (tenant-less by definition).
+  //   2. On quarter boundary, job walks ALL organizations via
+  //      withSystemContext — the enumeration IS the job.
+  //   3. Per organization, the job runs aggregate-only reads
+  //      (groupBy / count) on command_log + audit_log; never
+  //      SELECTs the JSON payloads. PHI invariant preserved by
+  //      "we only read counts" not "we run under tenancy".
+  //   4. Output is a JSONL evidence artifact + a markdown summary
+  //      + one notification per org — infrastructure outputs, not
+  //      state transitions. No order aggregate to gate; no
+  //      per-tenant actor.
+  // Same shape as security/ and drains/. Keep the Prisma ban; drop
+  // the system-context ban.
+  {
+    files: ["apps/worker/src/compliance/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
     },

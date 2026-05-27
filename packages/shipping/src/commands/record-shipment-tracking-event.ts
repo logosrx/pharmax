@@ -221,6 +221,11 @@ export const RecordShipmentTrackingEvent: Command<
             orderId: shipment.orderId,
             siteId: shipment.siteId,
             source: input.source,
+            // `trackingEventId` (DB row id) — surfaced so downstream
+            // outbox handlers (notably `EscalateOrderToEmergencyBucket`)
+            // can backlink the order-timeline entry to the originating
+            // tracking-event row without a separate join.
+            trackingEventId,
             externalEventId: input.externalEventId,
             kind: input.kind,
             carrierStatus: input.carrierStatus,

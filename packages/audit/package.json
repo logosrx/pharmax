@@ -9,8 +9,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
+    "@pharmax/telemetry": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
     "ulid": "^2.3.0"
   },

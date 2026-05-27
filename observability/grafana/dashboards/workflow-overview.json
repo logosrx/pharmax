@@ -1,0 +1,301 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Per-stage workflow latency, throughput, queue depth, SLA breaches, and emergency-bucket size. Use when the operator asks 'is the floor running on time?'.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Stage timings",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Time-in-stage p50 / p95 / p99 (seconds)",
+      "description": "Histogram-derived stage durations from pharmax_workflow_stage_duration_seconds. Faceted by interval kind (TYPING_ACTIVE, PV1_ACTIVE, FILL_ACTIVE, FINAL_VERIFICATION_ACTIVE, SHIPPING_ACTIVE).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "lastNotNull", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (kind, le) (rate(pharmax_workflow_stage_duration_seconds_bucket{deployment_environment=~\"$environment\"}[5m])))",
+          "legendFormat": "p50 {{ kind }}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (kind, le) (rate(pharmax_workflow_stage_duration_seconds_bucket{deployment_environment=~\"$environment\"}[5m])))",
+          "legendFormat": "p95 {{ kind }}"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (kind, le) (rate(pharmax_workflow_stage_duration_seconds_bucket{deployment_environment=~\"$environment\"}[5m])))",
+          "legendFormat": "p99 {{ kind }}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "row",
+      "title": "Queue depth",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
+      "panels": []
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Queue depth by stage",
+      "description": "Current open intervals by stage. Source: pharmax_workflow_queue_depth gauge, periodically scraped from order_stage_interval (open intervals = end_at IS NULL).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 11 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 30,
+            "stacking": { "mode": "normal", "group": "A" },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "right",
+          "displayMode": "table",
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (stage) (pharmax_workflow_queue_depth{deployment_environment=~\"$environment\"})",
+          "legendFormat": "{{ stage }}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Emergency bucket size (last value)",
+      "description": "Orders that crossed the SLA deadline and were moved to the emergency bucket per organization. Aggregate across all tenants.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 11 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "value_and_name",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (organization_id) (pharmax_workflow_emergency_bucket_size{deployment_environment=~\"$environment\"})",
+          "legendFormat": "{{ organization_id }}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "SLA breaches",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 },
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "SLA breaches per minute (by stage)",
+      "description": "Counter pharmax_workflow_sla_breaches_total, ratified by stage. Any non-zero is an operator-noticeable event.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 20 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "auto" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.0001 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom",
+          "displayMode": "table",
+          "calcs": ["sum"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (stage) (rate(pharmax_workflow_sla_breaches_total{deployment_environment=~\"$environment\"}[5m]))",
+          "legendFormat": "{{ stage }}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Throughput",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Orders completing each stage (per minute, by tenant)",
+      "description": "Derived from the stage histogram count (every observation = one completion). Aggregated by organization_id to spot tenant-specific slowdowns.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 30 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom",
+          "displayMode": "table",
+          "calcs": ["sum"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (organization_id, kind) (rate(pharmax_workflow_stage_duration_seconds_count{deployment_environment=~\"$environment\"}[5m]))",
+          "legendFormat": "{{ organization_id }} :: {{ kind }}"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["pharmax", "workflow"],
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(deployment_environment)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(deployment_environment)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "options": [],
+        "hide": 0
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(service_name)",
+        "query": {
+          "qryType": 1,
+          "query": "label_values(service_name)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "options": [],
+        "hide": 0
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Pharmax · Workflow Overview",
+  "uid": "pharmax-workflow-overview",
+  "version": 1,
+  "weekStart": ""
+}
