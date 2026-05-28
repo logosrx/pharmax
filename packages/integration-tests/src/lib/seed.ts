@@ -19,7 +19,23 @@
 
 import { randomUUID } from "node:crypto";
 
+import { CommandStatus, IntakeSourceKind, OrderPriority, OrderStatus } from "@pharmax/database";
+
 import type { Client } from "pg";
+
+// Enum values for workflow-critical columns are sourced from the
+// Prisma-generated client (re-exported by `@pharmax/database` for
+// "ergonomic value-side usage in commands/seeds"). They are bound
+// as parameters with an explicit `::"EnumType"` cast — matching
+// the pattern in `verification-record.test.ts` — so a rename of an
+// enum value in `schema.prisma` surfaces as a TS compile error in
+// this file BEFORE the integration suite ever talks to Postgres.
+//
+// Status literals on the tenant scaffolding (`'ACTIVE'`,
+// `'WORKFLOW'`) are intentionally left as bare strings: they are
+// shared across multiple low-churn enums and importing one symbol
+// per literal would add noise without materially reducing drift
+// risk.
 
 const PHI_PLACEHOLDER_JSON = JSON.stringify({ v: "placeholder", alg: "test" });
 
@@ -155,9 +171,9 @@ export async function seedOrderChain(client: Client, tenant: SeededTenant): Prom
      )
      VALUES (
        $1, $2, $3, $4, $5,
-       'PV1_IN_PROGRESS', $6,
-       $7, $8,
-       1, 'NORMAL', 'API_INTAKE', now(),
+       $6::"OrderStatus", $7,
+       $8, $9,
+       1, $10::"OrderPriority", $11::"IntakeSourceKind", now(),
        now(), now()
      )`,
     [
@@ -166,9 +182,12 @@ export async function seedOrderChain(client: Client, tenant: SeededTenant): Prom
       tenant.clinicId,
       tenant.siteId,
       patientId,
+      OrderStatus.PV1_IN_PROGRESS,
       tenant.bucketId,
       tenant.workflowPolicyId,
       tenant.workflowPolicyVersion,
+      OrderPriority.NORMAL,
+      IntakeSourceKind.API,
     ]
   );
 
@@ -177,13 +196,14 @@ export async function seedOrderChain(client: Client, tenant: SeededTenant): Prom
        id, "organizationId", "commandName", "actorUserId",
        "idempotencyKey", "requestHash", status, "createdAt"
      )
-     VALUES ($1, $2, 'ApprovePV1', $3, $4, $5, 'SUCCEEDED', now())`,
+     VALUES ($1, $2, 'ApprovePV1', $3, $4, $5, $6::"CommandStatus", now())`,
     [
       commandLogId,
       tenant.organizationId,
       tenant.adminUserId,
       `it-${randomUUID()}`,
       `req-${randomUUID()}`,
+      CommandStatus.SUCCEEDED,
     ]
   );
 
