@@ -54,12 +54,24 @@ export {
   type RevokeUserRoleOutput,
 } from "./commands/revoke-user-role.js";
 
+export {
+  UpsertWorkflowPolicyOverlay,
+  UPSERT_OVERLAY_ACTIVE_RACE,
+  UPSERT_OVERLAY_BASE_POLICY_NOT_FOUND,
+  UPSERT_OVERLAY_BASE_POLICY_NOT_READABLE,
+  UPSERT_OVERLAY_BASE_POLICY_UNSUPPORTED,
+  UPSERT_OVERLAY_CLINIC_NOT_FOUND,
+  type UpsertWorkflowPolicyOverlayInput,
+  type UpsertWorkflowPolicyOverlayOutput,
+} from "./commands/upsert-workflow-policy-overlay.js";
+
 import * as createOrganizationModule from "./commands/create-organization.js";
 import * as provisionDefaultBucketsModule from "./commands/provision-default-buckets.js";
 import * as updatePharmacySiteAddressModule from "./commands/update-pharmacy-site-address.js";
 import * as inviteUserModule from "./commands/invite-user.js";
 import * as assignRoleModule from "./commands/assign-role.js";
 import * as revokeUserRoleModule from "./commands/revoke-user-role.js";
+import * as upsertWorkflowPolicyOverlayModule from "./commands/upsert-workflow-policy-overlay.js";
 
 export const orgs = {
   commands: {
@@ -69,5 +81,6 @@ export const orgs = {
     InviteUser: inviteUserModule.InviteUser,
     AssignRole: assignRoleModule.AssignRole,
     RevokeUserRole: revokeUserRoleModule.RevokeUserRole,
+    UpsertWorkflowPolicyOverlay: upsertWorkflowPolicyOverlayModule.UpsertWorkflowPolicyOverlay,
   },
 } as const;

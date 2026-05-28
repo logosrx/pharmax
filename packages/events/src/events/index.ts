@@ -28,3 +28,4 @@ export * from "./patient/index.js";
 export * from "./provider/index.js";
 export * from "./shipment/index.js";
 export * from "./shipping/index.js";
+export * from "./workflow/index.js";

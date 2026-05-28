@@ -89,10 +89,13 @@ import type { PermissionCode } from "@pharmax/rbac";
 import {
   CREATE_READABLE_STATUSES,
   IN_FLIGHT_READABLE_STATUSES,
+  resolvePolicyForTenant,
+  type MergedWorkflowPolicy,
   type WorkflowPolicyStatusValue,
 } from "@pharmax/workflow";
 import type { ZodType } from "zod";
 
+import { getCommandBusConfiguration, type OverlayResolutionConfig } from "./configure.js";
 import { requireNoSoDViolationForOrder, type EventTypeToPermission } from "./sod.js";
 import type {
   AuditEntryDraft,
@@ -170,6 +173,23 @@ export interface LoadedPolicy {
   readonly id: string;
   readonly code: string;
   readonly version: number;
+  /**
+   * Per-tenant merged policy snapshot — base composed with the
+   * ACTIVE overlays for this tenant (and clinic, when the locked
+   * target carries one). Present iff `overlayResolution` is
+   * configured on the bus AND `basePolicyFor(code, version)`
+   * returned a shape.
+   *
+   * Handlers that need overlay behavior read this; handlers that
+   * still use the static base policy (`ORDER_STANDARD_V1`) work
+   * unchanged. The migration cost is one import swap per handler.
+   *
+   * The snapshot is IMMUTABLE and replay-correct for the lifetime
+   * of the command — sibling-worker activations between this load
+   * and the bus tx commit do NOT mutate the in-flight snapshot.
+   * That is the in-flight grandfather rule from ADR-0019 §3.
+   */
+  readonly merged?: MergedWorkflowPolicy;
 }
 
 /**
@@ -543,6 +563,31 @@ async function resolvePolicy(input: ResolvePolicyInput): Promise<LoadedPolicy> {
   // bind a local so TypeScript narrows it through to the policy
   // lookup below.
   const spec = input.spec;
+  const base = await loadBasePolicyRow(input, spec);
+
+  // Optional Tier-2 overlay resolution (ADR-0019). Decorates the
+  // base `LoadedPolicy` with `merged: MergedWorkflowPolicy` IFF the
+  // bus is configured with an overlay resolver AND the registry
+  // knows the shape for this (code, version). Handlers that still
+  // read the static base shape continue to work unchanged.
+  //
+  // Clinic scope: in-flight commands carry `target.clinicId`, which
+  // narrows overlay loading to org-wide + this-clinic bindings.
+  // CREATE-mode commands have no locked target, so the resolver
+  // sees the org-wide overlay set only — that matches reality:
+  // CreateOrder has no clinic yet (the order is being born; the
+  // clinic is part of the input but is validated by the handler).
+  return decorateWithOverlay({
+    base,
+    organizationId: input.organizationId,
+    clinicId: input.target?.clinicId,
+  });
+}
+
+async function loadBasePolicyRow(
+  input: ResolvePolicyInput,
+  spec: LoadPolicySpec
+): Promise<LoadedPolicy> {
   if ("from" in spec) {
     if (input.target === undefined) {
       // Already screened in validateSpec; defensive.
@@ -603,6 +648,59 @@ async function resolvePolicy(input: ResolvePolicyInput): Promise<LoadedPolicy> {
       version: spec.version,
     },
   });
+}
+
+/**
+ * Read the bus's optional overlay resolver and, if configured,
+ * compose the base policy with the per-tenant overlay snapshot.
+ *
+ * Fail-safe: if the overlay resolver throws, the command FAILS
+ * with the underlying error. We do NOT silently fall back to the
+ * base policy — a misconfigured overlay row is a 400-class admin
+ * problem the caller needs to know about. Silent-fallback would
+ * let a tightened overlay (e.g. "controlled-substance dual
+ * pharmacist signoff") be ignored without operators noticing,
+ * which is the worst possible failure mode for SOC-2 evidence.
+ *
+ * The bus configuration's `basePolicyFor` returning `undefined`
+ * for an unknown (code, version) is a different signal: it means
+ * the registry has not been populated for this policy yet, so
+ * overlay resolution is skipped (handlers read the static base).
+ * This is the safe migration path for new policy versions.
+ */
+async function decorateWithOverlay(input: {
+  readonly base: LoadedPolicy;
+  readonly organizationId: string;
+  readonly clinicId: string | undefined;
+}): Promise<LoadedPolicy> {
+  const overlay = readOverlayConfig();
+  if (overlay === undefined) return input.base;
+
+  const basePolicy = overlay.basePolicyFor(input.base.code, input.base.version);
+  if (basePolicy === undefined) return input.base;
+
+  const merged = await resolvePolicyForTenant(
+    {
+      organizationId: input.organizationId,
+      basePolicyId: input.base.id,
+      basePolicyVersion: input.base.version,
+      basePolicy,
+      ...(input.clinicId === undefined ? {} : { clinicId: input.clinicId }),
+    },
+    { source: overlay.source, cache: overlay.cache }
+  );
+
+  return { ...input.base, merged };
+}
+
+/**
+ * Pulls `overlayResolution` off the singleton config. Wrapped so
+ * the bus stays uncoupled from the singleton inside the
+ * synthesized handler — every read goes through this helper, so
+ * a future move to per-request DI is one edit.
+ */
+function readOverlayConfig(): OverlayResolutionConfig | undefined {
+  return getCommandBusConfiguration().overlayResolution;
 }
 
 /**

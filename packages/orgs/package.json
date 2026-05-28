@@ -14,10 +14,10 @@
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
+    "@pharmax/workflow": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@pharmax/workflow": "workspace:*",
     "@types/node": "^22.9.0",
     "typescript": "^5.6.3"
   }

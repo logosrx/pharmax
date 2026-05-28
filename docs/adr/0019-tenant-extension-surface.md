@@ -1,7 +1,8 @@
 # 0019 — Tenant extension surface (three-tier model)
 
-- **Status:** Proposed
-- **Date:** 2026-05-25
+- **Status:** Accepted (Tier 2 wiring landed 2026-05-28; see
+  "Implementation notes — Tier 2 activation" below)
+- **Date:** 2026-05-25 (revised 2026-05-28)
 - **Deciders:** Platform team
 - **Tags:** tenancy, extensibility, workflow, security
 
@@ -255,13 +256,152 @@ overlayVersion)` on every command_log row that consumed an
 - Tier 3 remains in design freeze until at least three real-world
   customizations cannot be expressed in Tier 2.
 
-**Deferred (out of scope for this slice):**
+**Deferred (still out of scope):**
 
-- The `workflow_policy_overlay` Prisma migration.
-- The `UpsertWorkflowPolicyOverlay` admin command.
-- Wiring `mergePolicyWithOverlay` into `defineCommand`'s
-  `loadPolicy` step.
+- Migrating individual workflow handlers (`ApprovePV1`, `StartFill`,
+  `CompleteFill`, etc.) from the static `ORDER_STANDARD_V1` import
+  to `deps.policy.merged`. See "Implementation notes" below for
+  the migration shape and the safety gate.
+- Stamping resolved overlay binding metadata (`overlayBindings: [{
+overlayId, version, priority }]`) on `command_log` rows for
+  per-command audit evidence. The bus has the snapshot in hand;
+  the audit-chain writer needs a small surface widening to accept
+  it. Captured as a follow-up ticket — not blocking the wiring.
 - Tier 3 command-interceptor runtime.
+
+## Implementation notes — Tier 2 activation (2026-05-28)
+
+The following landed as a single slice; this section is the
+single source of truth for engineers reading the bus and
+wondering "where do overlays plug in?".
+
+### Schema, migration, lifecycle helpers (already shipped)
+
+- `WorkflowPolicyOverlay` Prisma model + `WorkflowPolicyOverlayStatus`
+  enum + partial unique index on ACTIVE rows: `prisma/schema.prisma`
+  and `prisma/migrations/20260611000000_workflow_policy_overlay/migration.sql`.
+- Lifecycle validation helpers (status machine, supersede contract,
+  policy re-validation on base activation):
+  `packages/workflow/src/policy-lifecycle.ts`.
+- Merge function + tighten-only invariant + composition law:
+  `packages/workflow/src/policy-overlay.ts` (+ `.test.ts`).
+- Resolver + process-local cache + invalidation helper:
+  `packages/workflow/src/policy-overlay-resolver.ts` (+ `.test.ts`).
+
+### Admin authoring surface (landed this slice)
+
+- New permission `WORKFLOW_OVERLAY_MANAGE` (code
+  `workflow.overlay.manage`) in `packages/rbac/src/permissions.ts`,
+  seeded via `prisma/seed.ts`, granted by default to `OrgAdmin`
+  through `ALL_PERMS` in `packages/rbac/src/role-templates.ts`.
+- New command `UpsertWorkflowPolicyOverlay` in
+  `packages/orgs/src/commands/upsert-workflow-policy-overlay.ts`:
+  - Validates the overlay shape with Zod (rejects unknown keys,
+    unknown OrderWorkflowCommand keys, unknown OrderState values,
+    and `minSignatures < 1`).
+  - Resolves the base policy row inside the bus tx and asserts it
+    is an ACTIVE or SUPERSEDED `order.standard` v1 policy (the
+    only supported policy today; the registry widens as new
+    policies land).
+  - Re-runs `mergePolicyWithOverlay` as a WRITE-TIME safety check
+    so a misconfigured overlay (a forbid pair the base does not
+    declare) fails the command instead of landing as an ACTIVE
+    row that later breaks every read.
+  - Atomically supersedes any prior ACTIVE row for the same
+    `(org, clinic|null, workflowPolicyId)` scope and inserts the
+    new ACTIVE row. Race on the partial unique index surfaces as
+    `UPSERT_OVERLAY_ACTIVE_RACE` for the caller to retry.
+  - Emits `workflow.overlay.upserted.v1` (`@pharmax/events`,
+    schema `packages/events/src/events/workflow/overlay-upserted-v1.ts`)
+    for cache invalidation on sibling workers + SOC-2 admin-change
+    audit feed.
+- Contract tests in `packages/orgs/src/commands/upsert-workflow-policy-overlay.test.ts`
+  (16 tests, all green).
+
+### Bus wiring (landed this slice)
+
+- `CommandBusConfiguration` gained an optional `overlayResolution`
+  slot of type `OverlayResolutionConfig`. When present, the bus
+  decorates the synthesized `defineCommand` policy load with the
+  per-tenant merged snapshot.
+- `LoadedPolicy` (the row passed to handlers via `deps.policy`)
+  gained an optional `merged: MergedWorkflowPolicy`. Handlers
+  that still import the static `ORDER_STANDARD_V1` continue to
+  work unchanged; handlers gain overlay behavior by reading
+  `deps.policy.merged` instead.
+- The bus's `resolvePolicy` now:
+  1. Loads the base policy row (existing behavior — `from: "target"`
+     or `{code, version}` mode).
+  2. If `overlayResolution.basePolicyFor(code, version)` returns
+     a shape, calls `resolvePolicyForTenant` to obtain a frozen
+     merged snapshot (passing through `target.clinicId` for
+     in-flight commands; org-wide only for CREATE-mode).
+  3. Attaches the snapshot to `LoadedPolicy.merged`.
+- The process-local cache (`WorkflowPolicyOverlayCache`,
+  default TTL 30s) short-circuits the source on the cached path;
+  the activation command (`UpsertWorkflowPolicyOverlay`) emits
+  `workflow.overlay.upserted.v1` so a future cache-invalidator
+  drain can short-circuit the TTL for sibling workers.
+
+### Safety contract enforced at three layers
+
+The tighten-only invariant is enforced at the **shape** (Zod
+boundary in `UpsertWorkflowPolicyOverlay`), the **write-time
+merge check** (same command, runs `mergePolicyWithOverlay` before
+persisting), and the **read-time bus resolution**
+(`resolvePolicyForTenant` calls `applyOverlays` which calls
+`mergePolicyWithOverlay` again). A bug or rollback in any single
+layer is caught by the next. The integration test
+`packages/command-bus/src/define-command-overlay.test.ts` proves
+that a malformed overlay row in the source surfaces as
+`OVERLAY_LOOSENS_BASE_POLICY` and FAILS the command — no silent
+fallback to the base policy.
+
+### Migrating a handler to `deps.policy.merged`
+
+When a handler is ready to honor overlays, the migration is one
+import swap plus one engine-call substitution:
+
+```ts
+// Before
+import { applyTransition, ORDER_STANDARD_V1 } from "@pharmax/workflow";
+const transition = applyTransition({
+  policy: ORDER_STANDARD_V1,
+  currentState,
+  command: "APPROVE_PV1",
+});
+
+// After
+import { applyTransition } from "@pharmax/workflow";
+const transition = applyTransition({
+  policy: deps.policy?.merged?.merged ?? ORDER_STANDARD_V1, // fallback for unwired callers
+  currentState,
+  command: "APPROVE_PV1",
+});
+```
+
+Handler tests gain a fixture that activates an overlay via
+`UpsertWorkflowPolicyOverlay` and asserts the overlay behavior
+(e.g. "approve fails without the second attestation"). The
+non-overlay tests stay unchanged because the fallback preserves
+the static base.
+
+### Operational contract
+
+- **Activation propagation:** 30 seconds across all workers
+  (cache TTL). Operators are told this in the runbook.
+- **Stamping for audit:** `(workflowPolicyId, workflowPolicyVersion)`
+  is already on every order row; the bus's snapshot adds
+  `overlays: [{ id, version, priority }]` on every command
+  while the snapshot is in scope. Per-command audit stamping of
+  the bindings on `command_log.overlayBindings` is the follow-up
+  ticket noted in "Deferred" above.
+- **Failure surfaces:** misconfigured overlay →
+  `ValidationError(OVERLAY_LOOSENS_BASE_POLICY)`; lifecycle race
+  → `ConflictError(UPSERT_OVERLAY_ACTIVE_RACE)`; missing
+  policy → `NotFoundError(UPSERT_OVERLAY_BASE_POLICY_NOT_FOUND)`;
+  policy in DRAFT/ARCHIVED →
+  `ConflictError(UPSERT_OVERLAY_BASE_POLICY_NOT_READABLE)`.
 
 ## Alternatives Considered
 

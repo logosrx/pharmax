@@ -182,6 +182,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
   },
   { code: "billing.manage", description: "Manage invoices and pricing" },
   { code: "audit.read", description: "Read audit log" },
+  {
+    code: "workflow.overlay.manage",
+    description:
+      "Create, update, or deactivate per-tenant workflow policy overlays (tighten-only refinements of the base policy; see ADR-0019)",
+  },
 ];
 
 // ---------------------------------------------------------------------------

@@ -720,13 +720,13 @@ importers:
       '@pharmax/tenancy':
         specifier: workspace:*
         version: link:../tenancy
+      '@pharmax/workflow':
+        specifier: workspace:*
+        version: link:../workflow
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
-      '@pharmax/workflow':
-        specifier: workspace:*
-        version: link:../workflow
       '@types/node':
         specifier: ^22.9.0
         version: 22.19.19

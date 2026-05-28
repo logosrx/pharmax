@@ -20,8 +20,64 @@
 
 import type { PrismaClient } from "@pharmax/database";
 import type { clock as clockTypes, logger as loggerTypes } from "@pharmax/platform-core";
+import type {
+  OrderWorkflowPolicy,
+  OverlaySource,
+  WorkflowPolicyOverlayCache,
+} from "@pharmax/workflow";
 
 import { commandBusNotConfiguredError } from "./errors.js";
+
+/**
+ * Tier-2 overlay resolution wiring (ADR-0019).
+ *
+ * The bus uses this slot to load the per-tenant
+ * `MergedWorkflowPolicy` snapshot in `define-command.ts`'s
+ * `resolvePolicy` step (right after the base policy row is loaded
+ * and admissibility-checked). The merged snapshot is exposed to
+ * handlers via `deps.policy.merged`.
+ *
+ * Three reasons this is OPTIONAL on the configuration:
+ *
+ *   - Phase-2 / Phase-3 tests configure a minimal bus without the
+ *     overlay surface; the merged snapshot is absent and handlers
+ *     fall back to reading the static base policy
+ *     (`ORDER_STANDARD_V1`). That preserves the existing 200+ command
+ *     handler tests without modification.
+ *   - Bootstrap commands (`seed.ts`, migrations) run with no tenant
+ *     context and SHOULD NOT touch the overlay table.
+ *   - Apps that have not opted into Tier-2 (e.g. early staging
+ *     environments) can run on the bus without paying the overlay
+ *     read cost.
+ *
+ * Once configured, every command whose `loadPolicy` step fires will
+ * have `policy.merged` populated. Handlers gain overlay behavior the
+ * day they migrate from `ORDER_STANDARD_V1` to `deps.policy.merged`.
+ *
+ * PHI invariant: overlay rows are configuration, never patient data.
+ * The resolver / source / cache see only org / clinic / policy ids.
+ */
+export interface OverlayResolutionConfig {
+  /** Read port — typically a Prisma-backed implementation in production. */
+  readonly source: OverlaySource;
+  /**
+   * Process-local overlay cache. Bus reuses the same instance for the
+   * lifetime of the process; activation commands invalidate it after
+   * commit via `invalidatePolicyCache` so sibling workers pick up the
+   * new shape within the TTL.
+   */
+  readonly cache: WorkflowPolicyOverlayCache;
+  /**
+   * Look-up the immutable base `OrderWorkflowPolicy` shape for a
+   * given `(code, version)`. The bus needs the shape — not just the
+   * row id — to compose with overlays. Returning `undefined` for an
+   * unknown code disables overlay resolution for that command (the
+   * bus falls back to the row-only `LoadedPolicy`), so a newly-
+   * introduced policy version is opt-in by registration rather than
+   * a runtime error.
+   */
+  readonly basePolicyFor: (code: string, version: number) => OrderWorkflowPolicy | undefined;
+}
 
 export interface CommandBusConfiguration {
   /**
@@ -46,6 +102,11 @@ export interface CommandBusConfiguration {
    * surface.
    */
   readonly logger: loggerTypes.Logger;
+
+  /**
+   * Optional Tier-2 overlay resolution; see `OverlayResolutionConfig`.
+   */
+  readonly overlayResolution?: OverlayResolutionConfig;
 }
 
 let configured: CommandBusConfiguration | null = null;

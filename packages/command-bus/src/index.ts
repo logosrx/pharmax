@@ -14,6 +14,7 @@ export {
   getCommandBusConfiguration,
   resetCommandBusConfigurationForTests,
   type CommandBusConfiguration,
+  type OverlayResolutionConfig,
 } from "./configure.js";
 
 export type {

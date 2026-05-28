@@ -102,6 +102,9 @@ import { ShippingCarrierCredentialRegisteredV1 } from "./events/shipping/carrier
 import { ShippingPackagePhotoCapturedV1 } from "./events/shipping/package-photo-captured-v1.js";
 import { ShippingPackagePhotoMatchResolvedV1 } from "./events/shipping/package-photo-match-resolved-v1.js";
 
+// ---- workflow (per-tenant policy administration) ------------------------
+import { WorkflowOverlayUpsertedV1 } from "./events/workflow/overlay-upserted-v1.js";
+
 /**
  * Every definition in the registry. Order is not significant;
  * declared as an array literal so the loop below is the single
@@ -174,6 +177,8 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   ShippingCarrierCredentialRegisteredV1,
   ShippingPackagePhotoCapturedV1,
   ShippingPackagePhotoMatchResolvedV1,
+  // workflow
+  WorkflowOverlayUpsertedV1,
 ]) as ReadonlyArray<EventDefinition<Record<string, unknown>>>;
 
 function buildRegistry(): ReadonlyMap<string, EventDefinition<Record<string, unknown>>> {

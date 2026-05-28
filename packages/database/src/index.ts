@@ -56,6 +56,7 @@ export {
   UserStatus,
   VerificationDecision,
   VerificationStage,
+  WorkflowPolicyOverlayStatus,
   WorkflowPolicyStatus,
   WorkstationStatus,
 } from "./generated/client/index.js";

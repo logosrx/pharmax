@@ -99,6 +99,16 @@ export const PERMISSIONS = Object.freeze({
 
   // Audit.
   AUDIT_READ: "audit.read",
+
+  // Workflow administration (Tier 2 tenant extension; see ADR-0019).
+  // Authors per-tenant `WorkflowPolicyOverlay` rows. Overlays can
+  // only TIGHTEN the base policy (forbid transitions, add attestation
+  // requirements) — the merge function rejects any overlay that
+  // would loosen base, so this permission cannot weaken workflow
+  // safety. Restricted to OrgAdmin by default because misconfigured
+  // overlays appear in SOC-2 audit evidence (`command_log` cites the
+  // overlay binding the command was decided against).
+  WORKFLOW_OVERLAY_MANAGE: "workflow.overlay.manage",
 } as const);
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -319,6 +329,11 @@ export const PERMISSION_METADATA: Readonly<
     category: "Billing",
   },
   [PERMISSIONS.AUDIT_READ]: { description: "Read audit log.", category: "Audit" },
+  [PERMISSIONS.WORKFLOW_OVERLAY_MANAGE]: {
+    description:
+      "Create, update, or deactivate per-tenant workflow policy overlays (tighten-only refinements of the base policy; see ADR-0019).",
+    category: "Administration",
+  },
 });
 
 /**
