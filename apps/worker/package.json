@@ -13,7 +13,7 @@
     "@pharmax/billing": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/composition": "workspace:*",
-    "stripe": "^22.1.1",
+    "stripe": "^22.2.0",
     "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/events": "workspace:*",
