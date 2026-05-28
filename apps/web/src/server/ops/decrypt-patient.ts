@@ -18,6 +18,8 @@ import "server-only";
 
 import { decryptField } from "@pharmax/crypto";
 
+import { logger } from "../logger.js";
+
 interface PatientEncryptedRow {
   readonly firstNameEnc: unknown;
   readonly lastNameEnc: unknown;
@@ -78,7 +80,22 @@ async function tryDecrypt(input: {
       binding: input.binding,
     });
     return { value: plain, ok: true };
-  } catch {
+  } catch (cause) {
+    // Per-field decrypt failure is a real incident — KMS down,
+    // envelope corruption, AAD mismatch (cross-tenant leak
+    // attempt), key rotation issue. Surface as a warn-level log
+    // with the cause so the logger-bridge forwards the stack to
+    // Sentry. The page still renders with null for this field +
+    // a red banner; failing closed at the page level keeps the
+    // operator informed without aborting the whole render.
+    logger.warn("ops.patient.decrypt.field_failed", {
+      event: "ops.patient.decrypt.field_failed",
+      tenantId: input.binding.tenantId,
+      table: input.binding.table,
+      column: input.binding.column,
+      recordId: input.binding.recordId,
+      error: cause,
+    });
     return { value: null, ok: false };
   }
 }

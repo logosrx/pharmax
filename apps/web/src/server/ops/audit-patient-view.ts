@@ -20,6 +20,7 @@ import { ViewPatient, type ViewPatientOutput, type ViewPatientSurface } from "@p
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
 
 import { logger } from "../logger.js";
+import { withSentryOpsScope } from "../observability/ops-scope.js";
 
 export type AuditPatientViewResult =
   | { readonly ok: true; readonly output: ViewPatientOutput }
@@ -63,35 +64,52 @@ export async function auditPatientView(input: {
     actor: { userId: input.operatorUserId, correlationId: ids.generateUlid() },
   });
 
-  try {
-    const output = await withTenancyContext(tenancy, () =>
-      executeCommand(
-        ViewPatient,
-        {
-          patientId: input.patientId,
-          surface: input.surface,
-          phiDecryptErrors: input.phiDecryptErrors,
-          ...(input.orderId !== undefined ? { orderId: input.orderId } : {}),
-        },
-        { idempotencyKey }
-      )
-    );
-    return { ok: true, output };
-  } catch (cause) {
-    const code = cause instanceof errors.PharmaxError ? cause.code : "PATIENT_VIEW_AUDIT_FAILED";
-    const message =
-      cause instanceof errors.PharmaxError
-        ? cause.message
-        : "Failed to record PHI view audit; refusing to render patient data.";
-    logger.error("ops.patient.view.audit_failed", {
-      event: "ops.patient.view.audit_failed",
+  return await withSentryOpsScope(
+    {
       operatorUserId: input.operatorUserId,
-      patientId: input.patientId,
-      orderId: input.orderId ?? null,
-      code,
-    });
-    return { ok: false, code, message };
-  }
+      organizationId: input.organizationId,
+      commandName: "ViewPatient",
+      surface: input.surface,
+      route: "page:view-patient",
+    },
+    async () => {
+      try {
+        const output = await withTenancyContext(tenancy, () =>
+          executeCommand(
+            ViewPatient,
+            {
+              patientId: input.patientId,
+              surface: input.surface,
+              phiDecryptErrors: input.phiDecryptErrors,
+              ...(input.orderId !== undefined ? { orderId: input.orderId } : {}),
+            },
+            { idempotencyKey }
+          )
+        );
+        return { ok: true, output };
+      } catch (cause) {
+        const code =
+          cause instanceof errors.PharmaxError ? cause.code : "PATIENT_VIEW_AUDIT_FAILED";
+        const message =
+          cause instanceof errors.PharmaxError
+            ? cause.message
+            : "Failed to record PHI view audit; refusing to render patient data.";
+        // Audit failure is a compliance regression — forward the
+        // cause as `error` so Sentry captures the full stack with
+        // operator + surface tags from the scope above.
+        logger.error("ops.patient.view.audit_failed", {
+          event: "ops.patient.view.audit_failed",
+          operatorUserId: input.operatorUserId,
+          patientId: input.patientId,
+          orderId: input.orderId ?? null,
+          surface: input.surface,
+          code,
+          error: cause,
+        });
+        return { ok: false, code, message };
+      }
+    }
+  );
 }
 
 export interface BatchAuditPatientViewResult {

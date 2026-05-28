@@ -23,6 +23,7 @@ import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
 import { NextResponse } from "next/server";
 
 import { logger } from "../logger.js";
+import { withSentryOpsScope } from "../observability/ops-scope.js";
 import { resolveOperatorTenancyContext } from "../auth/resolve-tenancy.js";
 
 /**
@@ -147,28 +148,53 @@ export async function dispatchOpsCommand<TIn, TOut>(
     ...(tenancyExtras.siteId !== undefined ? { siteId: tenancyExtras.siteId } : {}),
   });
 
-  try {
-    const output = await withTenancyContext(tenancy, () =>
-      executeCommand(input.command, built as TIn, { idempotencyKey })
-    );
-    logger.info(input.successLogEvent, { operatorUserId: session.operator.userId });
-    return NextResponse.redirect(
-      new URL(input.successRedirect(output), "http://internal").toString(),
-      { status: 303 }
-    );
-  } catch (cause) {
-    const code = cause instanceof errors.PharmaxError ? cause.code : "OPS_DISPATCH_FAILED";
-    const message = cause instanceof errors.PharmaxError ? cause.message : "Unable to apply.";
-    logger.error(input.failureLogEvent, {
+  // Run the dispatch inside a Sentry scope frame so any error
+  // captured by the logger-bridge inside this function gets
+  // automatically tagged with the operator, the command name,
+  // and the organization. Without this, Sentry events fire but
+  // every event is "anonymous unscoped server error" — hard to
+  // triage in the dashboard.
+  return await withSentryOpsScope(
+    {
       operatorUserId: session.operator.userId,
-      code,
-    });
-    return NextResponse.redirect(
-      new URL(
-        `${input.failureRedirect}?error=${encodeURIComponent(`${code}: ${message}`)}`,
-        "http://internal"
-      ).toString(),
-      { status: 303 }
-    );
-  }
+      organizationId: session.tenancy.organizationId,
+      operatorDisplayName: session.operator.displayName,
+      clerkUserId: session.operator.clerkUserId,
+      commandName: input.command.name,
+      route: input.idempotencyKeyPrefix,
+    },
+    async () => {
+      try {
+        const output = await withTenancyContext(tenancy, () =>
+          executeCommand(input.command, built as TIn, { idempotencyKey })
+        );
+        logger.info(input.successLogEvent, { operatorUserId: session.operator.userId });
+        return NextResponse.redirect(
+          new URL(input.successRedirect(output), "http://internal").toString(),
+          { status: 303 }
+        );
+      } catch (cause) {
+        const code = cause instanceof errors.PharmaxError ? cause.code : "OPS_DISPATCH_FAILED";
+        const message = cause instanceof errors.PharmaxError ? cause.message : "Unable to apply.";
+        // Forward `cause` as `error` so the logger-bridge calls
+        // Sentry.captureException (with stack) rather than
+        // captureMessage (string only). The PHI-redaction
+        // allowlist in `sentry-scrubber.ts` strips anything
+        // unsafe before the event leaves the process.
+        logger.error(input.failureLogEvent, {
+          operatorUserId: session.operator.userId,
+          commandName: input.command.name,
+          code,
+          error: cause,
+        });
+        return NextResponse.redirect(
+          new URL(
+            `${input.failureRedirect}?error=${encodeURIComponent(`${code}: ${message}`)}`,
+            "http://internal"
+          ).toString(),
+          { status: 303 }
+        );
+      }
+    }
+  );
 }
