@@ -1,7 +1,8 @@
 # 0024 — Daily Merkle root signing and evidence
 
-- **Status:** Accepted (scaffold landed; wiring pending KMS + S3 lanes)
+- **Status:** Accepted (implemented; production KMS + S3 wiring lands with `infra/terraform/`)
 - **Date:** 2026-05-25
+- **Last reviewed:** 2026-05-28
 - **Deciders:** Platform team, Security officer
 - **Tags:** `security`, `compliance`, `audit`, `data`
 
@@ -64,17 +65,21 @@ The decision has four parts:
   worker's IAM role gets `kms:Sign` on that key only; no other
   identity has signing access. Implemented by
   [`MerkleRootSigner`](../../packages/security/src/merkle/sign-merkle-root.ts).
-  Local Ed25519 signer is provided for dev/test; production uses
-  `KmsAsymmetricSigner` (currently a stub awaiting the Terraform key
-  ARN from the deployment lane).
+  Local HMAC-SHA-256 signer (on the existing `LocalKmsAdapter.signRoot`)
+  is wired for dev/test; production binds the
+  [`KmsSigningClient`](../../packages/security/src/merkle/kms-signing-client.ts)
+  to the `KmsAdapter.signRoot` seam (`AwsKmsAdapter.signRoot` is the
+  AWS KMS asymmetric `Sign` implementation per ADR-0023).
 
 - **Publish** — the signed manifest is written to an S3 Object Lock
   bucket with COMPLIANCE-mode retention matching the SOC 2 retention
   policy. Key shape:
   `<orgId>/<YYYY>/<MM>/<DD>/merkle-manifest.json`. Implemented by
   [`ManifestPublisher`](../../packages/security/src/merkle/publish-merkle-manifest.ts);
-  `S3ObjectLockPublisher` is a stub today, `InMemoryManifestPublisher`
-  is wired for dev.
+  `InMemoryManifestPublisher` is wired for dev/test and
+  [`S3ObjectLockPublisher`](../../packages/security/src/merkle/s3-object-lock-client.ts)
+  is the production binding (consumes the bucket name + retention
+  years from `infra/terraform/modules/s3-audit-archive/`).
 
 - **Verify** — the same manifest can be re-derived from the live
   audit log and the signature re-checked against the published key
