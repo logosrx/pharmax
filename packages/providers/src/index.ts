@@ -4,8 +4,10 @@
 //   - Each command file owns its input/output types.
 //   - Commands re-exported individually AND under a `commands`
 //     namespace for ergonomic batch imports.
-//   - Future commands (`SyncFromNpiRegistry`) land alongside the
-//     existing handlers in `src/commands/` and re-export here.
+//   - `SyncFromNpiRegistry` is a worker (not a synchronous command);
+//     its building blocks land under `src/npi-sync/` and re-export
+//     here so future slices (HTTP client, schema, worker) can
+//     import the diff engine without crossing package boundaries.
 
 export {
   RegisterProvider,
@@ -57,6 +59,29 @@ export {
   type ReactivateProviderOutput,
   type ProviderReactivationReason,
 } from "./commands/reactivate-provider.js";
+
+// SyncFromNpiRegistry — slice 1 of N: the pure diff engine. Given a
+// local Provider row and a CMS NPPES snapshot, returns a
+// discriminated `SyncAction` (NONE / DEACTIVATE / UPDATE /
+// REACTIVATION_CANDIDATE / NOT_FOUND_AT_CMS /
+// ENUMERATION_TYPE_MISMATCH) for the worker to act on. No IO. The
+// HTTP client (slice 2), schema (slice 3), and worker (slice 4)
+// will land in `src/npi-sync/` and re-export here as they ship.
+export {
+  diffProviderAgainstCms,
+  buildSyncDeactivationReasonText,
+  type LocalProviderSnapshot,
+  type CmsNpiSnapshot,
+  type CmsAddress,
+  type SyncAction,
+  type SyncActionNone,
+  type SyncActionDeactivate,
+  type SyncActionUpdate,
+  type SyncActionReactivationCandidate,
+  type SyncActionNotFoundAtCms,
+  type SyncActionEnumerationTypeMismatch,
+  type ProviderUpdateChanges,
+} from "./npi-sync/diff-engine.js";
 
 import * as deactivateProviderModule from "./commands/deactivate-provider.js";
 import * as reactivateProviderModule from "./commands/reactivate-provider.js";
