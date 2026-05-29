@@ -53,9 +53,16 @@ execution.
 
 ## Test surface
 
-| Test file                     | What it pins                                                            |
-| ----------------------------- | ----------------------------------------------------------------------- |
-| `verification-record.test.ts` | RLS isolation, `REVOKE UPDATE/DELETE`, and the `decision↔reason` CHECK. |
+| Test file                     | What it pins                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `verification-record.test.ts` | RLS isolation, `REVOKE UPDATE/DELETE`, and the `decision↔reason` CHECK on append-only verification rows.                                                                                                                                                                                                                                                                                         |
+| `audit-log.test.ts`           | RLS cross-tenant block + same-tenant sentinel + GUC fail-closed, universal `REVOKE UPDATE/DELETE` (both `pharmax_app` AND `pharmax_system`), `UNIQUE(orgId, seq)` enforcement, and the `audit_chain_lock_key(uuid)` advisory-lock primitive. Also pins the chain-head invariant: a second sequential insert links `prevHash[N+1] = entryHash[N]` and advances `audit_chain_state` monotonically. |
+| `order.test.ts`               | RLS cross-tenant block + same-tenant sentinel + GUC fail-closed on the central workflow row, plus the COMPARE-AND-SWAP (`UPDATE ... WHERE version = $expected`) race: two concurrent `pharmax_app` connections updating the same row from version=1 to version=2 must produce exactly one update + one zero-row no-op + final version=2 under READ COMMITTED.                                    |
+| `idempotency-key.test.ts`     | `UNIQUE(orgId, commandName, key)` constraint actually fires (23505), constraint is scoped per-tenant (same key under a different org is permitted), and per-command (same key + tenant under a different command is permitted).                                                                                                                                                                  |
+
+**Total: 27 tests across 4 files.** Each test runs against a real
+Postgres and a fresh tenant; concurrent dev work on the same DB
+is not disturbed.
 
 ## Adding a new test
 

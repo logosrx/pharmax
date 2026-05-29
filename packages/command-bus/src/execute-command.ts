@@ -34,6 +34,7 @@ import { ulid } from "ulid";
 import type { ZodError } from "zod";
 
 import { errors } from "@pharmax/platform-core";
+import { getMeter } from "@pharmax/telemetry";
 import {
   applyTenancySessionGuc,
   tenancy,
@@ -56,6 +57,44 @@ import {
   updateCommandLogStatus,
 } from "./writers.js";
 
+// ---- OTel meters ----------------------------------------------------------
+//
+// Instrument creation is module-scoped so the OTel meter is asked
+// exactly once per process. When OTEL_ENABLED is false the global
+// API returns a no-op meter, so `.add` / `.record` calls degrade
+// silently — no caller-side gating needed.
+//
+// Label discipline (PHI guardrail): every metric below is labelled
+// only by `command_name` and `outcome`. NO PHI, NO patient ids,
+// NO order ids, NO tenant names. See observability/README.md for
+// the master metric catalog.
+
+const meter = getMeter("@pharmax/command-bus");
+
+const commandDispatchedCounter = meter.createCounter("pharmax_command_dispatched_total", {
+  description:
+    "Commands dispatched through the bus. Outcome is one of success | fail | replay | sod_rejected.",
+});
+
+const commandDurationHistogram = meter.createHistogram("pharmax_command_duration_seconds", {
+  description: "End-to-end command execution duration (validation through commit), in seconds.",
+  unit: "s",
+  advice: {
+    explicitBucketBoundaries: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  },
+});
+
+const commandIdempotencyDedupCounter = meter.createCounter(
+  "pharmax_command_idempotency_dedup_total",
+  { description: "Commands short-circuited by an idempotency cache hit (replay)." }
+);
+
+const commandSodRejectionCounter = meter.createCounter("pharmax_command_sod_rejection_total", {
+  description: "Commands rejected at the separation-of-duties guard before any domain mutation.",
+});
+
+const SOD_VIOLATION_CODE = "SOD_VIOLATION";
+
 export async function executeCommand<TInput, TOutput>(
   command: Command<TInput, TOutput>,
   rawInput: unknown,
@@ -63,6 +102,8 @@ export async function executeCommand<TInput, TOutput>(
 ): Promise<TOutput> {
   const config = getCommandBusConfiguration();
   const log = config.logger.child({ component: "command-bus", command: command.name });
+  const startHrTimeNs = process.hrtime.bigint();
+  const labels = { command_name: command.name };
 
   // Step 1 — Validate request shape (Zod).
   const parsed = command.inputSchema.safeParse(rawInput);
@@ -100,6 +141,12 @@ export async function executeCommand<TInput, TOutput>(
     log.info("command replay (idempotency hit)", {
       idempotencyKey,
       organizationId: ctx.organizationId,
+    });
+    commandIdempotencyDedupCounter.add(1, labels);
+    commandDispatchedCounter.add(1, { ...labels, outcome: "replay" });
+    commandDurationHistogram.record(elapsedSeconds(startHrTimeNs), {
+      ...labels,
+      outcome: "replay",
     });
     // The cached response is a plain JSON value; the call site
     // typed it as TOutput when it was written. We trust the cache.
@@ -183,6 +230,12 @@ export async function executeCommand<TInput, TOutput>(
       errorMessage: message,
       completedAt: config.clock.now(),
     });
+    const outcome = code === SOD_VIOLATION_CODE ? "sod_rejected" : "fail";
+    if (outcome === "sod_rejected") {
+      commandSodRejectionCounter.add(1, labels);
+    }
+    commandDispatchedCounter.add(1, { ...labels, outcome });
+    commandDurationHistogram.record(elapsedSeconds(startHrTimeNs), { ...labels, outcome });
     throw err;
   }
 
@@ -195,9 +248,22 @@ export async function executeCommand<TInput, TOutput>(
     completedAt: config.clock.now(),
   });
 
+  commandDispatchedCounter.add(1, { ...labels, outcome: "success" });
+  commandDurationHistogram.record(elapsedSeconds(startHrTimeNs), { ...labels, outcome: "success" });
+
   // Step 20 — Side effects fire from the drainer asynchronously.
   // Nothing to do here; the outbox row is already PENDING.
   return handlerResult.output;
+}
+
+/**
+ * Convert an hrtime.bigint() start anchor to seconds (float) elapsed.
+ * Used by the duration histogram. Nanosecond precision is preserved
+ * by the bigint subtraction; the / 1e9 only happens at the JS level
+ * for the final Number.
+ */
+function elapsedSeconds(startHrTimeNs: bigint): number {
+  return Number(process.hrtime.bigint() - startHrTimeNs) / 1_000_000_000;
 }
 
 function buildScopeSnapshot(ctx: TenancyContext): Record<string, unknown> {

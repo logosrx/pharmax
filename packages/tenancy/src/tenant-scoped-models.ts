@@ -52,6 +52,20 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["WorkflowPolicy", { kind: "organizationId" }] as const,
   ["WorkflowPolicyOverlay", { kind: "organizationId" }] as const,
 
+  // Reporting.
+  ["ReportRun", { kind: "organizationId" }] as const,
+  ["ReportSchedule", { kind: "organizationId" }] as const,
+
+  // Notifications.
+  ["NotificationDelivery", { kind: "organizationId" }] as const,
+
+  // Compliance evidence (SOC 2 CC6.2 access reviews). The row carries
+  // the full per-org (user → role → permission) graph at snapshot
+  // time; tenant auto-scoping closes the leak surface for the future
+  // operator-console read path that will surface "show me last
+  // quarter's evidence for my org".
+  ["AccessReviewSnapshot", { kind: "organizationId" }] as const,
+
   // Audit primitives (every write to these is also tenant-scoped).
   ["CommandLog", { kind: "organizationId" }] as const,
   ["OrderEvent", { kind: "organizationId" }] as const,
@@ -138,6 +152,30 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // and the Prisma extension's anti-leak guard treat it identically
   // to every other organization-scoped domain row.
   ["PackagePhotoUploadToken", { kind: "organizationId" }] as const,
+
+  // NPI Registry sync persistence (SyncFromNpiRegistry slice 3).
+  //
+  // ProviderSyncRun: one row per worker invocation per org with
+  //   summary metrics. Standard `{organizationId}` filter shape.
+  //
+  // ProviderSyncCheck: one row per (run, provider) audit row.
+  //   Standard `{organizationId}` filter shape. The per-row
+  //   `providerSyncRunId` + `providerId` are themselves
+  //   tenant-scoped FKs so cross-org leakage via JOIN is closed by
+  //   the parent policies; the auto-filter here is defense-in-depth.
+  //
+  // ProviderSyncReviewItem: operator review queue. Standard
+  //   `{organizationId}` filter shape. The slice-6 review UI reads
+  //   open items per-org; auto-filtering closes the leak surface
+  //   regardless of the route's tenancy enforcement.
+  //
+  // NPPES data is PUBLIC (no encryption needed); these tables store
+  // NPIs, provider names, practice addresses, and aggregate counts
+  // — none of which are PHI under HIPAA Safe Harbor. The standard
+  // organization filter is for tenant isolation, not PHI protection.
+  ["ProviderSyncRun", { kind: "organizationId" }] as const,
+  ["ProviderSyncCheck", { kind: "organizationId" }] as const,
+  ["ProviderSyncReviewItem", { kind: "organizationId" }] as const,
 ]);
 
 /**
@@ -176,6 +214,12 @@ export const TENANT_EXCLUDED_MODELS: ReadonlySet<string> = new Set([
   // `clerkUserId` in system context. The svix-id-keyed idempotency
   // ledger is platform-level by construction.
   "ClerkWebhookEvent",
+  // Inbound Resend (email delivery) webhook events. Same reason as
+  // the webhook ledgers above — the platform does not know which
+  // tenant a delivery event belongs to until the handler looks the
+  // `notification_delivery` row up by `providerMessageId` in system
+  // context. The svix-id-keyed idempotency ledger is platform-level.
+  "ResendWebhookEvent",
 ]);
 
 /**

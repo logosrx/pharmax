@@ -2,7 +2,16 @@
 
 For a SOC 2 Type 2 auditor. Each Trust Services Criterion (TSC) below
 states the control intent, the system component that satisfies it, and
-the exact artifact(s) to pull as evidence. Folder convention:
+the exact artifact(s) to pull as evidence.
+
+For the **engineering-grade crosswalk** — control → exact code paths
+
+- Prisma tables + `.test.ts` files + CI gate — see
+  [`../soc2/code-evidence-map.md`](../soc2/code-evidence-map.md). This
+  guide stays at the artifact-collection layer; the code map is the
+  "show me the test that proves the control" layer.
+
+Folder convention:
 
 ```
 evidence/

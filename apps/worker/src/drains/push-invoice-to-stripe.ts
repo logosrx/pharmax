@@ -31,9 +31,16 @@ import {
 } from "@pharmax/billing";
 import type { PrismaClient } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
+import { getMeter } from "@pharmax/telemetry";
 import { withSystemContext } from "@pharmax/tenancy";
 
 import type { OutboxEventHandler } from "./outbox-handlers.js";
+
+const meter = getMeter("@pharmax/worker.billing");
+
+const billingStripePushCounter = meter.createCounter("pharmax_billing_stripe_push_total", {
+  description: "Stripe invoice push attempts. Outcome is one of success | fail | skipped.",
+});
 
 export interface CreatePushInvoiceToStripeHandlerOptions {
   readonly client: PrismaClient;
@@ -130,6 +137,7 @@ export function createPushInvoiceToStripeHandler(
 
   return async (row, ctx): Promise<void> => {
     if (stripePort === null) {
+      billingStripePushCounter.add(1, { outcome: "skipped" });
       ctx.logger.info("outbox.billing.invoice.finalized.v1 skipped (stripe not configured)", {
         outboxId: row.id,
       });
@@ -182,16 +190,23 @@ export function createPushInvoiceToStripeHandler(
     // Push to Stripe (HTTP call; lives outside the Pharmax tx).
     // Any throw bubbles unchanged — the worker's retry policy
     // determines whether to back off or send to DLQ.
-    const result: StripePushResult = await stripePort.pushInvoice({
-      organizationId,
-      clinicId,
-      pharmaxInvoiceId: invoiceId,
-      invoiceNumber,
-      stripeCustomerId: resolved.stripeCustomerId,
-      currency,
-      daysUntilDue: resolved.daysUntilDue,
-      lines: resolved.lines,
-    });
+    let result: StripePushResult;
+    try {
+      result = await stripePort.pushInvoice({
+        organizationId,
+        clinicId,
+        pharmaxInvoiceId: invoiceId,
+        invoiceNumber,
+        stripeCustomerId: resolved.stripeCustomerId,
+        currency,
+        daysUntilDue: resolved.daysUntilDue,
+        lines: resolved.lines,
+      });
+    } catch (cause) {
+      billingStripePushCounter.add(1, { outcome: "fail" });
+      throw cause;
+    }
+    billingStripePushCounter.add(1, { outcome: "success" });
 
     // Write the linkage back through the standard command bus so
     // it lands with an audit row + downstream outbox event.

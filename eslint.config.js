@@ -287,6 +287,66 @@ export default tseslint.config(
     },
   },
 
+  // Override 3f: apps/worker/src/metrics/** are cross-tenant
+  // observability scrapers. The flow mirrors security/ and
+  // compliance/:
+  //   1. A poll-loop tick fires (tenant-less by definition).
+  //   2. The tick runs aggregate-only reads (groupBy / count) across
+  //      ALL organizations via withSystemContext — the cross-tenant
+  //      enumeration IS the scrape; entering one tenancy frame would
+  //      defeat the gauge.
+  //   3. The result populates OTel gauge label tuples limited to
+  //      `stage`, `bucket`, `organization_id` (opaque UUID). No PHI:
+  //      no order ids, no patient ids, no JSON payloads.
+  // Same shape as security/ and compliance/ — infrastructure
+  // telemetry, not state transitions, no order aggregate to gate.
+  // Keep the Prisma ban; drop the system-context ban.
+  {
+    files: ["apps/worker/src/metrics/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
+  // Override 3g: apps/worker/src/notifications/** is the persistent
+  // NotificationDeliveryStore wired into PersistentNotificationChannel
+  // at boot. The worker's notify handler fans out cross-tenant in one
+  // outbox tick and has no per-request tenancy frame, so the store
+  // runs its upsert/update under withSystemContext. The
+  // `organizationId` is carried explicitly on every call, so rows
+  // land tenant-scoped (RLS WITH CHECK still validates the non-null
+  // column) — the GUC is in system mode only because there is no
+  // single tenant to enter. Same shape as drains/. Keep the Prisma
+  // ban; drop the system-context ban.
+  {
+    files: ["apps/worker/src/notifications/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
+  // Override 3h: apps/web/app/api/webhooks/** are inbound webhook
+  // receivers (Clerk, Stripe, EasyPost, Resend). They are tenant-less
+  // by definition — the HTTP caller is a third party with no operator
+  // session. The established pattern is: verify signature, write an
+  // idempotency-ledger row, and either defer to a worker drain (Clerk,
+  // Stripe, EasyPost) OR apply a tenant-scoped *projection* update
+  // resolved by a globally-unique provider id (Resend's
+  // notification_delivery status). Both motions require
+  // withSystemContext because there is no operator GUC to enter; the
+  // target row carries its own org and RLS WITH CHECK validates it.
+  // CONSTRAINT: webhook routes may only write idempotency ledgers and
+  // delivery/status projections here — any business state transition
+  // MUST go through a command handler (dispatched from a worker drain
+  // under Override 3b). Keep the Prisma ban; drop the system-context
+  // ban.
+  {
+    files: ["apps/web/app/api/webhooks/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
   // Override 4: tests legitimately set up tenancy/system context as
   // fixtures and may exercise both code paths. Keep the Prisma ban.
   // Tests inside @pharmax/database are excluded — they validate the

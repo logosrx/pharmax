@@ -183,9 +183,29 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
   { code: "billing.manage", description: "Manage invoices and pricing" },
   { code: "audit.read", description: "Read audit log" },
   {
+    code: "reports.run",
+    description:
+      "Run a registered report on-demand and download CSV; writes a report_run row for SOC-2 traceability",
+  },
+  {
+    code: "reports.manage_schedule",
+    description:
+      "Create, edit, pause, or disable scheduled report executions; the worker tick dispatches the report under a per-org service identity",
+  },
+  {
     code: "workflow.overlay.manage",
     description:
       "Create, update, or deactivate per-tenant workflow policy overlays (tighten-only refinements of the base policy; see ADR-0019)",
+  },
+  {
+    code: "compliance.access_review.view",
+    description:
+      "View persisted SOC 2 access-review snapshots (read-only); gates the operator console's compliance browse surface without exposing user/role mutation permissions",
+  },
+  {
+    code: "compliance.access_review.record",
+    description:
+      "Dispatch RecordAccessReviewSnapshot to freeze an immutable, digest-sealed (user → role → permission) snapshot for SOC 2 CC6.2 evidence",
   },
 ];
 
@@ -513,6 +533,96 @@ async function seedDemoOrganization(): Promise<{ orgId: string }> {
       data: {
         userId: shippingWebhookUser.id,
         roleId: webhookServiceRole.id,
+        organizationId: org.id,
+      },
+    });
+  }
+
+  // Reports scheduler service identity. Used by the worker's
+  // `report-scheduler` poll loop to enter per-org tenancy and
+  // dispatch `RunReport` for due `report_schedule` rows. The
+  // operator can't grant this identity any permission outside of
+  // `reports.run` because we hardcode the `ReportsScheduler` role
+  // template — least-privilege for the machine identity that
+  // unattended-runs reports across pharmacy data.
+  const reportsSchedulerUser = await prisma.user.upsert({
+    where: {
+      organizationId_email: {
+        organizationId: org.id,
+        email: `reports-scheduler@${org.slug}.test`,
+      },
+    },
+    update: { displayName: "Reports Scheduler (DEMO)" },
+    create: {
+      organizationId: org.id,
+      email: `reports-scheduler@${org.slug}.test`,
+      displayName: "Reports Scheduler (DEMO)",
+      status: UserStatus.ACTIVE,
+    },
+  });
+  const reportsSchedulerRole = await prisma.role.findUniqueOrThrow({
+    where: { organizationId_code: { organizationId: org.id, code: "ReportsScheduler" } },
+  });
+  const existingReportsSchedulerGrant = await prisma.userRole.findFirst({
+    where: {
+      userId: reportsSchedulerUser.id,
+      roleId: reportsSchedulerRole.id,
+      siteId: null,
+      clinicId: null,
+      teamId: null,
+    },
+  });
+  if (!existingReportsSchedulerGrant) {
+    await prisma.userRole.create({
+      data: {
+        userId: reportsSchedulerUser.id,
+        roleId: reportsSchedulerRole.id,
+        organizationId: org.id,
+      },
+    });
+  }
+
+  // NPI sync worker service identity. Used by the worker's
+  // `npi-sync-scheduler` poll loop to enter per-org tenancy and
+  // dispatch `UpdateProvider` / `DeactivateProvider` for providers
+  // whose CMS-side data has drifted (or whose CMS status has moved
+  // to INACTIVE). Granted via the dedicated `NpiSyncWorker` role
+  // template — the operator can't bolt other permissions onto this
+  // identity; it carries exactly `providers.update` +
+  // `providers.deactivate`, the two commands the diff engine
+  // produces for non-review-item outcomes.
+  const npiSyncWorkerUser = await prisma.user.upsert({
+    where: {
+      organizationId_email: {
+        organizationId: org.id,
+        email: `npi-sync@${org.slug}.test`,
+      },
+    },
+    update: { displayName: "NPI Sync Worker (DEMO)" },
+    create: {
+      organizationId: org.id,
+      email: `npi-sync@${org.slug}.test`,
+      displayName: "NPI Sync Worker (DEMO)",
+      status: UserStatus.ACTIVE,
+    },
+  });
+  const npiSyncWorkerRole = await prisma.role.findUniqueOrThrow({
+    where: { organizationId_code: { organizationId: org.id, code: "NpiSyncWorker" } },
+  });
+  const existingNpiSyncWorkerGrant = await prisma.userRole.findFirst({
+    where: {
+      userId: npiSyncWorkerUser.id,
+      roleId: npiSyncWorkerRole.id,
+      siteId: null,
+      clinicId: null,
+      teamId: null,
+    },
+  });
+  if (!existingNpiSyncWorkerGrant) {
+    await prisma.userRole.create({
+      data: {
+        userId: npiSyncWorkerUser.id,
+        roleId: npiSyncWorkerRole.id,
         organizationId: org.id,
       },
     });

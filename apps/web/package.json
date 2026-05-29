@@ -21,6 +21,8 @@
     "@pharmax/orgs": "workspace:*",
     "@pharmax/package-capture": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
+    "@pharmax/reporting": "workspace:*",
+    "@aws-sdk/client-s3": "^3.703.0",
     "@pharmax/rbac": "workspace:*",
     "@pharmax/shipping": "workspace:*",
     "@pharmax/telemetry": "workspace:*",

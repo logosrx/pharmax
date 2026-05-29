@@ -57,6 +57,15 @@ export {
 } from "./access-review/generate-access-review.js";
 
 export {
+  ACCESS_REVIEW_REPORT_ORG_MISMATCH,
+  ACCESS_REVIEW_TENANCY_MISMATCH,
+  RecordAccessReviewSnapshot,
+  computeAccessReviewDigest,
+  type RecordAccessReviewSnapshotInput,
+  type RecordAccessReviewSnapshotOutput,
+} from "./access-review/record-access-review-snapshot.js";
+
+export {
   MERKLE_LEAF_TAG,
   MERKLE_NODE_TAG,
   computeDailyMerkleRoot,

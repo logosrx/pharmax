@@ -43,9 +43,36 @@ import {
   type ManifestPublisher,
   type MerkleRootSigner,
 } from "@pharmax/security";
+import { getMeter } from "@pharmax/telemetry";
 import { withSystemContext } from "@pharmax/tenancy";
 
 import { createDailyUtcScheduler, type DailyUtcScheduler } from "./daily-utc-scheduler.js";
+
+// Process-scoped state for the audit-manifest freshness gauge.
+// Updated on each successful (signed | idempotent) per-org publish;
+// observed by the ObservableGauge below on every metric scrape.
+//
+// Freshness intent: an operator alert fires when
+// `now - latest_signed_at_seconds > ~36h` → a nightly run was
+// missed. Process restart leaves the map empty until the next
+// successful run, which is acceptable (the gauge simply absent
+// is itself an alert-worthy condition once the loop has had time
+// to run at least once).
+const latestSignedAtByOrg = new Map<string, Date>();
+
+const meter = getMeter("@pharmax/worker.security");
+
+meter
+  .createObservableGauge("pharmax_audit_manifest_latest_signed_at_seconds", {
+    description:
+      "Unix seconds since epoch of the most-recent successful Merkle manifest publish, per organization. Stale value indicates a missed nightly signing run.",
+    unit: "s",
+  })
+  .addCallback((result) => {
+    for (const [organizationId, signedAt] of latestSignedAtByOrg) {
+      result.observe(Math.floor(signedAt.getTime() / 1000), { organization_id: organizationId });
+    }
+  });
 
 type Logger = loggerContract.Logger;
 
@@ -323,6 +350,14 @@ export function createNightlyMerkleRootLoop(
       });
       const publishResult = await publisher.publish(manifest);
       const outcome = publishResult.idempotent === true ? "idempotent" : "signed";
+
+      // Update the freshness gauge: both "signed" and "idempotent"
+      // outcomes prove the manifest for this period exists in the
+      // archive. We pin the gauge to sigOut.signedAt rather than
+      // publishResult time so the dashboard reports the
+      // *signing* recency, which is the auditor's question.
+      latestSignedAtByOrg.set(organizationId, sigOut.signedAt);
+
       log.info(outcome === "idempotent" ? "merkle.run.org.idempotent" : "merkle.run.org.signed", {
         organizationId,
         slug,

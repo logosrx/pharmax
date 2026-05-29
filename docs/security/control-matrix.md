@@ -12,6 +12,8 @@
 
 This is the master control-to-evidence map. For each control we care about — SOC 2 Trust Services Criteria and HIPAA Security Rule citations — the matrix names the control, describes how Pharmax implements it, points to the code or policy that constitutes the implementation, lists where the evidence lives, names the owner, and marks status.
 
+For the **engineering-grade companion** — control → exact code paths + Prisma tables + `.test.ts` files + CI gate — see [`../soc2/code-evidence-map.md`](../soc2/code-evidence-map.md). This matrix stays at the policy + ADR + narrative level; the code map fills in the file paths.
+
 Status vocabulary:
 
 - **Implemented** — the control is in production, evidence is being generated continuously.
@@ -200,6 +202,7 @@ Privacy (P-series) controls are scoped against the next audit period. The curren
 
 ## Cross-references
 
+- [`../soc2/code-evidence-map.md`](../soc2/code-evidence-map.md) — the engineering-grade crosswalk: control → code path + Prisma tables + `.test.ts` files + CI gate.
 - [`hipaa-security-risk-analysis.md`](./hipaa-security-risk-analysis.md) — the structured analysis that feeds this matrix.
 - [`encryption-overview.md`](./encryption-overview.md) — encryption controls in narrative form.
 - [`data-flow.md`](./data-flow.md) — where PHI moves; how each transition is protected.

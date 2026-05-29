@@ -17,7 +17,7 @@
 // not derived from any real PHI. They satisfy the schema's NOT
 // NULL constraints without leaking anything.
 
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { CommandStatus, IntakeSourceKind, OrderPriority, OrderStatus } from "@pharmax/database";
 
@@ -208,6 +208,108 @@ export async function seedOrderChain(client: Client, tenant: SeededTenant): Prom
   );
 
   return { patientId, orderId, commandLogId };
+}
+
+/**
+ * Insert a single `audit_log` row for `tenant`.
+ *
+ * This helper deliberately writes a SELF-CONSISTENT but otherwise
+ * meaningless chain row (random `entryHash`, monotonic `seq` via
+ * a `MAX(seq)+1` read) instead of going through the production
+ * `writeAuditChain` writer in `@pharmax/audit`. Reasons:
+ *
+ *   - The integration tests pin DATABASE-edge invariants (RLS,
+ *     GRANT, UNIQUE, CHECK). Chain ENCODING correctness is the
+ *     job of `packages/audit/src/chain/encoder.test.ts`.
+ *
+ *   - The production writer needs a Prisma tx client. Importing
+ *     Prisma here would defeat the purpose of using `pg` directly
+ *     for explicit role / GUC control.
+ *
+ * `prevHash` is set to the previous tenant row's `entryHash` so
+ * the chain-linkage assertion (`row[N+1].prevHash == row[N].entryHash`)
+ * remains meaningful even with synthetic hashes.
+ */
+export interface InsertAuditLogRowArgs {
+  readonly client: Client;
+  readonly organizationId: string;
+  readonly actorUserId: string | null;
+  readonly action: string;
+  readonly resourceType: string;
+  readonly resourceId?: string | null;
+}
+
+export interface InsertedAuditLogRow {
+  readonly id: string;
+  readonly seq: bigint;
+  readonly entryHash: Buffer;
+  readonly prevHash: Buffer | null;
+}
+
+export async function insertAuditLogRow(args: InsertAuditLogRowArgs): Promise<InsertedAuditLogRow> {
+  // SHA-256 has 32-byte hashes; we generate a random 32-byte
+  // Buffer so the row's column types (`bytea`) are exercised
+  // exactly as the production writer would.
+  const entryHash = randomBytes32();
+
+  const headRow = await args.client.query<{
+    latest_hash: Buffer | null;
+    latest_seq: string | null;
+  }>(
+    `SELECT "latestHash" AS latest_hash, "latestSeq"::text AS latest_seq
+       FROM audit_chain_state
+      WHERE "organizationId" = $1`,
+    [args.organizationId]
+  );
+  const head = headRow.rows[0];
+  const prevHash: Buffer | null = head?.latest_hash ?? null;
+  const nextSeq = head?.latest_seq == null ? 1n : BigInt(head.latest_seq) + 1n;
+
+  const inserted = await args.client.query<{ id: string }>(
+    `INSERT INTO audit_log (
+       id, "organizationId", "actorUserId", action, "resourceType", "resourceId",
+       "prevHash", "entryHash", seq, "occurredAt"
+     )
+     VALUES (
+       gen_random_uuid(), $1, $2, $3, $4, $5,
+       $6, $7, $8::bigint, now()
+     )
+     RETURNING id`,
+    [
+      args.organizationId,
+      args.actorUserId,
+      args.action,
+      args.resourceType,
+      args.resourceId ?? null,
+      prevHash,
+      entryHash,
+      nextSeq.toString(),
+    ]
+  );
+
+  // Upsert the chain head so the NEXT call to this helper for the
+  // same tenant computes `nextSeq = current + 1` and `prevHash =
+  // entryHash`. Mirrors the production writer's atomic chain-head
+  // advance.
+  await args.client.query(
+    `INSERT INTO audit_chain_state ("organizationId", "latestHash", "latestSeq", "updatedAt")
+       VALUES ($1, $2, $3::bigint, now())
+     ON CONFLICT ("organizationId")
+       DO UPDATE SET "latestHash" = EXCLUDED."latestHash",
+                     "latestSeq"  = EXCLUDED."latestSeq",
+                     "updatedAt"  = now()`,
+    [args.organizationId, entryHash, nextSeq.toString()]
+  );
+
+  const id = inserted.rows[0]?.id;
+  if (id == null) {
+    throw new Error("insertAuditLogRow: INSERT ... RETURNING id returned no row");
+  }
+  return { id, seq: nextSeq, entryHash, prevHash };
+}
+
+function randomBytes32(): Buffer {
+  return randomBytes(32);
 }
 
 /**

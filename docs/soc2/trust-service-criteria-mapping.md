@@ -8,6 +8,10 @@ implementation location (code path / ADR / migration / Terraform module
 effectiveness, the cadence at which evidence is captured, and the role
 that owns the control.
 
+For the **engineering-grade** drill-down on each control — exact code
+paths, Prisma tables, `.test.ts` files, and CI gates — see
+[`code-evidence-map.md`](./code-evidence-map.md).
+
 Conventions:
 
 - **Control ID** is `<criterion-id>-<n>` where `n` is the local

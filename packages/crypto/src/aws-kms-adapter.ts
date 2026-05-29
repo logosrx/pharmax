@@ -481,30 +481,65 @@ export class AwsKmsAdapter implements KmsAdapter {
   }
 
   /**
-   * Audit-Merkle root signing via AWS KMS asymmetric `Sign`.
+   * Audit-Merkle root signing is INTENTIONALLY NOT IMPLEMENTED on
+   * this adapter. The responsibility lives on a different,
+   * IAM-isolated port — `KmsAsymmetricSigner` in
+   * `@pharmax/security` (ADR-0024).
    *
-   * Wiring lands in a parallel slice owned by the AwsKmsAdapter
-   * agent. Until then, callers in production receive a clear error
-   * code (`KMS_KEY_NOT_FOUND` with metadata describing the missing
-   * wiring) rather than a silent no-op or a half-signed manifest.
+   * Why split the surface:
    *
-   * Local dev / test paths bind the LocalKmsAdapter, whose
-   * `signRoot` is fully implemented (HMAC-SHA-256). The worker
-   * drain goes through the `KmsAdapter` interface and so works
-   * end-to-end against the local adapter without depending on the
-   * AWS path being filled in.
+   *   - Different IAM scope. `AwsKmsAdapter` holds
+   *     `kms:GenerateDataKey` + `kms:Decrypt` + `kms:GenerateMac`
+   *     on the PHI data + search keys. The signer holds ONLY
+   *     `kms:Sign` + `kms:GetPublicKey` on the asymmetric audit
+   *     key. Splitting the ports means the production task role
+   *     for each app gets the minimal grant set — the print
+   *     agent (read-only PHI) never gets near `kms:Sign`, and the
+   *     audit-archive verifier never gets near `kms:Decrypt`.
+   *
+   *   - Different key class. Asymmetric SIGN_VERIFY keys are NOT
+   *     supported by AWS automatic rotation and use a separate
+   *     SDK surface (`SignCommand`, `GetPublicKeyCommand`). The
+   *     two responsibilities have nothing in common at the SDK
+   *     layer; collapsing them under one adapter would only obscure
+   *     the IAM split.
+   *
+   *   - Different blast radius. A compromise of the PHI data-key
+   *     IAM principal MUST NOT enable manifest forgery. Keeping
+   *     `kms:Sign` off this adapter is the structural enforcement.
+   *
+   * Production paths use:
+   *
+   *   - `KmsAsymmetricSigner` (signing) — wired in the worker
+   *     composition root by `createNightlyMerkleRootLoopFromEnv`
+   *     and the `pnpm security:sign-merkle --prod` CLI.
+   *   - `EcdsaP256SignatureVerifier` (verification) — offline,
+   *     does not call KMS. Used by `pnpm security:verify-merkle`
+   *     against the public-key PEM exported once per signing-key
+   *     epoch (see RUNBOOK § "Rotating the Merkle signing key").
+   *
+   * The `LocalKmsAdapter` still implements `signRoot`/`verifyRoot`
+   * (HMAC-SHA-256) because the local dev composition root binds
+   * the local adapter to the worker's signer port — that path
+   * stays self-contained and avoids requiring asymmetric crypto
+   * in unit tests.
+   *
+   * If you reach this method in production, the composition root
+   * is wired incorrectly — the worker should never call
+   * `KmsAdapter.signRoot` on the AwsKmsAdapter; it should resolve
+   * `KmsAsymmetricSigner` instead.
    */
   public async signRoot(input: SignRootInput): Promise<SignRootOutput> {
     throw kmsKeyNotFoundError({
       tenantId: input.tenantId,
-      kid: "aws-kms.signRoot is not yet wired; AwsKmsAdapter audit-signing key is provisioned in a parallel slice (ADR-0024).",
+      kid: "aws-kms.signRoot is not implemented by design; use KmsAsymmetricSigner from @pharmax/security (ADR-0024). Reaching this method indicates a miswired composition root.",
     });
   }
 
   public async verifyRoot(input: VerifyRootInput): Promise<boolean> {
     throw kmsKeyNotFoundError({
       tenantId: input.tenantId,
-      kid: "aws-kms.verifyRoot is not yet wired; AwsKmsAdapter audit-signing key is provisioned in a parallel slice (ADR-0024).",
+      kid: "aws-kms.verifyRoot is not implemented by design; use EcdsaP256SignatureVerifier from @pharmax/security (ADR-0024). Reaching this method indicates a miswired composition root.",
     });
   }
 

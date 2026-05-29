@@ -6,7 +6,14 @@
 // (e.g. for an Accelerate / Data Proxy variant) without rippling
 // imports across the monorepo.
 
-export { prisma } from "./client.js";
+// The canonical, tenancy-enforced client. Application code imports
+// THIS. Tenant-scoped models are auto-filtered to the active
+// `withTenancyContext` org and fail closed with no frame.
+export { prisma } from "./scoped-client.js";
+// The raw, UNSCOPED client. Cross-tenant system/bootstrap code only.
+export { systemPrisma } from "./client.js";
+// Both-layers (ORM extension + RLS GUC) tenant-scoped read wrapper.
+export { readInTenantContext, type TenantTransactionClient } from "./scoped-read.js";
 export * as billing from "./billing/index.js";
 export * as phi from "./phi/index.js";
 export {
@@ -33,17 +40,24 @@ export {
   LabelPrinterVendor,
   LabelStockKind,
   LotStatus,
+  NotificationDeliveryStatus,
+  ResendWebhookEventStatus,
   OrderLineStatus,
   OrderPriority,
   OrderStatus,
   OrganizationStatus,
   OutboxStatus,
+  PackagePhotoMatchStrategy,
+  PackagePhotoTrackingSource,
   PatientStatus,
   PrescriptionStatus,
   PricingRuleStatus,
   PrintJobStatus,
   ProviderStatus,
   ReopenReason,
+  ReportScheduleNotifyOn,
+  ReportScheduleRunStatus,
+  ReportScheduleStatus,
   RoleScope,
   ShipmentCarrier,
   ShipmentStatus,
@@ -96,6 +110,10 @@ export type {
   PrintTemplate,
   Product,
   Provider,
+  ReportRun,
+  ReportSchedule,
+  NotificationDelivery,
+  ResendWebhookEvent,
   Role,
   RolePermission,
   CarrierCredential,

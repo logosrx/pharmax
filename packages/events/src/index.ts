@@ -102,6 +102,8 @@ export type { ProviderUpdatedV1Payload } from "./events/provider/updated-v1.js";
 
 export type { OrderReceivedV1Payload } from "./events/order/received-v1.js";
 export type { OrderTypingStartedV1Payload } from "./events/order/typing-started-v1.js";
+export type { OrderTypingMissingInfoV1Payload } from "./events/order/typing-missing-info-v1.js";
+export type { OrderTypingResumedV1Payload } from "./events/order/typing-resumed-v1.js";
 export type { OrderTypingCompletedV1Payload } from "./events/order/typing-completed-v1.js";
 export type { OrderPv1StartedV1Payload } from "./events/order/pv1-started-v1.js";
 export type { OrderPv1ApprovedV1Payload } from "./events/order/pv1-approved-v1.js";
@@ -149,3 +151,7 @@ export type { BillingInvoiceVoidedV1Payload } from "./events/billing/invoice-voi
 export type { BillingPricingRuleUpsertedV1Payload } from "./events/billing/pricing-rule-upserted-v1.js";
 
 export type { WorkflowOverlayUpsertedV1Payload } from "./events/workflow/overlay-upserted-v1.js";
+
+export type { ComplianceAccessReviewSnapshotRecordedV1Payload } from "./events/compliance/access-review-snapshot-recorded-v1.js";
+
+export type { ReportingRunCompletedV1Payload } from "./events/reporting/run-completed-v1.js";

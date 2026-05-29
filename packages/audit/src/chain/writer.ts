@@ -44,7 +44,16 @@
 //     salt to avoid collision with other advisory-lock callers
 //     (e.g. Prisma's migration lock).
 
+import { getMeter } from "@pharmax/telemetry";
+
 import { computeAuditEntryHash } from "./encoder.js";
+
+const meter = getMeter("@pharmax/audit");
+
+const auditLogRowsCounter = meter.createCounter("pharmax_audit_log_rows_total", {
+  description:
+    "Audit log rows committed to the per-tenant hash-linked chain. Labelled by opaque organization_id only.",
+});
 
 /**
  * Minimal Prisma tx interface — avoids a build-time dependency on
@@ -180,6 +189,12 @@ export async function writeAuditLogInTx(
       latestSeq: seq,
     },
   });
+
+  // Emit the rows-written counter AFTER the chain-head upsert so a
+  // failure (e.g. unique-index race) does not inflate the count.
+  // The metric is per-tenant; the organization_id label is the
+  // opaque UUID, never a tenant name.
+  auditLogRowsCounter.add(1, { organization_id: input.organizationId });
 
   return { entryHash, seq };
 }

@@ -19,6 +19,7 @@
 // step (4) above is caught in CI.
 
 export * from "./billing/index.js";
+export * from "./compliance/index.js";
 export * from "./fill/index.js";
 export * from "./labels/index.js";
 export * from "./order/index.js";
@@ -26,6 +27,7 @@ export * from "./org/index.js";
 export * from "./organization/index.js";
 export * from "./patient/index.js";
 export * from "./provider/index.js";
+export * from "./reporting/index.js";
 export * from "./shipment/index.js";
 export * from "./shipping/index.js";
 export * from "./workflow/index.js";

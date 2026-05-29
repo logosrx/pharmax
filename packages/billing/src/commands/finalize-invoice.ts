@@ -53,7 +53,18 @@ import type { Command, HandlerResult } from "@pharmax/command-bus";
 import { InvoiceStatus, Prisma } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
+import { getMeter } from "@pharmax/telemetry";
 import { z } from "zod";
+
+const meter = getMeter("@pharmax/billing");
+
+const billingInvoiceFinalizedCounter = meter.createCounter(
+  "pharmax_billing_invoice_finalized_total",
+  {
+    description:
+      "Invoices transitioned DRAFT → OPEN via FinalizeInvoice. Idempotent re-finalizations (alreadyFinalized=true) are NOT counted.",
+  }
+);
 
 export const FINALIZE_INVOICE_NOT_FOUND = "FINALIZE_INVOICE_NOT_FOUND";
 export const FINALIZE_INVOICE_EMPTY = "FINALIZE_INVOICE_EMPTY";
@@ -209,6 +220,12 @@ export const FinalizeInvoice: Command<FinalizeInvoiceInput, FinalizeInvoiceOutpu
         },
       });
     }
+
+    // Metric emit AFTER the CAS succeeds. If the surrounding tx
+    // rolls back, the counter is off by 1 — acceptable for a
+    // dashboard signal. Auditors verify finalize state from
+    // audit_log + outbox, not from metrics.
+    billingInvoiceFinalizedCounter.add(1);
 
     return {
       output: {

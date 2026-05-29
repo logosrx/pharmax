@@ -83,6 +83,7 @@ import {
   GenerateMacCommand,
 } from "@aws-sdk/client-kms";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
+import { getMeter } from "@pharmax/telemetry";
 
 import type {
   AwsKmsClient,
@@ -96,6 +97,28 @@ import type {
   AwsKmsMacOutput,
 } from "./aws-kms-adapter.js";
 import { cryptoValidationError } from "./errors.js";
+
+const meter = getMeter("@pharmax/crypto");
+
+const kmsOperationErrorsCounter = meter.createCounter("pharmax_kms_operation_errors_total", {
+  description:
+    "AWS KMS operation failures (after SDK-internal retries). Labelled by operation name in snake_case.",
+});
+
+/**
+ * Wrap an async KMS call so any thrown error increments the
+ * `pharmax_kms_operation_errors_total{operation}` counter exactly
+ * once before re-throwing. The error itself is rethrown unchanged
+ * so the caller's error mapping is untouched.
+ */
+async function recordKmsError<T>(operation: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (cause) {
+    kmsOperationErrorsCounter.add(1, { operation });
+    throw cause;
+  }
+}
 
 /**
  * User-agent identifier name component. Bumped by hand together
@@ -236,14 +259,17 @@ export function createAwsKmsClient(options: CreateAwsKmsClientOptions): AwsKmsCl
 
   return {
     async generateDataKey(input: AwsKmsGenerateDataKeyInput): Promise<AwsKmsGenerateDataKeyOutput> {
-      const out = await kms.send(
-        new GenerateDataKeyCommand({
-          KeyId: input.KeyId,
-          KeySpec: input.KeySpec,
-          EncryptionContext: { ...input.EncryptionContext },
-        })
+      const out = await recordKmsError("generate_data_key", () =>
+        kms.send(
+          new GenerateDataKeyCommand({
+            KeyId: input.KeyId,
+            KeySpec: input.KeySpec,
+            EncryptionContext: { ...input.EncryptionContext },
+          })
+        )
       );
       if (out.Plaintext === undefined || out.CiphertextBlob === undefined) {
+        kmsOperationErrorsCounter.add(1, { operation: "generate_data_key" });
         throw cryptoValidationError({
           field: "kms.generateDataKey",
           reason: "AWS KMS returned no Plaintext or CiphertextBlob",
@@ -253,14 +279,17 @@ export function createAwsKmsClient(options: CreateAwsKmsClientOptions): AwsKmsCl
     },
 
     async decrypt(input: AwsKmsDecryptInput): Promise<AwsKmsDecryptOutput> {
-      const out = await kms.send(
-        new DecryptCommand({
-          KeyId: input.KeyId,
-          CiphertextBlob: input.CiphertextBlob,
-          EncryptionContext: { ...input.EncryptionContext },
-        })
+      const out = await recordKmsError("decrypt", () =>
+        kms.send(
+          new DecryptCommand({
+            KeyId: input.KeyId,
+            CiphertextBlob: input.CiphertextBlob,
+            EncryptionContext: { ...input.EncryptionContext },
+          })
+        )
       );
       if (out.Plaintext === undefined) {
+        kmsOperationErrorsCounter.add(1, { operation: "decrypt" });
         throw cryptoValidationError({
           field: "kms.decrypt",
           reason: "AWS KMS returned no Plaintext",
@@ -270,14 +299,17 @@ export function createAwsKmsClient(options: CreateAwsKmsClientOptions): AwsKmsCl
     },
 
     async mac(input: AwsKmsMacInput): Promise<AwsKmsMacOutput> {
-      const out = await kms.send(
-        new GenerateMacCommand({
-          KeyId: input.KeyId,
-          Message: input.Message,
-          MacAlgorithm: input.MacAlgorithm,
-        })
+      const out = await recordKmsError("generate_mac", () =>
+        kms.send(
+          new GenerateMacCommand({
+            KeyId: input.KeyId,
+            Message: input.Message,
+            MacAlgorithm: input.MacAlgorithm,
+          })
+        )
       );
       if (out.Mac === undefined) {
+        kmsOperationErrorsCounter.add(1, { operation: "generate_mac" });
         throw cryptoValidationError({
           field: "kms.mac",
           reason: "AWS KMS returned no Mac",
@@ -287,8 +319,11 @@ export function createAwsKmsClient(options: CreateAwsKmsClientOptions): AwsKmsCl
     },
 
     async describeKey(input: AwsKmsDescribeKeyInput): Promise<AwsKmsDescribeKeyOutput> {
-      const out = await kms.send(new DescribeKeyCommand({ KeyId: input.KeyId }));
+      const out = await recordKmsError("describe_key", () =>
+        kms.send(new DescribeKeyCommand({ KeyId: input.KeyId }))
+      );
       if (out.KeyMetadata === undefined || out.KeyMetadata.KeyId === undefined) {
+        kmsOperationErrorsCounter.add(1, { operation: "describe_key" });
         throw cryptoValidationError({
           field: "kms.describeKey",
           reason: "AWS KMS returned no KeyMetadata",

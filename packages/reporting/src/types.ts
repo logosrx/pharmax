@@ -27,6 +27,8 @@
 import type { PrismaClient } from "@pharmax/database";
 import type { ZodTypeAny, z } from "zod";
 
+import type { ReportParameterField } from "./parameter-fields.js";
+
 /**
  * Runtime context handed to every report's `run` function.
  *
@@ -78,6 +80,21 @@ export interface ReportDefinition<TParamsSchema extends ZodTypeAny, TRow extends
   /** Operator-facing one-line description. */
   readonly description: string;
   readonly parametersSchema: TParamsSchema;
+  /**
+   * OPTIONAL declarative UI descriptor for the run form. When
+   * present, the operator console renders typed controls (date
+   * pickers, enum selects, multi-selects) from these fields and
+   * `parseReportParameters` coerces the submitted form into the
+   * shape `parametersSchema` validates. When absent, the run UI
+   * falls back to the legacy `from`/`to` date pair — safe because
+   * every shipped report takes a date range.
+   *
+   * The descriptor is presentation metadata ONLY; `parametersSchema`
+   * remains the validation authority. A descriptor that drifts
+   * from its schema fails loudly at run time (the report rejects
+   * the coerced params), never silently.
+   */
+  readonly parameterFields?: ReadonlyArray<ReportParameterField>;
   readonly run: (
     ctx: ReportRunContext,
     params: z.infer<TParamsSchema>

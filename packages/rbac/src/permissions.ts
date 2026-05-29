@@ -100,6 +100,10 @@ export const PERMISSIONS = Object.freeze({
   // Audit.
   AUDIT_READ: "audit.read",
 
+  // Reporting.
+  REPORTS_RUN: "reports.run",
+  REPORTS_MANAGE_SCHEDULE: "reports.manage_schedule",
+
   // Workflow administration (Tier 2 tenant extension; see ADR-0019).
   // Authors per-tenant `WorkflowPolicyOverlay` rows. Overlays can
   // only TIGHTEN the base policy (forbid transitions, add attestation
@@ -109,6 +113,29 @@ export const PERMISSIONS = Object.freeze({
   // overlays appear in SOC-2 audit evidence (`command_log` cites the
   // overlay binding the command was decided against).
   WORKFLOW_OVERLAY_MANAGE: "workflow.overlay.manage",
+
+  // Compliance evidence (SOC 2 CC6.2 access reviews).
+  // View persisted `AccessReviewSnapshot` rows for the operator's
+  // organization. Read-only — snapshots are produced by the
+  // RecordAccessReviewSnapshot tenant command (CLI / worker) and
+  // are immutable post-write. Grants visibility into the per-quarter
+  // access-grant evidence without exposing the underlying RBAC
+  // mutation surface (`users.manage` + `roles.manage`), so a SOC 2
+  // reviewer / compliance officer can be granted this permission
+  // alone. Restricted to OrgAdmin + a dedicated compliance role
+  // template by default.
+  COMPLIANCE_ACCESS_REVIEW_VIEW: "compliance.access_review.view",
+
+  // Dispatch the `RecordAccessReviewSnapshot` command, which freezes
+  // the org's current (user → role → permission) graph into an
+  // immutable, digest-sealed `AccessReviewSnapshot` row. Separate
+  // from `compliance.access_review.view` so the operator who PRODUCES
+  // evidence is a deliberate, audited identity (typically the
+  // security officer running the quarterly script or the future
+  // scheduled worker's service user) — a viewer cannot retroactively
+  // forge a snapshot. Restricted to OrgAdmin + SecurityOfficer in
+  // the default role templates.
+  COMPLIANCE_ACCESS_REVIEW_RECORD: "compliance.access_review.record",
 } as const);
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -329,10 +356,30 @@ export const PERMISSION_METADATA: Readonly<
     category: "Billing",
   },
   [PERMISSIONS.AUDIT_READ]: { description: "Read audit log.", category: "Audit" },
+  [PERMISSIONS.REPORTS_RUN]: {
+    description:
+      "Run a registered report on-demand (operator console) or via scheduled execution. Writes a report_run row and downloads CSV; aggregate-only access — no per-PHI-row data.",
+    category: "Reporting",
+  },
+  [PERMISSIONS.REPORTS_MANAGE_SCHEDULE]: {
+    description:
+      "Create, edit, pause, or disable scheduled report executions (cron-driven). Schedules dispatch under a per-org service identity; admins can change the cron / parameters template / status but not the underlying report definition.",
+    category: "Reporting",
+  },
   [PERMISSIONS.WORKFLOW_OVERLAY_MANAGE]: {
     description:
       "Create, update, or deactivate per-tenant workflow policy overlays (tighten-only refinements of the base policy; see ADR-0019).",
     category: "Administration",
+  },
+  [PERMISSIONS.COMPLIANCE_ACCESS_REVIEW_VIEW]: {
+    description:
+      "View persisted SOC 2 access-review snapshots (read-only). Snapshots are produced by RecordAccessReviewSnapshot and are immutable evidence rows; this permission gates the operator console's compliance browse surface without exposing user/role mutation permissions.",
+    category: "Compliance",
+  },
+  [PERMISSIONS.COMPLIANCE_ACCESS_REVIEW_RECORD]: {
+    description:
+      "Dispatch the RecordAccessReviewSnapshot command to freeze an immutable, digest-sealed (user → role → permission) snapshot for SOC 2 CC6.2 evidence. Separate from .view so the snapshot author is a deliberate, audited identity.",
+    category: "Compliance",
   },
 });
 

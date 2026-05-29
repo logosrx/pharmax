@@ -66,7 +66,20 @@ export {
   type RecordedNotification,
 } from "./adapters/in-memory-notification-channel.js";
 
+export {
+  PersistentNotificationChannel,
+  type PersistentNotificationChannelOptions,
+} from "./adapters/persistent-notification-channel.js";
+
+export type {
+  NotificationDeliveryStore,
+  NotificationDeliveryRecordQueuedInput,
+  NotificationDeliveryMarkSentInput,
+  NotificationDeliveryMarkFailedInput,
+} from "./ports/notification-delivery-store.js";
+
 import * as adapterModule from "./adapters/in-memory-notification-channel.js";
+import * as persistentModule from "./adapters/persistent-notification-channel.js";
 import * as configureModule from "./configure.js";
 import * as portModule from "./ports/notification-channel.js";
 import * as templateModule from "./templates/template-registry.js";
@@ -78,4 +91,5 @@ export const notifications = {
   ...templateModule,
   ...portModule,
   ...adapterModule,
+  ...persistentModule,
 } as const;

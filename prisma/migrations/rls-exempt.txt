@@ -52,3 +52,11 @@ easypost_webhook_event
 # frame. The raw delivery ledger (svix-id idempotency key) is
 # platform-level by construction.
 clerk_webhook_event
+
+# Inbound Resend (email delivery) webhook events. Same reason as
+# clerk/stripe/easypost: Svix-signed events arrive BEFORE the platform
+# knows which tenant (if any) they resolve to. The dispatcher joins the
+# event to a notification_delivery row by Resend `email_id` and updates
+# the (RLS-protected, org-scoped) projection in system context. The raw
+# event store (svixMessageId idempotency key) is platform-level.
+resend_webhook_event

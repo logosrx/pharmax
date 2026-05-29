@@ -120,6 +120,19 @@ const PAYLOADS: Readonly<Record<string, Record<string, unknown>>> = Object.freez
     dueAt: "2026-06-25T10:00:00.000Z",
     occurredAt: NOW,
   },
+  "reporting.run.completed.v1": {
+    organizationId: ORG,
+    reportRunId: "00000000-0000-4000-8000-00000000000f",
+    reportId: "order-volume-by-stage",
+    reportVersion: 1,
+    rowCount: 100,
+    aggregates: { totalShipped: 100 },
+    windowFrom: NOW,
+    windowTo: "2026-05-28T00:00:00.000Z",
+    generatedAt: NOW,
+    runByUserId: USER,
+    runViaScheduleId: "00000000-0000-4000-8000-000000000077",
+  },
 });
 
 describe("outbox handler ↔ event registry parity", () => {

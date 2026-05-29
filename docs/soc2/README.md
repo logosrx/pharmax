@@ -49,6 +49,7 @@ docs/soc2/
 ├── README.md                                # this file
 ├── trust-service-criteria-mapping.md        # centerpiece: TSC → controls → evidence
 ├── controls-inventory.md                    # control catalog with status
+├── code-evidence-map.md                     # engineering crosswalk: control → code + test
 ├── evidence-inventory.md                    # artifact catalog with source
 ├── playbooks/                               # operator instructions
 │   ├── quarterly-access-review.md
@@ -151,7 +152,9 @@ owns the continuous controls (they live in code and in CI).
    to understand which Pharmax control satisfies each criterion.
 2. For each control they sample, the auditor reads the "Implementation"
    column (code path / ADR / migration) to confirm the control is
-   designed.
+   designed. For controls with code evidence, the auditor cross-checks
+   [`code-evidence-map.md`](./code-evidence-map.md) for the exact
+   `.test.ts` files that prove the control fires.
 3. The auditor then reads the "Evidence Source" column to retrieve the
    artifact for the period. For continuous controls this is a live
    query or configuration; for periodic controls it is a dated file
@@ -174,11 +177,15 @@ When a new control lands in code:
    pointing at the implementation.
 3. Add a row to [`controls-inventory.md`](./controls-inventory.md)
    with the status.
-4. Add a row to [`evidence-inventory.md`](./evidence-inventory.md) if
+4. Add a row to [`code-evidence-map.md`](./code-evidence-map.md)
+   with the implementing code path(s), the audit / Prisma tables the
+   control writes, the specific `.test.ts` file(s) that pin the
+   invariant, and the CI gate that catches regressions.
+5. Add a row to [`evidence-inventory.md`](./evidence-inventory.md) if
    the control produces a new evidence artifact.
-5. If the control is periodic, add or extend a script under
+6. If the control is periodic, add or extend a script under
    [`scripts/soc2/`](../../scripts/soc2/).
-6. If the control needs a recurring human activity, add or extend a
+7. If the control needs a recurring human activity, add or extend a
    playbook under [`playbooks/`](./playbooks/).
 
 When a control is deprecated or replaced, do not delete the row —

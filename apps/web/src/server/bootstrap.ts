@@ -45,6 +45,12 @@ import {
   InMemoryPackagePhotoStorage,
 } from "@pharmax/package-capture";
 import {
+  configureReportRunArchive,
+  InMemoryReportRunArchive,
+  S3ReportRunArchive,
+  type ReportRunArchivePort,
+} from "@pharmax/reporting";
+import {
   configureShipping,
   createEasyPostFactory,
   createFedExFactory,
@@ -62,6 +68,86 @@ import { initSentry } from "./observability/sentry-init.js";
 import { buildStripeRefundPortFromEnv } from "./billing/stripe-refund-port.js";
 
 let bootPromise: Promise<void> | null = null;
+
+/**
+ * Build the report-run archive port. S3 when the env vars are
+ * present, else in-memory. The web tier mirrors the worker's
+ * fallback so a single-host dev setup keeps consistent behavior
+ * across the two processes.
+ *
+ * The web side mostly READS (operator download path); the
+ * worker WRITES (scheduled-run persistence). They MUST point at
+ * the same bucket in production so a download attempted on the
+ * web tier finds the bytes the worker wrote.
+ */
+async function buildReportArchive(): Promise<ReportRunArchivePort> {
+  const bucket = env.REPORT_ARCHIVE_S3_BUCKET;
+  const kmsKeyId = env.REPORT_ARCHIVE_S3_KMS_KEY_ID;
+  if (
+    typeof bucket !== "string" ||
+    bucket.length === 0 ||
+    typeof kmsKeyId !== "string" ||
+    kmsKeyId.length === 0
+  ) {
+    if (env.NODE_ENV === "production") {
+      logger.warn("apps/web booted without S3 report archive", {
+        reason:
+          "REPORT_ARCHIVE_S3_BUCKET or REPORT_ARCHIVE_S3_KMS_KEY_ID unset; download route will report unavailable.",
+      });
+    }
+    return new InMemoryReportRunArchive();
+  }
+  const region = env.AWS_REGION;
+  if (typeof region !== "string" || region.length === 0) {
+    throw new Error(
+      "REPORT_ARCHIVE_S3_BUCKET is set but AWS_REGION is missing. Set both to use the S3 archive."
+    );
+  }
+  // Dynamic import of the AWS SDK keeps it out of the dev cold-
+  // start path for clones that don't use S3.
+  const { S3Client, GetObjectCommand, PutObjectCommand } = await import("@aws-sdk/client-s3");
+  const client = new S3Client({ region });
+  return new S3ReportRunArchive({
+    bucket,
+    kmsKeyId,
+    s3: {
+      async putObject(input) {
+        await client.send(
+          new PutObjectCommand({
+            Bucket: input.Bucket,
+            Key: input.Key,
+            Body: input.Body,
+            ContentType: input.ContentType,
+            ContentLength: input.ContentLength,
+            ChecksumSHA256: input.ChecksumSHA256,
+            ServerSideEncryption: input.ServerSideEncryption,
+            SSEKMSKeyId: input.SSEKMSKeyId,
+            Metadata: { ...input.Metadata },
+          })
+        );
+        return {};
+      },
+      async getObject(input) {
+        const response = await client.send(
+          new GetObjectCommand({ Bucket: input.Bucket, Key: input.Key })
+        );
+        const body = response.Body;
+        if (body === undefined || body === null) return null;
+        const chunks: Buffer[] = [];
+        const stream = body as NodeJS.ReadableStream;
+        for await (const chunk of stream) {
+          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
+        }
+        const buf = Buffer.concat(chunks);
+        return {
+          Body: new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength),
+          ...(response.ContentType !== undefined ? { ContentType: response.ContentType } : {}),
+          ...(response.Metadata !== undefined ? { Metadata: response.Metadata } : {}),
+        };
+      },
+    },
+  });
+}
 
 /**
  * Idempotent async boot. Safe to call multiple times — concurrent
@@ -210,6 +296,17 @@ async function doBootstrap(): Promise<void> {
   configurePackagePhotoStorage({
     storage: new InMemoryPackagePhotoStorage(),
   });
+
+  // 3.2 @pharmax/reporting CSV archive. Web tier needs READ access
+  // (the `/api/ops/reports/runs/[id]/download` route streams the
+  // CSV from the archive to the browser) and may eventually need
+  // WRITE access for an "operator-initiated runs also persist"
+  // checkbox. When the S3 bucket + KMS key are configured, wire
+  // the production adapter; otherwise fall back to in-memory
+  // (matches the worker's fallback so a single-process dev setup
+  // stays consistent).
+  const reportArchive: ReportRunArchivePort = await buildReportArchive();
+  configureReportRunArchive({ archive: reportArchive });
 
   // 4. @pharmax/billing — wire the Stripe refund port so the
   // operator-driven `IssueRefund` command can reach Stripe from

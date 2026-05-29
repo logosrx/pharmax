@@ -171,6 +171,35 @@ enum EasyPostWebhookEventStatus {
   IGNORED
 }
 
+// Lifecycle of a single notification send (one row per
+// (org, idempotencyKey)). QUEUED is written before the transport
+// call; SENT after the transport accepts (provider message id
+// captured); the Resend delivery webhook advances to a terminal
+// state. DELIVERY_DELAYED is a non-terminal Resend signal recorded
+// for visibility but not treated as failure.
+enum NotificationDeliveryStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  DELIVERY_DELAYED
+  BOUNCED
+  COMPLAINED
+  FAILED
+  CANCELLED
+}
+
+// Outcome of an inbound Resend webhook delivery. Mirrors the
+// Clerk inline-dispatch shape: PENDING before the handler runs,
+// APPLIED when a delivery row was advanced, NOOP when no matching
+// row was found (late/duplicate/foreign event), FAILED on handler
+// throw (Resend retries via Svix on 5xx; our dedupe makes it safe).
+enum ResendWebhookEventStatus {
+  PENDING
+  APPLIED
+  NOOP
+  FAILED
+}
+
 enum ClerkWebhookEventStatus {
   // The dispatcher has not yet been invoked for this delivery.
   PENDING
@@ -220,6 +249,74 @@ enum PatientStatus {
 enum ProviderStatus {
   ACTIVE
   INACTIVE
+}
+
+// ---------- NPI Registry sync (SyncFromNpiRegistry slice 3) ----------
+//
+// The worker that reconciles local provider rows against the public
+// CMS NPPES registry writes three kinds of rows:
+//
+//   - provider_sync_run         (one per invocation per org)
+//   - provider_sync_check       (one per (run, provider))
+//   - provider_sync_review_item (one open per (provider, kind))
+//
+// The enums below carry the structural signal each table uses.
+
+// Status of a sync run. IN_PROGRESS rows that exceed the worker's
+// runtime ceiling are swept to FAILED by the slice-5+ reaper.
+enum ProviderSyncRunStatus {
+  IN_PROGRESS
+  COMPLETED
+  PARTIAL
+  FAILED
+}
+
+// What triggered a sync run. MANUAL runs have a non-null
+// `triggeredByUserId`; CRON and BACKFILL leave it null.
+enum ProviderSyncRunTrigger {
+  CRON
+  MANUAL
+  BACKFILL
+}
+
+// What the worker did for one (run, provider) pair. Mirrors the
+// slice-1 SyncAction discriminator with an additional FETCH_FAILED
+// case for per-NPI CmsFetchResult.ok=false (the diff engine itself
+// never emits FETCH_FAILED — it's a worker-layer concept).
+enum ProviderSyncCheckAction {
+  NONE
+  UPDATE
+  DEACTIVATE
+  REACTIVATION_CANDIDATE
+  NOT_FOUND_AT_CMS
+  ENUMERATION_TYPE_MISMATCH
+  FETCH_FAILED
+}
+
+// Which kind of human-review case a review item represents. Subset
+// of ProviderSyncCheckAction restricted to the cases that require
+// HUMAN judgment per slice 1's "never auto-reactivate" contract.
+enum ProviderSyncReviewItemKind {
+  REACTIVATION_CANDIDATE
+  NOT_FOUND_AT_CMS
+  ENUMERATION_TYPE_MISMATCH
+}
+
+// Open/closed status of a review item.
+enum ProviderSyncReviewItemStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+// Specific resolution path when an OPEN review item is closed. Set
+// together with `resolvedAt` + `resolvedByUserId` on transition.
+enum ProviderSyncReviewItemResolution {
+  REACTIVATED
+  DEACTIVATED
+  NPI_CORRECTED
+  DISMISSED_AS_FALSE_POSITIVE
+  DISMISSED_NO_ACTION
 }
 
 enum PrescriptionStatus {
@@ -563,50 +660,57 @@ model Organization {
   createdAt DateTime           @default(now())
   updatedAt DateTime           @updatedAt
 
-  sites            PharmacySite[]
-  clinics          Clinic[]
-  teams            Team[]
-  buckets          Bucket[]
-  workstations     Workstation[]
-  users            User[]
-  roles            Role[]
-  userRoles        UserRole[]
-  workflowPolicies        WorkflowPolicy[]
-  workflowPolicyOverlays  WorkflowPolicyOverlay[]
-  commandLogs      CommandLog[]
-  orderEvents      OrderEvent[]
-  auditLogs        AuditLog[]
-  auditChainState  AuditChainState?
-  outboxEvents     EventOutbox[]
-  idempotencyKeys  IdempotencyKey[]
-  stripeCustomers  StripeCustomer[]
-  invoices         Invoice[]
-  invoiceLines     InvoiceLine[]
+  sites                  PharmacySite[]
+  clinics                Clinic[]
+  teams                  Team[]
+  buckets                Bucket[]
+  workstations           Workstation[]
+  users                  User[]
+  roles                  Role[]
+  userRoles              UserRole[]
+  workflowPolicies       WorkflowPolicy[]
+  workflowPolicyOverlays WorkflowPolicyOverlay[]
+  commandLogs            CommandLog[]
+  orderEvents            OrderEvent[]
+  auditLogs              AuditLog[]
+  auditChainState        AuditChainState?
+  outboxEvents           EventOutbox[]
+  idempotencyKeys        IdempotencyKey[]
+  stripeCustomers        StripeCustomer[]
+  invoices               Invoice[]
+  invoiceLines           InvoiceLine[]
 
-  patients               Patient[]
-  providers              Provider[]
-  prescriptions          Prescription[]
-  orders                 Order[]
-  orderLines             OrderLine[]
-  orderCancellations     OrderCancellation[]
-  orderHolds             OrderHold[]
-  orderCorrectionReopens OrderCorrectionReopen[]
-  verificationRecords    VerificationRecord[]
-  products               Product[]
-  lots                   Lot[]
-  lotAssignments         LotAssignment[]
-  inventoryTransactions  InventoryTransaction[]
-  labelPrinters          LabelPrinter[]
-  printTemplates         PrintTemplate[]
-  printJobs              PrintJob[]
-  vialLabels             VialLabel[]
-  shipments              Shipment[]
-  shipmentTrackingEvents ShipmentTrackingEvent[]
-  carrierCredentials     CarrierCredential[]
-  orderStageIntervals    OrderStageInterval[]
-  pricingRules           PricingRule[]
-  packagePhotos          PackagePhoto[]
+  patients                 Patient[]
+  providers                Provider[]
+  prescriptions            Prescription[]
+  orders                   Order[]
+  orderLines               OrderLine[]
+  orderCancellations       OrderCancellation[]
+  orderHolds               OrderHold[]
+  orderCorrectionReopens   OrderCorrectionReopen[]
+  verificationRecords      VerificationRecord[]
+  products                 Product[]
+  lots                     Lot[]
+  lotAssignments           LotAssignment[]
+  inventoryTransactions    InventoryTransaction[]
+  labelPrinters            LabelPrinter[]
+  printTemplates           PrintTemplate[]
+  printJobs                PrintJob[]
+  vialLabels               VialLabel[]
+  shipments                Shipment[]
+  shipmentTrackingEvents   ShipmentTrackingEvent[]
+  carrierCredentials       CarrierCredential[]
+  orderStageIntervals      OrderStageInterval[]
+  pricingRules             PricingRule[]
+  packagePhotos            PackagePhoto[]
   packagePhotoUploadTokens PackagePhotoUploadToken[]
+  reportRuns               ReportRun[]
+  reportSchedules          ReportSchedule[]
+  notificationDeliveries   NotificationDelivery[]
+  accessReviewSnapshots    AccessReviewSnapshot[]
+  providerSyncRuns         ProviderSyncRun[]
+  providerSyncChecks       ProviderSyncCheck[]
+  providerSyncReviewItems  ProviderSyncReviewItem[]
 
   @@map("organization")
 }
@@ -639,17 +743,17 @@ model PharmacySite {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  teams               Team[]
-  buckets             Bucket[]
-  workstations        Workstation[]
-  userRoles           UserRole[]
-  clinicLinks         ClinicSite[]
-  orders              Order[]
-  lots                Lot[]
-  labelPrinters       LabelPrinter[]
-  shipments           Shipment[]
-  orderStageIntervals OrderStageInterval[]
-  packagePhotos       PackagePhoto[]
+  teams                    Team[]
+  buckets                  Bucket[]
+  workstations             Workstation[]
+  userRoles                UserRole[]
+  clinicLinks              ClinicSite[]
+  orders                   Order[]
+  lots                     Lot[]
+  labelPrinters            LabelPrinter[]
+  shipments                Shipment[]
+  orderStageIntervals      OrderStageInterval[]
+  packagePhotos            PackagePhoto[]
   packagePhotoUploadTokens PackagePhotoUploadToken[]
 
   @@unique([organizationId, code])
@@ -671,20 +775,20 @@ model Clinic {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  siteLinks      ClinicSite[]
-  buckets        Bucket[]
-  userRoles      UserRole[]
-  stripeCustomer StripeCustomer?
-  invoices       Invoice[]
-  invoiceLines   InvoiceLine[]
-  pricingRules   PricingRule[]
-  patients       Patient[]
-  prescriptions  Prescription[]
-  orders         Order[]
-  orderLines     OrderLine[]
-  packagePhotos  PackagePhoto[]
+  siteLinks                ClinicSite[]
+  buckets                  Bucket[]
+  userRoles                UserRole[]
+  stripeCustomer           StripeCustomer?
+  invoices                 Invoice[]
+  invoiceLines             InvoiceLine[]
+  pricingRules             PricingRule[]
+  patients                 Patient[]
+  prescriptions            Prescription[]
+  orders                   Order[]
+  orderLines               OrderLine[]
+  packagePhotos            PackagePhoto[]
   packagePhotoUploadTokens PackagePhotoUploadToken[]
-  workflowPolicyOverlays WorkflowPolicyOverlay[]
+  workflowPolicyOverlays   WorkflowPolicyOverlay[]
 
   @@unique([organizationId, code])
   @@index([organizationId, status])
@@ -832,26 +936,31 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  userRoles                 UserRole[]
-  commandLogs               CommandLog[]
-  orderEvents               OrderEvent[]
-  auditLogs                 AuditLog[]
-  assignedOrders            Order[]                 @relation("OrderAssignee")
-  orderCancellations        OrderCancellation[]     @relation("OrderCancellationActor")
-  orderHoldsPlaced          OrderHold[]             @relation("OrderHoldPlacer")
-  orderHoldsReleased        OrderHold[]             @relation("OrderHoldReleaser")
-  orderCorrectionReopens    OrderCorrectionReopen[] @relation("OrderCorrectionReopenActor")
-  verificationRecords       VerificationRecord[]    @relation("VerificationRecordActor")
-  lotAssignments            LotAssignment[]         @relation("LotAssignmentActor")
-  printJobsRequested        PrintJob[]              @relation("PrintJobRequester")
-  shipmentsCreated          Shipment[]              @relation("ShipmentCreator")
-  shipmentsConfirmed        Shipment[]              @relation("ShipmentConfirmer")
-  carrierCredentialsCreated CarrierCredential[]     @relation("CarrierCredentialCreator")
-  pricingRulesCreated       PricingRule[]           @relation("PricingRuleCreator")
-  stageIntervalsActed       OrderStageInterval[]    @relation("StageIntervalActor")
-  packagePhotosCaptured     PackagePhoto[]          @relation("PackagePhotoCapturer")
-  packagePhotoUploadTokens  PackagePhotoUploadToken[] @relation("PackagePhotoUploadTokenUploader")
-  workflowPolicyOverlaysCreated WorkflowPolicyOverlay[] @relation("WorkflowPolicyOverlayCreator")
+  userRoles                     UserRole[]
+  commandLogs                   CommandLog[]
+  orderEvents                   OrderEvent[]
+  auditLogs                     AuditLog[]
+  assignedOrders                Order[]                   @relation("OrderAssignee")
+  orderCancellations            OrderCancellation[]       @relation("OrderCancellationActor")
+  orderHoldsPlaced              OrderHold[]               @relation("OrderHoldPlacer")
+  orderHoldsReleased            OrderHold[]               @relation("OrderHoldReleaser")
+  orderCorrectionReopens        OrderCorrectionReopen[]   @relation("OrderCorrectionReopenActor")
+  verificationRecords           VerificationRecord[]      @relation("VerificationRecordActor")
+  lotAssignments                LotAssignment[]           @relation("LotAssignmentActor")
+  printJobsRequested            PrintJob[]                @relation("PrintJobRequester")
+  shipmentsCreated              Shipment[]                @relation("ShipmentCreator")
+  shipmentsConfirmed            Shipment[]                @relation("ShipmentConfirmer")
+  carrierCredentialsCreated     CarrierCredential[]       @relation("CarrierCredentialCreator")
+  pricingRulesCreated           PricingRule[]             @relation("PricingRuleCreator")
+  stageIntervalsActed           OrderStageInterval[]      @relation("StageIntervalActor")
+  packagePhotosCaptured         PackagePhoto[]            @relation("PackagePhotoCapturer")
+  packagePhotoUploadTokens      PackagePhotoUploadToken[] @relation("PackagePhotoUploadTokenUploader")
+  workflowPolicyOverlaysCreated WorkflowPolicyOverlay[]   @relation("WorkflowPolicyOverlayCreator")
+  reportRuns                    ReportRun[]               @relation("ReportRunActor")
+  reportSchedulesCreated        ReportSchedule[]          @relation("ReportScheduleCreator")
+  accessReviewSnapshotsRecorded AccessReviewSnapshot[]    @relation("AccessReviewSnapshotRecordedBy")
+  providerSyncRunsTriggered     ProviderSyncRun[]         @relation("ProviderSyncRunTriggeredBy")
+  providerSyncReviewsResolved   ProviderSyncReviewItem[]  @relation("ProviderSyncReviewResolvedBy")
 
   @@unique([organizationId, email])
   @@index([organizationId, status])
@@ -983,7 +1092,7 @@ model WorkflowPolicy {
   // subsequent SUPERSEDED → ARCHIVED transition — the canonical
   // "when did this row stop being current?" marker. NULL for rows
   // that have never been demoted.
-  retiredAt DateTime?
+  retiredAt   DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1118,23 +1227,28 @@ model CommandLog {
   targetOrderId String? @db.Uuid
   targetOrder   Order?  @relation(fields: [targetOrderId], references: [id], onDelete: Restrict)
 
-  orderEvents               OrderEvent[]
-  orderCancellations        OrderCancellation[]
-  orderHoldsPlaced          OrderHold[]             @relation("OrderHoldPlaceCommand")
-  orderHoldsReleased        OrderHold[]             @relation("OrderHoldReleaseCommand")
-  orderCorrectionReopens    OrderCorrectionReopen[] @relation("OrderCorrectionReopenCommand")
-  verificationRecords       VerificationRecord[]
-  lotAssignments            LotAssignment[]
-  inventoryTransactions     InventoryTransaction[]
-  printJobs                 PrintJob[]
-  shipmentsCreated          Shipment[]              @relation("ShipmentCreateCommand")
-  shipmentsConfirmed        Shipment[]              @relation("ShipmentConfirmCommand")
-  shipmentTrackingEvents    ShipmentTrackingEvent[] @relation("ShipmentTrackingEventCommand")
-  carrierCredentialsCreated CarrierCredential[]     @relation("CarrierCredentialCreateCommand")
-  pricingRulesCreated       PricingRule[]           @relation("PricingRuleCreateCommandLog")
-  stageIntervalsOpened      OrderStageInterval[]    @relation("StageIntervalOpenCommand")
-  stageIntervalsClosed      OrderStageInterval[]    @relation("StageIntervalCloseCommand")
-  packagePhotos             PackagePhoto[]          @relation("PackagePhotoCaptureCommand")
+  orderEvents                  OrderEvent[]
+  orderCancellations           OrderCancellation[]
+  orderHoldsPlaced             OrderHold[]              @relation("OrderHoldPlaceCommand")
+  orderHoldsReleased           OrderHold[]              @relation("OrderHoldReleaseCommand")
+  orderCorrectionReopens       OrderCorrectionReopen[]  @relation("OrderCorrectionReopenCommand")
+  verificationRecords          VerificationRecord[]
+  lotAssignments               LotAssignment[]
+  inventoryTransactions        InventoryTransaction[]
+  printJobs                    PrintJob[]
+  shipmentsCreated             Shipment[]               @relation("ShipmentCreateCommand")
+  shipmentsConfirmed           Shipment[]               @relation("ShipmentConfirmCommand")
+  shipmentTrackingEvents       ShipmentTrackingEvent[]  @relation("ShipmentTrackingEventCommand")
+  carrierCredentialsCreated    CarrierCredential[]      @relation("CarrierCredentialCreateCommand")
+  pricingRulesCreated          PricingRule[]            @relation("PricingRuleCreateCommandLog")
+  stageIntervalsOpened         OrderStageInterval[]     @relation("StageIntervalOpenCommand")
+  stageIntervalsClosed         OrderStageInterval[]     @relation("StageIntervalCloseCommand")
+  packagePhotos                PackagePhoto[]           @relation("PackagePhotoCaptureCommand")
+  reportRuns                   ReportRun[]              @relation("ReportRunCommand")
+  reportSchedulesCreated       ReportSchedule[]         @relation("ReportScheduleCreateCommand")
+  accessReviewSnapshots        AccessReviewSnapshot[]   @relation("AccessReviewSnapshotCommand")
+  providerSyncChecksDispatched ProviderSyncCheck[]      @relation("ProviderSyncCheckDispatchedCommandLog")
+  providerSyncReviewsResolved  ProviderSyncReviewItem[] @relation("ProviderSyncReviewResolvedCommandLog")
 
   @@unique([organizationId, commandName, idempotencyKey])
   @@index([organizationId, status])
@@ -1448,12 +1562,12 @@ model ClerkWebhookEvent {
   // the dispatcher without re-fetching from Clerk.
   payload Json
 
-  status         ClerkWebhookEventStatus @default(PENDING)
+  status          ClerkWebhookEventStatus @default(PENDING)
   // Dispatcher's discriminated outcome string (e.g. "applied",
   // "noop_no_link"). Useful for ops triage; never null after the
   // first dispatch attempt.
   dispatchOutcome String?
-  attempts        Int     @default(0)
+  attempts        Int                     @default(0)
   lastError       String?
 
   receivedAt          DateTime  @default(now())
@@ -1463,6 +1577,72 @@ model ClerkWebhookEvent {
   @@index([eventType, receivedAt])
   @@index([receivedAt])
   @@map("clerk_webhook_event")
+}
+
+// One row per attempted notification send. Written by the
+// PersistentNotificationChannel decorator (QUEUED → SENT) and
+// advanced by the Resend delivery webhook. See migration
+// `20260618000000_phase5_notification_delivery` for the full
+// rationale. PHI-free: recipientAddress is operator/admin email
+// metadata, correlationId is a run id.
+model NotificationDelivery {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  template         String
+  channelName      String
+  recipientKind    String
+  recipientAddress String
+
+  // Caller's send key — the upsert anchor. Unique per (org, key).
+  idempotencyKey String
+
+  // Resend's email_id. NULL until the transport returns. Globally
+  // unique (partial — Postgres allows many NULLs) so the webhook
+  // handler can `findUnique` the row by this id alone, cross-tenant
+  // in system context.
+  providerMessageId String? @unique(map: "notification_delivery_provider_msg_key")
+
+  // Opaque caller correlation (today: reportRunId). Powers the
+  // schedule run-history "delivered/bounced per run" rollup.
+  correlationId String?
+
+  status        NotificationDeliveryStatus @default(QUEUED)
+  lastEventType String?
+  lastEventAt   DateTime?
+  failureReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, idempotencyKey], map: "notification_delivery_org_idempotency_idx")
+  @@index([organizationId, createdAt(sort: Desc)], map: "notification_delivery_org_created_idx")
+  @@map("notification_delivery")
+}
+
+// Idempotency ledger for inbound Resend delivery webhooks. Global
+// (no org) — mirrors clerk_webhook_event / stripe_webhook_event.
+model ResendWebhookEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  // The `svix-id` header value. Stable across Svix retries.
+  svixMessageId String @unique(map: "resend_webhook_event_svix_message_idx")
+  eventType     String
+
+  payload Json
+
+  status          ResendWebhookEventStatus @default(PENDING)
+  dispatchOutcome String?
+  attempts        Int                      @default(0)
+  lastError       String?
+
+  receivedAt          DateTime  @default(now())
+  signatureVerifiedAt DateTime
+  dispatchedAt        DateTime?
+
+  @@index([eventType, receivedAt], map: "resend_webhook_event_type_received_idx")
+  @@map("resend_webhook_event")
 }
 
 // Invoices are generated from operational truth (e.g. order shipped →
@@ -1787,7 +1967,9 @@ model Provider {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  prescriptions Prescription[]
+  prescriptions   Prescription[]
+  syncChecks      ProviderSyncCheck[]
+  syncReviewItems ProviderSyncReviewItem[]
 
   // NPI is globally unique by definition; but a provider can appear
   // in multiple orgs (each gets its own row). The unique key is
@@ -1797,6 +1979,193 @@ model Provider {
   @@index([organizationId, lastName])
   @@index([organizationId, deaNumber])
   @@map("provider")
+}
+
+// ----- NPI Registry sync (SyncFromNpiRegistry slice 3) ---------------
+//
+// Schema parallels the SQL migration `20260616000000_phase3_provider
+// _npi_sync`. See that file for the architectural rationale of three
+// tables vs. one, why provider_sync_check is not yet partitioned, and
+// the partial-unique-index pattern on review items.
+
+// One row per worker invocation per org. Carries summary metrics
+// denormalized so dashboards can answer "show me last week's run
+// rates" without scanning the per-check table. status=IN_PROGRESS
+// rows that exceed the worker's runtime ceiling are swept to FAILED
+// by the slice-5+ reaper.
+//
+// PHI-free by construction: NPPES is a public registry and the row
+// stores only NPIs / aggregate counts / PharmaxError contents (which
+// the platform-core error class refuses to carry PHI through).
+model ProviderSyncRun {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  status      ProviderSyncRunStatus  @default(IN_PROGRESS)
+  triggeredBy ProviderSyncRunTrigger
+
+  triggeredByUserId String? @db.Uuid
+  // MANUAL runs have a non-null triggeredByUser; CRON/BACKFILL leave
+  // this null. Restrict on delete: a sync run cannot be silently
+  // orphaned if the user record is removed (we don't hard-delete
+  // users today, but the FK preserves the audit trail).
+  triggeredByUser   User?   @relation("ProviderSyncRunTriggeredBy", fields: [triggeredByUserId], references: [id], onDelete: Restrict)
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  // Total providers in scope for this run (the result of the
+  // worker's "providers to sync" query). The worker iterates over
+  // these.
+  providersScanned        Int @default(0)
+  // Subset of providersScanned where the worker actually queried
+  // CMS (less than scanned when the worker skips recently-synced
+  // providers via a freshness check — implementation choice for
+  // slice 4).
+  providersFetchedFromCms Int @default(0)
+
+  // Per-action counters. Sum equals providersScanned (one check row
+  // per provider; one action per check). The worker updates these
+  // atomically as it writes each provider_sync_check row.
+  noChangeCount                 Int @default(0)
+  providersUpdated              Int @default(0)
+  providersDeactivated          Int @default(0)
+  reactivationCandidatesCreated Int @default(0)
+  notFoundAtCmsCount            Int @default(0)
+  enumerationTypeMismatchCount  Int @default(0)
+  fetchFailedCount              Int @default(0)
+
+  // PharmaxError contents for FAILED runs. By contract, no PHI.
+  errorMessage  String? @db.Text
+  errorMetadata Json?
+
+  createdAt DateTime @default(now())
+
+  checks      ProviderSyncCheck[]
+  reviewItems ProviderSyncReviewItem[]
+
+  @@index([organizationId, startedAt(sort: Desc)])
+  @@index([organizationId, status])
+  @@index([organizationId, triggeredByUserId])
+  // Partial unique index `provider_sync_run_active_unique` on
+  // (organizationId) WHERE status = 'IN_PROGRESS' lives in migration
+  // 20260628000000_phase3_provider_sync_run_active_unique. Enforces
+  // "at most one active sync per org" so the slice-5 cross-tenant
+  // scheduler can run multi-pod without double-dispatching. Prisma
+  // cannot express partial unique constraints, so the constraint
+  // lives in raw SQL.
+  @@map("provider_sync_run")
+}
+
+// One row per (run, provider). High-volume audit row. action mirrors
+// slice-1 SyncAction.kind plus FETCH_FAILED for per-NPI fetch
+// failures. dispatchedCommandLog is non-null when the worker
+// dispatched UpdateProvider / DeactivateProvider for this check;
+// null for NONE, review-item-emitting actions, and FETCH_FAILED.
+//
+// PHI-free by construction (same reasoning as ProviderSyncRun).
+model ProviderSyncCheck {
+  id                String          @id @default(uuid()) @db.Uuid
+  organizationId    String          @db.Uuid
+  organization      Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  providerSyncRunId String          @db.Uuid
+  providerSyncRun   ProviderSyncRun @relation(fields: [providerSyncRunId], references: [id], onDelete: Restrict)
+  providerId        String          @db.Uuid
+  provider          Provider        @relation(fields: [providerId], references: [id], onDelete: Restrict)
+
+  // Denormalized for query-without-join (and for historical reads
+  // when the local Provider row's NPI changed via a Deactivate +
+  // Register motion — the check row preserves the NPI as observed).
+  npi String @db.VarChar(10)
+
+  checkedAt    DateTime                @default(now())
+  action       ProviderSyncCheckAction
+  actionDetail String?                 @db.Text
+
+  // Denormalized CMS snapshot scalars for display without re-fetch.
+  // Both null when the lookup failed or returned no result.
+  cmsStatus        String?   @db.Char(1)
+  cmsLastUpdatedAt DateTime?
+
+  // Set when the worker dispatched a command for this check.
+  dispatchedCommandLogId String?     @db.Uuid
+  dispatchedCommandLog   CommandLog? @relation("ProviderSyncCheckDispatchedCommandLog", fields: [dispatchedCommandLogId], references: [id], onDelete: Restrict)
+
+  // Set when action=FETCH_FAILED. CmsNppesClient error code +
+  // PharmaxError metadata (PHI-free by contract).
+  errorCode     String? @db.Text
+  errorMetadata Json?
+
+  createdAt DateTime @default(now())
+
+  reviewItems ProviderSyncReviewItem[]
+
+  @@index([organizationId, providerSyncRunId])
+  @@index([organizationId, providerId, checkedAt(sort: Desc)])
+  @@index([organizationId, action, checkedAt(sort: Desc)])
+  @@index([organizationId, npi, checkedAt(sort: Desc)])
+  @@index([organizationId, dispatchedCommandLogId])
+  @@map("provider_sync_check")
+}
+
+// Operator review queue. One row per finding that requires human
+// judgment (REACTIVATION_CANDIDATE / NOT_FOUND_AT_CMS /
+// ENUMERATION_TYPE_MISMATCH per slice 1's contract). At most one OPEN
+// row per (provider, kind) — enforced by the partial unique index
+// `provider_sync_review_item_open_unique` defined in the migration
+// (Prisma's schema language cannot express partial unique indexes;
+// the index lives in raw SQL).
+//
+// cmsSnapshot and localSnapshot capture discovery-time evidence so
+// operators see what was observed WHEN, not the current state. NPPES
+// data is public; the local snapshot is provider-directory data —
+// neither is PHI.
+//
+// resolutionNotes is PHI-adjacent free text and will be redacted from
+// command_log by the slice-6 resolution command's `redactFields`.
+model ProviderSyncReviewItem {
+  id                  String            @id @default(uuid()) @db.Uuid
+  organizationId      String            @db.Uuid
+  organization        Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  providerId          String            @db.Uuid
+  provider            Provider          @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  providerSyncRunId   String            @db.Uuid
+  providerSyncRun     ProviderSyncRun   @relation(fields: [providerSyncRunId], references: [id], onDelete: Restrict)
+  providerSyncCheckId String            @db.Uuid
+  providerSyncCheck   ProviderSyncCheck @relation(fields: [providerSyncCheckId], references: [id], onDelete: Restrict)
+
+  kind   ProviderSyncReviewItemKind
+  status ProviderSyncReviewItemStatus @default(OPEN)
+
+  discoveredAt DateTime @default(now())
+
+  // Evidence blobs. cmsSnapshot is null for NOT_FOUND_AT_CMS (the
+  // whole point — CMS returned no result). localSnapshot is always
+  // populated.
+  cmsSnapshot   Json?
+  localSnapshot Json
+
+  resolvedAt           DateTime?
+  resolvedByUserId     String?                           @db.Uuid
+  resolvedByUser       User?                             @relation("ProviderSyncReviewResolvedBy", fields: [resolvedByUserId], references: [id], onDelete: Restrict)
+  resolution           ProviderSyncReviewItemResolution?
+  resolutionNotes      String?                           @db.Text
+  resolvedCommandLogId String?                           @db.Uuid
+  resolvedCommandLog   CommandLog?                       @relation("ProviderSyncReviewResolvedCommandLog", fields: [resolvedCommandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, kind, status, discoveredAt(sort: Desc)])
+  @@index([organizationId, status, discoveredAt(sort: Desc)])
+  @@index([organizationId, resolvedByUserId, resolvedAt(sort: Desc)])
+  // The partial UNIQUE on (organizationId, providerId, kind) WHERE
+  // status='OPEN' is defined in the SQL migration (Prisma cannot
+  // express the WHERE clause). It enforces "at most one open review
+  // per (provider, kind)" — the worker's re-emit guard rides on top
+  // of it.
+  @@map("provider_sync_review_item")
 }
 
 // A signed prescription written by a provider for a patient. One
@@ -2313,6 +2682,281 @@ model VerificationRecord {
   @@map("verification_record")
 }
 
+// Status of a scheduled-report row.
+//
+// ACTIVE  — included in the worker tick's claim query
+//           (`nextRunAt <= NOW() AND status = 'ACTIVE'`).
+// PAUSED  — visible + editable in admin; worker skips it.
+// DISABLED — soft-delete. Admin can resurrect; audit history preserved.
+enum ReportScheduleStatus {
+  ACTIVE
+  PAUSED
+  DISABLED
+}
+
+// Notification preference for a scheduled report.
+//
+// ALWAYS       — fan out on every dispatch (default).
+// FAILURE_ONLY — fan out only when lastRunStatus is FAILED or SKIPPED.
+// NEVER        — never fan out (the run still writes to report_run
+//                and audit; only the email/webhook side is muted).
+enum ReportScheduleNotifyOn {
+  ALWAYS
+  FAILURE_ONLY
+  NEVER
+}
+
+// Outcome of the most-recent worker tick that processed this schedule.
+//
+// SUCCEEDED — RunReport returned cleanly; `lastRunReportRunId`
+//             points at the persisted report_run row.
+// FAILED    — RunReport threw; `lastRunErrorCode` carries the
+//             typed code for the admin UI's health badge.
+// SKIPPED   — the schedule was due but RunReport was not
+//             dispatched (no service user found for the tenant,
+//             report id no longer in registry, etc.). Different
+//             from FAILED in audit: a SKIPPED row indicates a
+//             config issue, not a runtime fault.
+enum ReportScheduleRunStatus {
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+// Scheduled-report row. One per (org, reportId, name). The worker
+// tick claims due rows via `nextRunAt <= NOW() AND status = ACTIVE`
+// (partial index `report_schedule_due_idx`), dispatches RunReport
+// under a per-org service user, then recomputes nextRunAt from
+// the cron expression for the next tick.
+//
+// `parametersTemplate` is a JSONB blob in the report's parameter
+// shape with support for relative-date placeholders
+// (`{ "from": "now-30d", "to": "now" }`). The resolver in
+// `@pharmax/reporting/schedule/resolve-template.ts` substitutes
+// placeholders at tick time, so a single schedule produces a
+// fresh window on every run.
+model ReportSchedule {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  name               String
+  reportId           String
+  cronExpression     String
+  timezone           String               @default("UTC")
+  parametersTemplate Json
+  status             ReportScheduleStatus @default(ACTIVE)
+
+  lastRunAt          DateTime?
+  lastRunStatus      ReportScheduleRunStatus?
+  lastRunReportRunId String?                  @db.Uuid
+  lastRunReportRun   ReportRun?               @relation("ReportScheduleLastRun", fields: [lastRunReportRunId], references: [id], onDelete: SetNull)
+  lastRunErrorCode   String?
+
+  nextRunAt DateTime
+  runCount  Int      @default(0)
+
+  // Notification recipients (operator/admin email addresses). The
+  // worker tick reads this list AND the schedule's `notifyOn`
+  // preference; the reporting.run.completed.v1 outbox handler in
+  // apps/worker fans out one email per recipient via the
+  // @pharmax/notifications channel.
+  //
+  // Why TEXT[] and not a join table: recipient lists are small
+  // (typical 1-5), bounded (operators won't put 1000 emails on a
+  // schedule), and we never need to "find every schedule for
+  // recipient X" cross-org. Inline keeps the admin UI flow tight
+  // and avoids a join on every list query.
+  recipients String[]               @default([])
+  notifyOn   ReportScheduleNotifyOn @default(ALWAYS)
+
+  createdByUserId String @db.Uuid
+  createdByUser   User   @relation("ReportScheduleCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  createCommandLogId String     @db.Uuid
+  createCommandLog   CommandLog @relation("ReportScheduleCreateCommand", fields: [createCommandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, reportId, name], map: "report_schedule_org_report_name_idx")
+  @@index([organizationId, lastRunAt(sort: Desc)], map: "report_schedule_org_last_run_idx")
+  @@map("report_schedule")
+}
+
+// ReportRun — one row per dispatched report execution. Captures
+// who ran what, with which parameters, against which date window,
+// and how many rows came back. Source of truth for the SOC 2
+// query "what reports has operator X run this quarter".
+//
+// `parameters` JSONB stores the operator's exact input (already
+// validated against the report's Zod schema by the time we
+// persist). `aggregates` stores the result's `aggregates` map
+// (totalCount, distinctGroups, etc.) — the full row set is NOT
+// persisted; downloads re-run against the same parameters +
+// window, which produces stable output for historical date-range
+// reports.
+//
+// `runByUserId` is the OPERATOR who clicked Run. Nullable to
+// reserve the column for the future scheduled-run worker (which
+// will set `runViaScheduleId` instead and leave this null; the
+// system service user that ACTUALLY dispatched the bus command
+// lives on `commandLog.actorUserId`).
+//
+// `runViaScheduleId` is a stable id reserved for the upcoming
+// `report_schedule` table. No FK constraint today — added in the
+// schedule slice when the table lands.
+model ReportRun {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  reportId      String
+  reportVersion Int
+
+  parameters Json
+  aggregates Json
+  rowCount   Int
+
+  windowFrom  DateTime
+  windowTo    DateTime
+  generatedAt DateTime
+
+  runByUserId String? @db.Uuid
+  runByUser   User?   @relation("ReportRunActor", fields: [runByUserId], references: [id], onDelete: Restrict)
+
+  runViaScheduleId String?
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation("ReportRunCommand", fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  // Back-relation: report_schedule rows whose lastRunReportRunId
+  // points here (nullable SetNull FK; up to 1 in practice but the
+  // shape is array because the FK is one-to-many in Prisma terms).
+  scheduleLastRuns ReportSchedule[] @relation("ReportScheduleLastRun")
+
+  // CSV archive pointer. NULL when the run was on-demand (operator
+  // streamed CSV in-browser; no need to persist a copy) or when
+  // the archive wasn't configured at run time (dev environments
+  // without S3). Bucket + key + size + sha256 are all written
+  // atomically by RunReport when `persistCsv: true`.
+  //
+  // The download path (`/api/ops/reports/runs/[id]/download`)
+  // re-checks the sha256 after pulling from S3 — defense against
+  // a quietly-corrupting bucket policy change or KMS rotation.
+  csvObjectBucket String?
+  csvObjectKey    String?
+  csvSizeBytes    Int?
+  csvSha256Hex    String?  @db.VarChar(64)
+  csvPersistedAt  DateTime?
+
+  @@index([organizationId, generatedAt(sort: Desc)], map: "report_run_org_generated_idx")
+  @@index([organizationId, reportId, generatedAt(sort: Desc)], map: "report_run_org_report_generated_idx")
+  @@index([organizationId, runByUserId, generatedAt(sort: Desc)], map: "report_run_org_user_generated_idx")
+  @@map("report_run")
+}
+
+// ---------------------------------------------------------------------------
+// SOC 2 access-review snapshots (CC6.2 evidence).
+//
+// Each row is an immutable, point-in-time JSON snapshot of every
+// (user → role → scope → permission) assignment in one organization.
+// Generated by the `RecordAccessReviewSnapshot` system command after
+// `@pharmax/security::generateAccessReview` computes the report.
+//
+// Why a dedicated table (vs. just leaving the JSON on disk):
+//   - SOC 2 auditors want to confirm the snapshot in the evidence
+//     pack is THE snapshot that was generated — not a re-run that
+//     happens to match. Persisting the snapshot in the same DB the
+//     access rights live in lets `verifyChain`-style auditors trace
+//     the snapshot row back to its `command_log` + `audit_log` +
+//     `event_outbox` triple. The JSON file on disk is the human-
+//     readable export; this row is the integrity anchor.
+//   - `digestSha256` is the SHA-256 of the canonical (sorted-key)
+//     JSON serialization. Storing the digest in a column AND emitting
+//     it on the outbox event makes "did anyone tamper with the
+//     snapshot after generation?" a one-row read.
+//   - The summary scalars (`totalPrincipals`, `elevatedCount`, etc.)
+//     are denormalized from the `report` JSONB so auditors can
+//     filter / aggregate without parsing JSON.
+//
+// PHI: none. The report contains user identifiers (operator email
+// + display name), role codes, and tenancy scope ids — explicitly
+// no patient data per the `generateAccessReview` PHI invariant.
+//
+// RLS: standard tenant_isolation policy keyed on the existing
+// pharmax.system_context / pharmax.organization_id GUC pair. The
+// SystemCommand that writes here is dispatched from system context
+// (worker / CLI / admin tool), so the policy's system-context
+// branch is the path that fires; the per-tenant branch enforces
+// isolation when an OrgAdmin reads their org's snapshots.
+model AccessReviewSnapshot {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  /// Stable slug copied off the org at generation time, so a
+  /// later org rename does not retroactively alter the historical
+  /// evidence label.
+  organizationSlug String
+
+  /// Reporting window the snapshot summarizes. `periodStart` is
+  /// the start of the SOC 2 audit period (typically a quarter);
+  /// `periodEnd` is the cutoff for "everything granted before
+  /// this point counts as in scope". `generatedAt` is the wall
+  /// time the snapshot was produced and signed.
+  periodStart DateTime
+  periodEnd   DateTime
+  generatedAt DateTime
+
+  /// Denormalized summary counters (also present inside `report`).
+  /// Indexed so an auditor can answer "how many elevated principals
+  /// in <org> at <date>?" without parsing JSONB.
+  totalPrincipals             Int
+  elevatedPrincipalCount      Int
+  inactivePrincipalCount      Int
+  staleAssignmentCount        Int
+  cryptoShredCapableRoleCount Int
+
+  /// Full `AccessReviewReport` shape from
+  /// `@pharmax/security::generateAccessReview`. Frozen at write
+  /// time; never updated in place. Future field additions go in a
+  /// new column or a versioned `reportVersion` discriminator —
+  /// rewriting an existing row would invalidate the digest.
+  report Json
+
+  /// Canonical (sorted-key) JSON SHA-256 of `report`. Stored in
+  /// hex so it is searchable and human-comparable. Auditors who
+  /// download the JSON evidence file can recompute the digest and
+  /// confirm it matches this column.
+  digestSha256 String
+
+  /// Schema version of the persisted `report`. Increment when the
+  /// JSON shape changes incompatibly so verifiers can branch on the
+  /// version rather than guess.
+  reportVersion Int @default(1)
+
+  /// User who triggered the snapshot (CLI operator or future scheduled
+  /// job's actor). Nullable: a future system-tier scheduled job runs
+  /// as the per-org service identity and leaves this null.
+  recordedByUserId String? @db.Uuid
+  recordedByUser   User?   @relation("AccessReviewSnapshotRecordedBy", fields: [recordedByUserId], references: [id], onDelete: Restrict)
+
+  /// FK to the `command_log` row that produced this snapshot. The
+  /// audit-chain hop from snapshot → command → audit_log → event_outbox
+  /// is exactly what a SOC 2 reviewer follows to confirm provenance.
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation("AccessReviewSnapshotCommand", fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, generatedAt(sort: Desc)], map: "access_review_snapshot_org_generated_idx")
+  @@index([organizationId, periodEnd(sort: Desc)], map: "access_review_snapshot_org_period_idx")
+  @@map("access_review_snapshot")
+}
+
 // ===========================================================================
 // 8. Inventory + fill traceability (phase 4)
 // ===========================================================================
@@ -2822,11 +3466,11 @@ model PackagePhoto {
 // See migration 20260613000000_phase5_package_photo_upload_token
 // for the lifecycle + RLS reasoning.
 model PackagePhotoUploadToken {
-  token            String       @id @db.Uuid
-  organizationId   String       @db.Uuid
-  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  uploadedByUserId String       @db.Uuid
-  uploadedByUser   User         @relation("PackagePhotoUploadTokenUploader", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+  token            String        @id @db.Uuid
+  organizationId   String        @db.Uuid
+  organization     Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  uploadedByUserId String        @db.Uuid
+  uploadedByUser   User          @relation("PackagePhotoUploadTokenUploader", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
   siteId           String?       @db.Uuid
   site             PharmacySite? @relation(fields: [siteId], references: [id], onDelete: Restrict)
   clinicId         String?       @db.Uuid

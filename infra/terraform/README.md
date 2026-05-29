@@ -117,8 +117,30 @@ terraform plan -var-file=terraform.tfvars -out=tfplan
 terraform apply tfplan
 ```
 
-For staging and prod, `terraform apply` is gated behind a CI workflow
-that enforces approval. See `.github/workflows/deploy-aws-*.yml`.
+For the full first-time-deployment procedure — bootstrap, OIDC role
+setup, plan review, post-apply secrets backfill, rollback — see
+[`docs/operations/production-deployment.md`](../../docs/operations/production-deployment.md).
+
+Two GitHub workflows automate the parts that can be automated:
+
+- [`.github/workflows/terraform-ci.yml`](../../.github/workflows/terraform-ci.yml)
+  — runs `fmt-check + validate + tflint` (the three no-credential
+  gates) on every PR that touches `infra/terraform/**`. The
+  `terraform-ci-pass` aggregator is the required status check that
+  branch protection rules point at.
+- [`.github/workflows/terraform-drift.yml`](../../.github/workflows/terraform-drift.yml)
+  — daily scheduled `terraform plan -detailed-exitcode -lock=false`
+  against each production env-region via GitHub OIDC. Exit code 2
+  (drift) opens a `infra/drift`-labeled GitHub issue with the plan
+  tail. The workflow gracefully no-ops when the `AWS_DRIFT_ROLE_ARN`
+  repository variable is unset (forks, pre-bootstrap repos).
+
+Production `terraform apply` is deliberately operator-driven (run
+locally with the captured plan + 2-person review) rather than
+auto-applied from CI. This is the SOC 2 CC8.1 posture documented
+in the deployment runbook. An approval-gated `terraform-apply`
+workflow is queued (`tf1-applyflow`) for when the team grows past
+two engineers.
 
 The Makefile at `infra/terraform/Makefile` exposes shortcuts for every
 env-region:

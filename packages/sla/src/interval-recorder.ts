@@ -1,6 +1,27 @@
 import type { PrismaTxClient } from "@pharmax/command-bus";
 import { OrderStageIntervalKind, Prisma } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
+import { getMeter } from "@pharmax/telemetry";
+
+const meter = getMeter("@pharmax/sla");
+
+const workflowStageDurationHistogram = meter.createHistogram(
+  "pharmax_workflow_stage_duration_seconds",
+  {
+    description:
+      "Closed stage interval duration in seconds, labelled by `kind` (WAIT_BEFORE_TYPING, TYPING_ACTIVE, ...). Powers per-stage p50/p95/p99 dashboards and SLA-policy refinement.",
+    unit: "s",
+    // Bucket boundaries span dispatch-class workflows (sub-second
+    // commands) through full-day waits (e.g. WAIT_BEFORE_SHIPPING
+    // after-hours backlog). The high end deliberately reaches 24h
+    // because pharmacy SLA budgets are routinely hours-to-days.
+    advice: {
+      explicitBucketBoundaries: [
+        1, 5, 30, 60, 300, 900, 1800, 3600, 7200, 14_400, 28_800, 43_200, 86_400,
+      ],
+    },
+  }
+);
 
 export const SLA_INTERVAL_ALREADY_OPEN = "SLA_INTERVAL_ALREADY_OPEN";
 export const SLA_INTERVAL_NONE_OPEN = "SLA_INTERVAL_NONE_OPEN";
@@ -202,6 +223,14 @@ export async function closeOpenStageInterval(input: CloseOpenStageIntervalInput)
       },
     });
   }
+
+  // Record the closed interval's duration. Only the `kind` label
+  // is attached (PHI guardrail): no order_id, no organization_id.
+  // The non-negative invariant is already enforced above.
+  workflowStageDurationHistogram.record(
+    (input.endedAt.getTime() - open.startedAt.getTime()) / 1000,
+    { kind: String(open.kind) }
+  );
 }
 
 /**

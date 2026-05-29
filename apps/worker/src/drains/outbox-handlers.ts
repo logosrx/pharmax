@@ -36,6 +36,7 @@ import {
 } from "./dispatch-vial-print-job.js";
 import { createEscalateOnShipmentExceptionHandler } from "./escalate-on-shipment-exception.js";
 import { createMaterializeBillingOnOrderShippedHandler } from "./materialize-billing-on-order-shipped.js";
+import { createNotifyOnReportRunCompletedHandler } from "./notify-on-report-run-completed.js";
 import { createPushInvoiceToStripeHandler } from "./push-invoice-to-stripe.js";
 import type { ClaimedOutboxEventRow } from "./row-types.js";
 
@@ -77,6 +78,13 @@ type OutboxHandlerDeps = {
    * environments that have `STRIPE_SECRET_KEY` set.
    */
   readonly stripePort?: StripeInvoicePort | null;
+  /**
+   * Base URL of the operator console used by the scheduled-report
+   * notification handler to build deep-link "open in Pharmax"
+   * buttons. Defaults to "http://localhost:3000" in dev — set
+   * `OPS_CONSOLE_BASE_URL` in production.
+   */
+  readonly opsConsoleBaseUrl?: string;
 };
 
 /**
@@ -149,6 +157,10 @@ export function createOutboxHandlers(deps: OutboxHandlerDeps): OutboxHandlerMap 
     client: deps.prisma,
     stripePort: deps.stripePort ?? null,
   });
+  const reportRunNotifyHandler = createNotifyOnReportRunCompletedHandler({
+    client: deps.prisma,
+    opsConsoleBaseUrl: deps.opsConsoleBaseUrl ?? "http://localhost:3000",
+  });
   return {
     "organization.created.v1": handleOrganizationCreatedV1,
     "labels.vial_print.requested.v1": vialPrintHandler,
@@ -156,5 +168,6 @@ export function createOutboxHandlers(deps: OutboxHandlerDeps): OutboxHandlerMap 
     "shipment.tracking.recorded.v1": escalationHandler,
     "order.shipped.v1": billingMaterializationHandler,
     "billing.invoice.finalized.v1": stripePushHandler,
+    "reporting.run.completed.v1": reportRunNotifyHandler,
   };
 }

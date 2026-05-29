@@ -5,6 +5,12 @@ A flat catalog of every Pharmax control referenced in the
 with status, owner, and review cadence. This is the file the auditor
 reads to ask "is the control designed AND in place AND operating?".
 
+For the **engineering crosswalk** — control → exact code paths +
+audit / Prisma tables + `.test.ts` files + CI gate — see
+[`code-evidence-map.md`](./code-evidence-map.md). The IDs in this
+file are stable and authoritative; the code map fills in the file
+paths.
+
 Status vocabulary:
 
 - **Implemented** — the control is in production and evidence is being

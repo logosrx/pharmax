@@ -230,8 +230,6 @@ export const EVENT_REGISTRATION_ALLOWLIST: ReadonlyArray<string> = Object.freeze
   "clerk.session.created.v1", // BLOCKER: future Clerk webhook handler in @pharmax/security — TODO at packages/security/src/access-review/generate-access-review.ts
   "clerk.session.failed.v1", // BLOCKER: future Clerk webhook handler — TODO at apps/worker/src/security/digest-probes.ts
   "order.note.added.v1", // BLOCKER: future NoteAdded command — referenced in `@pharmax/orders/events.ts` translator (intentionally unmapped permission)
-  "order.typing.missing_info.v1", // BLOCKER: MARK_TYPING_MISSING_INFO transition emit in policy-v1 — command not yet implemented
-  "order.typing.resumed.v1", // BLOCKER: RESUME_TYPING_AFTER_INFO_RECEIVED transition emit in policy-v1 — command not yet implemented
 ]);
 
 const ALLOWLIST_SET: ReadonlySet<string> = Object.freeze(new Set(EVENT_REGISTRATION_ALLOWLIST));

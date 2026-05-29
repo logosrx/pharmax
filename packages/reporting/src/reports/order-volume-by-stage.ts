@@ -22,6 +22,7 @@
 import { OrderStatus } from "@pharmax/database";
 import { z } from "zod";
 
+import { dateRangeFields } from "../parameter-fields.js";
 import type { DateRangeParams, ReportDefinition, ReportResult } from "../types.js";
 
 export interface OrderVolumeByStageRow {
@@ -74,6 +75,17 @@ export const orderVolumeByStageReport: ReportDefinition<
   description:
     "Counts of orders by current workflow status (per clinic), for orders received within a date range.",
   parametersSchema: paramsSchema,
+  parameterFields: [
+    ...dateRangeFields(),
+    {
+      kind: "multi-enum",
+      key: "statuses",
+      label: "Statuses",
+      required: false,
+      help: "Restrict to these workflow statuses; leave empty for all.",
+      options: ORDER_STATUSES.map((s) => ({ value: s, label: s })),
+    },
+  ],
 
   async run(ctx, params): Promise<ReportResult<OrderVolumeByStageRow>> {
     const window: DateRangeParams = { from: params.from, to: params.to };

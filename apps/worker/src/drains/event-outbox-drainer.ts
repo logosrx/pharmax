@@ -17,12 +17,30 @@
 
 import type { PrismaClient, EventOutbox, OutboxStatus } from "@pharmax/database";
 import type { logger as loggerContract } from "@pharmax/platform-core";
+import { getMeter } from "@pharmax/telemetry";
 
 import { claimOutboxEvents } from "./claim-outbox-events.js";
 import type { ClaimOutboxEventsOptions, OutboxClaimClient } from "./claim-outbox-events.js";
 import { outboxHandlers as defaultHandlers } from "./outbox-handlers.js";
 import type { OutboxHandlerMap } from "./outbox-handlers.js";
 import type { ClaimedOutboxEventRow } from "./row-types.js";
+
+const meter = getMeter("@pharmax/worker.outbox");
+
+const outboxDispatchedCounter = meter.createCounter("pharmax_outbox_dispatched_total", {
+  description:
+    "Outbox rows handled per tick. Outcome is one of success | fail | dead. event_type is the registered event id.",
+});
+
+const outboxDeadCounter = meter.createCounter("pharmax_outbox_dead_total", {
+  description: "Outbox rows that exhausted retries and were marked DEAD (terminal).",
+});
+
+const outboxClaimLagHistogram = meter.createHistogram("pharmax_outbox_claim_lag_seconds", {
+  description: "Wall time between event_outbox.createdAt and the drainer claiming the row.",
+  unit: "s",
+  advice: { explicitBucketBoundaries: [0.5, 1, 5, 10, 30, 60, 300, 900] },
+});
 
 type Logger = loggerContract.Logger;
 
@@ -100,6 +118,14 @@ export function createOutboxDrainer(
           aggregateId: row.aggregateId,
           attempts: row.attempts,
         });
+        const eventTypeLabel = { event_type: row.eventType };
+
+        // Record claim lag — wall time the row spent waiting between
+        // commit (createdAt) and being picked up by the drainer.
+        // High p99 indicates the drainer is backlogged or the claim
+        // batch size is too small.
+        const claimLagSeconds = Math.max(0, (clock().getTime() - row.createdAt.getTime()) / 1000);
+        outboxClaimLagHistogram.record(claimLagSeconds);
 
         try {
           if (handler === undefined) {
@@ -110,6 +136,7 @@ export function createOutboxDrainer(
 
           await markDispatched(deps.client, row.id, clock());
           dispatched += 1;
+          outboxDispatchedCounter.add(1, { ...eventTypeLabel, outcome: "success" });
           rowLog.info("drain.row.dispatched");
         } catch (cause) {
           const failedAt = clock();
@@ -126,11 +153,14 @@ export function createOutboxDrainer(
 
           if (terminal) {
             dead += 1;
+            outboxDeadCounter.add(1, eventTypeLabel);
+            outboxDispatchedCounter.add(1, { ...eventTypeLabel, outcome: "dead" });
             rowLog.error("drain.row.dead", {
               errorMessage: describeError(cause),
             });
           } else {
             failed += 1;
+            outboxDispatchedCounter.add(1, { ...eventTypeLabel, outcome: "fail" });
             rowLog.warn("drain.row.failed", {
               errorMessage: describeError(cause),
               willRetry: true,

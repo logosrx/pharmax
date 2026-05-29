@@ -50,6 +50,7 @@ import {
   type FedExTrackResult,
 } from "@pharmax/shipping";
 import type { logger as loggerContract } from "@pharmax/platform-core";
+import { getMeter } from "@pharmax/telemetry";
 import { buildTenancyContext, withSystemContext, withTenancyContext } from "@pharmax/tenancy";
 import { ulid } from "ulid";
 
@@ -58,6 +59,32 @@ import {
   type ActiveFedExShipmentRow,
   type FedExShipmentClaimClient,
 } from "./claim-active-fedex-shipments.js";
+
+const meter = getMeter("@pharmax/worker.shipping");
+
+const shippingTrackingPollDurationHistogram = meter.createHistogram(
+  "pharmax_shipping_tracking_poll_duration_seconds",
+  {
+    description: "Wall-clock time to poll a carrier tracking endpoint for one batch of shipments.",
+    unit: "s",
+    advice: { explicitBucketBoundaries: [0.1, 0.5, 1, 2.5, 5, 10, 30] },
+  }
+);
+
+const shippingTrackingPollFailuresCounter = meter.createCounter(
+  "pharmax_shipping_tracking_poll_failures_total",
+  { description: "Carrier tracking poll attempts that threw (network, auth, parse, 5xx)." }
+);
+
+const shippingTrackingEventsRecordedCounter = meter.createCounter(
+  "pharmax_shipping_tracking_events_recorded_total",
+  {
+    description:
+      "Tracking events successfully recorded into the shipment_tracking_event ledger. Includes idempotent re-records.",
+  }
+);
+
+const CARRIER_FEDEX = { carrier: "fedex" };
 
 type Logger = loggerContract.Logger;
 
@@ -311,11 +338,21 @@ export function createFedExTrackingPoller(
         const shipmentByTracking = new Map(eligible.map((s) => [s.trackingNumber, s] as const));
 
         let response: FedExTrackResponse;
+        const pollStartNs = process.hrtime.bigint();
         try {
           response = await ctx.client.trackShipmentBatch(
             eligible.map((s) => s.trackingNumber).slice(0, FEDEX_BATCH_SIZE * 5)
           );
+          shippingTrackingPollDurationHistogram.record(
+            Number(process.hrtime.bigint() - pollStartNs) / 1_000_000_000,
+            CARRIER_FEDEX
+          );
         } catch (cause) {
+          shippingTrackingPollDurationHistogram.record(
+            Number(process.hrtime.bigint() - pollStartNs) / 1_000_000_000,
+            CARRIER_FEDEX
+          );
+          shippingTrackingPollFailuresCounter.add(1, CARRIER_FEDEX);
           tally.failed += eligible.length;
           log.error("drain.track.batch_failed", {
             organizationId,
@@ -383,6 +420,7 @@ export function createFedExTrackingPoller(
               );
             });
             tally.recorded += 1;
+            shippingTrackingEventsRecordedCounter.add(1, CARRIER_FEDEX);
           } catch (cause) {
             // Already-recorded duplicate is the most common "failure"
             // and that's the whole point of the unique-constraint
@@ -395,6 +433,7 @@ export function createFedExTrackingPoller(
               code === "SHIPMENT_TRACKING_DUPLICATE_EVENT"
             ) {
               tally.recorded += 1;
+              shippingTrackingEventsRecordedCounter.add(1, CARRIER_FEDEX);
             } else {
               tally.failed += 1;
               log.error("drain.track.dispatch_failed", {

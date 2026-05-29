@@ -36,10 +36,21 @@ import {
   EscalateOrderToEmergencyBucket,
   type EscalationReason,
 } from "@pharmax/shipping";
+import { getMeter } from "@pharmax/telemetry";
 import { buildTenancyContext, withSystemContext, withTenancyContext } from "@pharmax/tenancy";
 import { ulid } from "ulid";
 
 import type { OutboxEventHandler } from "./outbox-handlers.js";
+
+const meter = getMeter("@pharmax/worker.shipping");
+
+const shippingEscalationsCreatedCounter = meter.createCounter(
+  "pharmax_shipping_escalations_created_total",
+  {
+    description:
+      "Orders moved into the EMERGENCY bucket via EscalateOrderToEmergencyBucket. Excludes idempotent re-escalations (`alreadyEscalated=true`).",
+  }
+);
 
 export interface CreateEscalateOnShipmentExceptionHandlerOptions {
   readonly client: PrismaClient;
@@ -192,6 +203,10 @@ export function createEscalateOnShipmentExceptionHandler(
         { idempotencyKey: `escalate:${shipmentId}:${externalEventId}` }
       )
     );
+
+    if (!result.alreadyEscalated) {
+      shippingEscalationsCreatedCounter.add(1);
+    }
 
     ctx.logger.info("outbox.shipment.tracking.recorded.v1 escalated", {
       outboxId: row.id,

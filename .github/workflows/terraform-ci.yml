@@ -1,0 +1,151 @@
+# Pharmax Terraform CI — static validation of the AWS infrastructure
+# tree on every PR that touches it.
+#
+# This workflow runs the THREE gates that don't need AWS credentials:
+#
+#   1. `terraform fmt -recursive -check -diff` — every .tf file is
+#      canonically formatted. A diff here means the PR author did not
+#      run `make -C infra/terraform fmt` before pushing.
+#
+#   2. `terraform init -backend=false && terraform validate` — for the
+#      root composition, the bootstrap module, and every env-region
+#      working directory. Validates HCL syntax, resource references,
+#      and provider schema conformance WITHOUT touching the remote
+#      backend (so PRs from forks work + no AWS creds needed).
+#
+#   3. `tflint --recursive` with the AWS plugin — catches deprecated
+#      arguments, invalid instance types, missing required tags, and
+#      structural anti-patterns the Terraform CLI's `validate` misses.
+#
+# What this workflow DOES NOT do:
+#
+#   - It does not run `terraform plan`. Plan needs cloud credentials,
+#     and we run plans inside the operator-driven deployment runbook
+#     (`docs/operations/production-deployment.md`) rather than on every
+#     PR. The scheduled `terraform-drift.yml` workflow runs plan
+#     against production daily.
+#
+#   - It does not run `terraform apply`. Production applies are
+#     deliberately operator-driven for SOC 2 CC8.1 (every change is
+#     reviewed, plan is captured as evidence, sign-off recorded).
+#     This is the same posture the README documents.
+#
+# Path filter: only runs when `infra/terraform/**` or this workflow
+# itself changes. Application-code PRs do not need to wait on
+# Terraform init/validate.
+#
+# Branch protection: the `terraform-ci-pass` aggregator job is the
+# required status check that branch protection rules can require on
+# `main` (mirrors the pattern in `ci.yml`'s `ci-pass`).
+
+name: terraform-ci
+
+on:
+  pull_request:
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned for reproducibility. Updates land in a focused PR so the
+  # version bump is the only change in the diff.
+  TERRAFORM_VERSION: "1.9.8"
+  TFLINT_VERSION: "v0.55.1"
+
+jobs:
+  fmt-check:
+    name: terraform fmt -check
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Run `terraform fmt -check`
+        working-directory: infra/terraform
+        run: make fmt-check
+
+  validate:
+    name: terraform validate (every env-region)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # `make validate` walks every working directory (root, bootstrap,
+      # all four env-regions), runs `terraform init -backend=false`,
+      # then `terraform validate`. A failure in ANY directory fails
+      # the job.
+      - name: Run `terraform validate` for every env-region
+        working-directory: infra/terraform
+        run: make validate
+
+  tflint:
+    name: tflint --recursive (AWS plugin)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install tflint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: Cache tflint plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.tflint.d/plugins
+          key: tflint-plugins-${{ runner.os }}-${{ hashFiles('infra/terraform/.tflint.hcl') }}
+          restore-keys: |
+            tflint-plugins-${{ runner.os }}-
+
+      - name: Run `make lint` (tflint --init + tflint --recursive)
+        working-directory: infra/terraform
+        run: make lint
+
+  # Aggregate status — single check that branch-protection rules
+  # require on `main`. Adding or removing a job above updates the
+  # `needs:` here without touching branch protection.
+  terraform-ci-pass:
+    name: terraform-ci-pass
+    runs-on: ubuntu-latest
+    needs: [fmt-check, validate, tflint]
+    if: always()
+    steps:
+      - name: All required Terraform CI jobs succeeded
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::One or more required Terraform CI jobs failed or were cancelled."
+          exit 1
+      - run: echo "All required Terraform CI jobs passed."

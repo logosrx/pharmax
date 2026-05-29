@@ -131,10 +131,14 @@ export function hasRlsCoverage(sql: string, table: string): boolean {
 
   // Policy presence: a literal `CREATE POLICY ... ON "name"` or a
   // DO block that references the table by name.
-  // Same `\b` placement nuance as above: only the bare-identifier
-  // branch needs the word boundary; the quoted form is self-bounded.
+  // The POLICY name itself may be a bare identifier (`tenant_isolation`)
+  // or a double-quoted identifier (`"tenant_isolation"`) — both are
+  // valid PostgreSQL and both attach a real policy, so the name branch
+  // accepts either form. The TABLE branch keeps the same `\b` placement
+  // nuance as above: only the bare-identifier form needs the word
+  // boundary; the quoted form is self-bounded by its closing `"`.
   const policyLiteral = new RegExp(
-    `CREATE\\s+POLICY\\s+\\w+\\s+ON\\s+(?:"${safe}"|\\b${safe}\\b)`,
+    `CREATE\\s+POLICY\\s+(?:"[^"]+"|\\w+)\\s+ON\\s+(?:"${safe}"|\\b${safe}\\b)`,
     "i"
   );
   const policyViaBlock =

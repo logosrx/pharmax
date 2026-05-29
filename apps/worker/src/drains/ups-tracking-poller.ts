@@ -18,6 +18,7 @@ import {
   type UpsTrackPackage,
 } from "@pharmax/shipping";
 import type { logger as loggerContract } from "@pharmax/platform-core";
+import { getMeter } from "@pharmax/telemetry";
 import { buildTenancyContext, withSystemContext, withTenancyContext } from "@pharmax/tenancy";
 import { ulid } from "ulid";
 
@@ -26,6 +27,37 @@ import {
   type ActiveUpsShipmentRow,
   type UpsShipmentClaimClient,
 } from "./claim-active-ups-shipments.js";
+
+// Meters are defined in the FedEx poller module via a per-module getMeter
+// call. We register a separate meter scope here so the dashboard can
+// optionally split FedEx-vs-UPS by instrumentation scope if needed,
+// but the metric names + the `carrier` label are identical so they
+// merge cleanly in Prometheus.
+const meter = getMeter("@pharmax/worker.shipping");
+
+const shippingTrackingPollDurationHistogram = meter.createHistogram(
+  "pharmax_shipping_tracking_poll_duration_seconds",
+  {
+    description: "Wall-clock time to poll a carrier tracking endpoint for one batch of shipments.",
+    unit: "s",
+    advice: { explicitBucketBoundaries: [0.1, 0.5, 1, 2.5, 5, 10, 30] },
+  }
+);
+
+const shippingTrackingPollFailuresCounter = meter.createCounter(
+  "pharmax_shipping_tracking_poll_failures_total",
+  { description: "Carrier tracking poll attempts that threw (network, auth, parse, 5xx)." }
+);
+
+const shippingTrackingEventsRecordedCounter = meter.createCounter(
+  "pharmax_shipping_tracking_events_recorded_total",
+  {
+    description:
+      "Tracking events successfully recorded into the shipment_tracking_event ledger. Includes idempotent re-records.",
+  }
+);
+
+const CARRIER_UPS = { carrier: "ups" };
 
 type Logger = loggerContract.Logger;
 
@@ -271,7 +303,22 @@ export function createUpsTrackingPoller(
         // already isolated inside trackShipmentBatch.
         const shipmentByTracking = new Map(eligible.map((s) => [s.trackingNumber, s] as const));
         const trackingNumbers = eligible.map((s) => s.trackingNumber);
-        const batch = await ctx.client.trackShipmentBatch(trackingNumbers);
+        const pollStartNs = process.hrtime.bigint();
+        let batch;
+        try {
+          batch = await ctx.client.trackShipmentBatch(trackingNumbers);
+          shippingTrackingPollDurationHistogram.record(
+            Number(process.hrtime.bigint() - pollStartNs) / 1_000_000_000,
+            CARRIER_UPS
+          );
+        } catch (cause) {
+          shippingTrackingPollDurationHistogram.record(
+            Number(process.hrtime.bigint() - pollStartNs) / 1_000_000_000,
+            CARRIER_UPS
+          );
+          shippingTrackingPollFailuresCounter.add(1, CARRIER_UPS);
+          throw cause;
+        }
 
         // Step 4 — per-result dispatch inside the org's tenancy.
         for (const entry of batch.results) {
@@ -336,6 +383,7 @@ export function createUpsTrackingPoller(
               );
             });
             tally.recorded += 1;
+            shippingTrackingEventsRecordedCounter.add(1, CARRIER_UPS);
           } catch (cause) {
             const code = (cause as { code?: string } | undefined)?.code;
             if (
@@ -343,6 +391,7 @@ export function createUpsTrackingPoller(
               code === "SHIPMENT_TRACKING_DUPLICATE_EVENT"
             ) {
               tally.recorded += 1;
+              shippingTrackingEventsRecordedCounter.add(1, CARRIER_UPS);
             } else {
               tally.failed += 1;
               log.error("drain.track.dispatch_failed", {

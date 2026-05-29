@@ -1,5 +1,6 @@
 {
   "name": "@pharmax/reporting",
+  "_comment_dependencies": "cron-parser is a tiny zero-deps cron tool used by CreateReportSchedule (validate expression + compute initial nextRunAt) and by the worker tick (compute next nextRunAt after each run).",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -9,8 +10,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@pharmax/command-bus": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
+    "@pharmax/rbac": "workspace:*",
+    "cron-parser": "^4.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

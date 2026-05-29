@@ -4,19 +4,39 @@
 // Quarterly access review generator (SOC 2 CC6.2 evidence).
 //
 // Reads the @pharmax/rbac tables for the target organization and
-// writes a structured JSON snapshot of every (user → role → scope →
-// permission) assignment, plus a reviewer's-eye summary, to:
+// produces a structured snapshot of every (user → role → scope →
+// permission) assignment plus a reviewer's-eye summary.
 //
-//   evidence/access-reviews/<YYYY-Q#>/<org-slug>.json
+// Two persistence modes (run in this order):
 //
-// Pair the generated file with the human sign-off process documented
-// in `packages/security/src/access-review/README.md`.
+//   1. Database (canonical): dispatches the `RecordAccessReviewSnapshot`
+//      tenant command, which writes an immutable
+//      `access_review_snapshot` row keyed by SHA-256 digest of the
+//      report, emits the `compliance.access_review_snapshot.recorded.v1`
+//      outbox event, and writes the matching audit_log + command_log
+//      entries. This is the row a SOC 2 auditor relies on.
+//
+//   2. JSON file (evidence pack): also writes the same report to
+//      `evidence/access-reviews/<YYYY-Q#>/<org-slug>.json` so the
+//      file can be attached to a reviewer's sign-off page in the
+//      external evidence repository. The on-disk file is byte-
+//      identical to the JSON column on the DB row (canonical
+//      stringify + the same `report` content).
+//
+// Operator identity: the snapshot row records the operator who ran
+// the CLI in `recordedByUserId`. The operator must have the
+// `compliance.access_review.record` permission (granted to OrgAdmin
+// by default; the dedicated SecurityOfficer role template will be
+// added as separate work).
 //
 // Usage:
 //   pnpm tsx scripts/security/run-access-review.ts \
 //     --org=<organization-uuid> \
+//     --as-user=<operator-email> \
 //     [--out-dir=evidence/access-reviews/<YYYY-Q#>] \
-//     [--dry-run]
+//     [--dry-run]                # do not write DB row, do not write file
+//     [--skip-db]                # write the JSON file only (back-compat)
+//     [--skip-file]              # write the DB row only (CI smoke checks)
 //
 // Required env:
 //   DATABASE_URL              Postgres connection string.
@@ -25,28 +45,32 @@
 //                             this script does not encrypt anything).
 //
 // Exits:
-//   0  report generated (or printed in dry-run mode).
-//   1  validation error / org not found / unexpected failure.
+//   0  report generated (DB row + JSON file unless flags requested otherwise).
+//   1  validation error / org or user not found / RBAC denial / unexpected failure.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
+import { configureCommandBus, executeCommand } from "@pharmax/command-bus";
 import { configureCrypto, LocalKmsAdapter } from "@pharmax/crypto";
 import { prisma } from "@pharmax/database";
-import { logger as loggerNs } from "@pharmax/platform-core";
+import { clock, errors, ids, logger as loggerNs } from "@pharmax/platform-core";
+import { configureRbac, PrismaPermissionLoader } from "@pharmax/rbac";
 import {
   generateAccessReview,
   OrganizationNotFoundForAccessReviewError,
+  RecordAccessReviewSnapshot,
   type AccessReviewClient,
 } from "@pharmax/security";
-import { withSystemContext } from "@pharmax/tenancy";
+import { buildTenancyContext, withSystemContext, withTenancyContext } from "@pharmax/tenancy";
 
 const USAGE = `
 Usage: pnpm tsx scripts/security/run-access-review.ts \\
   --org=<organization-uuid> \\
+  --as-user=<operator-email> \\
   [--out-dir=evidence/access-reviews/<YYYY-Q#>] \\
-  [--dry-run]
+  [--dry-run] [--skip-db] [--skip-file]
 
 Required env:
   DATABASE_URL              Postgres connection string.
@@ -55,8 +79,11 @@ Required env:
 
 interface ParsedArgs {
   readonly orgId: string;
+  readonly asUserEmail: string;
   readonly outDir?: string;
   readonly dryRun: boolean;
+  readonly skipDb: boolean;
+  readonly skipFile: boolean;
 }
 
 function parseCliArgs(argv: ReadonlyArray<string>): ParsedArgs {
@@ -64,8 +91,11 @@ function parseCliArgs(argv: ReadonlyArray<string>): ParsedArgs {
     args: [...argv],
     options: {
       org: { type: "string" },
+      "as-user": { type: "string" },
       "out-dir": { type: "string" },
       "dry-run": { type: "boolean", default: false },
+      "skip-db": { type: "boolean", default: false },
+      "skip-file": { type: "boolean", default: false },
       help: { type: "boolean", short: "h" },
     },
     strict: true,
@@ -79,10 +109,21 @@ function parseCliArgs(argv: ReadonlyArray<string>): ParsedArgs {
     process.stderr.write(`--org is required.\n\n${USAGE}\n`);
     process.exit(1);
   }
+  const dryRun = values["dry-run"] === true;
+  const asUserEmail = typeof values["as-user"] === "string" ? values["as-user"] : "";
+  if (!dryRun && asUserEmail.length === 0) {
+    process.stderr.write(
+      `--as-user=<operator-email> is required (omit only with --dry-run).\n\n${USAGE}\n`
+    );
+    process.exit(1);
+  }
   return {
     orgId: values.org,
+    asUserEmail,
     ...(typeof values["out-dir"] === "string" ? { outDir: values["out-dir"] } : {}),
-    dryRun: values["dry-run"] === true,
+    dryRun,
+    skipDb: values["skip-db"] === true,
+    skipFile: values["skip-file"] === true,
   };
 }
 
@@ -183,6 +224,13 @@ async function main(): Promise<void> {
     level: "info",
   });
 
+  // The DB write path needs the bus + RBAC configured. The JSON-only
+  // path can skip these, but we configure unconditionally so a
+  // future flip from --skip-db to dispatch-only doesn't require
+  // re-bootstrapping the script.
+  configureCommandBus({ prisma, clock: clock.systemClock, logger });
+  configureRbac({ loader: new PrismaPermissionLoader(prisma) });
+
   const now = new Date();
   const periodEnd = now;
   const periodStart = new Date(now.getTime() - 90 * 86_400_000);
@@ -208,6 +256,90 @@ async function main(): Promise<void> {
     throw cause;
   }
 
+  // -----------------------------------------------------------
+  // 1. Persist to the database via the command bus (canonical).
+  // -----------------------------------------------------------
+  let snapshotId: string | null = null;
+  let digestSha256: string | null = null;
+
+  if (!args.dryRun && !args.skipDb) {
+    const operator = await withSystemContext("security:access-review:user-lookup", async () => {
+      return prisma.user.findFirst({
+        where: { organizationId: args.orgId, email: args.asUserEmail },
+        select: { id: true, organizationId: true, status: true },
+      });
+    });
+    if (operator === null) {
+      process.stderr.write(
+        `No user with email "${args.asUserEmail}" found in organization ${args.orgId}. ` +
+          `The operator must exist in the target org to record an access-review snapshot.\n`
+      );
+      await prisma.$disconnect();
+      process.exit(1);
+    }
+    if (operator.status !== "ACTIVE") {
+      process.stderr.write(
+        `User "${args.asUserEmail}" is not ACTIVE (status=${operator.status}). Aborting.\n`
+      );
+      await prisma.$disconnect();
+      process.exit(1);
+    }
+
+    const tenancy = buildTenancyContext({
+      organizationId: operator.organizationId,
+      actor: { userId: operator.id, correlationId: ids.generateUlid() },
+    });
+
+    // Idempotency key collapses a same-quarter re-run of the same
+    // org under the same operator into a no-op replay (returns the
+    // cached snapshot id rather than producing a new row). Operators
+    // who genuinely want a fresh row can use --dry-run + a manual
+    // dispatch with a new key, or wait for the next quarter.
+    const idempotencyKey = `cli:access-review:${currentQuarterLabel(now)}:${args.orgId}:${operator.id}`;
+
+    try {
+      const out = await withTenancyContext(tenancy, () =>
+        executeCommand(
+          RecordAccessReviewSnapshot,
+          { organizationId: args.orgId, report },
+          { idempotencyKey }
+        )
+      );
+      snapshotId = out.snapshotId;
+      digestSha256 = out.digestSha256;
+      logger.info("access-review.recorded", {
+        snapshotId,
+        digestSha256,
+        organizationId: args.orgId,
+        totalPrincipals: out.totalPrincipals,
+        elevatedPrincipalCount: out.elevatedPrincipalCount,
+        inactivePrincipalCount: out.inactivePrincipalCount,
+        staleAssignmentCount: out.staleAssignmentCount,
+        cryptoShredCapableRoleCount: out.cryptoShredCapableRoleCount,
+      });
+    } catch (cause: unknown) {
+      if (cause instanceof errors.PharmaxError) {
+        logger.error("access-review.record_failed", {
+          code: cause.code,
+          category: cause.category,
+          message: cause.message,
+        });
+        process.stderr.write(`\n[${cause.code}] ${cause.message}\n`);
+      } else {
+        logger.error("access-review.record_failed.unknown", {
+          errorName: cause instanceof Error ? cause.name : "Unknown",
+          errorMessage: cause instanceof Error ? cause.message : String(cause),
+        });
+        process.stderr.write(`\nUnexpected error while recording the snapshot.\n`);
+      }
+      await prisma.$disconnect().catch(() => undefined);
+      process.exit(1);
+    }
+  }
+
+  // -----------------------------------------------------------
+  // 2. JSON evidence pack (dual-write).
+  // -----------------------------------------------------------
   const outDir =
     args.outDir ?? resolve(process.cwd(), "evidence", "access-reviews", currentQuarterLabel(now));
   const outPath = resolve(outDir, `${report.organizationSlug}.json`);
@@ -220,15 +352,23 @@ async function main(): Promise<void> {
       elevated: report.summary.principalsWithElevatedRoles.length,
       stale: report.summary.staleAssignments.length,
     });
-  } else {
+  } else if (!args.skipFile) {
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
     process.stdout.write(`${outPath}\n`);
     logger.info("access-review.written", {
       outPath,
       organizationId: args.orgId,
+      snapshotId,
+      digestSha256,
       totalPrincipals: report.summary.totalPrincipals,
     });
+  } else {
+    // skip-file: emit the snapshot id + digest on stdout so CI can
+    // pipe it into the next step (e.g. evidence-pack uploader).
+    if (snapshotId !== null && digestSha256 !== null) {
+      process.stdout.write(`${snapshotId}\t${digestSha256}\n`);
+    }
   }
 
   await prisma.$disconnect();

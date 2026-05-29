@@ -156,44 +156,77 @@ auto-spans and standard semantic-convention HTTP server metrics
 (`http_server_request_duration_seconds`, etc.). The dashboards include panels
 that work today against those signals.
 
-### Planned custom metrics (referenced by dashboards/alerts)
+### Wired custom metrics
 
-These are intentionally named ahead of the code change that adds them — adding
-the meters is a small follow-up PR in each package. Until then, the dashboards
-gracefully render empty panels (Grafana does not error on missing series) and
-the alerts evaluate to `0` and never fire. The list:
+The `pharmax_*` series referenced by every dashboard and alert in this directory
+emit from the locations below. **Status legend:** ✅ live, 📋 named but not yet
+wired (alert evaluates to `0`).
 
-| Metric                                                             | Where it will be emitted                                                               |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| `pharmax_command_dispatched_total{command_name, outcome}`          | `packages/command-bus/src/execute-command.ts` (success / fail / replay / sod_rejected) |
-| `pharmax_command_duration_seconds{command_name, outcome}`          | same                                                                                   |
-| `pharmax_command_idempotency_dedup_total{command_name}`            | same                                                                                   |
-| `pharmax_command_optimistic_concurrency_retry_total{command_name}` | same                                                                                   |
-| `pharmax_command_sod_rejection_total{command_name}`                | `packages/command-bus/src/separation-of-duties.ts`                                     |
-| `pharmax_audit_log_rows_total{organization_id}`                    | `packages/audit/src/chain/writer.ts`                                                   |
-| `pharmax_audit_verifier_failures_total{organization_id}`           | `packages/audit/src/chain/verifier.ts` + nightly digest                                |
-| `pharmax_audit_manifest_latest_signed_at_seconds{organization_id}` | `apps/worker/src/security/daily-merkle-root-loop.ts`                                   |
-| `pharmax_workflow_stage_duration_seconds{kind}`                    | `packages/sla/src/interval-recorder.ts` (close-side)                                   |
-| `pharmax_workflow_queue_depth{stage, organization_id}`             | scraper that periodically queries `order_stage_interval`                               |
-| `pharmax_workflow_sla_breaches_total{stage}`                       | SLA breach scanner                                                                     |
-| `pharmax_workflow_emergency_bucket_size{organization_id}`          | same                                                                                   |
-| `pharmax_shipping_tracking_poll_duration_seconds{carrier}`         | `apps/worker/src/drains/{fedex,ups}-tracking-poller.ts`                                |
-| `pharmax_shipping_tracking_poll_failures_total{carrier}`           | same                                                                                   |
-| `pharmax_shipping_tracking_events_recorded_total{carrier}`         | same                                                                                   |
-| `pharmax_shipping_escalations_created_total`                       | `apps/worker/src/drains/escalate-on-shipment-exception.ts`                             |
-| `pharmax_shipping_bucket_size{bucket="EXCEPTION"}`                 | shipping bucket scanner                                                                |
-| `pharmax_billing_invoice_lines_created_total`                      | `apps/worker/src/drains/materialize-billing-on-order-shipped.ts`                       |
-| `pharmax_billing_invoice_finalized_total`                          | invoice finalize command                                                               |
-| `pharmax_billing_stripe_push_total{outcome}`                       | `apps/worker/src/drains/push-invoice-to-stripe.ts`                                     |
-| `pharmax_billing_refunds_issued_total`                             | `apps/worker/src/drains/stripe-handlers.ts`                                            |
-| `pharmax_kms_operation_errors_total{operation}`                    | `packages/crypto/src/aws-kms-client.ts`                                                |
-| `pharmax_outbox_dispatched_total{event_type, outcome}`             | `apps/worker/src/drains/event-outbox-drainer.ts`                                       |
-| `pharmax_outbox_dead_total{event_type}`                            | same                                                                                   |
-| `pharmax_outbox_claim_lag_seconds`                                 | same — histogram                                                                       |
+| Metric                                                             | Status | Where it emits from                                                                    |
+| ------------------------------------------------------------------ | :----: | -------------------------------------------------------------------------------------- |
+| `pharmax_command_dispatched_total{command_name, outcome}`          |   ✅   | `packages/command-bus/src/execute-command.ts` (success / fail / replay / sod_rejected) |
+| `pharmax_command_duration_seconds{command_name, outcome}`          |   ✅   | same                                                                                   |
+| `pharmax_command_idempotency_dedup_total{command_name}`            |   ✅   | same                                                                                   |
+| `pharmax_command_sod_rejection_total{command_name}`                |   ✅   | same (one counter — `outcome=sod_rejected` on dispatched_total)                        |
+| `pharmax_command_optimistic_concurrency_retry_total{command_name}` |   📋   | TODO — needs a CAS retry hook in `execute-command.ts`                                  |
+| `pharmax_audit_log_rows_total{organization_id}`                    |   ✅   | `packages/audit/src/chain/writer.ts`                                                   |
+| `pharmax_audit_verifier_failures_total{organization_id}`           |   ✅   | `packages/audit/src/chain/verifier.ts` (sequence / prevHash / entryHash breaks)        |
+| `pharmax_audit_manifest_latest_signed_at_seconds{organization_id}` |   ✅   | `apps/worker/src/security/daily-merkle-root-loop.ts` (ObservableGauge)                 |
+| `pharmax_workflow_stage_duration_seconds{kind}`                    |   ✅   | `packages/sla/src/interval-recorder.ts` (close-side histogram)                         |
+| `pharmax_workflow_queue_depth{stage, organization_id}`             |   ✅   | `apps/worker/src/metrics/workflow-bucket-scraper.ts` (ObservableGauge, scraped)        |
+| `pharmax_workflow_emergency_bucket_size{organization_id}`          |   ✅   | same                                                                                   |
+| `pharmax_shipping_bucket_size{bucket}`                             |   ✅   | same (`bucket="EXCEPTION"`)                                                            |
+| `pharmax_workflow_sla_breaches_total{stage}`                       |   📋   | TODO — needs a periodic breach scanner against policy SLAs                             |
+| `pharmax_shipping_tracking_poll_duration_seconds{carrier}`         |   ✅   | `apps/worker/src/drains/{fedex,ups}-tracking-poller.ts`                                |
+| `pharmax_shipping_tracking_poll_failures_total{carrier}`           |   ✅   | same                                                                                   |
+| `pharmax_shipping_tracking_events_recorded_total{carrier}`         |   ✅   | same                                                                                   |
+| `pharmax_shipping_escalations_created_total`                       |   ✅   | `apps/worker/src/drains/escalate-on-shipment-exception.ts`                             |
+| `pharmax_billing_invoice_lines_created_total`                      |   ✅   | `apps/worker/src/drains/materialize-billing-on-order-shipped.ts`                       |
+| `pharmax_billing_invoice_finalized_total`                          |   ✅   | `packages/billing/src/commands/finalize-invoice.ts`                                    |
+| `pharmax_billing_stripe_push_total{outcome}`                       |   ✅   | `apps/worker/src/drains/push-invoice-to-stripe.ts` (success / fail / skipped)          |
+| `pharmax_billing_refunds_issued_total`                             |   ✅   | `apps/worker/src/drains/stripe-handlers.ts`                                            |
+| `pharmax_kms_operation_errors_total{operation}`                    |   ✅   | `packages/crypto/src/aws-kms-client.ts`                                                |
+| `pharmax_outbox_dispatched_total{event_type, outcome}`             |   ✅   | `apps/worker/src/drains/event-outbox-drainer.ts`                                       |
+| `pharmax_outbox_dead_total{event_type}`                            |   ✅   | same                                                                                   |
+| `pharmax_outbox_claim_lag_seconds`                                 |   ✅   | same — histogram                                                                       |
 
-A follow-up RFC will land the meter wiring across these surfaces. Until then,
-the alerts in [`prometheus/rules/alert-rules.yaml`](./prometheus/rules/alert-rules.yaml)
-are inert (good — they fail closed, not open).
+**On the two 📋 entries.** Both are intentional follow-ups:
+
+- `pharmax_command_optimistic_concurrency_retry_total` — Pharmax does not run a
+  generic CAS retry loop inside `execute-command.ts` today; commands that need
+  optimistic concurrency surface `STALE_ORDER` directly so the caller can decide
+  whether to retry. If/when we add a transparent retry inside the bus, this is
+  the metric to wire.
+- `pharmax_workflow_sla_breaches_total` — SLA breach detection currently happens
+  in the UI by reading per-row `dueAt` vs `now()`. A periodic scanner that
+  tallies the breach count by stage and emits this counter is the right home;
+  it does not exist yet.
+
+Both alerts referencing these series in
+[`prometheus/rules/alert-rules.yaml`](./prometheus/rules/alert-rules.yaml) fail
+closed (evaluate to `0`) until the meters land.
+
+### Smoke-testing the wired metrics locally
+
+```bash
+# 1. Start the local observability stack
+docker compose -f observability/docker-compose.yml up -d
+
+# 2. Boot the worker pointed at it
+OTEL_ENABLED=true \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+OTEL_SERVICE_NAME=pharmax-worker \
+pnpm --filter @pharmax/worker start
+
+# 3. Query Prometheus
+curl -s 'http://localhost:9090/api/v1/label/__name__/values' \
+  | jq '.data[] | select(startswith("pharmax_"))'
+```
+
+You should see the `pharmax_outbox_*`, `pharmax_workflow_queue_depth`,
+`pharmax_workflow_emergency_bucket_size`, and `pharmax_audit_manifest_latest_signed_at_seconds`
+series appear within ~30s of boot (the worker's scraper interval). Other metrics
+populate once their respective commands / drainers run.
 
 ---
 

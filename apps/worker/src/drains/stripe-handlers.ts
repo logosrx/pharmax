@@ -50,8 +50,16 @@ import {
 import type { PrismaClient } from "@pharmax/database";
 import type { billing, logger as loggerContract } from "@pharmax/platform-core";
 import { errors } from "@pharmax/platform-core";
+import { getMeter } from "@pharmax/telemetry";
 import { withSystemContext } from "@pharmax/tenancy";
 import type Stripe from "stripe";
+
+const meter = getMeter("@pharmax/worker.billing");
+
+const billingRefundsIssuedCounter = meter.createCounter("pharmax_billing_refunds_issued_total", {
+  description:
+    "Refunds recognized via the `charge.refunded` Stripe webhook. Idempotent re-records (alreadyRecorded=true) are NOT counted.",
+});
 
 type Logger = loggerContract.Logger;
 type HandlerMap = billing.CreateDispatcherInput["handlers"];
@@ -368,6 +376,10 @@ export function createStripeEventHandlers(options: CreateStripeEventHandlersOpti
         { idempotencyKey: `stripe-event:${event.id}` }
       )
     );
+
+    if (result.recognized && !result.alreadyRecorded) {
+      billingRefundsIssuedCounter.add(1);
+    }
 
     ctx.logger.info("stripe.charge.refunded.applied", {
       stripeEventId: event.id,

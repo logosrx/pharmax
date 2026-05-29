@@ -23,4 +23,6 @@ export { OrderShipmentEscalationReaffirmedV1 } from "./shipment-escalation-reaff
 export { OrderShipmentLabelPurchasedV1 } from "./shipment-label-purchased-v1.js";
 export { OrderShippedV1 } from "./shipped-v1.js";
 export { OrderTypingCompletedV1 } from "./typing-completed-v1.js";
+export { OrderTypingMissingInfoV1 } from "./typing-missing-info-v1.js";
+export { OrderTypingResumedV1 } from "./typing-resumed-v1.js";
 export { OrderTypingStartedV1 } from "./typing-started-v1.js";

@@ -28,6 +28,7 @@
 import { OrderStageIntervalKind } from "@pharmax/database";
 import { z } from "zod";
 
+import { dateRangeFields } from "../parameter-fields.js";
 import type { DateRangeParams, ReportDefinition, ReportResult } from "../types.js";
 
 /**
@@ -123,6 +124,28 @@ export const slaBreachReport: ReportDefinition<typeof paramsSchema, SlaBreachRow
   description:
     "Order stage intervals that exceeded per-stage SLA thresholds within a date range. Includes ACTIVE breaches (open intervals evaluated against the report's asOf timestamp).",
   parametersSchema: paramsSchema,
+  parameterFields: [
+    ...dateRangeFields(),
+    {
+      kind: "multi-enum",
+      key: "kinds",
+      label: "Stage kinds",
+      required: false,
+      help: "Restrict to these stage intervals; leave empty for all stages.",
+      options: [
+        OrderStageIntervalKind.WAIT_BEFORE_TYPING,
+        OrderStageIntervalKind.TYPING_ACTIVE,
+        OrderStageIntervalKind.WAIT_BEFORE_PV1,
+        OrderStageIntervalKind.PV1_ACTIVE,
+        OrderStageIntervalKind.WAIT_BEFORE_FILL,
+        OrderStageIntervalKind.FILL_ACTIVE,
+        OrderStageIntervalKind.WAIT_BEFORE_FINAL_VERIFICATION,
+        OrderStageIntervalKind.FINAL_VERIFICATION_ACTIVE,
+        OrderStageIntervalKind.WAIT_BEFORE_SHIPPING,
+        OrderStageIntervalKind.SHIPPING_ACTIVE,
+      ].map((k) => ({ value: k, label: k })),
+    },
+  ],
 
   async run(ctx, params): Promise<ReportResult<SlaBreachRow>> {
     const window: DateRangeParams = { from: params.from, to: params.to };

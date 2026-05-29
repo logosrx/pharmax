@@ -105,6 +105,44 @@ export const NOTIFICATION_TEMPLATES = {
     description: "Fill team notification when a pharmacist rejects a final verification.",
   },
 
+  // ---- Reporting -------------------------------------------------------
+  /** A scheduled report finished executing. Triggers from
+   *  `reporting.run.completed.v1` IF the run came from a
+   *  schedule (i.e. payload's `runViaScheduleId` is non-null).
+   *  Operator-initiated runs already stream CSV to the browser
+   *  and are NOT mailed.
+   *
+   *  Required context covers everything an operator needs to
+   *  decide whether to investigate without round-tripping to the
+   *  UI: the schedule name + display title, the run outcome
+   *  (SUCCEEDED / FAILED / SKIPPED), the window the report
+   *  covered, the row count, and a deep-link back to a re-run
+   *  page with the same parameters.
+   *
+   *  PHI-free by construction: today's reports surface scalar
+   *  aggregates (status counts, SLA breach counts). When a
+   *  future report adds a PHI-bearing aggregate the report's
+   *  notification path MUST switch to a PHI-allowed template +
+   *  PHI-capable channel — see header note on
+   *  `assertNoPhiInContext`. */
+  REPORT_RUN_COMPLETED_V1: {
+    id: "REPORT_RUN_COMPLETED_V1",
+    channelKinds: ["email"] as const,
+    phiAllowed: false,
+    requiredContextKeys: [
+      "scheduleName",
+      "reportTitle",
+      "runStatus",
+      "windowFromIso",
+      "windowToIso",
+      "rowCount",
+      "generatedAtIso",
+      "dashboardLink",
+    ] as const,
+    description:
+      "Notification fired when a scheduled report finishes executing. Carries schedule + report metadata, the run outcome, window covered, row count, a re-run dashboard link, and an OPTIONAL `downloadLink` (when the run persisted its CSV to the archive — present for SUCCEEDED scheduled runs).",
+  },
+
   // ---- Shipping --------------------------------------------------------
   /** Order moved into the emergency bucket. Triggers from
    *  `order.escalated_to_emergency.v1`. */

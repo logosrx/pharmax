@@ -28,9 +28,20 @@
 import { executeSystemCommand } from "@pharmax/command-bus";
 import { MaterializeShippedOrderBilling } from "@pharmax/billing";
 import { errors } from "@pharmax/platform-core";
+import { getMeter } from "@pharmax/telemetry";
 import { withSystemContext } from "@pharmax/tenancy";
 
 import type { OutboxEventHandler } from "./outbox-handlers.js";
+
+const meter = getMeter("@pharmax/worker.billing");
+
+const billingInvoiceLinesCreatedCounter = meter.createCounter(
+  "pharmax_billing_invoice_lines_created_total",
+  {
+    description:
+      "Invoice lines materialized from shipped orders. Idempotent re-materializations (alreadyMaterialized=true) are NOT counted.",
+  }
+);
 
 function readString(payload: Record<string, unknown>, key: string): string | null {
   const v = payload[key];
@@ -109,6 +120,10 @@ export function createMaterializeBillingOnOrderShippedHandler(): OutboxEventHand
         occurredAt,
       })
     );
+
+    if (!result.alreadyMaterialized) {
+      billingInvoiceLinesCreatedCounter.add(1);
+    }
 
     ctx.logger.info("outbox.order.shipped.v1 billing materialized", {
       outboxId: row.id,

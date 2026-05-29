@@ -83,6 +83,15 @@ describe("hasRlsCoverage — literal ENABLE + CREATE POLICY", () => {
     `;
     expect(hasRlsCoverage(sql, "patient")).toBe(false);
   });
+
+  it("accepts a double-quoted policy name (valid SQL identifier form)", () => {
+    const sql = `
+      ALTER TABLE "patient" ENABLE ROW LEVEL SECURITY;
+      CREATE POLICY "tenant_isolation" ON "patient"
+        USING ("organizationId" = current_setting('pharmax.organization_id')::uuid);
+    `;
+    expect(hasRlsCoverage(sql, "patient")).toBe(true);
+  });
 });
 
 describe("hasRlsCoverage — DO block templated form", () => {

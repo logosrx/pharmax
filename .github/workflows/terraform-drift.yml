@@ -1,0 +1,341 @@
+# Pharmax Terraform Drift Detection — daily scheduled check against
+# production. Operating evidence for SOC 2 CC7.2 / CC8.1.
+#
+# Why this exists:
+#
+#   A SOC 2 finding is "an AWS resource changed without an
+#   approved Terraform change." The console is a common offender:
+#   somebody adjusts an alarm threshold, edits a security group
+#   inbound rule, swaps an instance type "just for an hour." If we
+#   never `plan` against the real account, drift accumulates
+#   silently until the next operator runs `apply` and discovers
+#   the plan wants to revert real-world changes.
+#
+#   This workflow runs `terraform plan -detailed-exitcode -lock=false`
+#   daily against every production env-region. Exit code 0 = no
+#   drift; exit code 2 = drift; exit code 1 = workflow error.
+#   On drift, the job opens (or comments on) a GitHub issue tagged
+#   `infra/drift` so the on-call engineer sees it next morning.
+#
+# Why scheduled (not on-push):
+#
+#   The CI workflow `terraform-ci.yml` covers the "did this PR
+#   break the HCL" question. Drift is orthogonal — it asks "has
+#   the live world deviated from what HCL says it should be?"
+#   That's a daily concern, not a per-PR one.
+#
+# AWS access:
+#
+#   This workflow assumes an IAM role via GitHub Actions OIDC. The
+#   role MUST be provisioned out-of-band (one-time) per
+#   `docs/operations/production-deployment.md` § "GitHub Actions
+#   OIDC role". The role's policy needs:
+#     - `iam:Get*`, `iam:List*` (plan reads IAM)
+#     - `kms:DescribeKey`, `kms:ListAliases`, `kms:GetKey*`
+#     - `ec2:Describe*`, `rds:Describe*`, `s3:GetBucket*`,
+#       `s3:ListBucket`, `logs:Describe*`, `ecs:Describe*`,
+#       `ecr:Describe*`, `secretsmanager:Describe*`,
+#       `elasticloadbalancing:Describe*`, `wafv2:Get*`,
+#       `cloudwatch:Describe*` (all the *Read* / *Describe*
+#       actions for resources the stack provisions)
+#     - NO `Create*` / `Update*` / `Delete*` actions. This role
+#       is read-only. Apply is operator-driven through a separate
+#       role.
+#
+#   The role ARN is exposed via the repository variable
+#   `AWS_DRIFT_ROLE_ARN`. If the variable is unset (e.g. on a
+#   fork) the workflow gracefully no-ops — no false-failure noise.
+#
+#   See `docs/security/secrets-management.md` § 8 for the project's
+#   OIDC pattern, and `docs/operations/production-deployment.md`
+#   for the bootstrap procedure.
+#
+# Result handling:
+#
+#   - Exit 0 (no drift): green check, no issue.
+#   - Exit 2 (drift): job marked failed, AND a GitHub issue is
+#     opened (or appended to if one is already open) so the
+#     finding survives the workflow run.
+#   - Exit 1 (workflow error): job marked failed; no issue;
+#     typically a transient AWS API error and the next run fixes
+#     itself.
+
+name: terraform-drift
+
+on:
+  schedule:
+    # 08:00 UTC every day (~03:00 ET / 00:00 PT). Late enough that
+    # the on-call sees it during business hours, early enough that
+    # action can happen before the next deploy window.
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # OIDC token issuance for assume-role.
+  id-token: write
+  # Issue creation on drift.
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: "1.9.8"
+  AWS_REGION: us-east-1
+
+jobs:
+  # Gate every cloud-touching job on the OIDC role variable being
+  # set. On a fork PR or in an unconfigured account, this returns
+  # `false` and the dependent jobs are skipped — no false alarms.
+  preflight:
+    name: Preflight — is OIDC role configured?
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ vars.AWS_DRIFT_ROLE_ARN }}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "AWS_DRIFT_ROLE_ARN is set; drift jobs will run."
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AWS_DRIFT_ROLE_ARN repository variable is not set."
+            echo "::notice::Skipping drift detection. See docs/operations/production-deployment.md for the one-time OIDC role setup."
+          fi
+
+  drift-prod-use1:
+    name: drift — prod / us-east-1
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DRIFT_ROLE_ARN }}
+          aws-region: us-east-1
+          # Distinct session name so CloudTrail entries are clearly
+          # attributable to drift detection vs. an operator apply.
+          role-session-name: gh-actions-drift-prod-use1
+
+      - name: terraform init (prod / us-east-1)
+        working-directory: infra/terraform/environments/prod/us-east-1
+        run: terraform init -input=false
+
+      - name: terraform plan -detailed-exitcode (prod / us-east-1)
+        id: plan
+        working-directory: infra/terraform/environments/prod/us-east-1
+        # `set +e` so we can capture the exit code; -detailed-exitcode
+        # returns 0 (no diff), 1 (error), or 2 (diff present).
+        run: |
+          set +e
+          terraform plan -input=false -lock=false -detailed-exitcode -no-color \
+            -var-file=terraform.tfvars \
+            -out=tfplan 2>&1 | tee plan-output.txt
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          # Truncate huge plans to the last 200 lines for the issue
+          # body so we don't blow past the 65k char issue-body limit.
+          tail -n 200 plan-output.txt > plan-tail.txt
+          exit 0
+
+      - name: Upload full plan output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-plan-prod-use1-${{ github.run_id }}
+          path: infra/terraform/environments/prod/us-east-1/plan-output.txt
+          retention-days: 30
+
+      - name: Open / update drift issue (on exit 2)
+        if: steps.plan.outputs.exit_code == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const planTail = fs.readFileSync(
+              'infra/terraform/environments/prod/us-east-1/plan-tail.txt',
+              'utf8'
+            );
+            const title = 'Terraform drift detected — prod / us-east-1';
+            const body = [
+              '**Drift detected by the daily `terraform-drift` workflow.**',
+              '',
+              `- Workflow run: <${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}>`,
+              `- Env-region: \`environments/prod/us-east-1\``,
+              `- Run timestamp (UTC): ${new Date().toISOString()}`,
+              '',
+              '## What to do',
+              '',
+              '1. Read the full plan artifact attached to the run',
+              '   (`drift-plan-prod-use1-' + context.runId + '`).',
+              '2. For each drifted resource, decide:',
+              '   - **Console change should be reverted** → open a PR that',
+              '     restores the world to match HCL (no .tf change).',
+              '   - **Console change should be ratified** → open a PR',
+              '     updating HCL to match the world. This is the',
+              '     CC8.1-compliant path.',
+              '3. Close this issue once `make plan-prod-use1` is green.',
+              '',
+              '## Plan tail (last 200 lines)',
+              '',
+              '```hcl',
+              planTail,
+              '```',
+              '',
+              'See `docs/operations/production-deployment.md` § "Handling',
+              'drift" for the full procedure.',
+            ].join('\n');
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'infra/drift,prod-use1',
+            });
+            if (existing.data.length > 0) {
+              const issue = existing.data[0];
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: body,
+              });
+              core.info(`Appended drift report to existing issue #${issue.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['infra/drift', 'prod-use1'],
+              });
+              core.info(`Opened drift issue #${created.data.number}`);
+            }
+
+      - name: Fail the job on drift or error
+        if: steps.plan.outputs.exit_code != '0'
+        run: |
+          echo "::error::terraform plan exited with ${{ steps.plan.outputs.exit_code }} (0=clean, 2=drift, 1=error). See uploaded plan artifact."
+          exit 1
+
+  drift-prod-usw2:
+    name: drift — prod / us-west-2
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DRIFT_ROLE_ARN }}
+          aws-region: us-west-2
+          role-session-name: gh-actions-drift-prod-usw2
+
+      - name: terraform init (prod / us-west-2)
+        working-directory: infra/terraform/environments/prod/us-west-2
+        run: terraform init -input=false
+
+      - name: terraform plan -detailed-exitcode (prod / us-west-2)
+        id: plan
+        working-directory: infra/terraform/environments/prod/us-west-2
+        run: |
+          set +e
+          terraform plan -input=false -lock=false -detailed-exitcode -no-color \
+            -var-file=terraform.tfvars \
+            -out=tfplan 2>&1 | tee plan-output.txt
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          tail -n 200 plan-output.txt > plan-tail.txt
+          exit 0
+
+      - name: Upload full plan output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-plan-prod-usw2-${{ github.run_id }}
+          path: infra/terraform/environments/prod/us-west-2/plan-output.txt
+          retention-days: 30
+
+      - name: Open / update drift issue (on exit 2)
+        if: steps.plan.outputs.exit_code == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const planTail = fs.readFileSync(
+              'infra/terraform/environments/prod/us-west-2/plan-tail.txt',
+              'utf8'
+            );
+            const title = 'Terraform drift detected — prod / us-west-2';
+            const body = [
+              '**Drift detected by the daily `terraform-drift` workflow.**',
+              '',
+              `- Workflow run: <${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}>`,
+              `- Env-region: \`environments/prod/us-west-2\` (DR region)`,
+              `- Run timestamp (UTC): ${new Date().toISOString()}`,
+              '',
+              '## What to do',
+              '',
+              'Same procedure as the primary; see `docs/operations/production-deployment.md`',
+              '§ "Handling drift". The DR region drift is typically lower-stakes',
+              'than primary, but ratify-or-revert still applies.',
+              '',
+              '## Plan tail (last 200 lines)',
+              '',
+              '```hcl',
+              planTail,
+              '```',
+            ].join('\n');
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'infra/drift,prod-usw2',
+            });
+            if (existing.data.length > 0) {
+              const issue = existing.data[0];
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: body,
+              });
+              core.info(`Appended drift report to existing issue #${issue.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['infra/drift', 'prod-usw2'],
+              });
+              core.info(`Opened drift issue #${created.data.number}`);
+            }
+
+      - name: Fail the job on drift or error
+        if: steps.plan.outputs.exit_code != '0'
+        run: |
+          echo "::error::terraform plan exited with ${{ steps.plan.outputs.exit_code }} (0=clean, 2=drift, 1=error). See uploaded plan artifact."
+          exit 1

@@ -64,6 +64,15 @@ export interface NotificationSendInput {
   readonly idempotencyKey: string;
   /** Optional trace identifier propagated into logs / dashboards. */
   readonly correlationId?: string;
+  /**
+   * Optional owning organization. Pure transport channels ignore
+   * this; the `PersistentNotificationChannel` decorator uses it to
+   * write the tenant-scoped `notification_delivery` ledger row.
+   * When absent, the decorator skips persistence (degrades to a
+   * plain transport send) — so a caller that hasn't wired org
+   * context still delivers, it just isn't tracked.
+   */
+  readonly organizationId?: string;
 }
 
 /** Outcome of a send attempt. */

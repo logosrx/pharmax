@@ -158,6 +158,48 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
     permissions: [PERMISSIONS.SHIP_RECORD_TRACKING_EVENT, PERMISSIONS.SHIP_ESCALATE_TO_EMERGENCY],
   },
   {
+    code: "ReportsScheduler",
+    name: "Reports Scheduler (machine)",
+    scope: RoleScope.ORGANIZATION,
+    description:
+      "Per-org service identity for the worker's scheduled-report dispatcher. Machine-only; not assignable to human users. Grants ONLY `reports.run` — the scheduler can dispatch existing reports but cannot create / edit / disable schedules (that's `reports.manage_schedule`, OrgAdmin-only).",
+    permissions: [PERMISSIONS.REPORTS_RUN],
+  },
+  {
+    // ---------------------------------------------------------------
+    // NpiSyncWorker — machine-only role for the worker's NPI sync
+    // dispatcher (per-org `npi-sync@<org-slug>.test` service user).
+    //
+    // Why ORGANIZATION scope: the diff engine produces changes for
+    // ANY provider in the org (no site/clinic filtering at the CMS
+    // layer), so the dispatcher needs org-wide reach.
+    //
+    // Permission set is intentionally minimal — just the two
+    // commands the worker actually dispatches: UpdateProvider (when
+    // CMS shows a non-functional drift like a credential change) and
+    // DeactivateProvider (when CMS marks the prescriber INACTIVE).
+    // Review-item creation (REACTIVATION_CANDIDATE,
+    // NOT_FOUND_AT_CMS, ENUMERATION_TYPE_MISMATCH) is a direct
+    // tenant-scoped insert by the worker and intentionally does NOT
+    // go through the bus — those rows are operator notifications,
+    // not workflow transitions.
+    //
+    // SOC 2 / HIPAA: a compromised npi-sync service user can update
+    // provider demographics + deactivate prescribers. Neither path
+    // discloses PHI; the worst case is "operator notices wrong
+    // credential field" or "operator sees a fresh INACTIVE provider
+    // they need to reactivate." Recovery is purely operational
+    // (review the audit trail, run UpdateProvider/ReactivateProvider
+    // manually).
+    // ---------------------------------------------------------------
+    code: "NpiSyncWorker",
+    name: "NPI Sync Worker (machine)",
+    scope: RoleScope.ORGANIZATION,
+    description:
+      "Per-org service identity for the worker's NPI registry sync dispatcher. Machine-only; not assignable to human users. Grants ONLY `providers.update` + `providers.deactivate` — the two commands the diff engine produces for non-review-item actions.",
+    permissions: [PERMISSIONS.PROVIDERS_UPDATE, PERMISSIONS.PROVIDERS_DEACTIVATE],
+  },
+  {
     code: "ClinicViewer",
     name: "Clinic Viewer",
     scope: RoleScope.CLINIC,

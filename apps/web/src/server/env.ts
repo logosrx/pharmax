@@ -24,6 +24,12 @@ const schema = z.object({
   STRIPE_SECRET_KEY: z.string().min(1).optional(),
   STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
   EASYPOST_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // Resend delivery webhook signing secret (Svix-signed, `whsec_`
+  // prefix). When unset the `/api/webhooks/resend` route returns
+  // 503 (dev clones without Resend). Production MUST set it so
+  // delivered/bounced/complained events advance the
+  // notification_delivery projection.
+  RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
 
   // Clerk authentication (identity layer). OPTIONAL at the schema
   // level so dev clones boot without a Clerk account (the operator
@@ -111,6 +117,14 @@ const schema = z.object({
   AWS_KMS_DATA_KEY_ID: z.string().min(1).optional(),
   AWS_KMS_SEARCH_KEY_ID: z.string().min(1).optional(),
   AWS_KMS_KEY_LABEL: z.string().min(1).optional(),
+
+  // Report CSV archive — the web tier READS from the same bucket
+  // the worker writes to (download route streams CSVs back to the
+  // operator). Optional in dev (in-memory fallback); MUST match
+  // the worker's bucket + KMS key in production. See
+  // apps/worker/src/env.ts for the producer-side notes.
+  REPORT_ARCHIVE_S3_BUCKET: z.string().min(1).optional(),
+  REPORT_ARCHIVE_S3_KMS_KEY_ID: z.string().min(1).optional(),
 
   // Error tracking (Sentry). Optional — when unset, Sentry is fully
   // disabled and `Logger.error` calls only hit stdout. In production

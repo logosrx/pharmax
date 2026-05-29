@@ -35,8 +35,17 @@
 //     re-encodes scope/metadata blobs through the canonical encoder
 //     without inspecting them.
 
+import { getMeter } from "@pharmax/telemetry";
+
 import { auditChainBrokenError } from "../errors.js";
 import { computeAuditEntryHash } from "./encoder.js";
+
+const meter = getMeter("@pharmax/audit");
+
+const auditVerifierFailuresCounter = meter.createCounter("pharmax_audit_verifier_failures_total", {
+  description:
+    "Chain-verifier failures detected per tenant. Non-zero rate is a SEV1 — paired with the alert at observability/prometheus/rules/alert-rules.yaml AuditChainVerifierFailing.",
+});
 
 /**
  * One row's worth of data, as read back from `audit_log`.
@@ -126,6 +135,7 @@ export async function verifyChain(
     if (firstSeq === null) firstSeq = row.seq;
 
     if (row.seq !== expectedSeq) {
+      auditVerifierFailuresCounter.add(1, { organization_id: args.organizationId });
       throw auditChainBrokenError({
         organizationId: args.organizationId,
         seq: row.seq,
@@ -134,6 +144,7 @@ export async function verifyChain(
     }
 
     if (!buffersEqualOrBothNull(row.prevHash, expectedPrev)) {
+      auditVerifierFailuresCounter.add(1, { organization_id: args.organizationId });
       throw auditChainBrokenError({
         organizationId: args.organizationId,
         seq: row.seq,
@@ -159,6 +170,7 @@ export async function verifyChain(
     );
 
     if (!recomputed.equals(row.entryHash)) {
+      auditVerifierFailuresCounter.add(1, { organization_id: args.organizationId });
       throw auditChainBrokenError({
         organizationId: args.organizationId,
         seq: row.seq,

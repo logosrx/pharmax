@@ -37,6 +37,9 @@ import { BillingInvoiceUncollectibleV1 } from "./events/billing/invoice-uncollec
 import { BillingInvoiceVoidedV1 } from "./events/billing/invoice-voided-v1.js";
 import { BillingPricingRuleUpsertedV1 } from "./events/billing/pricing-rule-upserted-v1.js";
 
+// ---- compliance (SOC 2 / HIPAA evidence) --------------------------------
+import { ComplianceAccessReviewSnapshotRecordedV1 } from "./events/compliance/access-review-snapshot-recorded-v1.js";
+
 // ---- fill ----------------------------------------------------------------
 import { FillLotAssignedV1 } from "./events/fill/lot-assigned-v1.js";
 
@@ -70,6 +73,8 @@ import { OrderShipmentEscalationReaffirmedV1 } from "./events/order/shipment-esc
 import { OrderShipmentLabelPurchasedV1 } from "./events/order/shipment-label-purchased-v1.js";
 import { OrderShippedV1 } from "./events/order/shipped-v1.js";
 import { OrderTypingCompletedV1 } from "./events/order/typing-completed-v1.js";
+import { OrderTypingMissingInfoV1 } from "./events/order/typing-missing-info-v1.js";
+import { OrderTypingResumedV1 } from "./events/order/typing-resumed-v1.js";
 import { OrderTypingStartedV1 } from "./events/order/typing-started-v1.js";
 
 // ---- org (tenant administration) ----------------------------------------
@@ -93,6 +98,12 @@ import { ProviderDeactivatedV1 } from "./events/provider/deactivated-v1.js";
 import { ProviderReactivatedV1 } from "./events/provider/reactivated-v1.js";
 import { ProviderRegisteredV1 } from "./events/provider/registered-v1.js";
 import { ProviderUpdatedV1 } from "./events/provider/updated-v1.js";
+
+// ---- reporting (on-demand + scheduled report runs) ----------------------
+import { ReportingRunCompletedV1 } from "./events/reporting/run-completed-v1.js";
+import { ReportScheduleCreatedV1 } from "./events/reporting/schedule-created-v1.js";
+import { ReportScheduleDisabledV1 } from "./events/reporting/schedule-disabled-v1.js";
+import { ReportScheduleUpdatedV1 } from "./events/reporting/schedule-updated-v1.js";
 
 // ---- shipment (carrier-side tracking) -----------------------------------
 import { ShipmentTrackingRecordedV1 } from "./events/shipment/tracking-recorded-v1.js";
@@ -122,6 +133,8 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   BillingInvoiceUncollectibleV1,
   BillingInvoiceVoidedV1,
   BillingPricingRuleUpsertedV1,
+  // compliance
+  ComplianceAccessReviewSnapshotRecordedV1,
   // fill
   FillLotAssignedV1,
   // labels
@@ -153,6 +166,8 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   OrderShipmentLabelPurchasedV1,
   OrderShippedV1,
   OrderTypingCompletedV1,
+  OrderTypingMissingInfoV1,
+  OrderTypingResumedV1,
   OrderTypingStartedV1,
   // org / organization
   OrgBucketsProvisionedV1,
@@ -171,6 +186,11 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   ProviderReactivatedV1,
   ProviderRegisteredV1,
   ProviderUpdatedV1,
+  // reporting
+  ReportingRunCompletedV1,
+  ReportScheduleCreatedV1,
+  ReportScheduleDisabledV1,
+  ReportScheduleUpdatedV1,
   // shipment
   ShipmentTrackingRecordedV1,
   // shipping

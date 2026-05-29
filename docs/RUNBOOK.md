@@ -12,18 +12,19 @@ Operational procedures for common incidents and routine maintenance. Each sectio
 4. [Rotating the KMS search-key (HMAC) key](#rotating-the-kms-search-key-hmac-key)
 5. [KMS boot validation failures](#kms-boot-validation-failures)
 6. [Verifying KMS in production](#verifying-kms-in-production)
-7. [Rotating a carrier credential](#rotating-a-carrier-credential)
-8. [Replaying a failed Stripe webhook](#replaying-a-failed-stripe-webhook)
-9. [Resending a failed print job](#resending-a-failed-print-job)
-10. [Audit chain integrity check](#audit-chain-integrity-check)
-11. [Outbox drain stuck or backed up](#outbox-drain-stuck-or-backed-up)
-12. [SLA breach storm — emergency bucket walkthrough](#sla-breach-storm--emergency-bucket-walkthrough)
-13. [Migrations: rules of the road](#migrations-rules-of-the-road)
-14. [Re-running a missed Merkle manifest](#re-running-a-missed-merkle-manifest)
-15. [Verifying a Merkle manifest from S3](#verifying-a-merkle-manifest-from-s3)
-16. [Verifying every chain + manifest in a run](#verifying-every-chain--manifest-in-a-run)
-17. [Rotating the Merkle signing key](#rotating-the-merkle-signing-key)
-18. [Object Lock retention extension](#object-lock-retention-extension)
+7. [Quarterly KMS rotation drill](#quarterly-kms-rotation-drill)
+8. [Rotating a carrier credential](#rotating-a-carrier-credential)
+9. [Replaying a failed Stripe webhook](#replaying-a-failed-stripe-webhook)
+10. [Resending a failed print job](#resending-a-failed-print-job)
+11. [Audit chain integrity check](#audit-chain-integrity-check)
+12. [Outbox drain stuck or backed up](#outbox-drain-stuck-or-backed-up)
+13. [SLA breach storm — emergency bucket walkthrough](#sla-breach-storm--emergency-bucket-walkthrough)
+14. [Migrations: rules of the road](#migrations-rules-of-the-road)
+15. [Re-running a missed Merkle manifest](#re-running-a-missed-merkle-manifest)
+16. [Verifying a Merkle manifest from S3](#verifying-a-merkle-manifest-from-s3)
+17. [Verifying every chain + manifest in a run](#verifying-every-chain--manifest-in-a-run)
+18. [Rotating the Merkle signing key](#rotating-the-merkle-signing-key)
+19. [Object Lock retention extension](#object-lock-retention-extension)
 
 ---
 
@@ -992,6 +993,166 @@ the operator id).
 that also has access to the prod database. The script never
 touches the DB, but combining the two role surfaces in a single
 session widens the blast radius unnecessarily.
+
+---
+
+## Quarterly KMS rotation drill
+
+**Why this exists.** A rotation procedure that has never been
+executed is not a procedure — it's a hypothesis. The rotation
+runbooks above (data key, search key, Merkle signing key) read
+like they will work, but until they are actually run end-to-end
+in a controlled environment, none of them are evidence-grade.
+The quarterly drill turns hypothesis into rehearsed muscle
+memory and produces a dated artifact for SOC 2 CC6.7.
+
+**Cadence:** quarterly. Skipping a quarter is a SOC 2 finding.
+The drill captain is rotated each quarter (same rotation as the
+[restore drill](#restoring-from-backup) for operational symmetry).
+
+**Scope:** the drill exercises one of the three CMK rotation
+procedures per quarter, on a rotating schedule:
+
+| Quarter      | Key under test                                          |
+| ------------ | ------------------------------------------------------- |
+| Q1 (Jan–Mar) | Data key (`aws_kms_key.data`, ADR-0023)                 |
+| Q2 (Apr–Jun) | Search key (`aws_kms_key.search`)                       |
+| Q3 (Jul–Sep) | Merkle signing key (`aws_kms_key.asymm_sign`, ADR-0024) |
+| Q4 (Oct–Dec) | Data key again (the most security-critical)             |
+
+Drills run in **staging** — never in production. The staging
+environment has its own copy of every CMK in the inventory
+(`infra/terraform/environments/staging/us-east-1/`); the drill
+provisions a sibling key alongside, performs the alias swap,
+runs the verification suite, then rolls back.
+
+### Pre-flight (one week before the drill)
+
+1. **Designate the captain + observer.** The observer is any
+   other engineer with staging KMS write access. Both names go
+   into the evidence pack header.
+2. **Read the per-key runbook entry one more time.** The drill
+   is the rehearsal; the procedure is unchanged.
+3. **Confirm staging is healthy.**
+   - `pnpm verify:kms` against staging passes.
+   - The web + worker apps in staging are running with the
+     current alias mapping.
+   - No active incident is in flight in staging (the drill
+     should be observable in CloudTrail without noise).
+4. **Open a ticket.** Title:
+   `KMS rotation drill <YYYY>-Q<N>: <key under test>`. The
+   ticket is the evidence container.
+
+### Drill steps (data-key example — Q1, Q4)
+
+The flow below targets the data key. For the search key (Q2),
+substitute the HMAC alias and add the blind-index backfill from
+the
+[search-key rotation runbook](#rotating-the-kms-search-key-hmac-key)
+§5. For the Merkle signing key (Q3), substitute the asymmetric
+alias and the
+[Merkle signer rotation runbook](#rotating-the-merkle-signing-key).
+
+1. **Snapshot the starting state.** Capture, into the ticket:
+   - The current alias → CMK mapping (`aws kms list-aliases`).
+   - The current `AWS_KMS_DATA_KEY_ID` value in the staging
+     task definition (alias name).
+   - A `pnpm verify:kms` run against staging (the "before"
+     artifact).
+2. **Provision the drill CMK.** In Terraform, add an
+   `aws_kms_key.data_drill_q<N>` sibling resource with the
+   same key spec + policy as the production data key. Plan +
+   apply. Capture the plan output.
+3. **Add the drill alias.** `alias/pharmax-staging-use1-data-drill-q<N>`
+   pointing at the drill CMK. Capture the alias creation
+   CloudTrail line.
+4. **Update IAM.** The staging ECS task role's IAM policy must
+   list the drill CMK ARN under
+   `kms:GenerateDataKey`/`kms:Decrypt`/`kms:DescribeKey`
+   IN ADDITION TO the current production alias. Do NOT remove
+   the production alias — the drill is non-destructive.
+5. **Deploy the staging tasks with `AWS_KMS_DATA_KEY_ID`
+   pointing at the drill alias.** Watch the deploy logs:
+   - Boot must succeed with the new alias.
+   - `apps/web bootstrap complete` and `worker.boot` lines
+     should appear.
+   - The first PHI write after the deploy should produce a
+     `kid` containing the drill key label (spot-check via the
+     query in step 4 of the
+     [data-key rotation runbook](#rotating-a-kms-data-key)).
+6. **Run `pnpm verify:kms` against the drill alias.** Capture
+   the JSON output (the "during" artifact). All steps must
+   pass.
+7. **Roll back.** Re-deploy the staging tasks with
+   `AWS_KMS_DATA_KEY_ID` pointing back at the original alias.
+   Boot must succeed.
+8. **Decommission the drill CMK.** In Terraform, remove the
+   drill alias, schedule the drill CMK for deletion (30-day
+   window), and remove its IAM grant. Plan + apply. Capture
+   the destroy plan.
+9. **Capture the closing snapshot.** A final `pnpm verify:kms`
+   against staging (the "after" artifact). The state must be
+   identical to the starting state.
+
+### Search-key drill notes (Q2)
+
+The search-key drill has an extra step: between steps 6 and 7,
+**run a small blind-index backfill against synthetic data only**.
+Do NOT backfill real staging data — the staging environment may
+contain mirror copies of production tenants whose blind indexes
+must remain stable. Provision a single throwaway organization,
+write 5–10 PHI rows under the drill alias, confirm the search
+returns them, then delete the organization before rollback. The
+goal of the drill is to exercise the
+`computeSearchKey` → `Mac` → `Buffer` round-trip end-to-end
+against an actual rotated key, not to test backfill at scale.
+
+### Merkle signer drill notes (Q3)
+
+The asymmetric signing key has a longer-lived public key PEM that
+auditors keep indefinitely. The drill exports the drill key's PEM
+(`aws kms get-public-key`) and verifies a synthetic Merkle root
+end-to-end through `pnpm security:sign-merkle --prod` (pointed at
+staging) followed by `pnpm security:verify-merkle`. The drill PEM
+goes into the ticket and is **not** added to the long-lived
+evidence repo (the drill key is destroyed at the end; preserving
+its PEM would clutter the trust store).
+
+### Evidence pack contents
+
+The ticket attaches:
+
+- Captain + observer names.
+- "Before" `verify:kms` output.
+- Terraform plan + apply for the drill CMK + alias + IAM.
+- Deploy logs showing the new alias in use.
+- "During" `verify:kms` output.
+- A representative encrypted write's `kid` from the staging DB
+  (synthetic-data-only).
+- Terraform plan + destroy for the drill resources.
+- "After" `verify:kms` output.
+- Captain's narrative: any divergence from the runbook, any
+  surprise, any change needed to the runbook.
+
+### When the drill fails
+
+A drill failure is **a finding**, not an incident. The fix is to
+update the runbook to reflect what actually happens, then
+re-run the drill with the corrected procedure. Track via the
+follow-up ticket; close it before the next quarter's drill.
+
+A drill that fails **and** leaves staging in a degraded state
+escalates to an incident. The most common cause is forgetting
+step 7 (the rollback) — staging continues to point at the drill
+alias. Page on-call to redeploy with the original alias.
+
+### Drill output goes into the SOC 2 evidence pack
+
+The ticket's attachments are the artifact for SOC 2 CC6.7 ("the
+entity uses cryptography to support encryption ... per its
+security policies"). The auditor wants to see one drill per
+quarter, dated, with the captain attested. Skipping a quarter
+means CC6.7 evidence is missing for that period.
 
 ---
 

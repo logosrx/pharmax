@@ -107,6 +107,7 @@ export type EventOwner =
   | "security"
   | "audit"
   | "workflow"
+  | "reporting"
   | "system";
 
 /**

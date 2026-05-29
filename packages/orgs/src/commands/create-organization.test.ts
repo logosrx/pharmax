@@ -271,7 +271,7 @@ describe("CreateOrganization — happy path", () => {
     expect(out.organizationId).toMatch(/^[0-9a-f-]{36}$/);
     expect(out.adminUserId).toMatch(/^[0-9a-f-]{36}$/);
     expect(out.roleCount).toBe(ROLE_TEMPLATES.length);
-    expect(ROLE_TEMPLATES.length).toBe(7);
+    expect(ROLE_TEMPLATES.length).toBe(9);
 
     // Organization create.
     const orgCreate = findOnly(fake.calls, "organization", "create");

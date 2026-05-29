@@ -30,16 +30,47 @@ and bundle the outputs together.
 
 ## How to run it
 
-The `scripts/security/run-access-review.ts` CLI invokes this generator
-once per organization and writes the JSON to
-`evidence/access-reviews/<YYYY-Q#>/<org-slug>.json`.
+The `scripts/security/run-access-review.ts` CLI invokes the generator
+once per organization. By default it **dual-writes** the evidence:
+
+1. **Database (canonical)** — dispatches the `RecordAccessReviewSnapshot`
+   tenant command, which persists an immutable `access_review_snapshot`
+   row keyed by SHA-256 digest of the report, emits the
+   `compliance.access_review_snapshot.recorded.v1` outbox event, and
+   writes the matching `audit_log` + `command_log` entries. This is
+   the row a SOC 2 auditor relies on; it is tamper-evident (the
+   `digestSha256` column matches the canonical-JSON SHA-256 of the
+   `report` column) and immutable (`access_review_snapshot` has no
+   UPDATE / DELETE grants in production).
+2. **JSON file (evidence pack)** — also writes the same report to
+   `evidence/access-reviews/<YYYY-Q#>/<org-slug>.json` for the
+   external evidence repository / Notion sign-off page.
 
 ```bash
-pnpm tsx scripts/security/run-access-review.ts --org=<org-uuid>
+pnpm tsx scripts/security/run-access-review.ts \
+  --org=<org-uuid> \
+  --as-user=<operator-email>
 ```
 
+The operator (`--as-user`) must exist in the target organization, be
+`ACTIVE`, and hold the `compliance.access_review.record` permission
+(granted to `OrgAdmin` by default). The snapshot row records the
+operator's id in `recordedByUserId` so SOC 2 reviewers can trace who
+produced the evidence.
+
+Flags:
+
+- `--dry-run` — generate the report and print it to stdout; do not
+  write the DB row or the JSON file. Use for previewing.
+- `--skip-db` — skip the database write (back-compatible JSON-only
+  mode for environments without a writable database).
+- `--skip-file` — skip the JSON file write; print the resulting
+  `<snapshotId>\t<digestSha256>` to stdout. Use in CI smoke checks.
+
 The output path matches the SOC 2 evidence-repository convention in
-`docs/compliance/evidence-collection-guide.md` (CC6.2 row).
+`docs/compliance/evidence-collection-guide.md` (CC6.2 row). See
+`docs/adr/0027-access-review-snapshot-persistence.md` for the design
+rationale behind the database-canonical evidence model.
 
 ## How the reviewer signs off
 
@@ -52,6 +83,11 @@ The output path matches the SOC 2 evidence-repository convention in
    off-platform, or document why their access is being retained.
 5. Sign the document. Commit the signed PDF to the SOC 2 evidence
    repo next to the JSON.
+6. Cross-reference the signed PDF against the `access_review_snapshot`
+   row by quoting the row's `digestSha256` in the sign-off note. Any
+   auditor can recompute the digest from the JSON file and confirm it
+   matches the persisted row — a tamper-evidence check that closes
+   the gap between the human sign-off and the canonical evidence row.
 
 ## Future work
 

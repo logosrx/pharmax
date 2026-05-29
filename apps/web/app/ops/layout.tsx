@@ -48,11 +48,18 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { href: "/ops/final", label: "Final verification", requires: PERMISSIONS.FINAL_START },
   { href: "/ops/shipping", label: "Shipping queue", requires: PERMISSIONS.SHIP_RELEASE },
   {
+    href: "/ops/shipping/dock",
+    label: "Shipping · Dock capture",
+    requires: PERMISSIONS.SHIP_CAPTURE_PACKAGE_PHOTO,
+  },
+  {
     href: "/ops/emergency",
     label: "Emergency queue",
     requires: PERMISSIONS.SHIP_RESOLVE_ESCALATION,
   },
   { href: "/ops/billing", label: "Billing", requires: PERMISSIONS.BILLING_READ },
+  { href: "/ops/reports", label: "Reports", requires: PERMISSIONS.REPORTS_RUN },
+  { href: "/ops/reports/runs", label: "Reports · History", requires: PERMISSIONS.REPORTS_RUN },
   {
     href: "/ops/admin/users",
     label: "Admin · Users",
@@ -72,6 +79,16 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
     href: "/ops/admin/carriers",
     label: "Admin · Carriers",
     requires: PERMISSIONS.SHIP_MANAGE_CARRIER_CREDENTIALS,
+  },
+  {
+    href: "/ops/admin/report-schedules",
+    label: "Admin · Report schedules",
+    requires: PERMISSIONS.REPORTS_MANAGE_SCHEDULE,
+  },
+  {
+    href: "/ops/admin/notifications",
+    label: "Admin · Notifications",
+    requires: PERMISSIONS.REPORTS_MANAGE_SCHEDULE,
   },
 ];
 
