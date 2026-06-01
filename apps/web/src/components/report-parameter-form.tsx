@@ -181,7 +181,9 @@ function FieldControl({
       );
     }
     case "number": {
-      const sticky = stickyString(values, field.key) ?? "";
+      const sticky =
+        stickyString(values, field.key) ??
+        (field.defaultValue !== undefined ? String(field.defaultValue) : "");
       return (
         <label className="space-y-1">
           {labelText}

@@ -126,6 +126,17 @@ const schema = z.object({
   REPORT_ARCHIVE_S3_BUCKET: z.string().min(1).optional(),
   REPORT_ARCHIVE_S3_KMS_KEY_ID: z.string().min(1).optional(),
 
+  // Package-photo storage — the dock-capture flow writes sealed-
+  // package photos to this bucket under SSE-KMS (the bytes are not
+  // PHI in our threat model, but are encrypted at rest regardless).
+  // Optional in dev (in-memory fallback drops captures on redeploy);
+  // in production, bootstrap.ts warns when unset and wires
+  // S3PackagePhotoStorage when both are present (AWS_REGION required
+  // alongside). The KMS key may be the same customer-managed key as
+  // AWS_KMS_DATA_KEY_ID or a dedicated photos key.
+  S3_PACKAGE_PHOTOS_BUCKET: z.string().min(1).optional(),
+  S3_PACKAGE_PHOTOS_KMS_KEY_ID: z.string().min(1).optional(),
+
   // Error tracking (Sentry). Optional — when unset, Sentry is fully
   // disabled and `Logger.error` calls only hit stdout. In production
   // these MUST be set; the bootstrap layer will warn if they aren't.

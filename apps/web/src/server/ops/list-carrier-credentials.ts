@@ -9,7 +9,11 @@
 
 import "server-only";
 
-import { prisma, type CarrierCredentialStatus, type ShippingProvider } from "@pharmax/database";
+import {
+  readInOrgScope,
+  type CarrierCredentialStatus,
+  type ShippingProvider,
+} from "@pharmax/database";
 
 export interface CarrierCredentialRow {
   readonly credentialId: string;
@@ -27,38 +31,40 @@ export interface CarrierCredentialRow {
 export async function listCarrierCredentials(input: {
   readonly organizationId: string;
 }): Promise<ReadonlyArray<CarrierCredentialRow>> {
-  const rows = await prisma.carrierCredential.findMany({
-    where: { organizationId: input.organizationId },
-    select: {
-      id: true,
-      provider: true,
-      status: true,
-      carrierAccountId: true,
-      baseUrl: true,
-      notes: true,
-      webhookSecretEnc: true,
-      createdByUserId: true,
-      createdAt: true,
-    },
-    orderBy: [{ status: "asc" }, { createdAt: "desc" }],
-  });
+  return readInOrgScope(input.organizationId, async (tx) => {
+    const rows = await tx.carrierCredential.findMany({
+      where: { organizationId: input.organizationId },
+      select: {
+        id: true,
+        provider: true,
+        status: true,
+        carrierAccountId: true,
+        baseUrl: true,
+        notes: true,
+        webhookSecretEnc: true,
+        createdByUserId: true,
+        createdAt: true,
+      },
+      orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+    });
 
-  return rows.map((r) =>
-    Object.freeze({
-      credentialId: r.id,
-      provider: r.provider,
-      status: r.status,
-      carrierAccountId: r.carrierAccountId,
-      baseUrl: r.baseUrl,
-      notes: r.notes,
-      // JSON envelope columns are non-null when a secret was
-      // registered. We compare against `null` rather than reading
-      // the envelope shape because we never want to decrypt here.
-      hasWebhookSecret: r.webhookSecretEnc !== null,
-      createdByUserId: r.createdByUserId,
-      createdAt: r.createdAt,
-    })
-  );
+    return rows.map((r) =>
+      Object.freeze({
+        credentialId: r.id,
+        provider: r.provider,
+        status: r.status,
+        carrierAccountId: r.carrierAccountId,
+        baseUrl: r.baseUrl,
+        notes: r.notes,
+        // JSON envelope columns are non-null when a secret was
+        // registered. We compare against `null` rather than reading
+        // the envelope shape because we never want to decrypt here.
+        hasWebhookSecret: r.webhookSecretEnc !== null,
+        createdByUserId: r.createdByUserId,
+        createdAt: r.createdAt,
+      })
+    );
+  });
 }
 
 /**
@@ -69,10 +75,12 @@ export async function listCarrierCredentials(input: {
 export async function listActiveProviders(input: {
   readonly organizationId: string;
 }): Promise<ReadonlyArray<ShippingProvider>> {
-  const rows = await prisma.carrierCredential.findMany({
-    where: { organizationId: input.organizationId, status: "ACTIVE" },
-    select: { provider: true },
-    orderBy: { provider: "asc" },
+  return readInOrgScope(input.organizationId, async (tx) => {
+    const rows = await tx.carrierCredential.findMany({
+      where: { organizationId: input.organizationId, status: "ACTIVE" },
+      select: { provider: true },
+      orderBy: { provider: "asc" },
+    });
+    return rows.map((r) => r.provider);
   });
-  return rows.map((r) => r.provider);
 }

@@ -193,6 +193,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
       "Create, edit, pause, or disable scheduled report executions; the worker tick dispatches the report under a per-org service identity",
   },
   {
+    code: "notifications.read",
+    description:
+      "View outbound notification delivery health (per-recipient delivery status from the Resend webhook); read-only operator metadata",
+  },
+  {
     code: "workflow.overlay.manage",
     description:
       "Create, update, or deactivate per-tenant workflow policy overlays (tighten-only refinements of the base policy; see ADR-0019)",

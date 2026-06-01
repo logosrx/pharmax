@@ -33,7 +33,7 @@
 import "server-only";
 
 import {
-  prisma,
+  readInOrgScope,
   LabelPrinterStatus,
   LotStatus,
   WorkstationStatus,
@@ -100,94 +100,96 @@ export async function getFillWorkbench(input: {
   readonly organizationId: string;
   readonly orderId: string;
 }): Promise<FillWorkbench | null> {
-  const order = await prisma.order.findFirst({
-    where: { id: input.orderId, organizationId: input.organizationId },
-    select: {
-      id: true,
-      externalOrderNumber: true,
-      currentStatus: true,
-      version: true,
-      currentAssigneeUserId: true,
-      siteId: true,
-      orderLines: {
-        select: {
-          id: true,
-          quantityToFill: true,
-          lot: { select: { id: true, lotNumber: true } },
-          vialLabel: {
-            select: {
-              id: true,
-              barcodeValue: true,
-              activePrintJob: { select: { status: true } },
-            },
-          },
-          prescription: {
-            select: {
-              id: true,
-              rxNumber: true,
-              drugNdc: true,
-              drugName: true,
-              drugStrength: true,
-            },
-          },
-        },
-        orderBy: { createdAt: "asc" },
-      },
-    },
-  });
-  if (order === null) return null;
-
-  const todayUtc = new Date();
-  const todayDate = new Date(
-    Date.UTC(todayUtc.getUTCFullYear(), todayUtc.getUTCMonth(), todayUtc.getUTCDate())
-  );
-
-  // ---- Fetch candidate lots per distinct NDC in one round trip ----
-  const distinctNdcs = Array.from(
-    new Set(order.orderLines.map((line) => line.prescription.drugNdc))
-  );
-  const candidateLotRows =
-    distinctNdcs.length === 0
-      ? []
-      : await prisma.lot.findMany({
-          where: {
-            organizationId: input.organizationId,
-            siteId: order.siteId,
-            status: LotStatus.ACTIVE,
-            expirationDate: { gte: todayDate },
-            product: { ndc: { in: distinctNdcs } },
-          },
+  return readInOrgScope(input.organizationId, async (tx) => {
+    const order = await tx.order.findFirst({
+      where: { id: input.orderId, organizationId: input.organizationId },
+      select: {
+        id: true,
+        externalOrderNumber: true,
+        currentStatus: true,
+        version: true,
+        currentAssigneeUserId: true,
+        siteId: true,
+        orderLines: {
           select: {
             id: true,
-            lotNumber: true,
-            expirationDate: true,
-            product: { select: { ndc: true } },
+            quantityToFill: true,
+            lot: { select: { id: true, lotNumber: true } },
+            vialLabel: {
+              select: {
+                id: true,
+                barcodeValue: true,
+                activePrintJob: { select: { status: true } },
+              },
+            },
+            prescription: {
+              select: {
+                id: true,
+                rxNumber: true,
+                drugNdc: true,
+                drugName: true,
+                drugStrength: true,
+              },
+            },
           },
-          // Soonest-to-expire first → encourages FEFO (first-expiring-
-          // first-out) without forcing the tech. Cap so a thousand-lot
-          // product can't bloat the page.
-          orderBy: [{ expirationDate: "asc" }, { lotNumber: "asc" }],
-          take: distinctNdcs.length * CANDIDATE_LOTS_LIMIT,
-        });
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    });
+    if (order === null) return null;
 
-  const lotsByNdc = new Map<string, FillWorkbenchCandidateLot[]>();
-  for (const row of candidateLotRows) {
-    const bucket = lotsByNdc.get(row.product.ndc) ?? [];
-    if (bucket.length < CANDIDATE_LOTS_LIMIT) {
-      bucket.push(
-        Object.freeze({
-          lotId: row.id,
-          lotNumber: row.lotNumber,
-          expirationDate: row.expirationDate,
-        })
-      );
+    const todayUtc = new Date();
+    const todayDate = new Date(
+      Date.UTC(todayUtc.getUTCFullYear(), todayUtc.getUTCMonth(), todayUtc.getUTCDate())
+    );
+
+    // ---- Fetch candidate lots per distinct NDC in one round trip ----
+    const distinctNdcs = Array.from(
+      new Set(order.orderLines.map((line) => line.prescription.drugNdc))
+    );
+    const candidateLotRows =
+      distinctNdcs.length === 0
+        ? []
+        : await tx.lot.findMany({
+            where: {
+              organizationId: input.organizationId,
+              siteId: order.siteId,
+              status: LotStatus.ACTIVE,
+              expirationDate: { gte: todayDate },
+              product: { ndc: { in: distinctNdcs } },
+            },
+            select: {
+              id: true,
+              lotNumber: true,
+              expirationDate: true,
+              product: { select: { ndc: true } },
+            },
+            // Soonest-to-expire first → encourages FEFO (first-expiring-
+            // first-out) without forcing the tech. Cap so a thousand-lot
+            // product can't bloat the page.
+            orderBy: [{ expirationDate: "asc" }, { lotNumber: "asc" }],
+            take: distinctNdcs.length * CANDIDATE_LOTS_LIMIT,
+          });
+
+    const lotsByNdc = new Map<string, FillWorkbenchCandidateLot[]>();
+    for (const row of candidateLotRows) {
+      const bucket = lotsByNdc.get(row.product.ndc) ?? [];
+      if (bucket.length < CANDIDATE_LOTS_LIMIT) {
+        bucket.push(
+          Object.freeze({
+            lotId: row.id,
+            lotNumber: row.lotNumber,
+            expirationDate: row.expirationDate,
+          })
+        );
+      }
+      lotsByNdc.set(row.product.ndc, bucket);
     }
-    lotsByNdc.set(row.product.ndc, bucket);
-  }
 
-  // ---- Fetch site-scoped print infrastructure ----
-  const [printers, workstations] = await Promise.all([
-    prisma.labelPrinter.findMany({
+    // ---- Fetch site-scoped print infrastructure ----
+    // Sequential (not Promise.all): these run inside one interactive
+    // transaction on a single connection.
+    const printers = await tx.labelPrinter.findMany({
       where: {
         organizationId: input.organizationId,
         siteId: order.siteId,
@@ -195,8 +197,8 @@ export async function getFillWorkbench(input: {
       },
       select: { id: true, code: true, name: true, workstationId: true },
       orderBy: [{ code: "asc" }],
-    }),
-    prisma.workstation.findMany({
+    });
+    const workstations = await tx.workstation.findMany({
       where: {
         organizationId: input.organizationId,
         siteId: order.siteId,
@@ -204,57 +206,58 @@ export async function getFillWorkbench(input: {
       },
       select: { id: true, code: true, name: true },
       orderBy: [{ code: "asc" }],
-    }),
-  ]);
+    });
 
-  const lines: FillWorkbenchLine[] = order.orderLines.map((line) =>
-    Object.freeze({
-      orderLineId: line.id,
-      prescriptionId: line.prescription.id,
-      rxNumber: line.prescription.rxNumber,
-      drugNdc: line.prescription.drugNdc,
-      drugName: line.prescription.drugName,
-      drugStrength: line.prescription.drugStrength,
-      quantityToFill: String(line.quantityToFill),
-      assignedLot:
-        line.lot !== null
-          ? Object.freeze({ lotId: line.lot.id, lotNumber: line.lot.lotNumber })
-          : null,
-      vialLabel:
-        line.vialLabel !== null
-          ? Object.freeze({
-              vialLabelId: line.vialLabel.id,
-              barcodeValue: line.vialLabel.barcodeValue,
-              latestPrintJobStatus: line.vialLabel.activePrintJob.status,
-            })
-          : null,
-      candidateLots: Object.freeze(lotsByNdc.get(line.prescription.drugNdc) ?? []),
-    })
-  );
-
-  const readyForCompletionScans =
-    lines.length > 0 && lines.every((line) => line.assignedLot !== null && line.vialLabel !== null);
-
-  return Object.freeze({
-    orderId: order.id,
-    externalOrderNumber: order.externalOrderNumber,
-    currentStatus: order.currentStatus,
-    version: order.version,
-    currentAssigneeUserId: order.currentAssigneeUserId,
-    siteId: order.siteId,
-    lines,
-    availablePrinters: printers.map((p) =>
+    const lines: FillWorkbenchLine[] = order.orderLines.map((line) =>
       Object.freeze({
-        printerId: p.id,
-        code: p.code,
-        name: p.name,
-        workstationId: p.workstationId,
+        orderLineId: line.id,
+        prescriptionId: line.prescription.id,
+        rxNumber: line.prescription.rxNumber,
+        drugNdc: line.prescription.drugNdc,
+        drugName: line.prescription.drugName,
+        drugStrength: line.prescription.drugStrength,
+        quantityToFill: String(line.quantityToFill),
+        assignedLot:
+          line.lot !== null
+            ? Object.freeze({ lotId: line.lot.id, lotNumber: line.lot.lotNumber })
+            : null,
+        vialLabel:
+          line.vialLabel !== null
+            ? Object.freeze({
+                vialLabelId: line.vialLabel.id,
+                barcodeValue: line.vialLabel.barcodeValue,
+                latestPrintJobStatus: line.vialLabel.activePrintJob.status,
+              })
+            : null,
+        candidateLots: Object.freeze(lotsByNdc.get(line.prescription.drugNdc) ?? []),
       })
-    ),
-    availableWorkstations: workstations.map((w) =>
-      Object.freeze({ workstationId: w.id, code: w.code, name: w.name })
-    ),
-    readyForCompletionScans,
+    );
+
+    const readyForCompletionScans =
+      lines.length > 0 &&
+      lines.every((line) => line.assignedLot !== null && line.vialLabel !== null);
+
+    return Object.freeze({
+      orderId: order.id,
+      externalOrderNumber: order.externalOrderNumber,
+      currentStatus: order.currentStatus,
+      version: order.version,
+      currentAssigneeUserId: order.currentAssigneeUserId,
+      siteId: order.siteId,
+      lines,
+      availablePrinters: printers.map((p) =>
+        Object.freeze({
+          printerId: p.id,
+          code: p.code,
+          name: p.name,
+          workstationId: p.workstationId,
+        })
+      ),
+      availableWorkstations: workstations.map((w) =>
+        Object.freeze({ workstationId: w.id, code: w.code, name: w.name })
+      ),
+      readyForCompletionScans,
+    });
   });
 }
 
@@ -270,14 +273,16 @@ export async function assertWorkstationBelongsToSite(input: {
   readonly siteId: string;
   readonly workstationId: string;
 }): Promise<boolean> {
-  const ws = await prisma.workstation.findFirst({
-    where: {
-      id: input.workstationId,
-      organizationId: input.organizationId,
-      siteId: input.siteId,
-      status: WorkstationStatus.ACTIVE,
-    },
-    select: { id: true },
+  return readInOrgScope(input.organizationId, async (tx) => {
+    const ws = await tx.workstation.findFirst({
+      where: {
+        id: input.workstationId,
+        organizationId: input.organizationId,
+        siteId: input.siteId,
+        status: WorkstationStatus.ACTIVE,
+      },
+      select: { id: true },
+    });
+    return ws !== null;
   });
-  return ws !== null;
 }

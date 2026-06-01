@@ -115,3 +115,65 @@ describe("InMemoryPackagePhotoStorage maintenance helpers", () => {
     expect(storage.getBytesByKey(upload.key)).toBeUndefined();
   });
 });
+
+describe("InMemoryPackagePhotoStorage.readObject", () => {
+  it("returns the bytes + content type for a known (org, bucket, key)", async () => {
+    const storage = new InMemoryPackagePhotoStorage();
+    const upload = await storage.beginUpload({
+      organizationId: ORG_A,
+      contentType: "image/png",
+      bytes: bytes("the-pixels"),
+    });
+
+    const got = await storage.readObject({
+      organizationId: ORG_A,
+      bucket: upload.bucket,
+      key: upload.key,
+    });
+
+    expect(got).not.toBeNull();
+    expect(got!.contentType).toBe("image/png");
+    expect(new TextDecoder().decode(got!.bytes)).toBe("the-pixels");
+  });
+
+  it("returns null for an unknown key", async () => {
+    const storage = new InMemoryPackagePhotoStorage();
+    const got = await storage.readObject({
+      organizationId: ORG_A,
+      bucket: "pharmax-package-photos-inmemory",
+      key: "org/org-a-0000-0000-0000-000000000000/photo/does-not-exist",
+    });
+    expect(got).toBeNull();
+  });
+
+  it("refuses to serve bytes when the requesting org does not match the entry", async () => {
+    const storage = new InMemoryPackagePhotoStorage();
+    const upload = await storage.beginUpload({
+      organizationId: ORG_A,
+      contentType: "image/jpeg",
+      bytes: bytes("org-a-bytes"),
+    });
+    // Same key, but a different org asks for it → not-found.
+    const got = await storage.readObject({
+      organizationId: ORG_B,
+      bucket: upload.bucket,
+      key: upload.key,
+    });
+    expect(got).toBeNull();
+  });
+
+  it("refuses to serve bytes when the bucket does not match the entry", async () => {
+    const storage = new InMemoryPackagePhotoStorage();
+    const upload = await storage.beginUpload({
+      organizationId: ORG_A,
+      contentType: "image/jpeg",
+      bytes: bytes("bucket-mismatch"),
+    });
+    const got = await storage.readObject({
+      organizationId: ORG_A,
+      bucket: "some-other-bucket",
+      key: upload.key,
+    });
+    expect(got).toBeNull();
+  });
+});

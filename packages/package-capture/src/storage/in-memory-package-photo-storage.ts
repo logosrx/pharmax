@@ -17,6 +17,8 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type {
+  PackagePhotoObject,
+  PackagePhotoReadInput,
   PackagePhotoStorage,
   PackagePhotoUploadInput,
   PackagePhotoUploadResult,
@@ -104,6 +106,18 @@ export class InMemoryPackagePhotoStorage implements PackagePhotoStorage {
       contentType: entry.contentType,
       organizationId: entry.organizationId,
     };
+  }
+
+  async readObject(input: PackagePhotoReadInput): Promise<PackagePhotoObject | null> {
+    const entry = this.byKey.get(input.key);
+    if (entry === undefined) return null;
+    // Defense in depth: the recorded entry must match the requested
+    // org + bucket. A mismatch means the caller passed a pointer
+    // that doesn't belong to this tenant — treat as not-found
+    // rather than serve foreign bytes.
+    if (entry.organizationId !== input.organizationId) return null;
+    if (entry.bucket !== input.bucket) return null;
+    return { bytes: entry.bytes, contentType: entry.contentType };
   }
 
   /** Read-out for tests. Returns the raw bytes uploaded against a

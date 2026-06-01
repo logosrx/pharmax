@@ -71,6 +71,7 @@ export interface ReportNumberField extends BaseField {
   readonly kind: "number";
   readonly min?: number;
   readonly max?: number;
+  readonly defaultValue?: number;
 }
 
 export type ReportParameterField =

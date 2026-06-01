@@ -42,6 +42,8 @@ export type {
   PackagePhotoUploadInput,
   PackagePhotoUploadResult,
   ResolvedPackagePhotoUpload,
+  PackagePhotoReadInput,
+  PackagePhotoObject,
 } from "./storage/package-photo-storage.js";
 
 export {
@@ -58,6 +60,8 @@ export {
   type S3UploadClient,
   type S3PutObjectInput,
   type S3PutObjectOutput,
+  type S3GetObjectInput,
+  type S3GetObjectOutput,
 } from "./storage/s3-package-photo-storage.js";
 
 export {

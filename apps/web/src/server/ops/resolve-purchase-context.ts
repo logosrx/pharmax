@@ -34,7 +34,7 @@
 import "server-only";
 
 import { decryptField } from "@pharmax/crypto";
-import { prisma, type ShippingProvider, type ShipmentCarrier } from "@pharmax/database";
+import { readInOrgScope, type ShippingProvider, type ShipmentCarrier } from "@pharmax/database";
 
 export const RESOLVE_PURCHASE_ORDER_NOT_FOUND = "ORDER_NOT_FOUND";
 export const RESOLVE_PURCHASE_SITE_ADDRESS_INCOMPLETE = "SITE_ADDRESS_INCOMPLETE";
@@ -107,46 +107,59 @@ export async function resolvePurchaseContext(input: {
   readonly organizationId: string;
   readonly orderId: string;
 }): Promise<ResolvePurchaseContextResult> {
-  const order = await prisma.order.findFirst({
-    where: { id: input.orderId, organizationId: input.organizationId },
-    select: {
-      id: true,
-      siteId: true,
-      site: {
-        select: {
-          name: true,
-          addressLine1: true,
-          addressLine2: true,
-          city: true,
-          state: true,
-          postalCode: true,
-          country: true,
-          phone: true,
+  // Phase 1 — DB reads inside a short tenant tx (ORM extension + RLS
+  // GUC). The recipient-address KMS decryption in phase 2 runs after
+  // the connection is released.
+  const loaded = await readInOrgScope(input.organizationId, async (tx) => {
+    const order = await tx.order.findFirst({
+      where: { id: input.orderId, organizationId: input.organizationId },
+      select: {
+        id: true,
+        siteId: true,
+        site: {
+          select: {
+            name: true,
+            addressLine1: true,
+            addressLine2: true,
+            city: true,
+            state: true,
+            postalCode: true,
+            country: true,
+            phone: true,
+          },
+        },
+        patient: {
+          select: {
+            id: true,
+            firstNameEnc: true,
+            lastNameEnc: true,
+            addressLine1Enc: true,
+            addressLine2Enc: true,
+            cityEnc: true,
+            stateEnc: true,
+            postalCodeEnc: true,
+            phoneEnc: true,
+          },
         },
       },
-      patient: {
-        select: {
-          id: true,
-          firstNameEnc: true,
-          lastNameEnc: true,
-          addressLine1Enc: true,
-          addressLine2Enc: true,
-          cityEnc: true,
-          stateEnc: true,
-          postalCodeEnc: true,
-          phoneEnc: true,
-        },
-      },
-    },
+    });
+    if (order === null) return null;
+    const providers = await tx.carrierCredential.findMany({
+      where: { organizationId: input.organizationId, status: "ACTIVE" },
+      select: { provider: true },
+      orderBy: { provider: "asc" },
+    });
+    return { order, providers };
   });
 
-  if (order === null) {
+  if (loaded === null) {
     return Object.freeze({
       ok: false,
       code: RESOLVE_PURCHASE_ORDER_NOT_FOUND,
       message: "Order not found in this organization.",
     });
   }
+  const { order, providers } = loaded;
 
   // --- From-address (site) ---
   const site = order.site;
@@ -255,12 +268,7 @@ export async function resolvePurchaseContext(input: {
     ...(phone.value !== null ? { phone: phone.value } : {}),
   });
 
-  // --- Available providers ---
-  const providers = await prisma.carrierCredential.findMany({
-    where: { organizationId: input.organizationId, status: "ACTIVE" },
-    select: { provider: true },
-    orderBy: { provider: "asc" },
-  });
+  // --- Available providers (fetched in phase 1) ---
   if (providers.length === 0) {
     return Object.freeze({
       ok: false,

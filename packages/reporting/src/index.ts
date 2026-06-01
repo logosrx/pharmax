@@ -20,6 +20,36 @@ export {
   DEFAULT_STAGE_SLA_THRESHOLDS_MS,
 } from "./reports/sla-breach-report.js";
 
+export {
+  shipmentExceptionBreakdownReport,
+  type ShipmentExceptionBreakdownParams,
+  type ShipmentExceptionBreakdownRow,
+} from "./reports/shipment-exception-breakdown.js";
+
+export {
+  lotExpiryWarningsReport,
+  type LotExpiryWarningsParams,
+  type LotExpiryWarningRow,
+} from "./reports/lot-expiry-warnings.js";
+
+export {
+  billingSummaryByClinicReport,
+  type BillingSummaryByClinicParams,
+  type BillingSummaryByClinicRow,
+} from "./reports/billing-summary-by-clinic.js";
+
+export {
+  userProductivityByStageReport,
+  type UserProductivityByStageParams,
+  type UserProductivityByStageRow,
+} from "./reports/user-productivity-by-stage.js";
+
+export {
+  verificationRejectionRateReport,
+  type VerificationRejectionRateParams,
+  type VerificationRejectionRateRow,
+} from "./reports/verification-rejection-rate.js";
+
 export { REPORT_REGISTRY, type ReportDefinitionAny } from "./report-registry.js";
 
 export {

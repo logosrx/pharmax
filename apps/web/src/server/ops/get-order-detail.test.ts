@@ -25,6 +25,9 @@ const decryptMock = vi.fn();
 
 vi.mock("@pharmax/database", () => ({
   prisma: prismaMock,
+  readInOrgScope: (_org: string, fn: (tx: unknown) => unknown) => fn(prismaMock),
+  withOrgScope: (_org: string, fn: () => unknown) => fn(),
+  readInTenantContext: (_ctx: unknown, fn: (tx: unknown) => unknown) => fn(prismaMock),
 }));
 
 vi.mock("@pharmax/crypto", () => ({
@@ -95,6 +98,20 @@ function buildOrderRow(overrides: Record<string, unknown> = {}): Record<string, 
         actorUserId: "00000000-0000-4000-8000-000000000009",
       },
     ],
+    packagePhotos: [
+      {
+        id: "00000000-0000-4000-8000-0000000000f1",
+        capturedAt: new Date("2026-05-25T18:00:00.000Z"),
+        capturedByUserId: "00000000-0000-4000-8000-000000000009",
+        matchStrategy: "EXTERNAL_ORDER_NUMBER",
+        matchedAt: new Date("2026-05-25T18:00:01.000Z"),
+        trackingNumber: "1Z999",
+        trackingSource: "ORDER",
+        contentType: "image/jpeg",
+        fileSize: 23_456,
+        sha256: "feedface0001",
+      },
+    ],
     ...overrides,
   };
 }
@@ -131,6 +148,34 @@ describe("getOrderDetail — happy path", () => {
     expect(result?.lines[0]?.sig).toMatch(/^dec\(sig/);
     expect(result?.lines[0]?.prescriberName).toBe("Pat Provider, MD");
     expect(result?.events).toHaveLength(1);
+    // Package photos are projected structurally (no decryption).
+    expect(result?.packagePhotos).toHaveLength(1);
+    expect(result?.packagePhotos[0]?.photoId).toBe("00000000-0000-4000-8000-0000000000f1");
+    expect(result?.packagePhotos[0]?.matchStrategy).toBe("EXTERNAL_ORDER_NUMBER");
+    expect(result?.packagePhotos[0]?.trackingNumber).toBe("1Z999");
+    expect(result?.packagePhotos[0]?.trackingSource).toBe("ORDER");
+    expect(result?.packagePhotos[0]?.sha256).toBe("feedface0001");
+  });
+
+  it("requests only structural package-photo columns (no notesEnc) newest-first, capped", async () => {
+    prismaMock.order.findFirst.mockResolvedValueOnce(buildOrderRow());
+    decryptMock.mockResolvedValue("x");
+    await getOrderDetail({ organizationId: ORG_ID, orderId: ORDER_ID });
+
+    const selectArg = prismaMock.order.findFirst.mock.calls[0]![0]!.select.packagePhotos;
+    expect(selectArg.orderBy).toEqual({ capturedAt: "desc" });
+    expect(selectArg.take).toBe(25);
+    expect("notesEnc" in selectArg.select).toBe(false);
+    // The matchedOrderId/matchedPatientId are redundant on this
+    // relation (it IS the matched order) so they're not selected.
+    expect("notesEnc" in selectArg.select).toBe(false);
+  });
+
+  it("projects an empty packagePhotos array when the order has none", async () => {
+    prismaMock.order.findFirst.mockResolvedValueOnce(buildOrderRow({ packagePhotos: [] }));
+    decryptMock.mockResolvedValue("x");
+    const result = await getOrderDetail({ organizationId: ORG_ID, orderId: ORDER_ID });
+    expect(result?.packagePhotos).toEqual([]);
   });
 });
 

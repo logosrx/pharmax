@@ -104,6 +104,9 @@ export const PERMISSIONS = Object.freeze({
   REPORTS_RUN: "reports.run",
   REPORTS_MANAGE_SCHEDULE: "reports.manage_schedule",
 
+  // Notifications.
+  NOTIFICATIONS_READ: "notifications.read",
+
   // Workflow administration (Tier 2 tenant extension; see ADR-0019).
   // Authors per-tenant `WorkflowPolicyOverlay` rows. Overlays can
   // only TIGHTEN the base policy (forbid transitions, add attestation
@@ -365,6 +368,11 @@ export const PERMISSION_METADATA: Readonly<
     description:
       "Create, edit, pause, or disable scheduled report executions (cron-driven). Schedules dispatch under a per-org service identity; admins can change the cron / parameters template / status but not the underlying report definition.",
     category: "Reporting",
+  },
+  [PERMISSIONS.NOTIFICATIONS_READ]: {
+    description:
+      "View outbound notification delivery health (per-recipient SENT / DELIVERED / BOUNCED / COMPLAINED status from the Resend delivery webhook). Read-only operator metadata; no PHI.",
+    category: "Notifications",
   },
   [PERMISSIONS.WORKFLOW_OVERLAY_MANAGE]: {
     description:

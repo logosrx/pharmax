@@ -32,13 +32,24 @@
 import "server-only";
 
 import { decryptField } from "@pharmax/crypto";
-import { prisma, type OrderPriority, type OrderStatus } from "@pharmax/database";
+import {
+  type PackagePhotoMatchStrategy,
+  type PackagePhotoTrackingSource,
+  readInOrgScope,
+  type OrderPriority,
+  type OrderStatus,
+} from "@pharmax/database";
 
 interface RawPhiEnvelope {
   // Envelope shape from @pharmax/crypto. We treat it as opaque
   // JSON here; decryptField does the validation.
   readonly [key: string]: unknown;
 }
+
+// Cap the matched-photo join. An order has 1 photo in the common
+// case, a handful after damage re-captures; the cap guards against a
+// pathological capture loop unbounding the order-detail read.
+const PACKAGE_PHOTO_LIMIT = 25;
 
 export interface OrderDetailPatient {
   readonly patientId: string;
@@ -83,6 +94,28 @@ export interface OrderDetailEvent {
   readonly actorUserId: string | null;
 }
 
+/**
+ * A sealed-package photo matched to this order (via the
+ * `PackagePhotoMatchedOrder` back-relation). Structural-only: we do
+ * NOT decrypt `notesEnc` here — notes can carry incidental PHI and
+ * the operator's reconciliation need is "which packages shipped for
+ * this order", answered by the capture metadata. (Rendering the
+ * actual image bytes needs a download/stream route that doesn't
+ * exist yet; this surfaces the storage descriptor instead.)
+ */
+export interface OrderDetailPackagePhoto {
+  readonly photoId: string;
+  readonly capturedAt: Date;
+  readonly capturedByUserId: string;
+  readonly matchStrategy: PackagePhotoMatchStrategy;
+  readonly matchedAt: Date | null;
+  readonly trackingNumber: string | null;
+  readonly trackingSource: PackagePhotoTrackingSource | null;
+  readonly contentType: string;
+  readonly fileSize: number;
+  readonly sha256: string;
+}
+
 export interface OrderDetail {
   readonly orderId: string;
   readonly externalOrderNumber: string | null;
@@ -99,6 +132,7 @@ export interface OrderDetail {
   readonly patient: OrderDetailPatient;
   readonly lines: ReadonlyArray<OrderDetailPrescriptionLine>;
   readonly events: ReadonlyArray<OrderDetailEvent>;
+  readonly packagePhotos: ReadonlyArray<OrderDetailPackagePhoto>;
   /**
    * True when ANY PHI field failed to decrypt. The page renders a
    * red banner so the operator doesn't make a clinical decision on
@@ -133,82 +167,107 @@ export async function getOrderDetail(input: {
 }): Promise<OrderDetail | null> {
   const eventLimit = Math.min(input.eventLimit ?? 50, 200);
 
-  const order = await prisma.order.findFirst({
-    where: { id: input.orderId, organizationId: input.organizationId },
-    select: {
-      id: true,
-      externalOrderNumber: true,
-      organizationId: true,
-      clinicId: true,
-      siteId: true,
-      currentStatus: true,
-      priority: true,
-      receivedAt: true,
-      slaDeadlineAt: true,
-      currentBucketId: true,
-      currentAssigneeUserId: true,
-      version: true,
-      patient: {
-        select: {
-          id: true,
-          firstNameEnc: true,
-          lastNameEnc: true,
-          middleNameEnc: true,
-          dateOfBirthEnc: true,
-          phoneEnc: true,
-          emailEnc: true,
-          addressLine1Enc: true,
-          addressLine2Enc: true,
-          cityEnc: true,
-          stateEnc: true,
-          postalCodeEnc: true,
-        },
-      },
-      orderLines: {
-        select: {
-          id: true,
-          quantityToFill: true,
-          daysSupplyToFill: true,
-          vialLabelId: true,
-          lot: {
-            select: { lotNumber: true, expirationDate: true },
+  // Phase 1 — load the order graph inside a short tenant tx (ORM
+  // extension + RLS GUC). Released before KMS decryption below.
+  const order = await readInOrgScope(input.organizationId, (tx) =>
+    tx.order.findFirst({
+      where: { id: input.orderId, organizationId: input.organizationId },
+      select: {
+        id: true,
+        externalOrderNumber: true,
+        organizationId: true,
+        clinicId: true,
+        siteId: true,
+        currentStatus: true,
+        priority: true,
+        receivedAt: true,
+        slaDeadlineAt: true,
+        currentBucketId: true,
+        currentAssigneeUserId: true,
+        version: true,
+        patient: {
+          select: {
+            id: true,
+            firstNameEnc: true,
+            lastNameEnc: true,
+            middleNameEnc: true,
+            dateOfBirthEnc: true,
+            phoneEnc: true,
+            emailEnc: true,
+            addressLine1Enc: true,
+            addressLine2Enc: true,
+            cityEnc: true,
+            stateEnc: true,
+            postalCodeEnc: true,
           },
-          prescription: {
-            select: {
-              id: true,
-              rxNumber: true,
-              drugNdc: true,
-              drugName: true,
-              drugStrength: true,
-              drugForm: true,
-              refillsRemaining: true,
-              sigEnc: true,
-              provider: {
-                select: {
-                  firstName: true,
-                  lastName: true,
-                  credential: true,
-                  npi: true,
+        },
+        orderLines: {
+          select: {
+            id: true,
+            quantityToFill: true,
+            daysSupplyToFill: true,
+            vialLabelId: true,
+            lot: {
+              select: { lotNumber: true, expirationDate: true },
+            },
+            prescription: {
+              select: {
+                id: true,
+                rxNumber: true,
+                drugNdc: true,
+                drugName: true,
+                drugStrength: true,
+                drugForm: true,
+                refillsRemaining: true,
+                sigEnc: true,
+                provider: {
+                  select: {
+                    firstName: true,
+                    lastName: true,
+                    credential: true,
+                    npi: true,
+                  },
                 },
               },
             },
           },
+          orderBy: { createdAt: "asc" },
         },
-        orderBy: { createdAt: "asc" },
-      },
-      orderEvents: {
-        select: {
-          id: true,
-          eventType: true,
-          sequenceNumber: true,
-          occurredAt: true,
-          actorUserId: true,
+        orderEvents: {
+          select: {
+            id: true,
+            eventType: true,
+            sequenceNumber: true,
+            occurredAt: true,
+            actorUserId: true,
+          },
+          orderBy: { occurredAt: "desc" },
+          take: eventLimit,
         },
-        orderBy: { occurredAt: "desc" },
-        take: eventLimit,
+        // Sealed-package photos matched to this order. Structural
+        // fields only — `notesEnc` is deliberately NOT selected
+        // (PHI-adjacent; same guard as every other package-photo
+        // surface). Newest-first; capped so a pathological
+        // re-capture loop can't unbound the order page.
+        packagePhotos: {
+          select: {
+            id: true,
+            capturedAt: true,
+            capturedByUserId: true,
+            matchStrategy: true,
+            matchedAt: true,
+            trackingNumber: true,
+            trackingSource: true,
+            contentType: true,
+            fileSize: true,
+            sha256: true,
+          },
+          orderBy: { capturedAt: "desc" },
+          take: PACKAGE_PHOTO_LIMIT,
+        },
       },
-    },
-  });
+    })
+  );
 
   if (order === null) return null;
 
@@ -348,6 +407,20 @@ export async function getOrderDetail(input: {
         sequenceNumber: e.sequenceNumber,
         occurredAt: e.occurredAt,
         actorUserId: e.actorUserId,
+      })
+    ),
+    packagePhotos: order.packagePhotos.map((p) =>
+      Object.freeze({
+        photoId: p.id,
+        capturedAt: p.capturedAt,
+        capturedByUserId: p.capturedByUserId,
+        matchStrategy: p.matchStrategy,
+        matchedAt: p.matchedAt,
+        trackingNumber: p.trackingNumber,
+        trackingSource: p.trackingSource,
+        contentType: p.contentType,
+        fileSize: p.fileSize,
+        sha256: p.sha256,
       })
     ),
     phiDecryptErrors,

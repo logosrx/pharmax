@@ -97,44 +97,55 @@ export async function dispatchOpsCommand<TIn, TOut>(
       ? ((await input.request.json().catch(() => ({}))) as Record<string, unknown>)
       : await input.request.formData();
 
-  const built = await Promise.resolve(
-    input.buildInput({
-      body,
-      operatorUserId: session.operator.userId,
-      organizationId: session.tenancy.organizationId,
-      bodyKind,
-    })
-  );
-  if (built !== null && typeof built === "object" && "error" in built) {
+  // `buildInput` and `resolveTenancyExtras` may issue org-scoped
+  // reads (e.g. the print-vial-label route looks up the order's site
+  // to validate the workstation). Those reads go through the
+  // tenancy-enforced Prisma client, which fails closed when no ALS
+  // frame is active. Run BOTH callbacks inside the operator's base
+  // tenancy frame so their reads are auto-scoped to the operator's
+  // org. The final command dispatch runs in its own (extras-enriched)
+  // frame below.
+  const prepared = await withTenancyContext(session.tenancy, async () => {
+    const builtInner = await Promise.resolve(
+      input.buildInput({
+        body,
+        operatorUserId: session.operator.userId,
+        organizationId: session.tenancy.organizationId,
+        bodyKind,
+      })
+    );
+    if (builtInner !== null && typeof builtInner === "object" && "error" in builtInner) {
+      return { kind: "error" as const, error: builtInner.error };
+    }
+
+    let extrasInner: DispatchOpsCommandTenancyExtras = {};
+    if (input.resolveTenancyExtras !== undefined) {
+      const extras = await input.resolveTenancyExtras({
+        body,
+        operatorUserId: session.operator.userId,
+        organizationId: session.tenancy.organizationId,
+      });
+      if (extras !== null && extras !== undefined && "error" in extras) {
+        return { kind: "error" as const, error: extras.error };
+      }
+      if (extras !== null && extras !== undefined) {
+        extrasInner = extras;
+      }
+    }
+    return { kind: "ok" as const, built: builtInner as TIn, tenancyExtras: extrasInner };
+  });
+
+  if (prepared.kind === "error") {
     return NextResponse.redirect(
       new URL(
-        `${input.failureRedirect}?error=${encodeURIComponent(built.error)}`,
+        `${input.failureRedirect}?error=${encodeURIComponent(prepared.error)}`,
         "http://internal"
       ).toString(),
       { status: 303 }
     );
   }
-
-  let tenancyExtras: DispatchOpsCommandTenancyExtras = {};
-  if (input.resolveTenancyExtras !== undefined) {
-    const extras = await input.resolveTenancyExtras({
-      body,
-      operatorUserId: session.operator.userId,
-      organizationId: session.tenancy.organizationId,
-    });
-    if (extras !== null && extras !== undefined && "error" in extras) {
-      return NextResponse.redirect(
-        new URL(
-          `${input.failureRedirect}?error=${encodeURIComponent(extras.error)}`,
-          "http://internal"
-        ).toString(),
-        { status: 303 }
-      );
-    }
-    if (extras !== null && extras !== undefined) {
-      tenancyExtras = extras;
-    }
-  }
+  const built = prepared.built;
+  const tenancyExtras = prepared.tenancyExtras;
 
   const minuteBucket = Math.floor(Date.now() / 60_000);
   const idempotencyKey = `${input.idempotencyKeyPrefix}:${minuteBucket}`;

@@ -30,6 +30,9 @@ vi.mock("@pharmax/database", async () => {
   return {
     ...actual,
     prisma: prismaMock,
+    readInOrgScope: (_org: string, fn: (tx: unknown) => unknown) => fn(prismaMock),
+    withOrgScope: (_org: string, fn: () => unknown) => fn(),
+    readInTenantContext: (_ctx: unknown, fn: (tx: unknown) => unknown) => fn(prismaMock),
   };
 });
 

@@ -10,7 +10,7 @@
 
 import "server-only";
 
-import { prisma, type PatientStatus } from "@pharmax/database";
+import { readInOrgScope, type PatientStatus } from "@pharmax/database";
 
 import { decryptPatientFields, type DecryptedPatientFields } from "./decrypt-patient.js";
 
@@ -35,44 +35,53 @@ export async function getPatientDetail(input: {
   readonly organizationId: string;
   readonly patientId: string;
 }): Promise<PatientDetail | null> {
-  const patient = await prisma.patient.findFirst({
-    where: { id: input.patientId, organizationId: input.organizationId },
-    select: {
-      id: true,
-      organizationId: true,
-      clinicId: true,
-      status: true,
-      cryptoShreddedAt: true,
-      mergedIntoPatientId: true,
-      createdAt: true,
-      updatedAt: true,
-      firstNameEnc: true,
-      lastNameEnc: true,
-      middleNameEnc: true,
-      dateOfBirthEnc: true,
-      sexAtBirthEnc: true,
-      ssnLast4Enc: true,
-      phoneEnc: true,
-      emailEnc: true,
-      addressLine1Enc: true,
-      addressLine2Enc: true,
-      cityEnc: true,
-      stateEnc: true,
-      postalCodeEnc: true,
-      mrnEnc: true,
-      clinic: { select: { name: true } },
-    },
+  // Phase 1 — DB reads inside a short tenant transaction (ORM
+  // extension + RLS GUC both active). The connection is released
+  // before the slow KMS decryption in phase 2.
+  const loaded = await readInOrgScope(input.organizationId, async (tx) => {
+    const patient = await tx.patient.findFirst({
+      where: { id: input.patientId, organizationId: input.organizationId },
+      select: {
+        id: true,
+        organizationId: true,
+        clinicId: true,
+        status: true,
+        cryptoShreddedAt: true,
+        mergedIntoPatientId: true,
+        createdAt: true,
+        updatedAt: true,
+        firstNameEnc: true,
+        lastNameEnc: true,
+        middleNameEnc: true,
+        dateOfBirthEnc: true,
+        sexAtBirthEnc: true,
+        ssnLast4Enc: true,
+        phoneEnc: true,
+        emailEnc: true,
+        addressLine1Enc: true,
+        addressLine2Enc: true,
+        cityEnc: true,
+        stateEnc: true,
+        postalCodeEnc: true,
+        mrnEnc: true,
+        clinic: { select: { name: true } },
+      },
+    });
+    if (patient === null) return null;
+    const orderCount = await tx.order.count({
+      where: { organizationId: input.organizationId, patientId: patient.id },
+    });
+    return { patient, orderCount };
   });
-  if (patient === null) return null;
 
+  if (loaded === null) return null;
+  const { patient, orderCount } = loaded;
+
+  // Phase 2 — decrypt PHI envelopes (KMS) outside the transaction.
   const decrypted = await decryptPatientFields({
     organizationId: input.organizationId,
     patientId: patient.id,
     row: patient,
-  });
-
-  const orderCount = await prisma.order.count({
-    where: { organizationId: input.organizationId, patientId: patient.id },
   });
 
   return Object.freeze({

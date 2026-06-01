@@ -45,6 +45,57 @@ function formatDateTime(value: Date): string {
   return value.toISOString().replace("T", " ").slice(0, 19) + "Z";
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+// Match-strategy badge text. Mirrors the dock + triage surfaces so
+// an operator sees the same vocabulary everywhere a capture appears.
+function matchStrategyLabel(strategy: string): string {
+  switch (strategy) {
+    case "EXTERNAL_ORDER_NUMBER":
+      return "AUTO-MATCHED";
+    case "MANUAL_ORDER_ID":
+      return "RESOLVED · ORDER";
+    case "MANUAL_PATIENT_ID":
+      return "RESOLVED · PATIENT";
+    case "UNMATCHED":
+      // Shouldn't appear on this relation (it's the matched-order
+      // back-relation), but render defensively rather than crash.
+      return "UNMATCHED";
+    default:
+      return strategy;
+  }
+}
+
+function matchStrategyBadgeClass(strategy: string): string {
+  switch (strategy) {
+    case "MANUAL_ORDER_ID":
+    case "MANUAL_PATIENT_ID":
+      return "border-blue-700 bg-blue-950 text-blue-200";
+    case "EXTERNAL_ORDER_NUMBER":
+      return "border-emerald-700 bg-emerald-950 text-emerald-200";
+    default:
+      return "border-neutral-700 bg-neutral-900 text-neutral-300";
+  }
+}
+
+function trackingSourceLabel(source: string | null): string {
+  if (source === null) return "no tracking";
+  switch (source) {
+    case "MANUAL":
+      return "manual tracking";
+    case "ORDER":
+      return "order shipment";
+    case "TRACKING_EVENT":
+      return "carrier event";
+    default:
+      return source;
+  }
+}
+
 function formatAddress(p: {
   readonly addressLine1: string | null;
   readonly addressLine2: string | null;
@@ -298,6 +349,74 @@ export default async function OrderDetailPage({
                     </dd>
                   </div>
                 </dl>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-400">
+          Package photos
+        </h2>
+        {detail.packagePhotos.length === 0 ? (
+          <div className="rounded-md border border-neutral-800 bg-neutral-950 p-4 text-sm text-neutral-500">
+            No sealed-package photos linked to this order yet. Captures taken at the dock and
+            matched to this order appear here.
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {detail.packagePhotos.map((photo) => (
+              <li
+                key={photo.photoId}
+                className="space-y-2 rounded-md border border-neutral-800 bg-neutral-950 p-3"
+              >
+                {/* Authenticated byte-proxy. A plain <img> is intentional:
+                    next/image would route this private,
+                    per-request-authorized image through the public image
+                    optimizer, which we explicitly do not want for
+                    tenant-scoped photo bytes. */}
+                <img
+                  src={`/api/ops/shipping/package-photos/${photo.photoId}/image`}
+                  alt="Sealed package"
+                  loading="lazy"
+                  className="max-h-56 w-auto rounded-md border border-neutral-800 bg-neutral-900 object-contain"
+                />
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span
+                    className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs ${matchStrategyBadgeClass(
+                      photo.matchStrategy
+                    )}`}
+                  >
+                    {matchStrategyLabel(photo.matchStrategy)}
+                  </span>
+                  <span className="text-xs text-neutral-500">
+                    Captured {formatDateTime(photo.capturedAt)}
+                  </span>
+                  {photo.matchedAt !== null ? (
+                    <span className="text-xs text-neutral-600">
+                      · matched {formatDateTime(photo.matchedAt)}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-neutral-500">
+                  <span>
+                    tracking: {trackingSourceLabel(photo.trackingSource)}
+                    {photo.trackingNumber !== null ? (
+                      <>
+                        {" — "}
+                        <code className="font-mono text-neutral-300">{photo.trackingNumber}</code>
+                      </>
+                    ) : null}
+                  </span>
+                  <span>
+                    {photo.contentType.replace("image/", "")} · {formatBytes(photo.fileSize)}
+                  </span>
+                  <span className="font-mono">sha {photo.sha256.slice(0, 8)}…</span>
+                  <span>
+                    captured by <code className="text-neutral-400">{photo.capturedByUserId}</code>
+                  </span>
+                </div>
               </li>
             ))}
           </ul>

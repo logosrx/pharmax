@@ -23,7 +23,7 @@
 
 import "server-only";
 
-import { prisma, type PatientStatus } from "@pharmax/database";
+import { readInOrgScope, type PatientStatus, type PrismaClient } from "@pharmax/database";
 import { searchPatients, type PatientSearchQuery } from "@pharmax/patients";
 
 import { decryptPatientFields } from "./decrypt-patient.js";
@@ -55,11 +55,16 @@ export async function searchPatientsForAdmin(input: {
   readonly limit?: number;
 }): Promise<PatientAdminSearchResult> {
   const limit = Math.min(input.limit ?? 25, MAX_DISPLAY_LIMIT);
-  const result = await searchPatients(prisma, {
-    query: input.query,
-    limit,
-    includeNonActive: input.includeNonActive ?? false,
-  });
+  // Phase 1 — run the search inside a short tenant tx (ORM extension +
+  // RLS GUC). Phase 2 decrypts the result rows after the tx closes so
+  // the DB connection is not held during KMS calls.
+  const result = await readInOrgScope(input.organizationId, (tx) =>
+    searchPatients(tx as unknown as PrismaClient, {
+      query: input.query,
+      limit,
+      includeNonActive: input.includeNonActive ?? false,
+    })
+  );
 
   const decryptedRows = await Promise.all(
     result.rows.map(async (row) => {

@@ -43,6 +43,8 @@ import { configureRbac, PrismaPermissionLoader } from "@pharmax/rbac";
 import {
   configurePackagePhotoStorage,
   InMemoryPackagePhotoStorage,
+  S3PackagePhotoStorage,
+  type PackagePhotoStorage,
 } from "@pharmax/package-capture";
 import {
   configureReportRunArchive,
@@ -147,6 +149,131 @@ async function buildReportArchive(): Promise<ReportRunArchivePort> {
       },
     },
   });
+}
+
+/**
+ * Build the package-photo storage adapter. Production
+ * `S3PackagePhotoStorage` when the env vars are present, else the
+ * in-memory dev/test adapter.
+ *
+ * The S3 adapter writes photo bytes to S3 under SSE-KMS and persists
+ * an opaque upload-token row to Postgres so the dispatch step
+ * (`CapturePackagePhoto`) can resolve the token across web-tier
+ * instances. The in-memory adapter keeps bytes in process memory —
+ * a redeploy drops every in-flight capture, so it is dev/staging
+ * only.
+ *
+ * We mirror `buildReportArchive`'s posture: warn (not hard-fail) in
+ * production when unset, so a deployment that hasn't provisioned the
+ * photo bucket yet still boots and serves the rest of the app —
+ * captures simply fall back to non-durable storage and a misconfig
+ * is loud in the logs. The bucket + KMS key MUST match across
+ * instances so an upload routed to instance A and a dispatch routed
+ * to instance B resolve the same token row (the token row lives in
+ * Postgres, but the bytes live in the shared S3 bucket).
+ */
+async function buildPackagePhotoStorage(): Promise<{
+  readonly storage: PackagePhotoStorage;
+  readonly adapterName: "S3PackagePhotoStorage" | "InMemoryPackagePhotoStorage";
+}> {
+  const bucket = env.S3_PACKAGE_PHOTOS_BUCKET;
+  const kmsKeyId = env.S3_PACKAGE_PHOTOS_KMS_KEY_ID;
+  if (
+    typeof bucket !== "string" ||
+    bucket.length === 0 ||
+    typeof kmsKeyId !== "string" ||
+    kmsKeyId.length === 0
+  ) {
+    if (env.NODE_ENV === "production") {
+      logger.warn("apps/web booted without S3 package-photo storage", {
+        reason:
+          "S3_PACKAGE_PHOTOS_BUCKET or S3_PACKAGE_PHOTOS_KMS_KEY_ID unset; dock captures use non-durable in-memory storage and are lost on redeploy.",
+      });
+    }
+    return {
+      storage: new InMemoryPackagePhotoStorage(),
+      adapterName: "InMemoryPackagePhotoStorage",
+    };
+  }
+  const region = env.AWS_REGION;
+  if (typeof region !== "string" || region.length === 0) {
+    throw new Error(
+      "S3_PACKAGE_PHOTOS_BUCKET is set but AWS_REGION is missing. Set both to use S3 package-photo storage."
+    );
+  }
+  // Dynamic import keeps the AWS SDK out of the dev cold-start path
+  // for clones that don't use S3 (mirrors buildReportArchive).
+  const { S3Client, PutObjectCommand, GetObjectCommand } = await import("@aws-sdk/client-s3");
+  const client = new S3Client({ region });
+  return {
+    adapterName: "S3PackagePhotoStorage",
+    storage: new S3PackagePhotoStorage({
+      prisma,
+      bucket,
+      kmsKeyId,
+      s3: {
+        async putObject(input) {
+          const result = await client.send(
+            new PutObjectCommand({
+              Bucket: input.Bucket,
+              Key: input.Key,
+              Body: input.Body,
+              ContentType: input.ContentType,
+              ContentLength: input.ContentLength,
+              ChecksumSHA256: input.ChecksumSHA256,
+              ServerSideEncryption: input.ServerSideEncryption,
+              SSEKMSKeyId: input.SSEKMSKeyId,
+              Metadata: { ...input.Metadata },
+            })
+          );
+          return {
+            ...(result.ETag !== undefined ? { ETag: result.ETag } : {}),
+            ...(result.VersionId !== undefined ? { VersionId: result.VersionId } : {}),
+          };
+        },
+        async getObject(input) {
+          // Map a missing object to `null` (the image route 404s);
+          // re-throw anything else so a perms/network fault surfaces
+          // as a 5xx instead of a misleading "not found".
+          try {
+            const response = await client.send(
+              new GetObjectCommand({ Bucket: input.Bucket, Key: input.Key })
+            );
+            const body = response.Body;
+            if (body === undefined || body === null) return null;
+            const chunks: Buffer[] = [];
+            const stream = body as NodeJS.ReadableStream;
+            for await (const chunk of stream) {
+              chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
+            }
+            const buf = Buffer.concat(chunks);
+            return {
+              Body: new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength),
+              ...(response.ContentType !== undefined ? { ContentType: response.ContentType } : {}),
+            };
+          } catch (cause) {
+            if (isS3NotFound(cause)) return null;
+            throw cause;
+          }
+        },
+      },
+    }),
+  };
+}
+
+/**
+ * True when an AWS SDK error represents a missing object. The v3
+ * SDK throws a `NoSuchKey` (named error) for a GET on a key that
+ * doesn't exist; some endpoints surface it as a 404 in
+ * `$metadata.httpStatusCode`. Match both so a swept/never-written
+ * object resolves to a 404 rather than a 5xx.
+ */
+function isS3NotFound(cause: unknown): boolean {
+  if (typeof cause !== "object" || cause === null) return false;
+  const name = (cause as { name?: unknown }).name;
+  if (name === "NoSuchKey" || name === "NotFound") return true;
+  const status = (cause as { $metadata?: { httpStatusCode?: unknown } }).$metadata?.httpStatusCode;
+  return status === 404;
 }
 
 /**
@@ -276,26 +403,25 @@ async function doBootstrap(): Promise<void> {
 
   // 3.1 @pharmax/package-capture — wire the package-photo storage
   // adapter that backs `CapturePackagePhoto`'s upload-token resolver
-  // and the multipart `beginUpload` HTTP route.
+  // and the multipart `beginUpload` HTTP route (used by both the
+  // dock-capture orchestrator and the JSON upload route).
   //
-  // Today (Phase 5 backend slice) we wire the in-memory adapter
-  // unconditionally: the operator UI is JS-driven and posts photos
-  // to the web tier, which forwards them to the configured adapter;
-  // the in-memory adapter keeps bytes in process memory keyed by
-  // `(organizationId, sha256)`. That's deliberately a no-op for
-  // production durability — the production `S3PackagePhotoStorage`
-  // adapter is a follow-up that wires SSE-KMS encryption + the
-  // pre-signed-URL variant for client-direct uploads. A misconfig
-  // there will surface here as `PACKAGE_PHOTO_STORAGE_NOT_CONFIGURED`
-  // on first dispatch, NOT as a silent fallback.
+  // Production: `S3PackagePhotoStorage` (when S3_PACKAGE_PHOTOS_BUCKET
+  // + S3_PACKAGE_PHOTOS_KMS_KEY_ID + AWS_REGION are set) writes bytes
+  // to S3 under SSE-KMS and persists the opaque upload-token row to
+  // Postgres so the upload and dispatch steps resolve across web-tier
+  // instances.
   //
-  // Process-memory storage means a Next.js redeploy drops every
-  // captured photo that hasn't been flushed downstream — acceptable
-  // for the dev / staging slice; the S3 adapter closes that loop in
-  // the same PR as the dock-side capture UI lands.
-  configurePackagePhotoStorage({
-    storage: new InMemoryPackagePhotoStorage(),
-  });
+  // Dev / staging (or prod without the env vars): the in-memory
+  // adapter keeps bytes in process memory keyed by
+  // `(organizationId, sha256)`. A redeploy drops every in-flight
+  // capture — acceptable for non-prod, loud-warned in prod (see
+  // buildPackagePhotoStorage). Crypto MUST be wired first (above):
+  // the S3 adapter relies on the SSE-KMS key referenced by
+  // S3_PACKAGE_PHOTOS_KMS_KEY_ID, which is the same KMS surface the
+  // rest of the app uses.
+  const packagePhotoStorage = await buildPackagePhotoStorage();
+  configurePackagePhotoStorage({ storage: packagePhotoStorage.storage });
 
   // 3.2 @pharmax/reporting CSV archive. Web tier needs READ access
   // (the `/api/ops/reports/runs/[id]/download` route streams the
@@ -337,7 +463,7 @@ async function doBootstrap(): Promise<void> {
     nodeEnv: env.NODE_ENV,
     cryptoAdapter: adapterName,
     shippingProviders: ["EASYPOST", "FEDEX", "UPS"],
-    packagePhotoStorage: "InMemoryPackagePhotoStorage",
+    packagePhotoStorage: packagePhotoStorage.adapterName,
     stripeRefundReady: stripeRefundPort !== null,
     sentryReady,
     telemetryReady: telemetryHandle?.enabled === true,

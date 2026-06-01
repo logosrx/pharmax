@@ -28,7 +28,7 @@
 import "server-only";
 
 import {
-  prisma,
+  readInOrgScope,
   type OrderPriority,
   type OrderStatus,
   type ShipmentCarrier,
@@ -75,118 +75,120 @@ export async function listShippingQueue(input: {
 }): Promise<ListShippingQueueResult> {
   const limit = Math.min(input.limit ?? 100, 500);
 
-  const bucket = await prisma.bucket.findUnique({
-    where: {
-      organizationId_code: {
-        organizationId: input.organizationId,
-        code: "SHIPPING",
+  return readInOrgScope(input.organizationId, async (tx) => {
+    const bucket = await tx.bucket.findUnique({
+      where: {
+        organizationId_code: {
+          organizationId: input.organizationId,
+          code: "SHIPPING",
+        },
       },
-    },
-    select: { id: true, name: true },
-  });
-  if (bucket === null) {
-    return Object.freeze({
-      bucketExists: false,
-      bucketId: null,
-      bucketName: null,
-      rows: [],
+      select: { id: true, name: true },
     });
-  }
+    if (bucket === null) {
+      return Object.freeze({
+        bucketExists: false,
+        bucketId: null,
+        bucketName: null,
+        rows: [],
+      });
+    }
 
-  const orders = await prisma.order.findMany({
-    where: {
-      organizationId: input.organizationId,
-      currentBucketId: bucket.id,
-    },
-    select: {
-      id: true,
-      externalOrderNumber: true,
-      currentStatus: true,
-      priority: true,
-      clinicId: true,
-      siteId: true,
-      receivedAt: true,
-      slaDeadlineAt: true,
-      currentAssigneeUserId: true,
-      version: true,
-    },
-    orderBy: [{ priority: "desc" }, { slaDeadlineAt: "asc" }, { receivedAt: "asc" }],
-    take: limit,
-  });
+    const orders = await tx.order.findMany({
+      where: {
+        organizationId: input.organizationId,
+        currentBucketId: bucket.id,
+      },
+      select: {
+        id: true,
+        externalOrderNumber: true,
+        currentStatus: true,
+        priority: true,
+        clinicId: true,
+        siteId: true,
+        receivedAt: true,
+        slaDeadlineAt: true,
+        currentAssigneeUserId: true,
+        version: true,
+      },
+      orderBy: [{ priority: "desc" }, { slaDeadlineAt: "asc" }, { receivedAt: "asc" }],
+      take: limit,
+    });
 
-  if (orders.length === 0) {
+    if (orders.length === 0) {
+      return Object.freeze({
+        bucketExists: true,
+        bucketId: bucket.id,
+        bucketName: bucket.name,
+        rows: [],
+      });
+    }
+
+    // Fetch shipments for these orders in one round-trip. We sort
+    // newest-first and reduce to a per-order map keyed on
+    // `orderId` — v1 enforces at most one shipment per order at the
+    // command layer, but we pick the most recent to be defensive
+    // against any historical data drift.
+    const shipments = await tx.shipment.findMany({
+      where: {
+        organizationId: input.organizationId,
+        orderId: { in: orders.map((o) => o.id) },
+      },
+      select: {
+        id: true,
+        orderId: true,
+        status: true,
+        carrier: true,
+        serviceLevel: true,
+        trackingNumber: true,
+        externalTrackerId: true,
+        lastTrackingEventAt: true,
+        lastTrackingEventKind: true,
+        createdAt: true,
+        confirmedAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const shipmentByOrderId = new Map<string, ShippingQueueShipment>();
+    for (const s of shipments) {
+      if (shipmentByOrderId.has(s.orderId)) continue;
+      shipmentByOrderId.set(
+        s.orderId,
+        Object.freeze({
+          shipmentId: s.id,
+          status: s.status,
+          carrier: s.carrier,
+          serviceLevel: s.serviceLevel,
+          trackingNumber: s.trackingNumber,
+          externalTrackerId: s.externalTrackerId,
+          lastTrackingEventAt: s.lastTrackingEventAt,
+          lastTrackingEventKind: s.lastTrackingEventKind,
+          createdAt: s.createdAt,
+          confirmedAt: s.confirmedAt,
+        })
+      );
+    }
+
     return Object.freeze({
       bucketExists: true,
       bucketId: bucket.id,
       bucketName: bucket.name,
-      rows: [],
+      rows: orders.map((o) =>
+        Object.freeze({
+          orderId: o.id,
+          externalOrderNumber: o.externalOrderNumber,
+          currentStatus: o.currentStatus,
+          priority: o.priority,
+          clinicId: o.clinicId,
+          siteId: o.siteId,
+          receivedAt: o.receivedAt,
+          slaDeadlineAt: o.slaDeadlineAt,
+          currentAssigneeUserId: o.currentAssigneeUserId,
+          version: o.version,
+          shipment: shipmentByOrderId.get(o.id) ?? null,
+        })
+      ),
     });
-  }
-
-  // Fetch shipments for these orders in one round-trip. We sort
-  // newest-first and reduce to a per-order map keyed on
-  // `orderId` — v1 enforces at most one shipment per order at the
-  // command layer, but we pick the most recent to be defensive
-  // against any historical data drift.
-  const shipments = await prisma.shipment.findMany({
-    where: {
-      organizationId: input.organizationId,
-      orderId: { in: orders.map((o) => o.id) },
-    },
-    select: {
-      id: true,
-      orderId: true,
-      status: true,
-      carrier: true,
-      serviceLevel: true,
-      trackingNumber: true,
-      externalTrackerId: true,
-      lastTrackingEventAt: true,
-      lastTrackingEventKind: true,
-      createdAt: true,
-      confirmedAt: true,
-    },
-    orderBy: { createdAt: "desc" },
-  });
-
-  const shipmentByOrderId = new Map<string, ShippingQueueShipment>();
-  for (const s of shipments) {
-    if (shipmentByOrderId.has(s.orderId)) continue;
-    shipmentByOrderId.set(
-      s.orderId,
-      Object.freeze({
-        shipmentId: s.id,
-        status: s.status,
-        carrier: s.carrier,
-        serviceLevel: s.serviceLevel,
-        trackingNumber: s.trackingNumber,
-        externalTrackerId: s.externalTrackerId,
-        lastTrackingEventAt: s.lastTrackingEventAt,
-        lastTrackingEventKind: s.lastTrackingEventKind,
-        createdAt: s.createdAt,
-        confirmedAt: s.confirmedAt,
-      })
-    );
-  }
-
-  return Object.freeze({
-    bucketExists: true,
-    bucketId: bucket.id,
-    bucketName: bucket.name,
-    rows: orders.map((o) =>
-      Object.freeze({
-        orderId: o.id,
-        externalOrderNumber: o.externalOrderNumber,
-        currentStatus: o.currentStatus,
-        priority: o.priority,
-        clinicId: o.clinicId,
-        siteId: o.siteId,
-        receivedAt: o.receivedAt,
-        slaDeadlineAt: o.slaDeadlineAt,
-        currentAssigneeUserId: o.currentAssigneeUserId,
-        version: o.version,
-        shipment: shipmentByOrderId.get(o.id) ?? null,
-      })
-    ),
   });
 }

@@ -12,8 +12,12 @@
 export { prisma } from "./scoped-client.js";
 // The raw, UNSCOPED client. Cross-tenant system/bootstrap code only.
 export { systemPrisma } from "./client.js";
-// Both-layers (ORM extension + RLS GUC) tenant-scoped read wrapper.
-export { readInTenantContext, type TenantTransactionClient } from "./scoped-read.js";
+// Tenant-scoped read wrappers (ORM extension + optional RLS GUC).
+export {
+  readInTenantContext,
+  readInOrgScope,
+  type TenantTransactionClient,
+} from "./scoped-read.js";
 export * as billing from "./billing/index.js";
 export * as phi from "./phi/index.js";
 export {

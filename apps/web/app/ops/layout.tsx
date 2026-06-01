@@ -53,6 +53,11 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
     requires: PERMISSIONS.SHIP_CAPTURE_PACKAGE_PHOTO,
   },
   {
+    href: "/ops/shipping/unmatched",
+    label: "Shipping · Unmatched photos",
+    requires: PERMISSIONS.SHIP_RESOLVE_PACKAGE_PHOTO_MATCH,
+  },
+  {
     href: "/ops/emergency",
     label: "Emergency queue",
     requires: PERMISSIONS.SHIP_RESOLVE_ESCALATION,
@@ -88,7 +93,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   {
     href: "/ops/admin/notifications",
     label: "Admin · Notifications",
-    requires: PERMISSIONS.REPORTS_MANAGE_SCHEDULE,
+    requires: PERMISSIONS.NOTIFICATIONS_READ,
   },
 ];
 

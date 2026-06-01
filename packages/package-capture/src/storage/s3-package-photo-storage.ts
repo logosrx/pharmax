@@ -76,6 +76,8 @@ import {
 } from "@pharmax/tenancy";
 
 import type {
+  PackagePhotoObject,
+  PackagePhotoReadInput,
   PackagePhotoStorage,
   PackagePhotoUploadInput,
   PackagePhotoUploadResult,
@@ -94,6 +96,26 @@ import type {
 
 export interface S3UploadClient {
   putObject(input: S3PutObjectInput): Promise<S3PutObjectOutput>;
+  /**
+   * Fetch an object's bytes back. MUST resolve to `null` (not throw)
+   * when the object does not exist (`NoSuchKey` / 404) so the image
+   * route can map a missing object to a clean 404. Any other failure
+   * (permissions, network) should reject so the route surfaces a
+   * 5xx. The composition root's shim is responsible for the
+   * stream-to-`Uint8Array` collection.
+   */
+  getObject(input: S3GetObjectInput): Promise<S3GetObjectOutput | null>;
+}
+
+export interface S3GetObjectInput {
+  readonly Bucket: string;
+  readonly Key: string;
+}
+
+export interface S3GetObjectOutput {
+  /** Fully-buffered object bytes. */
+  readonly Body: Uint8Array;
+  readonly ContentType?: string;
 }
 
 export interface S3PutObjectInput {
@@ -355,6 +377,24 @@ export class S3PackagePhotoStorage implements PackagePhotoStorage {
       fileSize: row.fileSize,
       contentType: row.contentType,
       organizationId: row.organizationId,
+    };
+  }
+
+  async readObject(input: PackagePhotoReadInput): Promise<PackagePhotoObject | null> {
+    // Defense in depth: every key this adapter writes is
+    // `org/{orgId}/photo/...`. A row whose storageKey is not
+    // prefixed for the requested org is corrupt or hostile — refuse
+    // to fetch rather than risk serving cross-tenant bytes. The
+    // route already RLS-scoped the package_photo row; this is the
+    // belt to that braces.
+    if (!input.key.startsWith(`org/${input.organizationId}/`)) {
+      return null;
+    }
+    const got = await this.s3.getObject({ Bucket: input.bucket, Key: input.key });
+    if (got === null) return null;
+    return {
+      bytes: got.Body,
+      contentType: got.ContentType ?? "application/octet-stream",
     };
   }
 }

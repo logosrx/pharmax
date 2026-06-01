@@ -17,8 +17,8 @@
 
 import "server-only";
 
-import { prisma } from "@pharmax/database";
-import { withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
+import { readInTenantContext } from "@pharmax/database";
+import { type TenancyContext } from "@pharmax/tenancy";
 
 export interface ReportRunListRow {
   readonly id: string;
@@ -87,8 +87,8 @@ export async function listReportRuns(input: {
   readonly limit?: number;
 }): Promise<ReadonlyArray<ReportRunListRow>> {
   const limit = input.limit ?? 100;
-  return withTenancyContext(input.tenancy, async () => {
-    const rows = await prisma.reportRun.findMany({
+  return readInTenantContext(input.tenancy, async (tx) => {
+    const rows = await tx.reportRun.findMany({
       orderBy: { generatedAt: "desc" },
       take: limit,
       select: SELECT,
@@ -103,8 +103,8 @@ export async function listReportRunsBySchedule(input: {
   readonly limit?: number;
 }): Promise<ReadonlyArray<ReportRunListRow>> {
   const limit = input.limit ?? 100;
-  return withTenancyContext(input.tenancy, async () => {
-    const rows = await prisma.reportRun.findMany({
+  return readInTenantContext(input.tenancy, async (tx) => {
+    const rows = await tx.reportRun.findMany({
       where: { runViaScheduleId: input.scheduleId },
       orderBy: { generatedAt: "desc" },
       take: limit,
@@ -136,8 +136,8 @@ export async function getReportRunForDownload(input: {
   readonly tenancy: TenancyContext;
   readonly reportRunId: string;
 }): Promise<ReportRunDownloadDescriptor | null> {
-  return withTenancyContext(input.tenancy, async () => {
-    const row = await prisma.reportRun.findFirst({
+  return readInTenantContext(input.tenancy, async (tx) => {
+    const row = await tx.reportRun.findFirst({
       where: { id: input.reportRunId },
       select: {
         id: true,

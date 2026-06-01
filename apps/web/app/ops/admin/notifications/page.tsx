@@ -7,11 +7,10 @@
 // (a bouncing recipient on a schedule means the report isn't
 // reaching someone).
 //
-// Permission gate: `reports.manage_schedule`. Today the only
-// notifications are scheduled-report emails, so the schedule
-// admins are exactly who needs delivery health. When notifications
-// expand beyond reports, introduce a dedicated `notifications.read`
-// permission.
+// Permission gate: `notifications.read` — a dedicated read
+// permission so delivery-health visibility is decoupled from
+// schedule management (and from reports entirely, ahead of
+// notifications expanding beyond scheduled reports).
 
 import Link from "next/link";
 
@@ -63,12 +62,12 @@ export default async function NotificationsHealthPage({ searchParams }: PageProp
     );
   }
   const permissions = await loadOperatorPermissions(result.tenancy);
-  if (!hasOperatorPermission(permissions, PERMISSIONS.REPORTS_MANAGE_SCHEDULE)) {
+  if (!hasOperatorPermission(permissions, PERMISSIONS.NOTIFICATIONS_READ)) {
     return (
       <main className="space-y-2 p-6 text-neutral-100">
         <h1 className="text-2xl font-semibold">Notification delivery</h1>
         <p className="text-rose-300">
-          Your role does not include <code>reports.manage_schedule</code>.
+          Your role does not include <code>notifications.read</code>.
         </p>
       </main>
     );

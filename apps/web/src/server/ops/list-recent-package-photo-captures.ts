@@ -32,7 +32,7 @@ import "server-only";
 import {
   type PackagePhotoMatchStrategy,
   type PackagePhotoTrackingSource,
-  prisma,
+  readInOrgScope,
 } from "@pharmax/database";
 
 export interface RecentPackagePhotoCapture {
@@ -60,47 +60,49 @@ export async function listRecentPackagePhotoCaptures(input: {
 }): Promise<ReadonlyArray<RecentPackagePhotoCapture>> {
   const limit = clampLimit(input.limit);
 
-  const rows = await prisma.packagePhoto.findMany({
-    where: {
-      organizationId: input.organizationId,
-      capturedByUserId: input.capturedByUserId,
-    },
-    select: {
-      id: true,
-      capturedAt: true,
-      pharmacyExternalOrderNumber: true,
-      matched: true,
-      matchStrategy: true,
-      matchedOrderId: true,
-      matchedPatientId: true,
-      trackingNumber: true,
-      trackingSource: true,
-      sha256: true,
-      contentType: true,
-      fileSize: true,
-    },
-    // Index `(organizationId, capturedByUserId, capturedAt)` makes
-    // this a single index range scan; LIMIT pushes down.
-    orderBy: { capturedAt: "desc" },
-    take: limit,
-  });
+  return readInOrgScope(input.organizationId, async (tx) => {
+    const rows = await tx.packagePhoto.findMany({
+      where: {
+        organizationId: input.organizationId,
+        capturedByUserId: input.capturedByUserId,
+      },
+      select: {
+        id: true,
+        capturedAt: true,
+        pharmacyExternalOrderNumber: true,
+        matched: true,
+        matchStrategy: true,
+        matchedOrderId: true,
+        matchedPatientId: true,
+        trackingNumber: true,
+        trackingSource: true,
+        sha256: true,
+        contentType: true,
+        fileSize: true,
+      },
+      // Index `(organizationId, capturedByUserId, capturedAt)` makes
+      // this a single index range scan; LIMIT pushes down.
+      orderBy: { capturedAt: "desc" },
+      take: limit,
+    });
 
-  return rows.map((r) =>
-    Object.freeze({
-      photoId: r.id,
-      capturedAt: r.capturedAt,
-      pharmacyExternalOrderNumber: r.pharmacyExternalOrderNumber,
-      matched: r.matched,
-      matchStrategy: r.matchStrategy,
-      matchedOrderId: r.matchedOrderId,
-      matchedPatientId: r.matchedPatientId,
-      trackingNumber: r.trackingNumber,
-      trackingSource: r.trackingSource,
-      sha256: r.sha256,
-      contentType: r.contentType,
-      fileSize: r.fileSize,
-    })
-  );
+    return rows.map((r) =>
+      Object.freeze({
+        photoId: r.id,
+        capturedAt: r.capturedAt,
+        pharmacyExternalOrderNumber: r.pharmacyExternalOrderNumber,
+        matched: r.matched,
+        matchStrategy: r.matchStrategy,
+        matchedOrderId: r.matchedOrderId,
+        matchedPatientId: r.matchedPatientId,
+        trackingNumber: r.trackingNumber,
+        trackingSource: r.trackingSource,
+        sha256: r.sha256,
+        contentType: r.contentType,
+        fileSize: r.fileSize,
+      })
+    );
+  });
 }
 
 function clampLimit(limit: number | undefined): number {

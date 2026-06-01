@@ -15,8 +15,13 @@
 
 import type { ZodTypeAny } from "zod";
 
+import { billingSummaryByClinicReport } from "./reports/billing-summary-by-clinic.js";
+import { lotExpiryWarningsReport } from "./reports/lot-expiry-warnings.js";
 import { orderVolumeByStageReport } from "./reports/order-volume-by-stage.js";
+import { shipmentExceptionBreakdownReport } from "./reports/shipment-exception-breakdown.js";
 import { slaBreachReport } from "./reports/sla-breach-report.js";
+import { userProductivityByStageReport } from "./reports/user-productivity-by-stage.js";
+import { verificationRejectionRateReport } from "./reports/verification-rejection-rate.js";
 import type { ReportDefinition } from "./types.js";
 
 /**
@@ -35,4 +40,12 @@ export type ReportDefinitionAny = ReportDefinition<ZodTypeAny, Record<string, un
 export const REPORT_REGISTRY: Readonly<Record<string, ReportDefinitionAny>> = Object.freeze({
   [orderVolumeByStageReport.id]: orderVolumeByStageReport as unknown as ReportDefinitionAny,
   [slaBreachReport.id]: slaBreachReport as unknown as ReportDefinitionAny,
+  [shipmentExceptionBreakdownReport.id]:
+    shipmentExceptionBreakdownReport as unknown as ReportDefinitionAny,
+  [lotExpiryWarningsReport.id]: lotExpiryWarningsReport as unknown as ReportDefinitionAny,
+  [billingSummaryByClinicReport.id]: billingSummaryByClinicReport as unknown as ReportDefinitionAny,
+  [userProductivityByStageReport.id]:
+    userProductivityByStageReport as unknown as ReportDefinitionAny,
+  [verificationRejectionRateReport.id]:
+    verificationRejectionRateReport as unknown as ReportDefinitionAny,
 });

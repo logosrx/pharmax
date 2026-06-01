@@ -21,7 +21,13 @@ const prismaMock = {
 
 vi.mock("@pharmax/database", async () => {
   const actual = await vi.importActual<typeof DatabaseModule>("@pharmax/database");
-  return { ...actual, prisma: prismaMock };
+  return {
+    ...actual,
+    prisma: prismaMock,
+    readInOrgScope: (_org: string, fn: (tx: unknown) => unknown) => fn(prismaMock),
+    withOrgScope: (_org: string, fn: () => unknown) => fn(),
+    readInTenantContext: (_ctx: unknown, fn: (tx: unknown) => unknown) => fn(prismaMock),
+  };
 });
 
 const { listRecentPackagePhotoCaptures } = await import("./list-recent-package-photo-captures.js");

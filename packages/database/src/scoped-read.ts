@@ -28,8 +28,10 @@
 //     connection the GUC is set but ignored — harmless, and the ORM
 //     layer still enforces isolation.
 
+import { ids } from "@pharmax/platform-core";
 import {
   applyTenancySessionGuc,
+  buildTenancyContext,
   withTenancyContext,
   type SessionGucExecutor,
   type TenancyContext,
@@ -37,6 +39,25 @@ import {
 
 import { prisma } from "./scoped-client.js";
 import type { PrismaClient } from "./generated/client/index.js";
+
+// Sentinel actor for server-side READ scopes that have authenticated
+// the operator and resolved their org, but do not have (or need) the
+// full command actor. Read projections never write command_log /
+// audit_log / event_outbox, so the actor is never persisted — both
+// enforcement layers (the tenancy extension and the RLS GUC) read
+// only `organizationId`. Using a sentinel keeps the read helpers'
+// `{ organizationId }` signatures stable while still establishing a
+// real tenancy frame. NEVER perform a mutating command inside a
+// read scope — route those through the command bus with the real
+// operator context instead.
+const READ_SCOPE_SENTINEL_USER_ID = "00000000-0000-0000-0000-000000000000";
+
+function buildReadScopeContext(organizationId: string): TenancyContext {
+  return buildTenancyContext({
+    organizationId,
+    actor: { userId: READ_SCOPE_SENTINEL_USER_ID, correlationId: ids.generateUlid() },
+  });
+}
 
 /**
  * The interactive-transaction client shape Prisma passes to the
@@ -65,3 +86,29 @@ export function readInTenantContext<T>(
     })
   );
 }
+
+/**
+ * Both-layers read scope keyed by `organizationId` (for read helpers
+ * that take a bare org id rather than a full `TenancyContext`). Opens
+ * a transaction, sets the RLS GUC, and runs `fn` with a tenant-scoped
+ * `tx` client inside the tenancy frame.
+ *
+ * Queries inside `fn` MUST use the provided `tx`. Because this opens
+ * an interactive transaction, do NOT perform slow non-DB work (e.g.
+ * KMS decryption) inside `fn` — that would hold the connection. For
+ * read flows that interleave KMS/HTTP work, use `withOrgScope`
+ * (frame-only) instead and accept ORM-layer isolation only.
+ */
+export function readInOrgScope<T>(
+  organizationId: string,
+  fn: (tx: TenantTransactionClient) => Promise<T>
+): Promise<T> {
+  return readInTenantContext(buildReadScopeContext(organizationId), fn);
+}
+
+// NOTE: a frame-only (`withTenancyContext` without the RLS GUC) read
+// scope was deliberately removed. Every read path must engage BOTH
+// layers so the runtime can connect as the non-BYPASSRLS `pharmax_app`
+// role. Reads that interleave slow non-DB work (e.g. PHI decryption)
+// must split into "load rows in `readInOrgScope` (tx) → process after
+// the tx closes" rather than holding the connection open.

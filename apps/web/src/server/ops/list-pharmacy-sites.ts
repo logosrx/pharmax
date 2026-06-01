@@ -7,7 +7,7 @@
 
 import "server-only";
 
-import { prisma, type SiteStatus } from "@pharmax/database";
+import { readInOrgScope, type SiteStatus } from "@pharmax/database";
 
 export interface PharmacySiteRow {
   readonly siteId: string;
@@ -49,40 +49,42 @@ function computeAddressComplete(row: {
 export async function listPharmacySites(input: {
   readonly organizationId: string;
 }): Promise<ReadonlyArray<PharmacySiteRow>> {
-  const rows = await prisma.pharmacySite.findMany({
-    where: { organizationId: input.organizationId },
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      status: true,
-      timezone: true,
-      addressLine1: true,
-      addressLine2: true,
-      city: true,
-      state: true,
-      postalCode: true,
-      country: true,
-      phone: true,
-    },
-    orderBy: [{ status: "asc" }, { code: "asc" }],
-  });
+  return readInOrgScope(input.organizationId, async (tx) => {
+    const rows = await tx.pharmacySite.findMany({
+      where: { organizationId: input.organizationId },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        status: true,
+        timezone: true,
+        addressLine1: true,
+        addressLine2: true,
+        city: true,
+        state: true,
+        postalCode: true,
+        country: true,
+        phone: true,
+      },
+      orderBy: [{ status: "asc" }, { code: "asc" }],
+    });
 
-  return rows.map((r) =>
-    Object.freeze({
-      siteId: r.id,
-      code: r.code,
-      name: r.name,
-      status: r.status,
-      timezone: r.timezone,
-      addressLine1: r.addressLine1,
-      addressLine2: r.addressLine2,
-      city: r.city,
-      state: r.state,
-      postalCode: r.postalCode,
-      country: r.country,
-      phone: r.phone,
-      addressComplete: computeAddressComplete(r),
-    })
-  );
+    return rows.map((r) =>
+      Object.freeze({
+        siteId: r.id,
+        code: r.code,
+        name: r.name,
+        status: r.status,
+        timezone: r.timezone,
+        addressLine1: r.addressLine1,
+        addressLine2: r.addressLine2,
+        city: r.city,
+        state: r.state,
+        postalCode: r.postalCode,
+        country: r.country,
+        phone: r.phone,
+        addressComplete: computeAddressComplete(r),
+      })
+    );
+  });
 }

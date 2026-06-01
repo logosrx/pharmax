@@ -9,9 +9,9 @@
 
 import "server-only";
 
-import { prisma } from "@pharmax/database";
+import { readInTenantContext } from "@pharmax/database";
 import type { NotificationDeliveryStatus } from "@pharmax/database";
-import { withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
+import { type TenancyContext } from "@pharmax/tenancy";
 
 export interface NotificationDeliveryListRow {
   readonly id: string;
@@ -53,8 +53,8 @@ export async function listNotificationDeliveries(input: {
   readonly problemsOnly?: boolean;
 }): Promise<ReadonlyArray<NotificationDeliveryListRow>> {
   const limit = input.limit ?? 100;
-  return withTenancyContext(input.tenancy, async () => {
-    const rows = await prisma.notificationDelivery.findMany({
+  return readInTenantContext(input.tenancy, async (tx) => {
+    const rows = await tx.notificationDelivery.findMany({
       ...(input.problemsOnly === true
         ? { where: { status: { in: [...PROBLEM_DELIVERY_STATUSES] } } }
         : {}),
@@ -180,8 +180,8 @@ export async function rollupDeliveriesByReportRun(input: {
   readonly reportRunIds: ReadonlyArray<string>;
 }): Promise<ReadonlyMap<string, DeliveryRollup>> {
   if (input.reportRunIds.length === 0) return new Map();
-  return withTenancyContext(input.tenancy, async () => {
-    const rows = await prisma.notificationDelivery.findMany({
+  return readInTenantContext(input.tenancy, async (tx) => {
+    const rows = await tx.notificationDelivery.findMany({
       where: { correlationId: { in: [...input.reportRunIds] } },
       select: { correlationId: true, status: true },
     });

@@ -22,7 +22,13 @@ const prismaMock = {
 
 vi.mock("@pharmax/database", async () => {
   const actual = await vi.importActual<typeof DatabaseModule>("@pharmax/database");
-  return { ...actual, prisma: prismaMock };
+  return {
+    ...actual,
+    prisma: prismaMock,
+    readInOrgScope: (_org: string, fn: (tx: unknown) => unknown) => fn(prismaMock),
+    withOrgScope: (_org: string, fn: () => unknown) => fn(),
+    readInTenantContext: (_ctx: unknown, fn: (tx: unknown) => unknown) => fn(prismaMock),
+  };
 });
 
 const { listShippingQueue } = await import("./list-shipping-queue.js");

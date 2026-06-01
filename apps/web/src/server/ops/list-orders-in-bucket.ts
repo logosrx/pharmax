@@ -14,7 +14,7 @@
 
 import "server-only";
 
-import { prisma, type OrderPriority, type OrderStatus } from "@pharmax/database";
+import { readInOrgScope, type OrderPriority, type OrderStatus } from "@pharmax/database";
 
 export interface BucketOrderRow {
   readonly orderId: string;
@@ -45,68 +45,70 @@ export async function listOrdersInBucketByCode(input: {
 }): Promise<ListBucketResult> {
   const limit = Math.min(input.limit ?? 100, 500);
 
-  const bucket = await prisma.bucket.findUnique({
-    where: {
-      organizationId_code: {
-        organizationId: input.organizationId,
-        code: input.bucketCode,
+  return readInOrgScope(input.organizationId, async (tx) => {
+    const bucket = await tx.bucket.findUnique({
+      where: {
+        organizationId_code: {
+          organizationId: input.organizationId,
+          code: input.bucketCode,
+        },
       },
-    },
-    select: { id: true, name: true },
-  });
-  if (bucket === null) {
-    return Object.freeze({
-      bucketExists: false,
-      bucketId: null,
-      bucketName: null,
-      rows: [],
+      select: { id: true, name: true },
     });
-  }
+    if (bucket === null) {
+      return Object.freeze({
+        bucketExists: false,
+        bucketId: null,
+        bucketName: null,
+        rows: [],
+      });
+    }
 
-  const orders = await prisma.order.findMany({
-    where: {
-      organizationId: input.organizationId,
-      currentBucketId: bucket.id,
-    },
-    select: {
-      id: true,
-      externalOrderNumber: true,
-      currentStatus: true,
-      priority: true,
-      clinicId: true,
-      siteId: true,
-      receivedAt: true,
-      updatedAt: true,
-      slaDeadlineAt: true,
-      currentAssigneeUserId: true,
-      version: true,
-    },
-    // Queue scanner shape — match the covering index:
-    //   (organizationId, currentBucketId, currentStatus, priority,
-    //    slaDeadlineAt, receivedAt)
-    // Postgres serves this from one btree without a sort step.
-    orderBy: [{ priority: "desc" }, { slaDeadlineAt: "asc" }, { receivedAt: "asc" }],
-    take: limit,
-  });
+    const orders = await tx.order.findMany({
+      where: {
+        organizationId: input.organizationId,
+        currentBucketId: bucket.id,
+      },
+      select: {
+        id: true,
+        externalOrderNumber: true,
+        currentStatus: true,
+        priority: true,
+        clinicId: true,
+        siteId: true,
+        receivedAt: true,
+        updatedAt: true,
+        slaDeadlineAt: true,
+        currentAssigneeUserId: true,
+        version: true,
+      },
+      // Queue scanner shape — match the covering index:
+      //   (organizationId, currentBucketId, currentStatus, priority,
+      //    slaDeadlineAt, receivedAt)
+      // Postgres serves this from one btree without a sort step.
+      orderBy: [{ priority: "desc" }, { slaDeadlineAt: "asc" }, { receivedAt: "asc" }],
+      take: limit,
+    });
 
-  return Object.freeze({
-    bucketExists: true,
-    bucketId: bucket.id,
-    bucketName: bucket.name,
-    rows: orders.map((o) =>
-      Object.freeze({
-        orderId: o.id,
-        externalOrderNumber: o.externalOrderNumber,
-        currentStatus: o.currentStatus,
-        priority: o.priority,
-        clinicId: o.clinicId,
-        siteId: o.siteId,
-        receivedAt: o.receivedAt,
-        enteredBucketAt: o.updatedAt,
-        slaDeadlineAt: o.slaDeadlineAt,
-        currentAssigneeUserId: o.currentAssigneeUserId,
-        version: o.version,
-      })
-    ),
+    return Object.freeze({
+      bucketExists: true,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      rows: orders.map((o) =>
+        Object.freeze({
+          orderId: o.id,
+          externalOrderNumber: o.externalOrderNumber,
+          currentStatus: o.currentStatus,
+          priority: o.priority,
+          clinicId: o.clinicId,
+          siteId: o.siteId,
+          receivedAt: o.receivedAt,
+          enteredBucketAt: o.updatedAt,
+          slaDeadlineAt: o.slaDeadlineAt,
+          currentAssigneeUserId: o.currentAssigneeUserId,
+          version: o.version,
+        })
+      ),
+    });
   });
 }

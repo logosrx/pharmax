@@ -13,6 +13,9 @@ const prismaMock = {
 
 vi.mock("@pharmax/database", () => ({
   prisma: prismaMock,
+  readInOrgScope: (_org: string, fn: (tx: unknown) => unknown) => fn(prismaMock),
+  withOrgScope: (_org: string, fn: () => unknown) => fn(),
+  readInTenantContext: (_ctx: unknown, fn: (tx: unknown) => unknown) => fn(prismaMock),
 }));
 
 const { listInvoices, getInvoiceDetail } = await import("./list-invoices.js");

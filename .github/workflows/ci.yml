@@ -165,6 +165,9 @@ jobs:
     #     against infra/terraform/modules/kms/main.tf so the auditor-
     #     facing inventory cannot silently drift from the IaC truth
     #     (closes the `kms3` follow-up).
+    #   - check:raw-prisma bans importing the raw, unscoped
+    #     `systemPrisma` client outside the reviewed allowlist, so the
+    #     tenancy-enforced `prisma` stays the only client app code uses.
     # Each is a TypeScript file under `scripts/`. They run sequentially
     # in this job because each is fast (sub-second).
     steps:
@@ -178,6 +181,7 @@ jobs:
       - run: pnpm check:schema
       - run: pnpm check:commands
       - run: pnpm check:kms-inventory
+      - run: pnpm check:raw-prisma
 
   test:
     name: Unit tests + coverage

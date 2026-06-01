@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PACKAGE_PHOTO_UPLOAD_TTL_MS,
   S3PackagePhotoStorage,
+  type S3GetObjectInput,
+  type S3GetObjectOutput,
   type S3PutObjectInput,
   type S3UploadClient,
 } from "./s3-package-photo-storage.js";
@@ -31,11 +33,26 @@ class FakeS3 implements S3UploadClient {
   public readonly calls: S3PutObjectInput[] = [];
   public nextResult: { ETag?: string } = { ETag: "etag-1" };
   public nextError: Error | null = null;
+  // Backing object store for getObject. putObject records here so
+  // readObject round-trips work in tests.
+  public readonly objects = new Map<string, { body: Uint8Array; contentType: string }>();
+  public getError: Error | null = null;
 
   async putObject(input: S3PutObjectInput): Promise<{ ETag?: string }> {
     this.calls.push(input);
     if (this.nextError !== null) throw this.nextError;
+    this.objects.set(`${input.Bucket}/${input.Key}`, {
+      body: input.Body,
+      contentType: input.ContentType,
+    });
     return this.nextResult;
+  }
+
+  async getObject(input: S3GetObjectInput): Promise<S3GetObjectOutput | null> {
+    if (this.getError !== null) throw this.getError;
+    const found = this.objects.get(`${input.Bucket}/${input.Key}`);
+    if (found === undefined) return null;
+    return { Body: found.body, ContentType: found.contentType };
   }
 }
 
@@ -378,5 +395,73 @@ describe("S3PackagePhotoStorage — cross-org round-trip", () => {
     expect(resolvedB?.organizationId).toBe(ORG_B);
     expect(resolvedA?.key.startsWith(`org/${ORG_A}/`)).toBe(true);
     expect(resolvedB?.key.startsWith(`org/${ORG_B}/`)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readObject.
+// ---------------------------------------------------------------------------
+
+describe("S3PackagePhotoStorage.readObject", () => {
+  it("round-trips the bytes written by beginUpload", async () => {
+    const issued = await withTenancyContext(ctx(ORG_A), () =>
+      storage.beginUpload({
+        organizationId: ORG_A,
+        contentType: "image/webp",
+        bytes: bytes("real-pixels"),
+      })
+    );
+
+    const got = await storage.readObject({
+      organizationId: ORG_A,
+      bucket: issued.bucket,
+      key: issued.key,
+    });
+
+    expect(got).not.toBeNull();
+    expect(new TextDecoder().decode(got!.bytes)).toBe("real-pixels");
+    expect(got!.contentType).toBe("image/webp");
+  });
+
+  it("returns null when the object is absent from the store", async () => {
+    const got = await storage.readObject({
+      organizationId: ORG_A,
+      bucket: "pharmax-package-photos-prod",
+      key: `org/${ORG_A}/photo/upload/never-written`,
+    });
+    expect(got).toBeNull();
+  });
+
+  it("refuses (null) when the key is not prefixed for the requesting org", async () => {
+    // A row whose storageKey points at ORG_B's prefix must not serve
+    // bytes to an ORG_A request, even if S3 has the object.
+    const issued = await withTenancyContext(ctx(ORG_B), () =>
+      storage.beginUpload({
+        organizationId: ORG_B,
+        contentType: "image/jpeg",
+        bytes: bytes("org-b-pixels"),
+      })
+    );
+
+    const got = await storage.readObject({
+      organizationId: ORG_A,
+      bucket: issued.bucket,
+      key: issued.key, // org/ORG_B/... — prefix mismatch
+    });
+    expect(got).toBeNull();
+  });
+
+  it("propagates a non-not-found S3 error (so the route can 5xx)", async () => {
+    const issued = await withTenancyContext(ctx(ORG_A), () =>
+      storage.beginUpload({
+        organizationId: ORG_A,
+        contentType: "image/jpeg",
+        bytes: bytes("boom"),
+      })
+    );
+    s3.getError = new Error("AccessDenied");
+    await expect(
+      storage.readObject({ organizationId: ORG_A, bucket: issued.bucket, key: issued.key })
+    ).rejects.toThrow(/AccessDenied/);
   });
 });

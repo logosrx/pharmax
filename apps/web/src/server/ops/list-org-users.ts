@@ -10,7 +10,7 @@
 
 import "server-only";
 
-import { prisma, type RoleScope, type UserStatus } from "@pharmax/database";
+import { readInOrgScope, type RoleScope, type UserStatus } from "@pharmax/database";
 
 export interface OrgUserGrant {
   readonly userRoleId: string;
@@ -57,8 +57,10 @@ export interface OrgAdminPageData {
 export async function loadOrgAdminPageData(input: {
   readonly organizationId: string;
 }): Promise<OrgAdminPageData> {
-  const [users, roles, sites] = await Promise.all([
-    prisma.user.findMany({
+  return readInOrgScope(input.organizationId, async (tx) => {
+    // Sequential (not Promise.all) because these run inside one
+    // interactive transaction on a single connection.
+    const users = await tx.user.findMany({
       where: { organizationId: input.organizationId },
       select: {
         id: true,
@@ -80,52 +82,52 @@ export async function loadOrgAdminPageData(input: {
         },
       },
       orderBy: [{ status: "asc" }, { email: "asc" }],
-    }),
-    prisma.role.findMany({
+    });
+    const roles = await tx.role.findMany({
       where: { organizationId: input.organizationId },
       select: { id: true, code: true, name: true, scope: true, isSystem: true },
       orderBy: [{ scope: "asc" }, { code: "asc" }],
-    }),
-    prisma.pharmacySite.findMany({
+    });
+    const sites = await tx.pharmacySite.findMany({
       where: { organizationId: input.organizationId, status: "ACTIVE" },
       select: { id: true, code: true, name: true },
       orderBy: { code: "asc" },
-    }),
-  ]);
+    });
 
-  return Object.freeze({
-    users: users.map((u) =>
-      Object.freeze({
-        userId: u.id,
-        email: u.email,
-        displayName: u.displayName,
-        status: u.status,
-        clerkUserId: u.clerkUserId,
-        lastLoginAt: u.lastLoginAt,
-        createdAt: u.createdAt,
-        grants: u.userRoles.map((g) =>
-          Object.freeze({
-            userRoleId: g.id,
-            roleId: g.roleId,
-            roleCode: g.role.code,
-            roleName: g.role.name,
-            roleScope: g.role.scope,
-            siteId: g.siteId,
-            clinicId: g.clinicId,
-            teamId: g.teamId,
-          })
-        ),
-      })
-    ),
-    roles: roles.map((r) =>
-      Object.freeze({
-        roleId: r.id,
-        code: r.code,
-        name: r.name,
-        scope: r.scope,
-        isSystem: r.isSystem,
-      })
-    ),
-    sites: sites.map((s) => Object.freeze({ siteId: s.id, code: s.code, name: s.name })),
+    return Object.freeze({
+      users: users.map((u) =>
+        Object.freeze({
+          userId: u.id,
+          email: u.email,
+          displayName: u.displayName,
+          status: u.status,
+          clerkUserId: u.clerkUserId,
+          lastLoginAt: u.lastLoginAt,
+          createdAt: u.createdAt,
+          grants: u.userRoles.map((g) =>
+            Object.freeze({
+              userRoleId: g.id,
+              roleId: g.roleId,
+              roleCode: g.role.code,
+              roleName: g.role.name,
+              roleScope: g.role.scope,
+              siteId: g.siteId,
+              clinicId: g.clinicId,
+              teamId: g.teamId,
+            })
+          ),
+        })
+      ),
+      roles: roles.map((r) =>
+        Object.freeze({
+          roleId: r.id,
+          code: r.code,
+          name: r.name,
+          scope: r.scope,
+          isSystem: r.isSystem,
+        })
+      ),
+      sites: sites.map((s) => Object.freeze({ siteId: s.id, code: s.code, name: s.name })),
+    });
   });
 }

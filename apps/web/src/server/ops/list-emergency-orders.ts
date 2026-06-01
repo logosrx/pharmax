@@ -21,7 +21,7 @@
 
 import "server-only";
 
-import { prisma } from "@pharmax/database";
+import { readInOrgScope } from "@pharmax/database";
 
 const EMERGENCY_BUCKET_CODE = "EMERGENCY";
 
@@ -57,79 +57,81 @@ export async function listEmergencyOrders(input: {
 }): Promise<ListEmergencyOrdersResult> {
   const limit = input.limit ?? 100;
 
-  const bucket = await prisma.bucket.findUnique({
-    where: {
-      organizationId_code: {
-        organizationId: input.organizationId,
-        code: EMERGENCY_BUCKET_CODE,
-      },
-    },
-    select: { id: true },
-  });
-  if (bucket === null) {
-    return Object.freeze({ bucketExists: false, rows: [] });
-  }
-
-  const orders = await prisma.order.findMany({
-    where: {
-      organizationId: input.organizationId,
-      currentBucketId: bucket.id,
-    },
-    select: {
-      id: true,
-      externalOrderNumber: true,
-      currentStatus: true,
-      priority: true,
-      receivedAt: true,
-      updatedAt: true,
-      clinicId: true,
-      siteId: true,
-      version: true,
-      shipments: {
-        select: {
-          id: true,
-          trackingEvents: {
-            select: {
-              kind: true,
-              carrierStatus: true,
-              occurredAt: true,
-            },
-            orderBy: { occurredAt: "desc" },
-            take: 1,
-          },
+  return readInOrgScope(input.organizationId, async (tx) => {
+    const bucket = await tx.bucket.findUnique({
+      where: {
+        organizationId_code: {
+          organizationId: input.organizationId,
+          code: EMERGENCY_BUCKET_CODE,
         },
-        orderBy: { createdAt: "desc" },
-        take: 1,
       },
-    },
-    orderBy: [{ priority: "desc" }, { receivedAt: "asc" }],
-    take: limit,
-  });
-
-  const rows: EmergencyQueueRow[] = orders.map((o) => {
-    const latestShipment = o.shipments[0];
-    const latestEvent = latestShipment?.trackingEvents[0];
-    return Object.freeze({
-      orderId: o.id,
-      externalOrderNumber: o.externalOrderNumber,
-      currentStatus: o.currentStatus,
-      priority: o.priority,
-      receivedAt: o.receivedAt,
-      enteredEmergencyAt: o.updatedAt,
-      clinicId: o.clinicId,
-      siteId: o.siteId,
-      version: o.version,
-      latestShipmentEvent:
-        latestEvent !== undefined && latestShipment !== undefined
-          ? Object.freeze({
-              kind: latestEvent.kind,
-              carrierStatus: latestEvent.carrierStatus,
-              occurredAt: latestEvent.occurredAt,
-              shipmentId: latestShipment.id,
-            })
-          : null,
+      select: { id: true },
     });
-  });
+    if (bucket === null) {
+      return Object.freeze({ bucketExists: false, rows: [] });
+    }
 
-  return Object.freeze({ bucketExists: true, rows });
+    const orders = await tx.order.findMany({
+      where: {
+        organizationId: input.organizationId,
+        currentBucketId: bucket.id,
+      },
+      select: {
+        id: true,
+        externalOrderNumber: true,
+        currentStatus: true,
+        priority: true,
+        receivedAt: true,
+        updatedAt: true,
+        clinicId: true,
+        siteId: true,
+        version: true,
+        shipments: {
+          select: {
+            id: true,
+            trackingEvents: {
+              select: {
+                kind: true,
+                carrierStatus: true,
+                occurredAt: true,
+              },
+              orderBy: { occurredAt: "desc" },
+              take: 1,
+            },
+          },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
+      orderBy: [{ priority: "desc" }, { receivedAt: "asc" }],
+      take: limit,
+    });
+
+    const rows: EmergencyQueueRow[] = orders.map((o) => {
+      const latestShipment = o.shipments[0];
+      const latestEvent = latestShipment?.trackingEvents[0];
+      return Object.freeze({
+        orderId: o.id,
+        externalOrderNumber: o.externalOrderNumber,
+        currentStatus: o.currentStatus,
+        priority: o.priority,
+        receivedAt: o.receivedAt,
+        enteredEmergencyAt: o.updatedAt,
+        clinicId: o.clinicId,
+        siteId: o.siteId,
+        version: o.version,
+        latestShipmentEvent:
+          latestEvent !== undefined && latestShipment !== undefined
+            ? Object.freeze({
+                kind: latestEvent.kind,
+                carrierStatus: latestEvent.carrierStatus,
+                occurredAt: latestEvent.occurredAt,
+                shipmentId: latestShipment.id,
+              })
+            : null,
+      });
+    });
+
+    return Object.freeze({ bucketExists: true, rows });
+  });
 }

@@ -22,7 +22,7 @@
 
 import "server-only";
 
-import { prisma, type InvoiceLineKind, type InvoiceStatus } from "@pharmax/database";
+import { readInOrgScope, type InvoiceLineKind, type InvoiceStatus } from "@pharmax/database";
 
 export interface InvoiceListRow {
   readonly invoiceId: string;
@@ -60,61 +60,63 @@ export interface ListInvoicesResult {
 export async function listInvoices(options: ListInvoicesOptions): Promise<ListInvoicesResult> {
   const limit = Math.min(options.limit ?? 50, 200);
 
-  const rows = await prisma.invoice.findMany({
-    where: {
-      organizationId: options.organizationId,
-      ...(options.status !== undefined ? { status: options.status } : {}),
-      ...(options.clinicId !== undefined ? { clinicId: options.clinicId } : {}),
-    },
-    select: {
-      id: true,
-      invoiceNumber: true,
-      clinicId: true,
-      status: true,
-      currency: true,
-      subtotalCents: true,
-      totalCents: true,
-      amountPaidCents: true,
-      amountDueCents: true,
-      issuedAt: true,
-      dueAt: true,
-      paidAt: true,
-      stripeInvoiceId: true,
-      version: true,
-      createdAt: true,
-      _count: { select: { lines: true } },
-    },
-    orderBy: [{ createdAt: "desc" }],
-    take: limit + 1,
-    ...(options.cursor !== undefined ? { cursor: { id: options.cursor }, skip: 1 } : {}),
-  });
+  return readInOrgScope(options.organizationId, async (tx) => {
+    const rows = await tx.invoice.findMany({
+      where: {
+        organizationId: options.organizationId,
+        ...(options.status !== undefined ? { status: options.status } : {}),
+        ...(options.clinicId !== undefined ? { clinicId: options.clinicId } : {}),
+      },
+      select: {
+        id: true,
+        invoiceNumber: true,
+        clinicId: true,
+        status: true,
+        currency: true,
+        subtotalCents: true,
+        totalCents: true,
+        amountPaidCents: true,
+        amountDueCents: true,
+        issuedAt: true,
+        dueAt: true,
+        paidAt: true,
+        stripeInvoiceId: true,
+        version: true,
+        createdAt: true,
+        _count: { select: { lines: true } },
+      },
+      orderBy: [{ createdAt: "desc" }],
+      take: limit + 1,
+      ...(options.cursor !== undefined ? { cursor: { id: options.cursor }, skip: 1 } : {}),
+    });
 
-  const hasMore = rows.length > limit;
-  const sliced = hasMore ? rows.slice(0, limit) : rows;
-  const nextCursor = hasMore ? sliced[sliced.length - 1]!.id : null;
+    const hasMore = rows.length > limit;
+    const sliced = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor = hasMore ? sliced[sliced.length - 1]!.id : null;
 
-  return Object.freeze({
-    rows: sliced.map((r) =>
-      Object.freeze({
-        invoiceId: r.id,
-        invoiceNumber: r.invoiceNumber,
-        clinicId: r.clinicId,
-        status: r.status,
-        currency: r.currency,
-        subtotalCents: r.subtotalCents,
-        totalCents: r.totalCents,
-        amountPaidCents: r.amountPaidCents,
-        amountDueCents: r.amountDueCents,
-        issuedAt: r.issuedAt,
-        dueAt: r.dueAt,
-        paidAt: r.paidAt,
-        stripeInvoiceId: r.stripeInvoiceId,
-        lineCount: r._count.lines,
-        version: r.version,
-        createdAt: r.createdAt,
-      })
-    ),
-    nextCursor,
+    return Object.freeze({
+      rows: sliced.map((r) =>
+        Object.freeze({
+          invoiceId: r.id,
+          invoiceNumber: r.invoiceNumber,
+          clinicId: r.clinicId,
+          status: r.status,
+          currency: r.currency,
+          subtotalCents: r.subtotalCents,
+          totalCents: r.totalCents,
+          amountPaidCents: r.amountPaidCents,
+          amountDueCents: r.amountDueCents,
+          issuedAt: r.issuedAt,
+          dueAt: r.dueAt,
+          paidAt: r.paidAt,
+          stripeInvoiceId: r.stripeInvoiceId,
+          lineCount: r._count.lines,
+          version: r.version,
+          createdAt: r.createdAt,
+        })
+      ),
+      nextCursor,
+    });
   });
 }
 
@@ -155,73 +157,75 @@ export async function getInvoiceDetail(input: {
   readonly organizationId: string;
   readonly invoiceId: string;
 }): Promise<InvoiceDetail | null> {
-  const row = await prisma.invoice.findFirst({
-    where: { id: input.invoiceId, organizationId: input.organizationId },
-    select: {
-      id: true,
-      invoiceNumber: true,
-      clinicId: true,
-      status: true,
-      currency: true,
-      subtotalCents: true,
-      totalCents: true,
-      amountPaidCents: true,
-      amountDueCents: true,
-      issuedAt: true,
-      dueAt: true,
-      paidAt: true,
-      voidedAt: true,
-      stripeInvoiceId: true,
-      stripeCustomerId: true,
-      stripeChargeId: true,
-      version: true,
-      createdAt: true,
-      lines: {
-        select: {
-          id: true,
-          kind: true,
-          description: true,
-          quantity: true,
-          unitAmountCents: true,
-          amountCents: true,
-          orderId: true,
-          createdAt: true,
+  return readInOrgScope(input.organizationId, async (tx) => {
+    const row = await tx.invoice.findFirst({
+      where: { id: input.invoiceId, organizationId: input.organizationId },
+      select: {
+        id: true,
+        invoiceNumber: true,
+        clinicId: true,
+        status: true,
+        currency: true,
+        subtotalCents: true,
+        totalCents: true,
+        amountPaidCents: true,
+        amountDueCents: true,
+        issuedAt: true,
+        dueAt: true,
+        paidAt: true,
+        voidedAt: true,
+        stripeInvoiceId: true,
+        stripeCustomerId: true,
+        stripeChargeId: true,
+        version: true,
+        createdAt: true,
+        lines: {
+          select: {
+            id: true,
+            kind: true,
+            description: true,
+            quantity: true,
+            unitAmountCents: true,
+            amountCents: true,
+            orderId: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: "asc" },
         },
-        orderBy: { createdAt: "asc" },
       },
-    },
-  });
-  if (row === null) return null;
-  return Object.freeze({
-    invoiceId: row.id,
-    invoiceNumber: row.invoiceNumber,
-    clinicId: row.clinicId,
-    status: row.status,
-    currency: row.currency,
-    subtotalCents: row.subtotalCents,
-    totalCents: row.totalCents,
-    amountPaidCents: row.amountPaidCents,
-    amountDueCents: row.amountDueCents,
-    issuedAt: row.issuedAt,
-    dueAt: row.dueAt,
-    paidAt: row.paidAt,
-    voidedAt: row.voidedAt,
-    stripeInvoiceId: row.stripeInvoiceId,
-    stripeCustomerId: row.stripeCustomerId,
-    stripeChargeId: row.stripeChargeId,
-    version: row.version,
-    createdAt: row.createdAt,
-    lines: row.lines.map((l) =>
-      Object.freeze({
-        invoiceLineId: l.id,
-        kind: l.kind,
-        description: l.description,
-        quantity: String(l.quantity),
-        unitAmountCents: l.unitAmountCents,
-        amountCents: l.amountCents,
-        orderId: l.orderId,
-        createdAt: l.createdAt,
-      })
-    ),
+    });
+    if (row === null) return null;
+    return Object.freeze({
+      invoiceId: row.id,
+      invoiceNumber: row.invoiceNumber,
+      clinicId: row.clinicId,
+      status: row.status,
+      currency: row.currency,
+      subtotalCents: row.subtotalCents,
+      totalCents: row.totalCents,
+      amountPaidCents: row.amountPaidCents,
+      amountDueCents: row.amountDueCents,
+      issuedAt: row.issuedAt,
+      dueAt: row.dueAt,
+      paidAt: row.paidAt,
+      voidedAt: row.voidedAt,
+      stripeInvoiceId: row.stripeInvoiceId,
+      stripeCustomerId: row.stripeCustomerId,
+      stripeChargeId: row.stripeChargeId,
+      version: row.version,
+      createdAt: row.createdAt,
+      lines: row.lines.map((l) =>
+        Object.freeze({
+          invoiceLineId: l.id,
+          kind: l.kind,
+          description: l.description,
+          quantity: String(l.quantity),
+          unitAmountCents: l.unitAmountCents,
+          amountCents: l.amountCents,
+          orderId: l.orderId,
+          createdAt: l.createdAt,
+        })
+      ),
+    });
   });
 }
