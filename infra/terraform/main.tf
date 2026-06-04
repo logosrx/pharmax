@@ -104,7 +104,9 @@ module "ecr" {
 }
 
 # -----------------------------------------------------------------------------
-# RDS — Postgres 16 Multi-AZ, encrypted, isolated subnets.
+# Database — Aurora PostgreSQL cluster (writer + optional readers), encrypted,
+# isolated subnets. Capacity (serverless vs provisioned) and reader count are
+# auto-derived from the environment unless explicitly overridden. See ADR 0029.
 # -----------------------------------------------------------------------------
 
 module "rds" {
@@ -116,17 +118,25 @@ module "rds" {
   ingress_security_group_ids          = [module.ecs.task_security_group_id]
   kms_key_arn                         = module.kms.rds_key_arn
   engine_version                      = var.rds_engine_version
-  parameter_group_family              = var.rds_parameter_group_family
+  capacity_mode                       = local.aurora_capacity_mode
   instance_class                      = var.rds_instance_class
-  allocated_storage_gb                = var.rds_allocated_storage_gb
-  max_allocated_storage_gb            = var.rds_max_allocated_storage_gb
+  serverless_min_acu                  = var.aurora_serverless_min_acu
+  serverless_max_acu                  = var.aurora_serverless_max_acu
+  reader_count                        = local.aurora_reader_count
   backup_retention_days               = var.rds_backup_retention_days
-  multi_az                            = var.rds_multi_az
   deletion_protection                 = var.rds_deletion_protection
   master_username                     = var.rds_master_username
   database_name                       = var.rds_database_name
   performance_insights_retention_days = var.rds_performance_insights_retention_days
-  tags                                = local.phi_tags
+
+  # Aurora Global Database role + cross-region wiring. Standalone by default;
+  # the primary stack creates the global cluster, the secondary stack joins it
+  # with the primary's global id + cluster ARN (operator-supplied).
+  global_cluster_role           = var.rds_global_cluster_role
+  global_cluster_identifier     = var.rds_global_cluster_identifier
+  replication_source_identifier = var.rds_replication_source_identifier
+
+  tags = local.phi_tags
 }
 
 # -----------------------------------------------------------------------------
@@ -187,7 +197,10 @@ module "alb" {
   acm_certificate_domain     = var.acm_certificate_domain
   idle_timeout_seconds       = var.alb_idle_timeout_seconds
   enable_deletion_protection = var.environment != "dev"
-  tags                       = local.common_tags
+  # Lock the ALB to the CloudFront edge when the distribution fronts it.
+  restrict_ingress_to_cloudfront = var.enable_cloudfront
+  enable_shield_advanced         = var.enable_shield_advanced
+  tags                           = local.common_tags
 }
 
 # -----------------------------------------------------------------------------
@@ -236,6 +249,10 @@ module "ecs" {
   audit_archive_kms_key_alias = module.kms.audit_archive_key_alias
   audit_archive_bucket_name   = module.s3_audit_archive.bucket_name
 
+  # Inject REPORTING_DATABASE_URL (Aurora reader endpoint) only when a reader
+  # instance exists; otherwise reports read the primary writer.
+  enable_reporting_replica = local.reporting_replica_enabled
+
   web_cpu           = var.ecs_web_cpu
   web_memory        = var.ecs_web_memory
   web_desired_count = var.ecs_web_desired_count
@@ -255,6 +272,119 @@ module "ecs" {
 }
 
 # -----------------------------------------------------------------------------
+# Security baseline — CloudTrail + AWS Config + GuardDuty + Security Hub.
+# Optional (off by default). These are account+region singletons: enable in
+# EXACTLY ONE stack per account+region (the primary). SOC 2 CC7.2/CC7.3/CC6.x.
+# -----------------------------------------------------------------------------
+
+module "security_baseline" {
+  count  = var.enable_security_baseline ? 1 : 0
+  source = "./modules/security-baseline"
+
+  name_prefix = local.name_prefix
+
+  enable_cloudtrail       = var.security_enable_cloudtrail
+  enable_config           = var.security_enable_config
+  enable_config_rules     = var.security_enable_config_rules
+  enable_guardduty        = var.security_enable_guardduty
+  enable_securityhub      = var.security_enable_securityhub
+  securityhub_enable_fsbp = var.security_enable_securityhub_fsbp
+
+  cloudtrail_log_retention_days          = var.cloudtrail_log_retention_days
+  guardduty_finding_publishing_frequency = var.guardduty_finding_publishing_frequency
+
+  tags = local.common_tags
+}
+
+# -----------------------------------------------------------------------------
+# CloudFront — global edge CDN in front of the ALB. Optional (off by default);
+# enable ONLY in the primary us-east-1 stack (CLOUDFRONT-scoped WAF + ACM must
+# live in us-east-1). When enabled, the ALB SG is locked to the CloudFront
+# origin-facing prefix list above.
+# -----------------------------------------------------------------------------
+
+module "cloudfront" {
+  count  = var.enable_cloudfront ? 1 : 0
+  source = "./modules/cloudfront"
+
+  name_prefix = local.name_prefix
+  # Defaults to the ALB DNS for convenience, but production MUST set a custom
+  # origin domain covered by the ALB cert (see the module's variables.tf).
+  origin_domain_name        = var.cloudfront_origin_domain_name != "" ? var.cloudfront_origin_domain_name : module.alb.alb_dns_name
+  aliases                   = var.cloudfront_aliases
+  acm_certificate_arn       = var.cloudfront_acm_certificate_arn
+  price_class               = var.cloudfront_price_class
+  rate_limit_per_5min       = var.waf_rate_limit_per_5min
+  geo_restriction_type      = var.cloudfront_geo_restriction_type
+  geo_restriction_locations = var.cloudfront_geo_restriction_locations
+
+  enable_shield_advanced = var.enable_shield_advanced
+
+  tags = local.common_tags
+}
+
+# -----------------------------------------------------------------------------
+# ElastiCache — Redis replication group backing @pharmax/cache (REDIS_URL).
+# Optional (off by default); private isolated subnets, TLS + AUTH, ingress
+# only from the ECS task SG. See modules/elasticache for the REDIS_URL
+# assembly note.
+# -----------------------------------------------------------------------------
+
+module "elasticache" {
+  count  = var.enable_elasticache ? 1 : 0
+  source = "./modules/elasticache"
+
+  name_prefix                = local.name_prefix
+  vpc_id                     = module.network.vpc_id
+  subnet_ids                 = module.network.isolated_subnet_ids
+  ingress_security_group_ids = [module.ecs.task_security_group_id]
+  secrets_kms_key_arn        = module.kms.secrets_key_arn
+
+  node_type               = var.elasticache_node_type
+  engine_version          = var.elasticache_engine_version
+  parameter_group_family  = var.elasticache_parameter_group_family
+  replica_count           = var.elasticache_replica_count
+  multi_az                = var.elasticache_multi_az
+  at_rest_kms_key_arn     = var.elasticache_at_rest_kms_key_arn
+  maxmemory_policy        = var.elasticache_maxmemory_policy
+  snapshot_retention_days = var.elasticache_snapshot_retention_days
+
+  tags = local.common_tags
+}
+
+# -----------------------------------------------------------------------------
+# CI/CD deploy role — GitHub Actions OIDC role for the source → ECR → ECS
+# pipeline. Optional (off by default); enable in one working directory per
+# account. Scoped to push only the pharmax ECR repos and roll out only the
+# pharmax ECS services. See .github/workflows/deploy.yml.
+# -----------------------------------------------------------------------------
+
+module "cicd_deploy" {
+  count  = var.enable_cicd_deploy_role ? 1 : 0
+  source = "./modules/cicd-deploy"
+
+  name_prefix    = local.name_prefix
+  aws_account_id = data.aws_caller_identity.current.account_id
+  region         = var.region
+
+  github_repository     = var.cicd_github_repository
+  github_environment    = var.cicd_github_environment
+  github_subject_claims = var.cicd_github_subject_claims
+  create_oidc_provider  = var.cicd_create_oidc_provider
+  oidc_provider_arn     = var.cicd_oidc_provider_arn
+
+  ecr_repository_arns = values(module.ecr.repository_arns)
+  passrole_role_arns = [
+    module.iam.task_execution_role_arn,
+    module.iam.task_role_web_arn,
+    module.iam.task_role_worker_arn,
+    module.iam.task_role_print_agent_arn,
+  ]
+
+  tags = local.common_tags
+}
+
+# -----------------------------------------------------------------------------
 # CloudWatch — alarms + dashboard.
 # -----------------------------------------------------------------------------
 
@@ -265,7 +395,8 @@ module "cloudwatch" {
   aws_region          = var.region
   alarm_sns_topic_arn = var.alarm_sns_topic_arn
 
-  rds_instance_id                 = module.rds.instance_id
+  rds_cluster_id                  = module.rds.cluster_id
+  rds_instance_id                 = module.rds.writer_instance_id
   alb_arn_suffix                  = module.alb.alb_arn_suffix
   alb_target_group_web_arn_suffix = module.alb.target_group_web_arn_suffix
   ecs_cluster_name                = module.ecs.cluster_name

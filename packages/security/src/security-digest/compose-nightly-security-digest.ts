@@ -1,12 +1,14 @@
 // Nightly security digest composer.
 //
-// TODO(integration): a future PR will wire a real `DigestPublisher`
-// (Resend, AWS SES, or a Slack adapter) to deliver the rendered text
-// to `security@<tenant-domain>`. For now this module is transport-
-// agnostic — it produces a structured `SecurityDigest` plus a
-// `renderAsText()` helper, and the script
-// `scripts/security/send-nightly-security-digest.ts` prints it to
-// stdout. The interface is shaped so the swap is mechanical.
+// Transport-agnostic by design: this module produces a structured
+// `SecurityDigest` plus a `renderAsText()` helper. The production
+// `DigestPublisher` (Resend → SECURITY_DIGEST_DAILY_V1 template) is
+// wired at the worker boundary in
+// `apps/worker/src/security/notification-channel-digest-publisher.ts`,
+// and the script `scripts/security/send-nightly-security-digest.ts`
+// prints the rendered body to stdout for manual operator use.
+// Slack / Teams adapters can be added as sibling `DigestPublisher`
+// implementations without touching this composer.
 //
 // Sections (one per concern, all opt-out via empty arrays):
 //

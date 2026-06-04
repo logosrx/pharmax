@@ -95,6 +95,11 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
     label: "Admin · Notifications",
     requires: PERMISSIONS.NOTIFICATIONS_READ,
   },
+  {
+    href: "/ops/admin/access-reviews",
+    label: "Admin · Access reviews",
+    requires: PERMISSIONS.COMPLIANCE_ACCESS_REVIEW_VIEW,
+  },
 ];
 
 export default async function OpsLayout({ children }: Readonly<{ children: ReactNode }>) {

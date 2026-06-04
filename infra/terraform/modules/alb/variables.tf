@@ -70,3 +70,15 @@ variable "access_logs_prefix" {
   type        = string
   default     = "alb-access-logs"
 }
+
+variable "restrict_ingress_to_cloudfront" {
+  description = "When true, the ALB SG accepts 443 only from the AWS-managed CloudFront origin-facing prefix list (set when CloudFront fronts the ALB) instead of the public internet."
+  type        = bool
+  default     = false
+}
+
+variable "enable_shield_advanced" {
+  description = "Register the ALB with AWS Shield Advanced. Requires an active account-level Shield Advanced subscription."
+  type        = bool
+  default     = false
+}

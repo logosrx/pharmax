@@ -1,0 +1,37 @@
+# IAM Identity Center — apply from the Organizations management / delegated-
+# admin account, in the region the IdC instance lives in.
+#
+# Copy to terraform.tfvars and fill in. The default permission sets
+# (Administrator / Engineer / ReadOnly / Billing / SecurityAudit, all
+# MFA-enforced) are defined in the module; override there if you need a
+# different catalog.
+
+region      = "us-east-1"
+name_prefix = "pharmax"
+
+# Map IdC groups to permission sets per target account. The groups must
+# already exist in the identity store (created in IdC, or synced from your
+# IdP via SCIM). Leave empty on the first apply to create the permission sets
+# only, then fill this in once groups + account ids are known.
+#
+# account_assignments = [
+#   {
+#     permission_set_name = "Administrator"
+#     group_display_name  = "pharmax-platform-admins"
+#     account_id          = "111111111111"
+#   },
+#   {
+#     permission_set_name = "Engineer"
+#     group_display_name  = "pharmax-engineers"
+#     account_id          = "222222222222"
+#   },
+#   {
+#     permission_set_name = "ReadOnly"
+#     group_display_name  = "pharmax-support"
+#     account_id          = "222222222222"
+#   },
+# ]
+
+tags = {
+  CostCenter = "platform"
+}

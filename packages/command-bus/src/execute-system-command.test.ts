@@ -93,8 +93,11 @@ describe("executeSystemCommand — happy path", () => {
     // inside the tx BEFORE any audit/outbox write. We assert both
     // that the GUC was applied and that the reason string was bound
     // as a parameter (not interpolated into SQL).
+    // The system GUC (organization_id clear + system_context='on' +
+    // reason) is issued as a SINGLE round trip — one `$executeRaw`
+    // with all three set_config calls in one SELECT target list.
     const gucCalls = callsTo(prisma, "$executeRaw", "set_config");
-    expect(gucCalls.length).toBeGreaterThanOrEqual(3);
+    expect(gucCalls.length).toBeGreaterThanOrEqual(1);
     const firstGucIdx = prisma.calls.indexOf(gucCalls[0]!);
     const firstAuditIdx = prisma.calls.indexOf(callsTo(prisma, "auditLog", "create")[0]!);
     expect(firstGucIdx).toBeLessThan(firstAuditIdx);

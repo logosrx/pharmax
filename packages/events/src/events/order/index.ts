@@ -18,6 +18,8 @@ export { OrderPv1StartedV1 } from "./pv1-started-v1.js";
 export { OrderReceivedV1 } from "./received-v1.js";
 export { OrderReopenedV1 } from "./reopened-v1.js";
 export { OrderShipReleasedV1 } from "./ship-released-v1.js";
+export { OrderSlaBreachEscalatedV1 } from "./sla-breach-escalated-v1.js";
+export { OrderSlaBreachEscalationReaffirmedV1 } from "./sla-breach-escalation-reaffirmed-v1.js";
 export { OrderShipmentCreatedV1 } from "./shipment-created-v1.js";
 export { OrderShipmentEscalationReaffirmedV1 } from "./shipment-escalation-reaffirmed-v1.js";
 export { OrderShipmentLabelPurchasedV1 } from "./shipment-label-purchased-v1.js";

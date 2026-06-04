@@ -13,6 +13,7 @@ import {
   readInOrgScope,
   type CarrierCredentialStatus,
   type ShippingProvider,
+  type TenantTransactionClient,
 } from "@pharmax/database";
 
 export interface CarrierCredentialRow {
@@ -74,13 +75,22 @@ export async function listCarrierCredentials(input: {
  */
 export async function listActiveProviders(input: {
   readonly organizationId: string;
+  /**
+   * Optional shared tenant-scoped transaction (batching). Provide it
+   * to run this read inside an outer `readInOrgScope` alongside other
+   * page reads — one connection instead of one per read. Omit to open
+   * a dedicated scope. MUST already be scoped to `organizationId`.
+   */
+  readonly tx?: TenantTransactionClient;
 }): Promise<ReadonlyArray<ShippingProvider>> {
-  return readInOrgScope(input.organizationId, async (tx) => {
+  const run = async (tx: TenantTransactionClient): Promise<ReadonlyArray<ShippingProvider>> => {
     const rows = await tx.carrierCredential.findMany({
       where: { organizationId: input.organizationId, status: "ACTIVE" },
       select: { provider: true },
       orderBy: { provider: "asc" },
     });
     return rows.map((r) => r.provider);
-  });
+  };
+
+  return input.tx !== undefined ? run(input.tx) : readInOrgScope(input.organizationId, run);
 }

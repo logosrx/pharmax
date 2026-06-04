@@ -48,6 +48,10 @@ import {
   renderReportCompletedEmail,
   type ReportCompletedRenderInput,
 } from "./render-report-completed-email.js";
+import {
+  renderSecurityDigestEmail,
+  type SecurityDigestRenderInput,
+} from "./render-security-digest-email.js";
 
 /**
  * Narrow contract over Resend's `emails.send` for testing — the
@@ -206,6 +210,10 @@ function renderTemplate(
       const narrowed = coerceReportCompletedContext(context);
       return renderReportCompletedEmail(narrowed);
     }
+    case "SECURITY_DIGEST_DAILY_V1": {
+      const narrowed = coerceSecurityDigestContext(context);
+      return renderSecurityDigestEmail(narrowed);
+    }
     default:
       // Defensive: the channel guards have already validated that
       // the recipient kind matches the template's channelKinds,
@@ -246,4 +254,40 @@ function coerceReportCompletedContext(
       : {}),
     ...(typeof ctx["errorCode"] === "string" ? { errorCode: ctx["errorCode"] as string } : {}),
   };
+}
+
+/**
+ * Narrow the raw notification context into the typed renderer
+ * input for the SECURITY_DIGEST_DAILY_V1 template. The channel's
+ * `assertRequiredContextKeysPresent` gate has already confirmed
+ * every required key exists; we coerce shapes here and reject any
+ * non-finite numeric scalar (a regression in the publisher that
+ * passed `NaN` instead of a count would surface here rather than
+ * in a "0" subject line).
+ */
+function coerceSecurityDigestContext(
+  ctx: Readonly<Record<string, unknown>>
+): SecurityDigestRenderInput {
+  return {
+    generatedAtIso: String(ctx["generatedAtIso"]),
+    windowFromIso: String(ctx["windowFromIso"]),
+    windowToIso: String(ctx["windowToIso"]),
+    digestText: String(ctx["digestText"]),
+    auditOrgCount: requireFiniteNumber(ctx["auditOrgCount"], "auditOrgCount"),
+    brokenChainCount: requireFiniteNumber(ctx["brokenChainCount"], "brokenChainCount"),
+    breakGlassCount: requireFiniteNumber(ctx["breakGlassCount"], "breakGlassCount"),
+    outboxDeadCount: requireFiniteNumber(ctx["outboxDeadCount"], "outboxDeadCount"),
+  };
+}
+
+function requireFiniteNumber(value: unknown, field: string): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    throw new errors.ValidationError({
+      code: "NOTIFICATION_CONTEXT_INVALID",
+      message: `SECURITY_DIGEST_DAILY_V1 context: ${field} must be a finite number`,
+      metadata: { field, receivedType: typeof value },
+    });
+  }
+  return n;
 }

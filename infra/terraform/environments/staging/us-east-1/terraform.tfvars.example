@@ -22,16 +22,27 @@ alb_idle_timeout_seconds = 60
 # ---- KMS --------------------------------------------------------------------
 asymm_sign_key_spec = "ECC_NIST_P384"
 
-# ---- RDS --------------------------------------------------------------------
-rds_instance_class                      = "db.r6g.large"
-rds_allocated_storage_gb                = 100
-rds_max_allocated_storage_gb            = 500
-rds_backup_retention_days               = 35
+# ---- Database (Aurora PostgreSQL) -------------------------------------------
+# Staging mirrors prod's shape on a budget: Serverless v2 with ONE reader so
+# the reporting-replica path (REPORTING_DATABASE_URL) is exercised before prod.
+aurora_capacity_mode      = "serverless"
+aurora_serverless_min_acu = 0.5
+aurora_serverless_max_acu = 8
+aurora_reader_count       = 1
+
 rds_engine_version                      = "16.4"
-rds_parameter_group_family              = "postgres16"
-rds_multi_az                            = true
+rds_backup_retention_days               = 35
 rds_deletion_protection                 = true
 rds_performance_insights_retention_days = 7
+
+# Used only if staging switches to provisioned capacity.
+rds_instance_class = "db.r6g.large"
+
+# DEPRECATED (see dev example). Retained so this file stays valid.
+rds_allocated_storage_gb     = 100
+rds_max_allocated_storage_gb = 500
+rds_parameter_group_family   = "postgres16"
+rds_multi_az                 = true
 
 # ---- ECS --------------------------------------------------------------------
 ecs_web_cpu                    = 1024

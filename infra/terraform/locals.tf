@@ -19,7 +19,7 @@
 locals {
   # Compact region code: drop the dashes and the digit alignment, keep the
   # canonical "first letter of each word + final digit" form.
-  region_segments  = split("-", var.region)
+  region_segments = split("-", var.region)
   region_shortcode = format(
     "%s%s%s",
     substr(local.region_segments[0], 0, 1),
@@ -45,4 +45,22 @@ locals {
     DataClassification = "phi"
     HipaaScope         = "in-scope"
   })
+
+  # ---- Aurora capacity derivation -------------------------------------------
+  #
+  # When the operator leaves the capacity knobs at their sentinel defaults we
+  # pick sensible per-environment values so dev/staging stay cheap (Serverless
+  # v2, writer-only) while prod gets a provisioned writer + reader.
+  aurora_capacity_mode = var.aurora_capacity_mode != "" ? var.aurora_capacity_mode : (
+    var.environment == "prod" ? "provisioned" : "serverless"
+  )
+
+  aurora_reader_count = var.aurora_reader_count >= 0 ? var.aurora_reader_count : (
+    var.environment == "prod" ? 1 : 0
+  )
+
+  # A reader endpoint distinct from the writer only exists when there is at
+  # least one reader instance. The reporting replica (REPORTING_DATABASE_URL)
+  # is wired into ECS only when that is true.
+  reporting_replica_enabled = local.aurora_reader_count > 0
 }

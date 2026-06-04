@@ -11,17 +11,23 @@
 //     small, so we don't lose the Prisma-types ergonomics that
 //     justify Prisma elsewhere.
 //
-// Tenancy note: the query is org-scoped via the WHERE clause. We
-// intentionally use the RAW `PrismaClient` here (not the extended
-// `db` from `applyTenancyExtension`) because this loader is
-// supervisor infrastructure that runs BEFORE the user's tenancy
-// context is fully populated (the actor is known, but the
-// tenancy extension would refuse a `user_role` query that doesn't
-// happen to have an active context). We re-enforce org isolation
-// via the explicit `organizationId = $1` predicate in the SQL.
+// Tenancy note: the query is org-scoped via the WHERE clause AND the
+// Postgres org GUC. The raw SQL bypasses the Prisma tenancy extension
+// (raw queries are not model operations), so under the RLS-subject
+// `pharmax_app` role the read would be denied unless the org GUC is
+// set. We therefore run the query inside a short transaction that
+// calls `applyTenancySessionGuc` first. `role`/`user_role` are
+// org-scoped (RLS + the explicit predicate both bind them);
+// `role_permission`/`permission` are RLS-exempt registries.
 
 import { Prisma } from "@pharmax/database";
 import type { PrismaClient, RoleScope } from "@pharmax/database";
+import { ids } from "@pharmax/platform-core";
+import {
+  applyTenancySessionGuc,
+  buildTenancyContext,
+  type SessionGucExecutor,
+} from "@pharmax/tenancy";
 
 import type { ResolvedGrant } from "./grants.js";
 import type { EffectivePermissionLoader, PermissionLoadInput } from "./loader.js";
@@ -40,26 +46,35 @@ export class PrismaPermissionLoader implements EffectivePermissionLoader {
   public constructor(private readonly prisma: PrismaClient) {}
 
   public async load(input: PermissionLoadInput): Promise<ReadonlyArray<ResolvedGrant>> {
-    // Prisma's typed `$queryRaw` template-tag form keeps the query
-    // safe from injection AND keeps Prisma's connection pool / log
-    // hooks active for the call.
-    const rows = await this.prisma.$queryRaw<PermissionRow[]>(
-      Prisma.sql`
-        SELECT
-          ur.id              AS "userRoleId",
-          r.scope            AS "roleScope",
-          ur.site_id         AS "siteId",
-          ur.clinic_id       AS "clinicId",
-          ur.team_id         AS "teamId",
-          p.code             AS "permissionCode"
-        FROM user_role ur
-        JOIN role r              ON r.id = ur.role_id
-        JOIN role_permission rp  ON rp.role_id = r.id
-        JOIN permission p        ON p.id = rp.permission_id
-        WHERE ur.organization_id = ${input.organizationId}::uuid
-          AND ur.user_id         = ${input.userId}::uuid
-      `
-    );
+    // Run inside a short transaction that sets the org GUC, so the
+    // raw read is permitted under the RLS-subject `pharmax_app` role.
+    // The loader runs before the command bus opens its own tx, so it
+    // owns this one. Prisma's typed `$queryRaw` template-tag keeps the
+    // query injection-safe and the pool/log hooks active.
+    const ctx = buildTenancyContext({
+      organizationId: input.organizationId,
+      actor: { userId: input.userId, correlationId: ids.generateUlid() },
+    });
+    const rows = await this.prisma.$transaction(async (tx) => {
+      await applyTenancySessionGuc(tx as unknown as SessionGucExecutor, ctx);
+      return tx.$queryRaw<PermissionRow[]>(
+        Prisma.sql`
+          SELECT
+            ur.id              AS "userRoleId",
+            r.scope            AS "roleScope",
+            ur.site_id         AS "siteId",
+            ur.clinic_id       AS "clinicId",
+            ur.team_id         AS "teamId",
+            p.code             AS "permissionCode"
+          FROM user_role ur
+          JOIN role r              ON r.id = ur.role_id
+          JOIN role_permission rp  ON rp.role_id = r.id
+          JOIN permission p        ON p.id = rp.permission_id
+          WHERE ur.organization_id = ${input.organizationId}::uuid
+            AND ur.user_id         = ${input.userId}::uuid
+        `
+      );
+    });
 
     return groupRows(rows);
   }

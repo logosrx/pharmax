@@ -4,7 +4,7 @@ variable "name_prefix" {
 }
 
 variable "vpc_id" {
-  description = "VPC the instance lives in."
+  description = "VPC the cluster lives in."
   type        = string
 }
 
@@ -14,12 +14,12 @@ variable "isolated_subnet_ids" {
 
   validation {
     condition     = length(var.isolated_subnet_ids) >= 2
-    error_message = "RDS subnet group requires at least 2 subnets in distinct AZs."
+    error_message = "Aurora subnet group requires at least 2 subnets in distinct AZs."
   }
 }
 
 variable "ingress_security_group_ids" {
-  description = "Security groups allowed to reach RDS on port 5432 (typically the ECS task SG)."
+  description = "Security groups allowed to reach Aurora on port 5432 (typically the ECS task SG)."
   type        = list(string)
 }
 
@@ -29,32 +29,51 @@ variable "kms_key_arn" {
 }
 
 variable "engine_version" {
-  description = "Postgres engine minor (e.g. 16.4)."
+  description = "Aurora PostgreSQL engine version (e.g. 16.4). The cluster parameter-group family is derived from the major (aurora-postgresql16)."
   type        = string
 }
 
-variable "parameter_group_family" {
-  description = "RDS parameter group family (e.g. postgres16)."
+variable "capacity_mode" {
+  description = "Aurora capacity model: 'serverless' (Aurora Serverless v2, db.serverless) or 'provisioned' (fixed instance_class)."
   type        = string
+
+  validation {
+    condition     = contains(["serverless", "provisioned"], var.capacity_mode)
+    error_message = "capacity_mode must be 'serverless' or 'provisioned'."
+  }
 }
 
 variable "instance_class" {
-  description = "RDS instance class (db.r6g.large, db.t4g.medium, …)."
+  description = "Instance class for PROVISIONED mode (db.r6g.large, …). Ignored in serverless mode (db.serverless is used)."
   type        = string
+  default     = "db.r6g.large"
 }
 
-variable "allocated_storage_gb" {
-  description = "Initial storage."
+variable "serverless_min_acu" {
+  description = "Serverless v2 minimum Aurora Capacity Units (0.5 increments). Only used in serverless mode."
   type        = number
+  default     = 0.5
 }
 
-variable "max_allocated_storage_gb" {
-  description = "Storage autoscaling ceiling."
+variable "serverless_max_acu" {
+  description = "Serverless v2 maximum Aurora Capacity Units. Only used in serverless mode."
   type        = number
+  default     = 16
+}
+
+variable "reader_count" {
+  description = "Number of reader instances in addition to the writer. >= 1 enables a real reader endpoint for REPORTING_DATABASE_URL."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.reader_count >= 0 && var.reader_count <= 14
+    error_message = "reader_count must be between 0 and 14 (Aurora allows up to 15 instances total)."
+  }
 }
 
 variable "backup_retention_days" {
-  description = "Automated backup retention (7-35)."
+  description = "Automated backup retention (1-35)."
   type        = number
 }
 
@@ -68,11 +87,6 @@ variable "maintenance_window" {
   description = "UTC weekly maintenance window."
   type        = string
   default     = "Sun:04:30-Sun:05:30"
-}
-
-variable "multi_az" {
-  description = "Enable Multi-AZ standby."
-  type        = bool
 }
 
 variable "deletion_protection" {
@@ -104,11 +118,54 @@ variable "monitoring_interval_seconds" {
 variable "enabled_cloudwatch_logs_exports" {
   description = "Which Postgres log streams to export to CloudWatch."
   type        = list(string)
-  default     = ["postgresql", "upgrade"]
+  default     = ["postgresql"]
 }
 
 variable "tags" {
-  description = "Tags to apply to every RDS resource."
+  description = "Tags to apply to every database resource."
   type        = map(string)
   default     = {}
+}
+
+# ---- Aurora Global Database (cross-region DR) -------------------------------
+#
+# Aurora Global Database links a primary cluster (read/write) in one region to
+# one or more secondary clusters (read-only, sub-second replication lag) in
+# other regions, with managed promotion for regional failover (RPO ~1s,
+# RTO < 1 min). It supersedes the manual warm-standby posture.
+#
+#   - "standalone" (default): a single-region cluster — unchanged behavior.
+#   - "primary":   creates the global cluster + the primary cluster. Outputs
+#                  `global_cluster_id` + `cluster_arn` for the secondary stack.
+#   - "secondary": joins an existing global cluster as a read replica. The
+#                  master credentials + database are inherited from the
+#                  primary; only this region's KMS key is set locally.
+#
+# Cross-state wiring: the secondary stack lives in a different region with its
+# own state, so it takes the primary's `global_cluster_identifier` +
+# `replication_source_identifier` (the primary cluster ARN) as inputs — the
+# operator copies them from the primary stack's outputs (the same
+# operator-driven pattern used for DATABASE_URL / DNS).
+
+variable "global_cluster_role" {
+  description = "Role of this cluster in an Aurora Global Database: 'standalone' (default), 'primary', or 'secondary'."
+  type        = string
+  default     = "standalone"
+
+  validation {
+    condition     = contains(["standalone", "primary", "secondary"], var.global_cluster_role)
+    error_message = "global_cluster_role must be 'standalone', 'primary', or 'secondary'."
+  }
+}
+
+variable "global_cluster_identifier" {
+  description = "For a 'secondary' cluster: the global cluster identifier from the primary stack's `global_cluster_id` output. Empty otherwise."
+  type        = string
+  default     = ""
+}
+
+variable "replication_source_identifier" {
+  description = "For a 'secondary' cluster: the primary cluster ARN from the primary stack's `cluster_arn` output. Empty otherwise."
+  type        = string
+  default     = ""
 }

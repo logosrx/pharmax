@@ -68,6 +68,11 @@ export async function listUnmatchedPackagePhotos(input: {
       where: {
         organizationId: input.organizationId,
         matched: false,
+        // Archived captures (test shots, dupes, misclicks) are
+        // dispositioned out of the triage bucket — they're no longer
+        // actionable. The `archivedAt IS NULL` filter is the
+        // soft-delete gate.
+        archivedAt: null,
       },
       select: {
         id: true,

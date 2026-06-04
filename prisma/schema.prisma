@@ -608,6 +608,21 @@ enum PackagePhotoMatchStrategy {
   UNMATCHED
 }
 
+// Disposition reason for ArchivePackagePhoto. Required on every
+// archive (workflow-safety: every disposition carries a reason).
+enum PackagePhotoArchiveReason {
+  // Packing-station test shot — not a real shipment.
+  TEST_CAPTURE
+  // The same package was already captured (operator retake / dupe).
+  DUPLICATE
+  // Wrong photo / misclick / not actually a package.
+  CAPTURED_IN_ERROR
+  // A genuine capture that will never match an order (e.g. order was
+  // cancelled, or the external number was a one-off that no order
+  // will ever carry). Clears it from the triage bucket.
+  UNRESOLVABLE
+}
+
 enum OrderStageIntervalKind {
   WAIT_BEFORE_TYPING
   TYPING_ACTIVE
@@ -954,6 +969,7 @@ model User {
   pricingRulesCreated           PricingRule[]             @relation("PricingRuleCreator")
   stageIntervalsActed           OrderStageInterval[]      @relation("StageIntervalActor")
   packagePhotosCaptured         PackagePhoto[]            @relation("PackagePhotoCapturer")
+  packagePhotosArchived         PackagePhoto[]            @relation("PackagePhotoArchiver")
   packagePhotoUploadTokens      PackagePhotoUploadToken[] @relation("PackagePhotoUploadTokenUploader")
   workflowPolicyOverlaysCreated WorkflowPolicyOverlay[]   @relation("WorkflowPolicyOverlayCreator")
   reportRuns                    ReportRun[]               @relation("ReportRunActor")
@@ -2849,7 +2865,7 @@ model ReportRun {
   csvObjectBucket String?
   csvObjectKey    String?
   csvSizeBytes    Int?
-  csvSha256Hex    String?  @db.VarChar(64)
+  csvSha256Hex    String?   @db.VarChar(64)
   csvPersistedAt  DateTime?
 
   @@index([organizationId, generatedAt(sort: Desc)], map: "report_run_org_generated_idx")
@@ -3432,6 +3448,16 @@ model PackagePhoto {
   trackingSource   PackagePhotoTrackingSource?
   sourceShipmentId String?                     @db.Uuid
   sourceShipment   Shipment?                   @relation("PackagePhotoSourceShipment", fields: [sourceShipmentId], references: [id], onDelete: Restrict)
+
+  // Archive disposition. A capture that will never match (test shot,
+  // duplicate, misclick) is archived out of the triage bucket and the
+  // order timeline rather than left dangling forever. The row is
+  // retained (audit anchor); `archivedAt != null` is the soft-delete
+  // marker every read surface filters on.
+  archivedAt       DateTime?
+  archiveReason    PackagePhotoArchiveReason?
+  archivedByUserId String?                    @db.Uuid
+  archivedByUser   User?                      @relation("PackagePhotoArchiver", fields: [archivedByUserId], references: [id], onDelete: Restrict)
 
   // Storage layer pointer.
   storageBucket String

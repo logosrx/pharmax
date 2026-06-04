@@ -19,27 +19,49 @@ security primitives delivered in `@pharmax/security`:
 
 - **`nightly-security-digest-loop.ts`** — fires daily at 02:30 UTC
   (intentionally after the Merkle job). Composes the
-  `SecurityDigest` via the probes in `./digest-probes.ts` and renders
-  it. The default publisher is the in-memory one + an INFO log line;
-  swap in a Resend/SES `DigestPublisher` when that lands.
+  `SecurityDigest` via the probes in `./digest-probes.ts`, renders it
+  via `renderDigestAsText`, and hands the pair to the configured
+  `DigestPublisher`. Boot wires either `NotificationChannelDigestPublisher`
+  (email via Resend → SECURITY_DIGEST_DAILY_V1 template) when
+  `NIGHTLY_SECURITY_DIGEST_RECIPIENT_EMAIL` is set and the Resend
+  channel is wired, or the in-memory publisher + an INFO log line
+  otherwise.
+
+- **`notification-channel-digest-publisher.ts`** — production
+  `DigestPublisher` adapter that delegates to the worker's existing
+  `NotificationChannel` (the same Resend-backed channel that powers
+  scheduled-report emails). Composes the typed context payload from
+  the digest aggregates, pins the recipient as the configured
+  security distribution alias, and builds the per-digest idempotency
+  key off `digest.generatedAt` so worker restarts inside the
+  scheduler's debounce window cannot double-send.
+
+- **`audit-chain-verifier-loop.ts`** — fires daily at 01:30 UTC,
+  BEFORE the Merkle signing job, replaying each org's audit chain.
+  A break increments `pharmax_audit_verifier_failures_total` and
+  pages on-call via the standard alert path.
 
 - **`daily-utc-scheduler.ts`** — minimal once-per-day-at-UTC-HH:MM
-  scheduler (~80 lines). Used by both loops above. We did NOT reuse
-  `createPollLoop` because that fires at a fixed _interval_, not at
-  a specific clock time.
+  scheduler (~80 lines). Used by all three loops above. We did NOT
+  reuse `createPollLoop` because that fires at a fixed _interval_,
+  not at a specific clock time.
 
 - **`digest-probes.ts`** — worker-process adapter that bridges the
   digest probes to Prisma / withSystemContext.
 
 ## Wiring in `apps/worker/src/main.ts`
 
-The Merkle loop is wired during boot via
-`createNightlyMerkleRootLoopFromEnv` — that variant resolves the
-signer and publisher from env (dynamically importing
-`@aws-sdk/client-kms` and `@aws-sdk/client-s3` only when the
-production env vars are set), then returns the standard loop
-handle. The digest loop is NOT yet wired into main.ts — see the
-"Open items" list below.
+All three loops (Merkle signing, audit-chain verifier, nightly
+security digest) are wired during boot. The Merkle loop uses
+`createNightlyMerkleRootLoopFromEnv` to resolve its signer and
+publisher from env (dynamically importing `@aws-sdk/client-kms`
+and `@aws-sdk/client-s3` only when the production env vars are
+set). The digest loop's publisher is selected at boot from the
+combination of `NIGHTLY_SECURITY_DIGEST_RECIPIENT_EMAIL` +
+`RESEND_API_KEY` + `NOTIFICATION_FROM_EMAIL`; the resolved choice
+is surfaced under `nightlySecurityDigest.publisher` in the
+`worker.boot` log line so an operator can confirm which path is
+active without inspecting downstream logs.
 
 ## Env vars consumed by the Merkle loop
 
@@ -56,10 +78,27 @@ handle. The digest loop is NOT yet wired into main.ts — see the
 `buildMerkleSigner` and `buildMerklePublisher` hard-fail when
 production env is missing — boot stops before the first run.
 
+## Env vars consumed by the digest loop
+
+| Var                                       | Required in prod  | Notes                                                                                                         |
+| ----------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------- |
+| `NIGHTLY_SECURITY_DIGEST_ENABLED`         | no (default true) | When false, the loop is not started.                                                                          |
+| `NIGHTLY_SECURITY_DIGEST_HOUR_UTC`        | no (default 2)    | UTC hour the digest fires.                                                                                    |
+| `NIGHTLY_SECURITY_DIGEST_MINUTE_UTC`      | no (default 30)   | UTC minute the digest fires.                                                                                  |
+| `NIGHTLY_SECURITY_DIGEST_WINDOW_HOURS`    | no (default 24)   | Look-back window for probes.                                                                                  |
+| `NIGHTLY_SECURITY_DIGEST_RECIPIENT_EMAIL` | recommended       | When set + Resend channel wired → email delivery. When unset → INFO-log-only fallback + production-time warn. |
+
+Use a group alias (e.g. `security@<operator-domain>`) for the
+recipient. The notification channel is one-recipient-per-send by
+design; multi-recipient fan-out belongs at the email-vendor /
+Workspace / Google Groups layer so that Resend's per-send
+`Idempotency-Key` correctly dedupes worker retries.
+
 ## Open items (not in this lane's scope)
 
-- `nightly-security-digest-loop.ts` wiring into `main.ts`.
-- Real `DigestPublisher` (Resend / SES) — replace `InMemoryDigestPublisher`.
 - `break_glass_session` Prisma model + migration per
   `packages/security/src/break-glass/SCHEMA.md`. Until then, the
   break-glass probe in `digest-probes.ts` returns an empty list.
+- Slack / Teams `DigestPublisher` adapters — sibling to
+  `NotificationChannelDigestPublisher` for high-urgency operators
+  who prefer paging.

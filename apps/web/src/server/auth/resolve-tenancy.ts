@@ -46,10 +46,27 @@
 
 import "server-only";
 
+import { cache } from "react";
+
 import { auth } from "@clerk/nextjs/server";
-import { prisma, UserStatus } from "@pharmax/database";
+import { cached, type Cache } from "@pharmax/composition";
+import { prisma, UserStatus, type PrismaClient } from "@pharmax/database";
 import { ids } from "@pharmax/platform-core";
-import { buildTenancyContext, withSystemContext, type TenancyContext } from "@pharmax/tenancy";
+import {
+  applySystemSessionGuc,
+  buildTenancyContext,
+  withSystemContext,
+  type SessionGucExecutor,
+  type TenancyContext,
+} from "@pharmax/tenancy";
+
+import { getServerCache } from "../cache.js";
+import { logger } from "../logger.js";
+import {
+  operatorIdentityCacheKey,
+  OPERATOR_IDENTITY_CACHE_TTL_MS,
+  type CachedOperatorRow,
+} from "./operator-identity-cache.js";
 
 export const RESOLVE_TENANCY_NO_SESSION = "RESOLVE_TENANCY_NO_SESSION";
 export const RESOLVE_TENANCY_USER_NOT_LINKED = "RESOLVE_TENANCY_USER_NOT_LINKED";
@@ -85,31 +102,21 @@ interface ResolveTenancyOptions {
    * real Pharmax Prisma client.
    */
   readonly auth?: () => Promise<{ userId: string | null }>;
-  readonly client?: {
-    readonly user: {
-      readonly findUnique: (args: {
-        where: { clerkUserId: string };
-        select: {
-          id: true;
-          organizationId: true;
-          email: true;
-          displayName: true;
-          status: true;
-          clerkUserId: true;
-        };
-      }) => Promise<{
-        id: string;
-        organizationId: string;
-        email: string;
-        displayName: string;
-        status: UserStatus;
-        clerkUserId: string | null;
-      } | null>;
-    };
-  };
+  /**
+   * Injectable for tests. Needs `$transaction` (the lookup runs in a
+   * system-GUC transaction so it is permitted under the RLS-subject
+   * `pharmax_app` role) and the `user` delegate.
+   */
+  readonly client?: Pick<PrismaClient, "$transaction" | "user">;
+  /**
+   * Injectable for tests. The cross-request cache for the Clerk userId →
+   * Pharmax `user` row mapping. Defaults to the process cache singleton
+   * (RedisCache when REDIS_URL is set, NoopCache otherwise).
+   */
+  readonly cache?: Cache;
 }
 
-export async function resolveOperatorTenancyContext(
+async function resolveOperatorTenancyContextImpl(
   options: ResolveTenancyOptions = {}
 ): Promise<ResolveTenancyResult> {
   const authFn = options.auth ?? (auth as unknown as () => Promise<{ userId: string | null }>);
@@ -133,19 +140,47 @@ export async function resolveOperatorTenancyContext(
   // see USER_NOT_LINKED briefly and the next refresh succeeds.
   // We deliberately do NOT pull-fallback here to keep this hot
   // path off the Clerk API.
-  const user = await withSystemContext("apps/web:resolve-operator-tenancy", async () =>
-    client.user.findUnique({
-      where: { clerkUserId },
-      select: {
-        id: true,
-        organizationId: true,
-        email: true,
-        displayName: true,
-        status: true,
-        clerkUserId: true,
-      },
-    })
-  );
+  const reason = "apps/web:resolve-operator-tenancy";
+  const cacheInstance = options.cache ?? getServerCache();
+
+  // Cross-request read-through. `cached()` returns a hit when present,
+  // otherwise runs the authoritative system-context lookup and caches the
+  // row for OPERATOR_IDENTITY_CACHE_TTL_MS. A null (not-linked) result is
+  // never cached, so a just-provisioned operator is never locked out; the
+  // Clerk webhooks invalidate this key on every identity mutation.
+  const user = await cached<CachedOperatorRow | null>({
+    cache: cacheInstance,
+    key: operatorIdentityCacheKey(clerkUserId),
+    ttlMs: OPERATOR_IDENTITY_CACHE_TTL_MS,
+    load: () =>
+      withSystemContext(reason, () =>
+        client.$transaction(async (tx) => {
+          // Set `pharmax.system_context='on'` so the cross-tenant user
+          // lookup is permitted under the non-BYPASSRLS `pharmax_app`
+          // role. The query is still narrowed by the unique `clerkUserId`.
+          await applySystemSessionGuc(tx as unknown as SessionGucExecutor, reason);
+          return tx.user.findUnique({
+            where: { clerkUserId },
+            select: {
+              id: true,
+              organizationId: true,
+              email: true,
+              displayName: true,
+              status: true,
+              clerkUserId: true,
+            },
+          });
+        })
+      ),
+    onError: (stage, error) => {
+      // Cache transport failure is non-fatal — `cached()` already fell
+      // through to the loader. Log for metrics only.
+      logger.warn("auth.operator_identity_cache.error", {
+        stage,
+        errorMessage: error instanceof Error ? `${error.name}: ${error.message}` : "unknown",
+      });
+    },
+  });
 
   if (user === null) {
     return Object.freeze({
@@ -179,4 +214,52 @@ export async function resolveOperatorTenancyContext(
       clerkUserId: user.clerkUserId!,
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Per-request memoization (production hot path).
+//
+// A single React server request renders the `/ops/*` layout AND the
+// nested page AND (for actions) a route handler — each historically
+// called `resolveOperatorTenancyContext()` independently, paying a
+// fresh Clerk `auth()` plus a system-context user-lookup transaction
+// EVERY time. At enterprise traffic that is the dominant per-navigation
+// cost and it also defeated the RBAC permission cache: every call built
+// a NEW `TenancyContext`, and `resolveEffectivePermissions` keys its
+// memo on the context object, so the permission join re-ran per call.
+//
+// `cache()` from React is request-scoped on the server: Next allocates
+// a fresh cache per RSC request, so there is NO cross-request leakage
+// (the same guarantee `cachedClerkMfaLookup` in require-mfa.ts relies
+// on). Memoizing the zero-arg path means the layout, the page, and any
+// nested reads share ONE auth() + ONE user-lookup tx AND ONE stable
+// `TenancyContext` — which in turn makes the permission WeakMap hit, so
+// the 4-table permission join also runs once per request.
+//
+// The injectable `options` path (unit tests, or any caller supplying a
+// custom auth()/client) deliberately BYPASSES the cache so each call
+// exercises the real resolution with its own dependencies and a fresh
+// correlation id.
+// ---------------------------------------------------------------------------
+
+const cachedResolveOperatorTenancyContext = cache(
+  (): Promise<ResolveTenancyResult> => resolveOperatorTenancyContextImpl()
+);
+
+/**
+ * Resolve the Clerk session → Pharmax `TenancyContext`.
+ *
+ * Production callers invoke this with no arguments and get a
+ * per-request-memoized result (shared across the layout, the page, and
+ * any nested server reads in the same request). Callers that inject
+ * `auth` / `client` / `cache` (tests) bypass the memo and run the
+ * resolution directly so each call is independent.
+ */
+export function resolveOperatorTenancyContext(
+  options: ResolveTenancyOptions = {}
+): Promise<ResolveTenancyResult> {
+  if (options.auth !== undefined || options.client !== undefined || options.cache !== undefined) {
+    return resolveOperatorTenancyContextImpl(options);
+  }
+  return cachedResolveOperatorTenancyContext();
 }

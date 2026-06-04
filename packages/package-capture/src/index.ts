@@ -37,6 +37,14 @@ export {
   PACKAGE_PHOTO_ALREADY_MATCHED,
 } from "./commands/resolve-package-photo-match.js";
 
+export {
+  ArchivePackagePhoto,
+  type ArchivePackagePhotoInput,
+  type ArchivePackagePhotoOutput,
+  type PackagePhotoArchiveReason,
+  PACKAGE_PHOTO_ARCHIVE_NOT_FOUND,
+} from "./commands/archive-package-photo.js";
+
 export type {
   PackagePhotoStorage,
   PackagePhotoUploadInput,

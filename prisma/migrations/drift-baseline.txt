@@ -1,0 +1,101 @@
+# prisma/migrations/drift-baseline.txt
+#
+# ACCEPTED drift between the migration history and schema.prisma,
+# captured by `scripts/check-prisma-drift.ts`. Everything below this
+# header is verbatim `prisma migrate diff` summary output.
+#
+# This is NOT a TODO list of bugs — most entries are divergence
+# Prisma 5 cannot model (partial unique indexes), intentional index
+# aliases, or FK ordering. The guard's job is to fail when this set
+# CHANGES, so a NEW, unreviewed divergence cannot slip in.
+#
+# Regenerate after an intentional reconciliation (review the diff!):
+#   UPDATE_DRIFT_BASELINE=1 pnpm check:drift
+[*] Changed the `access_review_snapshot` table
+  [-] Removed foreign key on columns (commandLogId)
+  [-] Removed foreign key on columns (organizationId)
+  [-] Removed foreign key on columns (recordedByUserId)
+  [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
+  [+] Added foreign key on columns (organizationId)
+  [+] Added foreign key on columns (recordedByUserId)
+  [+] Added foreign key on columns (commandLogId)
+
+[*] Changed the `invoice` table
+  [+] Added unique index on columns (stripeChargeId)
+
+[*] Changed the `notification_delivery` table
+  [-] Removed foreign key on columns (organizationId)
+  [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
+  [+] Added foreign key on columns (organizationId)
+
+[*] Changed the `package_photo` table
+  [*] Renamed index `package_photo_org_capturedAt_idx` to `package_photo_organizationId_capturedAt_idx`
+  [*] Renamed index `package_photo_org_capturedByUserId_capturedAt_idx` to `package_photo_organizationId_capturedByUserId_capturedAt_idx`
+  [*] Renamed index `package_photo_org_clinicId_capturedAt_idx` to `package_photo_organizationId_clinicId_capturedAt_idx`
+  [*] Renamed index `package_photo_org_externalOrderNumber_idx` to `package_photo_organizationId_pharmacyExternalOrderNumber_idx`
+  [*] Renamed index `package_photo_org_matchedOrderId_idx` to `package_photo_organizationId_matchedOrderId_idx`
+  [*] Renamed index `package_photo_org_matchedPatientId_idx` to `package_photo_organizationId_matchedPatientId_idx`
+  [*] Renamed index `package_photo_org_matched_idx` to `package_photo_organizationId_matched_idx`
+  [*] Renamed index `package_photo_org_sha256_key` to `package_photo_organizationId_sha256_key`
+  [*] Renamed index `package_photo_org_siteId_capturedAt_idx` to `package_photo_organizationId_siteId_capturedAt_idx`
+  [*] Renamed index `package_photo_org_trackingNumber_idx` to `package_photo_organizationId_trackingNumber_idx`
+
+[*] Changed the `package_photo_upload_token` table
+  [*] Renamed index `package_photo_upload_token_org_createdAt_idx` to `package_photo_upload_token_organizationId_createdAt_idx`
+  [*] Renamed index `package_photo_upload_token_org_uploadedByUserId_idx` to `package_photo_upload_token_organizationId_uploadedByUserId_idx`
+
+[*] Changed the `pricing_rule` table
+  [*] Renamed index `pricing_rule_clinic_idx` to `pricing_rule_organizationId_clinicId_idx`
+  [*] Renamed index `pricing_rule_resolver_idx` to `pricing_rule_organizationId_kind_status_effectiveFrom_idx`
+
+[*] Changed the `provider_sync_check` table
+  [*] Renamed the foreign key "provider_sync_check_commandLogId_fkey" to "provider_sync_check_dispatchedCommandLogId_fkey"
+  [*] Renamed the foreign key "provider_sync_check_runId_fkey" to "provider_sync_check_providerSyncRunId_fkey"
+  [*] Renamed index `provider_sync_check_organizationId_commandLogId_idx` to `provider_sync_check_organizationId_dispatchedCommandLogId_idx`
+  [*] Renamed index `provider_sync_check_organizationId_runId_idx` to `provider_sync_check_organizationId_providerSyncRunId_idx`
+
+[*] Changed the `provider_sync_review_item` table
+  [*] Altered column `updatedAt` (default changed from `Some(Now)` to `None`)
+  [*] Renamed the foreign key "provider_sync_review_item_checkId_fkey" to "provider_sync_review_item_providerSyncCheckId_fkey"
+  [*] Renamed the foreign key "provider_sync_review_item_runId_fkey" to "provider_sync_review_item_providerSyncRunId_fkey"
+  [*] Renamed index `provider_sync_review_item_organizationId_kind_status_disc_idx` to `provider_sync_review_item_organizationId_kind_status_discov_idx`
+  [*] Renamed index `provider_sync_review_item_organizationId_resolver_idx` to `provider_sync_review_item_organizationId_resolvedByUserId_r_idx`
+  [*] Renamed index `provider_sync_review_item_organizationId_status_disc_idx` to `provider_sync_review_item_organizationId_status_discoveredA_idx`
+
+[*] Changed the `report_run` table
+  [-] Removed foreign key on columns (commandLogId)
+  [-] Removed foreign key on columns (organizationId)
+  [-] Removed foreign key on columns (runByUserId)
+  [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
+  [+] Added index on columns (organizationId, runByUserId, generatedAt)
+  [+] Added foreign key on columns (organizationId)
+  [+] Added foreign key on columns (runByUserId)
+  [+] Added foreign key on columns (commandLogId)
+
+[*] Changed the `report_schedule` table
+  [-] Removed foreign key on columns (createCommandLogId)
+  [-] Removed foreign key on columns (createdByUserId)
+  [-] Removed foreign key on columns (lastRunReportRunId)
+  [-] Removed foreign key on columns (organizationId)
+  [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
+  [+] Added foreign key on columns (organizationId)
+  [+] Added foreign key on columns (lastRunReportRunId)
+  [+] Added foreign key on columns (createdByUserId)
+  [+] Added foreign key on columns (createCommandLogId)
+
+[*] Changed the `resend_webhook_event` table
+  [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
+
+[*] Changed the `shipment_tracking_event` table
+  [*] Renamed index `shipment_tracking_event_shipmentId_occurredAt_idx` to `shipment_tracking_event_organizationId_shipmentId_occurredA_idx`
+  [*] Renamed index `shipment_tracking_event_source_external_idx` to `shipment_tracking_event_organizationId_source_externalEvent_key`
+
+[*] Changed the `user` table
+  [+] Added unique index on columns (clerkUserId)
+
+[*] Changed the `verification_record` table
+  [*] Renamed index `verification_record_organizationId_pharmacistUserId_occurredAt_` to `verification_record_organizationId_pharmacistUserId_occurre_idx`
+  [*] Renamed index `verification_record_organizationId_stage_decision_occurredAt_id` to `verification_record_organizationId_stage_decision_occurredA_idx`
+
+[*] Changed the `workflow_policy_overlay` table
+  [*] Renamed index `workflow_policy_overlay_organizationId_workflowPolicyId_status_` to `workflow_policy_overlay_organizationId_workflowPolicyId_sta_idx`

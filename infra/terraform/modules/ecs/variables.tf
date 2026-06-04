@@ -99,6 +99,19 @@ variable "secret_arns" {
   type        = map(string)
 }
 
+variable "enable_reporting_replica" {
+  description = <<-EOT
+    When true, inject REPORTING_DATABASE_URL (the Aurora reader endpoint
+    connection string) into the web and worker tasks so heavy report scans
+    read from a replica instead of the writer. Only enable when a reader
+    instance exists AND the `reporting-database-url` secret is populated —
+    an empty value fails the app's URL validation at boot. When false, the
+    env var is omitted and reports read the primary.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "data_kms_key_alias" {
   description = "Alias of the data CMK (PHI envelope encryption). Injected as AWS_KMS_DATA_KEY_ID + legacy AWS_KMS_APP_KEY_ID into every service container."
   type        = string

@@ -63,6 +63,7 @@ import { prisma, UserStatus, type PrismaClient } from "@pharmax/database";
 import { applySystemSessionGuc, withSystemContext } from "@pharmax/tenancy";
 
 import { logger } from "../logger.js";
+import { invalidateOperatorIdentityCache } from "./operator-identity-cache.js";
 
 // ---------------------------------------------------------------------------
 // Typed event payloads (narrow surface — Clerk publishes more fields
@@ -159,6 +160,15 @@ export interface DispatchOptions {
    * to assert the audit shape per outcome.
    */
   readonly writeAudit?: AuditEntryWriter;
+  /**
+   * Invalidate the operator-identity cache for a Clerk userId after an
+   * identity mutation applies. Default delegates to
+   * `invalidateOperatorIdentityCache` (best-effort; a transport error is
+   * swallowed there). Tests inject a spy/no-op so the dispatcher stays
+   * offline. Keyed by the Clerk userId so a terminated operator's cached
+   * ACTIVE row is dropped immediately rather than lingering until TTL.
+   */
+  readonly invalidateIdentityCache?: (clerkUserId: string) => Promise<void>;
 }
 
 export type TxRunner = <T>(
@@ -193,17 +203,17 @@ export async function dispatchClerkWebhookEvent(
     case "user.created": {
       const payload = parseUserPayload(event.data);
       if (payload === null) return "noop_no_invited_row";
-      return handleUserCreated(payload, deps);
+      return invalidateOnApplied(payload.id, await handleUserCreated(payload, deps), deps);
     }
     case "user.updated": {
       const payload = parseUserPayload(event.data);
       if (payload === null) return "noop_no_link";
-      return handleUserUpdated(payload, deps);
+      return invalidateOnApplied(payload.id, await handleUserUpdated(payload, deps), deps);
     }
     case "user.deleted": {
       const payload = parseDeletedPayload(event.data);
       if (payload === null) return "noop_no_link";
-      return handleUserDeleted(payload, deps);
+      return invalidateOnApplied(payload.id, await handleUserDeleted(payload, deps), deps);
     }
     case "session.created": {
       const payload = parseSessionPayload(event.data);
@@ -224,6 +234,7 @@ interface ResolvedDeps {
   readonly runInTransaction: TxRunner;
   readonly applySystemGuc: (tx: ClerkWebhookTxClient, reason: string) => Promise<void>;
   readonly writeAudit: AuditEntryWriter;
+  readonly invalidateIdentityCache: (clerkUserId: string) => Promise<void>;
 }
 
 function resolveDeps(options: DispatchOptions): ResolvedDeps {
@@ -233,6 +244,9 @@ function resolveDeps(options: DispatchOptions): ResolvedDeps {
     runInTransaction: options.runInTransaction ?? defaultTxRunner,
     applySystemGuc: options.applySystemGuc ?? defaultApplySystemGuc,
     writeAudit: options.writeAudit ?? defaultWriteAudit,
+    invalidateIdentityCache:
+      options.invalidateIdentityCache ??
+      ((clerkUserId: string) => invalidateOperatorIdentityCache(clerkUserId)),
   };
 }
 
@@ -323,9 +337,15 @@ async function handleUserCreated(
     // Cross-tenant read: a Clerk identity is tenant-less until we
     // resolve it to a Pharmax `user` row. Same shape as the worker
     // drains' webhook resolvers (see ESLint Override 3c).
-    const candidates = await deps.client.user.findMany({
-      where: { email, status: UserStatus.INVITED },
-      select: { id: true, organizationId: true, email: true, clerkUserId: true },
+    // Cross-tenant read in a GUC tx so it is permitted under the
+    // RLS-subject `pharmax_app` role (system_context lifts the
+    // predicate; the email + INVITED status still narrow the rows).
+    const candidates = await deps.runInTransaction(deps.client, async (tx) => {
+      await deps.applySystemGuc(tx, SYSTEM_REASON);
+      return tx.user.findMany({
+        where: { email, status: UserStatus.INVITED },
+        select: { id: true, organizationId: true, email: true, clerkUserId: true },
+      });
     });
 
     if (candidates.length === 0) {
@@ -439,9 +459,12 @@ async function handleUserUpdated(
   deps: ResolvedDeps
 ): Promise<DispatchOutcome> {
   return withSystemContext("clerk.webhook.user_updated", async () => {
-    const target = await deps.client.user.findUnique({
-      where: { clerkUserId: payload.id },
-      select: { id: true, organizationId: true, email: true, displayName: true },
+    const target = await deps.runInTransaction(deps.client, async (tx) => {
+      await deps.applySystemGuc(tx, SYSTEM_REASON);
+      return tx.user.findUnique({
+        where: { clerkUserId: payload.id },
+        select: { id: true, organizationId: true, email: true, displayName: true },
+      });
     });
     if (target === null) {
       logger.info("clerk.webhook.user_updated.no_link", {
@@ -510,9 +533,12 @@ async function handleUserDeleted(
   deps: ResolvedDeps
 ): Promise<DispatchOutcome> {
   return withSystemContext("clerk.webhook.user_deleted", async () => {
-    const target = await deps.client.user.findUnique({
-      where: { clerkUserId: payload.id },
-      select: { id: true, status: true, organizationId: true },
+    const target = await deps.runInTransaction(deps.client, async (tx) => {
+      await deps.applySystemGuc(tx, SYSTEM_REASON);
+      return tx.user.findUnique({
+        where: { clerkUserId: payload.id },
+        select: { id: true, status: true, organizationId: true },
+      });
     });
     if (target === null) {
       logger.info("clerk.webhook.user_deleted.no_link", {
@@ -581,9 +607,12 @@ async function handleSessionCreated(
   return withSystemContext<DispatchOutcome>(
     "clerk.webhook.session_created",
     async (): Promise<DispatchOutcome> => {
-      const target = await deps.client.user.findUnique({
-        where: { clerkUserId: payload.user_id },
-        select: { id: true, organizationId: true, status: true },
+      const target = await deps.runInTransaction(deps.client, async (tx) => {
+        await deps.applySystemGuc(tx, SYSTEM_REASON);
+        return tx.user.findUnique({
+          where: { clerkUserId: payload.user_id },
+          select: { id: true, organizationId: true, status: true },
+        });
       });
       if (target === null) {
         // Session created for a Clerk user not linked to any Pharmax
@@ -628,6 +657,25 @@ async function handleSessionCreated(
 // ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------
+
+/**
+ * Drop the operator-identity cache entry for `clerkUserId` whenever an
+ * identity mutation actually applied, then return the outcome unchanged.
+ * Off-boarding (`user.deleted`) is the load-bearing case: it evicts the
+ * terminated operator's cached ACTIVE row immediately instead of waiting
+ * for the TTL. Invalidation is best-effort (the helper swallows transport
+ * errors); the cache's short TTL is the backstop.
+ */
+async function invalidateOnApplied(
+  clerkUserId: string,
+  outcome: DispatchOutcome,
+  deps: ResolvedDeps
+): Promise<DispatchOutcome> {
+  if (outcome === "applied") {
+    await deps.invalidateIdentityCache(clerkUserId);
+  }
+  return outcome;
+}
 
 async function runAuditOnly(deps: ResolvedDeps, entry: ClerkAuditEntry): Promise<void> {
   await deps.runInTransaction(deps.client, async (tx) => {

@@ -11,6 +11,7 @@ import { logger } from "./logger.js";
 import { flushSentry } from "./observability/sentry-init.js";
 import { createZplTransport } from "./printer/send-zpl.js";
 import { processNextSentPrintJob, refreshTenancyCorrelation } from "./process-sent-print-job.js";
+import { createLivenessHeartbeat } from "./runtime/liveness.js";
 import { createPollLoop } from "./runtime/poll-loop.js";
 import {
   resolvePrintAgentRuntimeContext,
@@ -88,8 +89,17 @@ async function main(): Promise<void> {
 
   pollLoop.start();
 
+  // Liveness marker for the ECS/Fargate container health check
+  // (`test -f /tmp/pharmax-print-agent-alive` in
+  // infra/terraform/modules/ecs/main.tf). Started AFTER the poll loop is
+  // running so the task only reports healthy once it has actually booted;
+  // the marker is removed during shutdown below.
+  const livenessHeartbeat = createLivenessHeartbeat({ logger });
+  await livenessHeartbeat.start();
+
   await waitForShutdown({
     pollLoop,
+    livenessHeartbeat,
     runtime,
     shutdownTimeoutMs: env.PRINT_AGENT_SHUTDOWN_TIMEOUT_MS,
   });
@@ -97,6 +107,7 @@ async function main(): Promise<void> {
 
 async function waitForShutdown(input: {
   pollLoop: { stop(): Promise<void> };
+  livenessHeartbeat: { stop(): Promise<void> };
   runtime: PrintAgentRuntimeContext;
   shutdownTimeoutMs: number;
 }): Promise<void> {
@@ -118,7 +129,11 @@ async function waitForShutdown(input: {
       }, input.shutdownTimeoutMs);
       forceExit.unref();
 
-      void input.pollLoop.stop().finally(async () => {
+      void (async () => {
+        // Remove the liveness marker first so a draining task fails its
+        // ECS health check immediately instead of lingering as healthy.
+        await input.livenessHeartbeat.stop();
+        await input.pollLoop.stop();
         clearTimeout(forceExit);
         await prisma.$disconnect();
         await flushSentry(2_000);
@@ -127,7 +142,7 @@ async function waitForShutdown(input: {
         }
         logger.info("print-agent.shutdown.complete");
         resolve();
-      });
+      })();
     };
 
     process.on("SIGINT", shutdown);

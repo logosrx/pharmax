@@ -15,7 +15,7 @@
 
 resource "aws_wafv2_web_acl" "this" {
   name        = "${var.name_prefix}-waf"
-  description = "Pharmax WAF — managed rule groups + rate limit"
+  description = "Pharmax WAF - managed rule groups + rate limit"
   scope       = "REGIONAL"
 
   default_action {

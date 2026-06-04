@@ -32,6 +32,7 @@ import Link from "next/link";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { PV1_REJECTION_REASONS } from "@pharmax/verification";
 
+import { SlaBadge, slaRowBorderClass, slaStatusFor } from "../../../src/components/sla-badge.js";
 import {
   hasOperatorPermission,
   loadOperatorPermissions,
@@ -145,14 +146,15 @@ export default async function Pv1QueuePage({
               row.currentAssigneeUserId !== null &&
               row.currentAssigneeUserId !== session.operator.userId;
             const ageMs = now - row.receivedAt.getTime();
-            const overSla = row.slaDeadlineAt !== null && row.slaDeadlineAt.getTime() < now;
+            const nowDate = new Date(now);
+            const slaStatus = slaStatusFor(row.slaDeadlineAt, nowDate);
 
             return (
               <li
                 key={row.orderId}
-                className={`space-y-3 rounded-md border bg-neutral-950 p-4 ${
-                  overSla ? "border-red-800" : "border-neutral-800"
-                }`}
+                className={`space-y-3 rounded-md border bg-neutral-950 p-4 ${slaRowBorderClass(
+                  slaStatus
+                )}`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="space-y-1">
@@ -171,19 +173,10 @@ export default async function Pv1QueuePage({
                         {row.priority}
                       </span>
                       <span className="text-xs text-neutral-500">{row.currentStatus}</span>
+                      <SlaBadge slaDeadlineAt={row.slaDeadlineAt} now={nowDate} />
                     </div>
                     <div className="text-xs text-neutral-500">
                       Received {formatDuration(ageMs)} ago
-                      {row.slaDeadlineAt !== null ? (
-                        <>
-                          {" · "}SLA{" "}
-                          <span className={overSla ? "text-red-400" : "text-neutral-300"}>
-                            {overSla
-                              ? "BREACHED"
-                              : `due in ${formatDuration(row.slaDeadlineAt.getTime() - now)}`}
-                          </span>
-                        </>
-                      ) : null}
                     </div>
                     {otherAssignee ? (
                       <div className="text-xs text-neutral-500">

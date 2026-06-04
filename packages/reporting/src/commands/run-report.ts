@@ -54,6 +54,7 @@ import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
 
 import { getReportRunArchive } from "../archive/configure.js";
+import { getReportReadScope } from "../replica/configure.js";
 import { toCsv } from "../csv.js";
 import { REPORT_REGISTRY, type ReportDefinitionAny } from "../report-registry.js";
 import type { ReportResult } from "../types.js";
@@ -247,20 +248,37 @@ export const RunReport: Command<RunReportInput, RunReportOutput> = {
       });
     }
 
-    // 3. Run the report. The report receives a ReportRunContext
-    //    with the active tx as the Prisma client — keeps reads
-    //    inside the same connection as our writes below, so the
-    //    audit row + report run row are atomic with the read.
+    // 3. Run the report read.
+    //
+    //    When a `ReportReadScope` is configured (app boot wires a
+    //    replica-backed scope), the read runs on a SEPARATE
+    //    tenant-scoped connection (the replica) so heavy
+    //    analytical scans don't compete with the primary's write
+    //    path. The `report_run` insert + audit + outbox below
+    //    stay on the command transaction `tx` (the primary) — the
+    //    audit trail is atomic with the command, the read is not
+    //    (reports are point-in-time; replica lag is acceptable and
+    //    documented).
+    //
+    //    When NO scope is configured, we fall back to reading on
+    //    the command `tx` — identical to the pre-replica behavior.
     const now = clock.now();
-    const result: ReportResult<Record<string, unknown>> = await definition.run(
-      {
-        client: tx as unknown as Parameters<typeof definition.run>[0]["client"],
-        organizationId: ctx.organizationId,
-        ...(ctx.clinicId !== undefined ? { clinicId: ctx.clinicId } : {}),
-        asOf: now,
-      },
-      parsedParams.data
-    );
+    const runAgainst = (client: unknown): Promise<ReportResult<Record<string, unknown>>> =>
+      definition.run(
+        {
+          client: client as Parameters<typeof definition.run>[0]["client"],
+          organizationId: ctx.organizationId,
+          ...(ctx.clinicId !== undefined ? { clinicId: ctx.clinicId } : {}),
+          asOf: now,
+        },
+        parsedParams.data
+      );
+
+    const readScope = getReportReadScope();
+    const result: ReportResult<Record<string, unknown>> =
+      readScope === null
+        ? await runAgainst(tx)
+        : await readScope.read(ctx.organizationId, runAgainst);
 
     // 4a. CSV archive. When the operator asked us to persist, we
     //     pre-allocate the report_run id, serialize the row set

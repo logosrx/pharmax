@@ -33,6 +33,9 @@ module "stack" {
   acm_certificate_domain   = var.acm_certificate_domain
   alb_idle_timeout_seconds = var.alb_idle_timeout_seconds
 
+  # AWS Shield Advanced (account-level subscription; protects this region's ALB).
+  enable_shield_advanced = var.enable_shield_advanced
+
   asymm_sign_key_spec = var.asymm_sign_key_spec
 
   rds_instance_class                      = var.rds_instance_class
@@ -44,6 +47,18 @@ module "stack" {
   rds_multi_az                            = var.rds_multi_az
   rds_deletion_protection                 = var.rds_deletion_protection
   rds_performance_insights_retention_days = var.rds_performance_insights_retention_days
+
+  aurora_capacity_mode      = var.aurora_capacity_mode
+  aurora_serverless_min_acu = var.aurora_serverless_min_acu
+  aurora_serverless_max_acu = var.aurora_serverless_max_acu
+  aurora_reader_count       = var.aurora_reader_count
+
+  # Aurora Global Database — this DR region joins the primary's global cluster
+  # as a read-only secondary (managed promotion on failover). The two
+  # identifiers come from the us-east-1 primary stack's outputs.
+  rds_global_cluster_role           = var.rds_global_cluster_role
+  rds_global_cluster_identifier     = var.rds_global_cluster_identifier
+  rds_replication_source_identifier = var.rds_replication_source_identifier
 
   ecs_web_cpu                    = var.ecs_web_cpu
   ecs_web_memory                 = var.ecs_web_memory

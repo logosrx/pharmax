@@ -35,9 +35,10 @@ import {
 } from "../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../src/server/auth/resolve-tenancy.js";
 import {
-  listOrdersInBucketByCode,
+  listOrdersInBucketsByCode,
   type BucketOrderRow,
 } from "../../../src/server/ops/list-orders-in-bucket.js";
+import { SlaBadge, slaRowBorderClass, slaStatusFor } from "../../../src/components/sla-badge.js";
 
 const TYPING_FLASH: Readonly<Record<string, string>> = {
   claimed: "Claimed for typing.",
@@ -97,7 +98,8 @@ function QueueRow({
   canReopen,
 }: RowRenderProps) {
   const ageMs = nowMs - row.receivedAt.getTime();
-  const overSla = row.slaDeadlineAt !== null && row.slaDeadlineAt.getTime() < nowMs;
+  const nowDate = new Date(nowMs);
+  const slaStatus = slaStatusFor(row.slaDeadlineAt, nowDate);
   const isReady = row.currentStatus === "RECEIVED";
   const isInProgress = row.currentStatus === "TYPING_IN_PROGRESS";
   const isPending = row.currentStatus === "TYPING_PENDING_MISSING_INFO";
@@ -110,9 +112,7 @@ function QueueRow({
 
   return (
     <li
-      className={`space-y-3 rounded-md border bg-neutral-950 p-4 ${
-        overSla ? "border-red-800" : "border-neutral-800"
-      }`}
+      className={`space-y-3 rounded-md border bg-neutral-950 p-4 ${slaRowBorderClass(slaStatus)}`}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
@@ -139,17 +139,8 @@ function QueueRow({
             </span>
           </div>
           <div className="text-xs text-neutral-500">
-            Received {formatDuration(ageMs)} ago
-            {row.slaDeadlineAt !== null ? (
-              <>
-                {" · "}SLA{" "}
-                <span className={overSla ? "text-red-400" : "text-neutral-300"}>
-                  {overSla
-                    ? "BREACHED"
-                    : `due in ${formatDuration(row.slaDeadlineAt.getTime() - nowMs)}`}
-                </span>
-              </>
-            ) : null}
+            Received {formatDuration(ageMs)} ago{" "}
+            <SlaBadge slaDeadlineAt={row.slaDeadlineAt} now={nowDate} />
           </div>
           {otherAssignee ? (
             <div className="text-xs text-neutral-500">
@@ -318,20 +309,16 @@ export default async function TypingQueuePage({
   );
   const canReopen = hasOperatorPermission(permissions, PERMISSIONS.ORDERS_REOPEN_FOR_CORRECTION);
 
-  // Two queries because RECEIVED → INBOX bucket and the rest of the
-  // typing-stage statuses → TYPING bucket (per BUCKET_CODE_FOR_STATUS).
-  // Cheaper to issue two indexed lookups than to build a polymorphic
-  // helper for an inconsistency the rest of the workflow doesn't share.
-  const [inbox, typing] = await Promise.all([
-    listOrdersInBucketByCode({
-      organizationId: session.tenancy.organizationId,
-      bucketCode: "INBOX",
-    }),
-    listOrdersInBucketByCode({
-      organizationId: session.tenancy.organizationId,
-      bucketCode: "TYPING",
-    }),
-  ]);
+  // Two buckets because RECEIVED → INBOX and the rest of the
+  // typing-stage statuses → TYPING (per BUCKET_CODE_FOR_STATUS). Both
+  // are read in a SINGLE tenant transaction (one connection, one
+  // BEGIN/GUC/COMMIT) rather than two independent scopes.
+  const buckets = await listOrdersInBucketsByCode({
+    organizationId: session.tenancy.organizationId,
+    bucketCodes: ["INBOX", "TYPING"],
+  });
+  const inbox = buckets["INBOX"]!;
+  const typing = buckets["TYPING"]!;
 
   const flashKey = typeof params["flash"] === "string" ? params["flash"] : null;
   const flashOrderId = typeof params["orderId"] === "string" ? params["orderId"] : null;

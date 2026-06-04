@@ -10,12 +10,14 @@
   },
   "dependencies": {
     "@pharmax/billing": "workspace:*",
+    "@pharmax/cache": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",
-    "@pharmax/shipping": "workspace:*"
+    "@pharmax/shipping": "workspace:*",
+    "ioredis": "^5.4.2"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

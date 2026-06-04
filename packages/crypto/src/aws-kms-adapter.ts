@@ -81,6 +81,8 @@
 //   cutover (e.g. after a confirmed key compromise), the procedure
 //   is documented in `docs/RUNBOOK.md#rotating-a-kms-data-key`.
 
+import { getMeter } from "@pharmax/telemetry";
+
 import { cryptoValidationError, decryptFailedError, kmsKeyNotFoundError } from "./errors.js";
 import type {
   DeriveSearchKeyInput,
@@ -94,6 +96,35 @@ import type {
 
 const DEK_BYTES = 32;
 const SEARCH_KEY_BYTES = 32;
+
+const meter = getMeter("@pharmax/crypto");
+
+/**
+ * Incremented every time `unwrapDataKey` succeeds against a key that
+ * is NOT the current `dataKeyKeyId`. Labels:
+ *   - `key_position` — 1-indexed position in `previousDataKeyKeyIds`
+ *     (so `key_position=1` is "the first historical key", which is
+ *     usually the most recent one before the rotation).
+ *
+ * Why this is worth a metric: CMK identity rotation is an
+ * operator-triggered event with a defined bake-in window. Production
+ * monitors this counter to confirm (a) the historical-key fallback
+ * is genuinely needed during a rotation, and (b) traffic has drained
+ * off the historical key before the operator drops it from
+ * `AWS_KMS_PREVIOUS_DATA_KEY_IDS` and revokes IAM grants.
+ *
+ * A non-zero rate AFTER a planned rotation's bake-in window has
+ * elapsed indicates dark data (an envelope no recent code path has
+ * touched) still bound to the old CMK — block the IAM revocation
+ * until the rate returns to zero.
+ */
+const kmsHistoricalKeyHitsCounter = meter.createCounter(
+  "pharmax_kms_decrypt_historical_key_hits_total",
+  {
+    description:
+      "AwsKmsAdapter.unwrapDataKey succeeded against a historical CMK (not the current dataKeyKeyId) during a CMK identity rotation. Labelled by 1-indexed position in previousDataKeyKeyIds. A non-zero rate AFTER the bake-in window means dark envelopes still bind to the old CMK — block IAM revocation until this returns to zero.",
+  }
+);
 
 // ---------------------------------------------------------------------------
 // Minimal KMS client surface used by this adapter.
@@ -199,6 +230,63 @@ export interface AwsKmsAdapterOptions {
    * Terraform alias name without the `alias/pharmax/` prefix).
    */
   readonly keyIdLabel?: string;
+  /**
+   * Optional list of historical `ENCRYPT_DECRYPT` CMK ARNs/aliases
+   * that previously wrapped DEKs and remain decrypt-eligible during a
+   * **manual CMK identity rotation** (see RUNBOOK §
+   * "Rotating a KMS data key — Manual CMK rotation").
+   *
+   * Why this option exists
+   * ----------------------
+   *
+   * `kms.Decrypt` validates that the `KeyId` parameter matches the
+   * CMK identity baked into the ciphertext blob. After an alias-swap
+   * rotation (new CMK behind the same alias name; old CMK still
+   * exists with `Decrypt`-only grants for the bake-in window),
+   * envelopes wrapped under the OLD CMK now fail Decrypt against the
+   * NEW CMK's id. The kid stored in our envelopes (which embeds the
+   * `keyIdLabel`, NOT the CMK ARN) cannot disambiguate which CMK to
+   * try, so the adapter walks this list as a fallback.
+   *
+   * Behavioral contract
+   * -------------------
+   *
+   *   1. Steady state (no rotation in flight): leave undefined or
+   *      empty. The adapter performs exactly ONE Decrypt call per
+   *      unwrap (zero behavioral change, zero added latency).
+   *   2. During rotation bake-in: populate with the OLD CMK ARN(s).
+   *      `unwrapDataKey` tries the current `dataKeyKeyId` first; on
+   *      failure, walks this list in declared order, returning the
+   *      first successful decrypt and incrementing
+   *      `pharmax_kms_decrypt_historical_key_hits_total`. When ALL
+   *      keys fail, the error returned is the LAST attempt's failure
+   *      (most informative for diagnosis).
+   *   3. Post-rotation cutover: drop entries from this list as their
+   *      hit-rate drains to zero in the metric above. Coordinate
+   *      with IAM revocation — never remove a key from this list
+   *      while traffic still targets it.
+   *
+   * Validation invariants (enforced in `validate()`)
+   * -----------------------------------------------
+   *
+   *   - Each entry is `DescribeKey`-reachable AND `Enabled === true`
+   *     AND `KeyUsage === ENCRYPT_DECRYPT` AND `KeySpec === SYMMETRIC_DEFAULT`.
+   *   - Duplicate entries (or duplicates of `dataKeyKeyId`) throw
+   *     `CRYPTO_VALIDATION` from the constructor — silently allowing
+   *     them would inflate the decrypt-attempt budget on every
+   *     historical envelope.
+   *
+   * SOC 2 mapping
+   * -------------
+   *
+   * Closes the `kms2` follow-up in
+   * `docs/security/kms-key-inventory.md` § 7 and `docs/soc2/
+   * code-evidence-map.md`. The supporting envelope kid invariant
+   * (no kid change across identity rotation) is documented in
+   * `docs/RUNBOOK.md` § "Rotating a KMS data key — Manual CMK
+   * rotation".
+   */
+  readonly previousDataKeyKeyIds?: ReadonlyArray<string>;
 }
 
 export class AwsKmsAdapter implements KmsAdapter {
@@ -206,6 +294,11 @@ export class AwsKmsAdapter implements KmsAdapter {
   private readonly dataKeyKeyId: string;
   private readonly searchKeyKeyId: string;
   private readonly keyIdLabel: string;
+  // Frozen at construction time. Iterated in declared order on
+  // unwrap fallback (see `unwrapDataKey`). Empty when no rotation is
+  // in flight — the adapter performs exactly one Decrypt call in
+  // that case (no behavioral change vs. pre-rotation deployments).
+  private readonly previousDataKeyKeyIds: ReadonlyArray<string>;
   // Cache the in-flight Promise rather than the resolved Buffer so two
   // concurrent `deriveSearchKey` calls for the same (tenant, purpose)
   // collapse to ONE KMS round-trip — DataLoader-style coalescing.
@@ -222,6 +315,10 @@ export class AwsKmsAdapter implements KmsAdapter {
     this.dataKeyKeyId = options.dataKeyKeyId;
     this.searchKeyKeyId = options.searchKeyKeyId;
     this.keyIdLabel = options.keyIdLabel ?? sanitizeKeyIdForLabel(options.dataKeyKeyId);
+    this.previousDataKeyKeyIds = validatePreviousDataKeyKeyIds(
+      options.previousDataKeyKeyIds,
+      options.dataKeyKeyId
+    );
   }
 
   /**
@@ -304,6 +401,36 @@ export class AwsKmsAdapter implements KmsAdapter {
         field: "searchKeyKeyId",
         reason: `expected KeySpec=HMAC_256, got ${formatField(searchKey.KeyMetadata.KeySpec)} for ${this.searchKeyKeyId}`,
       });
+    }
+
+    // Historical CMKs from a rotation in flight. Validated with the
+    // SAME shape as the current key — Enabled + ENCRYPT_DECRYPT +
+    // SYMMETRIC_DEFAULT. A misconfigured historical entry (typo'd
+    // ARN, missing IAM grant, key disabled by accident) fails at
+    // boot rather than at first-historical-envelope-decrypt — which
+    // could be hours or days into traffic.
+    for (let index = 0; index < this.previousDataKeyKeyIds.length; index += 1) {
+      const previousKeyId = this.previousDataKeyKeyIds[index]!;
+      const fieldLabel = `previousDataKeyKeyIds[${index}]` as const;
+      const meta = await this.describeOrThrow(previousKeyId, "dataKeyKeyId", fieldLabel);
+      if (meta.KeyMetadata.Enabled !== true) {
+        throw kmsKeyNotFoundError({
+          tenantId: "(boot)",
+          kid: `aws-kms describe(${previousKeyId}) for ${fieldLabel}: disabled`,
+        });
+      }
+      if (meta.KeyMetadata.KeyUsage !== "ENCRYPT_DECRYPT") {
+        throw cryptoValidationError({
+          field: fieldLabel,
+          reason: `expected KeyUsage=ENCRYPT_DECRYPT, got ${formatField(meta.KeyMetadata.KeyUsage)} for ${previousKeyId}`,
+        });
+      }
+      if (meta.KeyMetadata.KeySpec !== "SYMMETRIC_DEFAULT") {
+        throw cryptoValidationError({
+          field: fieldLabel,
+          reason: `expected KeySpec=SYMMETRIC_DEFAULT, got ${formatField(meta.KeyMetadata.KeySpec)} for ${previousKeyId}`,
+        });
+      }
     }
 
     this.validated = true;
@@ -394,14 +521,83 @@ export class AwsKmsAdapter implements KmsAdapter {
       throw kmsKeyNotFoundError({ tenantId: input.tenantId, kid: input.kid });
     }
 
-    let result: AwsKmsDecryptOutput;
+    const ciphertextBlob = new Uint8Array(input.wrappedDek);
+    const encryptionContext = { tenantId: input.tenantId } as const;
+
+    // Try the current CMK first. This is the steady-state path —
+    // exactly one Decrypt call per unwrap when no rotation is in
+    // flight. KMS validates that `KeyId` matches the CMK identity
+    // baked into the ciphertext blob; the call fails with
+    // InvalidCiphertextException if the envelope was wrapped under
+    // a different CMK (the rotation case).
+    //
+    // KMS ALSO uses the EncryptionContext as additional authenticated
+    // data on the wrap. Mismatched EncryptionContext returns the
+    // same InvalidCiphertextException shape — but here that's a true
+    // cross-tenant attempt that we WANT to fail closed (i.e. NOT
+    // fall through to historical keys, because the historical keys
+    // would reject it for the same reason). The fallthrough only
+    // matters for the rotation case; the cross-tenant case still
+    // surfaces as DECRYPT_FAILED, just via the historical-key path
+    // when historical keys are configured.
+    let lastError: unknown;
+    let result: AwsKmsDecryptOutput | null = null;
     try {
       result = await this.client.decrypt({
         KeyId: this.dataKeyKeyId,
-        CiphertextBlob: new Uint8Array(input.wrappedDek),
-        EncryptionContext: { tenantId: input.tenantId },
+        CiphertextBlob: ciphertextBlob,
+        EncryptionContext: encryptionContext,
       });
     } catch (cause) {
+      lastError = cause;
+    }
+
+    // Fall through to historical CMKs if the current key did not
+    // decrypt. Iterated in declared order — operators typically
+    // place the most-recently-rotated CMK first, which is the most
+    // likely match for in-flight envelopes during a bake-in window.
+    //
+    // We do NOT attempt to inspect the CiphertextBlob header to
+    // guess which CMK wrapped it: the embedded key id is opaque to
+    // application code (and exposing it via a "peek" call would
+    // require AWS SDK internals). Burning at most
+    // `previousDataKeyKeyIds.length + 1` round-trips per historical
+    // envelope is acceptable for the rotation window — operators
+    // drain the list as the metric below reports zero hits for the
+    // tail entries.
+    if (result === null) {
+      for (let index = 0; index < this.previousDataKeyKeyIds.length; index += 1) {
+        const historicalKeyId = this.previousDataKeyKeyIds[index]!;
+        try {
+          // Sequential by design: KMS Decrypt is the choke point,
+          // and parallel fan-out would burn N×latency and N×IAM cost
+          // on every historical envelope. Stop at the first success.
+          result = await this.client.decrypt({
+            KeyId: historicalKeyId,
+            CiphertextBlob: ciphertextBlob,
+            EncryptionContext: encryptionContext,
+          });
+          // 1-indexed position label so dashboards read naturally —
+          // `key_position=1` is "the most recent historical key" in
+          // the operator's mental model. Recorded only on SUCCESS so
+          // a noisy cross-tenant attempt (every key rejects) does
+          // not pollute the metric.
+          kmsHistoricalKeyHitsCounter.add(1, { key_position: String(index + 1) });
+          break;
+        } catch (cause) {
+          lastError = cause;
+        }
+      }
+    }
+
+    if (result === null) {
+      // Every attempt failed. Surface the LAST error's message —
+      // most informative for diagnosis (a current-key
+      // InvalidCiphertextException is expected during rotation; the
+      // tail error reveals whether the envelope is genuinely
+      // unrecoverable or just bound to an unconfigured historical
+      // CMK).
+      //
       // KMS returns InvalidCiphertextException if EncryptionContext
       // doesn't match what was used at wrap time. That is the
       // cryptographic enforcement layer: even if the caller's
@@ -410,7 +606,7 @@ export class AwsKmsAdapter implements KmsAdapter {
       // error code so the caller experiences the same shape as the
       // local adapter.
       throw decryptFailedError({
-        reason: cause instanceof Error ? cause.message : "kms.decrypt failed",
+        reason: lastError instanceof Error ? lastError.message : "kms.decrypt failed",
         tenantId: input.tenantId,
         // Not a PHI surface — these fields are caller-supplied
         // record identifiers (ULIDs).
@@ -561,19 +757,74 @@ export class AwsKmsAdapter implements KmsAdapter {
    */
   private async describeOrThrow(
     keyId: string,
-    field: "dataKeyKeyId" | "searchKeyKeyId"
+    field: "dataKeyKeyId" | "searchKeyKeyId",
+    // Optional override for the field label in error messages —
+    // historical CMKs share the `dataKeyKeyId` shape but produce
+    // clearer diagnostics when the position in the array is named.
+    fieldLabelOverride?: string
   ): Promise<AwsKmsDescribeKeyOutput> {
+    const fieldLabel = fieldLabelOverride ?? field;
     try {
       return await this.client.describeKey({ KeyId: keyId });
     } catch (cause) {
       throw kmsKeyNotFoundError({
         tenantId: "(boot)",
-        kid: `aws-kms describe(${keyId}) failed for ${field}: ${
+        kid: `aws-kms describe(${keyId}) failed for ${fieldLabel}: ${
           cause instanceof Error ? cause.message : "unknown"
         }`,
       });
     }
   }
+}
+
+/**
+ * Validate the `previousDataKeyKeyIds` option at construction time.
+ *
+ * Invariants:
+ *   - Every entry is a non-empty string.
+ *   - No entry equals `dataKeyKeyId` (silent duplicate would burn an
+ *     extra Decrypt round-trip on every historical envelope for no
+ *     gain — the current-key path already covers it).
+ *   - No entry equals another entry (same reason, plus inflates the
+ *     historical-key-hit metric incorrectly).
+ *
+ * Returns a frozen copy so the adapter cannot be mutated by a caller
+ * holding a reference to the original array.
+ */
+function validatePreviousDataKeyKeyIds(
+  raw: ReadonlyArray<string> | undefined,
+  dataKeyKeyId: string
+): ReadonlyArray<string> {
+  if (raw === undefined) return Object.freeze([] as string[]);
+
+  const seen = new Set<string>();
+  seen.add(dataKeyKeyId);
+  const cleaned: string[] = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const entry = raw[index];
+    if (typeof entry !== "string" || entry.length === 0) {
+      throw cryptoValidationError({
+        field: `previousDataKeyKeyIds[${index}]`,
+        reason: "must be a non-empty string",
+      });
+    }
+    if (seen.has(entry)) {
+      // Two surfaces here. Same entry twice = operator error. Entry
+      // == current dataKeyKeyId = operator error (the current-key
+      // attempt already covers it). Reject both up front so the
+      // adapter cannot be in an unstable steady-state config.
+      throw cryptoValidationError({
+        field: `previousDataKeyKeyIds[${index}]`,
+        reason:
+          entry === dataKeyKeyId
+            ? `duplicates dataKeyKeyId (${entry}); the current key is always tried first`
+            : `duplicate entry (${entry})`,
+      });
+    }
+    seen.add(entry);
+    cleaned.push(entry);
+  }
+  return Object.freeze(cleaned);
 }
 
 // ---------------------------------------------------------------------------

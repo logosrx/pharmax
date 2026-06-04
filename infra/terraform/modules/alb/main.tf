@@ -17,12 +17,15 @@ data "aws_acm_certificate" "this" {
 }
 
 # ---- Security group ---------------------------------------------------------
-# The ALB SG accepts 80/443 from the internet. The ECS task SG accepts traffic
-# from THIS SG only (declared in the ecs module).
+# Default: the ALB SG accepts 80/443 from the internet. When CloudFront is in
+# front (`restrict_ingress_to_cloudfront = true`), ingress is locked to the
+# AWS-managed CloudFront origin-facing prefix list so the public internet
+# cannot reach the ALB directly — all traffic must traverse the edge (WAF +
+# Shield). The ECS task SG accepts traffic from THIS SG only (ecs module).
 
 resource "aws_security_group" "alb" {
   name        = "${var.name_prefix}-alb"
-  description = "Pharmax ALB SG — public 80/443"
+  description = var.restrict_ingress_to_cloudfront ? "Pharmax ALB SG - CloudFront origin only" : "Pharmax ALB SG - public 80/443"
   vpc_id      = var.vpc_id
 
   tags = merge(var.tags, {
@@ -30,7 +33,16 @@ resource "aws_security_group" "alb" {
   })
 }
 
+# CloudFront's published origin-facing IP ranges, as an AWS-managed prefix
+# list. Only looked up when we are locking the ALB to the edge.
+data "aws_ec2_managed_prefix_list" "cloudfront" {
+  count = var.restrict_ingress_to_cloudfront ? 1 : 0
+  name  = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
+# Public ingress (default posture, no CloudFront).
 resource "aws_security_group_rule" "alb_ingress_https" {
+  count             = var.restrict_ingress_to_cloudfront ? 0 : 1
   type              = "ingress"
   from_port         = 443
   to_port           = 443
@@ -42,6 +54,7 @@ resource "aws_security_group_rule" "alb_ingress_https" {
 }
 
 resource "aws_security_group_rule" "alb_ingress_http" {
+  count             = var.restrict_ingress_to_cloudfront ? 0 : 1
   type              = "ingress"
   from_port         = 80
   to_port           = 80
@@ -52,6 +65,19 @@ resource "aws_security_group_rule" "alb_ingress_http" {
   description       = "HTTP (redirected to HTTPS)"
 }
 
+# CloudFront-only ingress. The distribution's origin requests are HTTPS-only
+# (see the cloudfront module), so we only open 443 to the edge prefix list.
+resource "aws_security_group_rule" "alb_ingress_https_cloudfront" {
+  count             = var.restrict_ingress_to_cloudfront ? 1 : 0
+  type              = "ingress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  prefix_list_ids   = [data.aws_ec2_managed_prefix_list.cloudfront[0].id]
+  security_group_id = aws_security_group.alb.id
+  description       = "HTTPS from the CloudFront origin-facing prefix list only"
+}
+
 resource "aws_security_group_rule" "alb_egress_all" {
   type              = "egress"
   from_port         = 0
@@ -60,7 +86,7 @@ resource "aws_security_group_rule" "alb_egress_all" {
   cidr_blocks       = ["0.0.0.0/0"]
   ipv6_cidr_blocks  = ["::/0"]
   security_group_id = aws_security_group.alb.id
-  description       = "ALB→target traffic"
+  description       = "ALB to target traffic"
 }
 
 # ---- ALB --------------------------------------------------------------------
@@ -130,6 +156,19 @@ resource "aws_lb_target_group" "web" {
   lifecycle {
     create_before_destroy = true
   }
+}
+
+# ---- Shield Advanced (optional) ---------------------------------------------
+# Requires an active account-level Shield Advanced subscription (a paid,
+# annual commitment configured out-of-band — there is no Terraform resource
+# for the subscription itself). Protects the ALB with enhanced DDoS
+# mitigation + access to the Shield Response Team / cost-protection.
+
+resource "aws_shield_protection" "alb" {
+  count        = var.enable_shield_advanced ? 1 : 0
+  name         = "${var.name_prefix}-alb"
+  resource_arn = aws_lb.this.arn
+  tags         = var.tags
 }
 
 # ---- HTTP → HTTPS redirect --------------------------------------------------

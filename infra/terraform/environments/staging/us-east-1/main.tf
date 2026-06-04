@@ -31,6 +31,11 @@ module "stack" {
   rds_deletion_protection                 = var.rds_deletion_protection
   rds_performance_insights_retention_days = var.rds_performance_insights_retention_days
 
+  aurora_capacity_mode      = var.aurora_capacity_mode
+  aurora_serverless_min_acu = var.aurora_serverless_min_acu
+  aurora_serverless_max_acu = var.aurora_serverless_max_acu
+  aurora_reader_count       = var.aurora_reader_count
+
   ecs_web_cpu                    = var.ecs_web_cpu
   ecs_web_memory                 = var.ecs_web_memory
   ecs_web_desired_count          = var.ecs_web_desired_count

@@ -16,8 +16,17 @@ export { systemPrisma } from "./client.js";
 export {
   readInTenantContext,
   readInOrgScope,
+  readInSystemContext,
+  buildReadScopeContext,
   type TenantTransactionClient,
 } from "./scoped-read.js";
+// Reporting read replica routing (heavy report scans → replica
+// connection when REPORTING_DATABASE_URL is set; primary fallback).
+export {
+  reportingPrisma,
+  reportingClientIsReplica,
+  readReportingInOrgScope,
+} from "./reporting-client.js";
 export * as billing from "./billing/index.js";
 export * as phi from "./phi/index.js";
 export {

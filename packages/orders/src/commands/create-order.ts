@@ -27,8 +27,8 @@
 //      per site; admins can later add custom buckets and re-bind
 //      this resolution.
 //   5. Insert the Order row. `currentStatus = RECEIVED`, `version
-//      = 0`, `slaDeadlineAt` is left null until `@pharmax/sla`
-//      lands in Phase 3.
+//      = 0`, `slaDeadlineAt = computeOrderSlaDeadline(receivedAt,
+//      priority)` from `@pharmax/sla`.
 //   6. Insert one OrderLine per prescription.
 //
 // Outside the handler, the factory + bus together:
@@ -53,7 +53,7 @@ import { defineCommand } from "@pharmax/command-bus";
 import { IntakeSourceKind, OrderPriority, OrderStatus, Prisma } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
-import { openInitialWaitBeforeTyping } from "@pharmax/sla";
+import { computeOrderSlaDeadline, openInitialWaitBeforeTyping } from "@pharmax/sla";
 import { BUCKET_CODE_FOR_STATUS } from "@pharmax/workflow";
 import { z } from "zod";
 
@@ -277,7 +277,13 @@ export const CreateOrder = defineCommand<CreateOrderInput, CreateOrderOutput>({
     }
 
     // ---- Step 6: insert Order ----
+    // `slaDeadlineAt` is computed once at intake from the SLA
+    // engine: `receivedAt + endToEndBudget × priorityMultiplier`
+    // (RUSH / EMERGENCY compress the budget). The breach-evaluator
+    // tick + the queue-row badges both classify against this single
+    // deadline via `classifySlaStatus`.
     const now = clock.now();
+    const slaDeadlineAt = computeOrderSlaDeadline({ receivedAt: now, priority: input.priority });
     const order = await tx.order.create({
       data: {
         organizationId: orgId,
@@ -292,6 +298,7 @@ export const CreateOrder = defineCommand<CreateOrderInput, CreateOrderOutput>({
         priority: input.priority,
         intakeSourceKind: input.intakeSourceKind,
         receivedAt: now,
+        slaDeadlineAt,
         ...(input.externalOrderNumber === undefined
           ? {}
           : { externalOrderNumber: input.externalOrderNumber }),

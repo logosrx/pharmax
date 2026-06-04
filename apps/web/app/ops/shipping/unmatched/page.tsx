@@ -103,15 +103,31 @@ const RESOLVE_FLASH: Readonly<Record<string, { readonly title: string; readonly 
     title: "Matched",
     body: "The capture is now linked to the order. It has left the unmatched bucket.",
   },
+  archived: {
+    title: "Archived",
+    body: "The capture is dispositioned out of the triage bucket and the order timeline.",
+  },
+  archived_noop: {
+    title: "Already archived",
+    body: "This capture was already archived. No change was made.",
+  },
 };
+
+const ARCHIVE_REASON_OPTIONS: ReadonlyArray<{ readonly value: string; readonly label: string }> = [
+  { value: "TEST_CAPTURE", label: "Test capture" },
+  { value: "DUPLICATE", label: "Duplicate" },
+  { value: "CAPTURED_IN_ERROR", label: "Captured in error" },
+  { value: "UNRESOLVABLE", label: "Unresolvable (no order)" },
+];
 
 interface UnmatchedRowProps {
   readonly row: UnmatchedPackagePhotoRow;
   readonly nowMs: number;
   readonly isSelected: boolean;
+  readonly canArchive: boolean;
 }
 
-function UnmatchedRow({ row, nowMs, isSelected }: UnmatchedRowProps) {
+function UnmatchedRow({ row, nowMs, isSelected, canArchive }: UnmatchedRowProps) {
   const ageMs = nowMs - row.capturedAt.getTime();
   return (
     <li
@@ -171,6 +187,36 @@ function UnmatchedRow({ row, nowMs, isSelected }: UnmatchedRowProps) {
           <span className="font-mono">sha {row.sha256.slice(0, 8)}…</span>
         </div>
       </div>
+      {canArchive ? (
+        <form
+          action="/api/ops/shipping/unmatched/archive"
+          method="POST"
+          className="flex flex-wrap items-center gap-2 border-t border-neutral-800 pt-2"
+        >
+          <input type="hidden" name="photoId" value={row.photoId} />
+          <span className="text-xs text-neutral-500">
+            Won&apos;t ever match? Archive it out of the bucket:
+          </span>
+          <select
+            name="reason"
+            defaultValue="TEST_CAPTURE"
+            aria-label="Archive reason"
+            className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs text-neutral-100"
+          >
+            {ARCHIVE_REASON_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="submit"
+            className="rounded-md border border-neutral-700 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-red-800 hover:bg-red-950 hover:text-red-200"
+          >
+            Archive
+          </button>
+        </form>
+      ) : null}
     </li>
   );
 }
@@ -244,6 +290,7 @@ export default async function UnmatchedTriagePage({
   if (!session.ok) return null;
 
   const permissions = await loadOperatorPermissions(session.tenancy);
+  const canArchive = hasOperatorPermission(permissions, PERMISSIONS.SHIP_ARCHIVE_PACKAGE_PHOTO);
   if (!hasOperatorPermission(permissions, PERMISSIONS.SHIP_RESOLVE_PACKAGE_PHOTO_MATCH)) {
     return (
       <main className="space-y-3">
@@ -438,6 +485,7 @@ export default async function UnmatchedTriagePage({
                 row={row}
                 nowMs={now}
                 isSelected={row.photoId === selectedPhotoId}
+                canArchive={canArchive}
               />
             ))}
           </ul>

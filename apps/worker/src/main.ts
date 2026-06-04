@@ -28,9 +28,15 @@ import {
   type NotificationChannel,
 } from "@pharmax/notifications";
 import { billing, clock } from "@pharmax/platform-core";
-import { billing as databaseBilling, prisma } from "@pharmax/database";
+import {
+  billing as databaseBilling,
+  prisma,
+  readReportingInOrgScope,
+  reportingClientIsReplica,
+} from "@pharmax/database";
 import { configureRbac, PrismaPermissionLoader } from "@pharmax/rbac";
 import {
+  configureReportReadScope,
   configureReportRunArchive,
   InMemoryReportRunArchive,
   S3ReportRunArchive,
@@ -65,8 +71,14 @@ import { createOutboxDrainer } from "./drains/event-outbox-drainer.js";
 import { createFedExTrackingPoller } from "./drains/fedex-tracking-poller.js";
 import { createNpiSyncScheduler } from "./drains/npi-sync-scheduler.js";
 import { createOutboxHandlers } from "./drains/outbox-handlers.js";
+import { createExpiredPackagePhotoUploadTokenReaper } from "./drains/reap-expired-package-photo-upload-tokens.js";
+import {
+  createOrphanPackagePhotoObjectSweeper,
+  type PackagePhotoObjectStore,
+} from "./drains/sweep-orphan-package-photo-objects.js";
 import { createStuckNpiSyncRunReaper } from "./drains/reap-stuck-npi-sync-runs.js";
 import { createReportScheduler } from "./drains/report-scheduler.js";
+import { createSlaBreachEvaluator } from "./drains/sla-breach-evaluator.js";
 import { createEasyPostTargetResolver } from "./drains/shipping-lookups.js";
 import { createUpsTrackingPoller } from "./drains/ups-tracking-poller.js";
 import { createStripeWebhookDrainer } from "./drains/stripe-webhook-event-drainer.js";
@@ -75,8 +87,12 @@ import { env } from "./env.js";
 import { logger } from "./logger.js";
 import { createWorkflowBucketScraper } from "./metrics/workflow-bucket-scraper.js";
 import { flushSentry, initSentry } from "./observability/sentry-init.js";
+import { createLivenessHeartbeat } from "./runtime/liveness.js";
 import { createPollLoop } from "./runtime/poll-loop.js";
+import { createDailyAuditChainVerifierLoop } from "./security/audit-chain-verifier-loop.js";
 import { createNightlyMerkleRootLoopFromEnv } from "./security/daily-merkle-root-loop.js";
+import { createNightlySecurityDigestLoop } from "./security/nightly-security-digest-loop.js";
+import { NotificationChannelDigestPublisher } from "./security/notification-channel-digest-publisher.js";
 
 let workerTelemetryHandle: TelemetryHandle | null = null;
 
@@ -161,6 +177,21 @@ async function main(): Promise<void> {
         })
       : new InMemoryReportRunArchive();
   configureReportRunArchive({ archive: reportArchive });
+
+  // Route scheduled-report READS to the reporting replica (when
+  // REPORTING_DATABASE_URL is set) so the worker's analytical
+  // scans don't burden the OLTP primary. report_run + audit +
+  // outbox stay on the primary command tx.
+  configureReportReadScope({
+    usingReplica: reportingClientIsReplica,
+    read: (organizationId, fn) => readReportingInOrgScope(organizationId, (tx) => fn(tx)),
+  });
+  if (reportingClientIsReplica) {
+    logger.info("worker.reporting.replica_enabled", {
+      event: "reporting.replica.enabled",
+    });
+  }
+
   if (env.NODE_ENV === "production" && !(reportArchive instanceof S3ReportRunArchive)) {
     logger.warn("worker.booted_without_report_archive_s3", {
       reason:
@@ -210,6 +241,35 @@ async function main(): Promise<void> {
         "RESEND_API_KEY or NOTIFICATION_FROM_EMAIL unset; scheduled-report emails will be skipped.",
     });
   }
+
+  // Nightly security digest publisher selection — computed here so
+  // the boot-log dump + the loop construction both reference the
+  // same source of truth.
+  //
+  // When NIGHTLY_SECURITY_DIGEST_RECIPIENT_EMAIL is set AND the
+  // worker's Resend channel is wired, we deliver the digest as an
+  // email via NotificationChannelDigestPublisher → the existing
+  // SECURITY_DIGEST_DAILY_V1 template → Resend → operator. Otherwise
+  // the loop falls back to the in-memory publisher and the
+  // structured `digest.published` log line remains the SOC 2
+  // evidence.
+  //
+  // The PHI sentinel gate on the template is `phiAllowed: false`
+  // by intent — the digest is non-PHI by construction; a future
+  // regression that accidentally embedded a `patientName` key in
+  // the context payload would fail closed at the channel boundary
+  // before any bytes leave the process.
+  const digestRecipient = env.NIGHTLY_SECURITY_DIGEST_RECIPIENT_EMAIL;
+  const digestRecipientConfigured =
+    typeof digestRecipient === "string" && digestRecipient.length > 0;
+  const resendChannelWired = notificationChannel.metadata.name === "resend-email";
+  const securityDigestPublisher =
+    digestRecipientConfigured && resendChannelWired
+      ? new NotificationChannelDigestPublisher({
+          channel: notificationChannel,
+          recipientEmail: digestRecipient as string,
+        })
+      : undefined;
 
   // @pharmax/shipping factory registry. The FedEx + UPS tracking
   // pollers instantiate clients directly (they decrypt the
@@ -261,6 +321,10 @@ async function main(): Promise<void> {
       batchSize: env.REPORT_SCHEDULER_BATCH_SIZE,
       intervalMs: env.REPORT_SCHEDULER_INTERVAL_MS,
     },
+    slaBreachEvaluator: {
+      batchSize: env.SLA_BREACH_EVAL_BATCH_SIZE,
+      intervalMs: env.SLA_BREACH_EVAL_INTERVAL_MS,
+    },
     npiSyncScheduler: {
       batchSize: env.NPI_SYNC_SCHEDULER_BATCH_SIZE,
       intervalMs: env.NPI_SYNC_SCHEDULER_INTERVAL_MS,
@@ -271,6 +335,17 @@ async function main(): Promise<void> {
     npiSyncReaper: {
       intervalMs: env.NPI_SYNC_REAPER_INTERVAL_MS,
       runtimeCeilingMs: env.NPI_SYNC_RUNTIME_CEILING_MS,
+    },
+    packagePhotoTokenReaper: {
+      intervalMs: env.PACKAGE_PHOTO_TOKEN_REAPER_INTERVAL_MS,
+      batchSize: env.PACKAGE_PHOTO_TOKEN_REAPER_BATCH_SIZE,
+    },
+    packagePhotoOrphanSweep: {
+      enabled:
+        typeof env.S3_PACKAGE_PHOTOS_BUCKET === "string" && env.S3_PACKAGE_PHOTOS_BUCKET.length > 0,
+      intervalMs: env.PACKAGE_PHOTO_ORPHAN_SWEEP_INTERVAL_MS,
+      safetyWindowMs: env.PACKAGE_PHOTO_ORPHAN_SWEEP_SAFETY_WINDOW_MS,
+      maxKeysPerTick: env.PACKAGE_PHOTO_ORPHAN_SWEEP_MAX_KEYS_PER_TICK,
     },
     notifications: {
       channel: notificationChannel.metadata.name,
@@ -294,6 +369,19 @@ async function main(): Promise<void> {
       utcMinute: env.QUARTERLY_ACCESS_REVIEW_MINUTE_UTC,
       lookbackDays: env.QUARTERLY_ACCESS_REVIEW_LOOKBACK_DAYS,
       evidenceRoot: env.QUARTERLY_ACCESS_REVIEW_EVIDENCE_ROOT,
+    },
+    auditChainVerifier: {
+      enabled: env.DAILY_AUDIT_CHAIN_VERIFIER_ENABLED,
+      utcHour: env.DAILY_AUDIT_CHAIN_VERIFIER_HOUR_UTC,
+      utcMinute: env.DAILY_AUDIT_CHAIN_VERIFIER_MINUTE_UTC,
+    },
+    nightlySecurityDigest: {
+      enabled: env.NIGHTLY_SECURITY_DIGEST_ENABLED,
+      utcHour: env.NIGHTLY_SECURITY_DIGEST_HOUR_UTC,
+      utcMinute: env.NIGHTLY_SECURITY_DIGEST_MINUTE_UTC,
+      windowHours: env.NIGHTLY_SECURITY_DIGEST_WINDOW_HOURS,
+      publisher: securityDigestPublisher !== undefined ? "notification-channel" : "in-memory",
+      recipientConfigured: digestRecipientConfigured,
     },
   });
 
@@ -392,6 +480,11 @@ async function main(): Promise<void> {
     { batchSize: env.REPORT_SCHEDULER_BATCH_SIZE }
   );
 
+  const slaBreachEvaluator = createSlaBreachEvaluator(
+    { client: prisma, logger },
+    { batchSize: env.SLA_BREACH_EVAL_BATCH_SIZE }
+  );
+
   // NPI Registry sync scheduler + reaper. Two loops:
   //   - scheduler: tick → claim orgs due for a sync → enter per-org
   //     tenancy → runNpiSyncForOrg.
@@ -440,6 +533,45 @@ async function main(): Promise<void> {
     { client: prisma, logger, clock: clock.systemClock },
     { runtimeCeilingMs: env.NPI_SYNC_RUNTIME_CEILING_MS }
   );
+
+  // Package-photo upload-token reaper. Sweeps expired
+  // `package_photo_upload_token` rows (DB rows only — the durable
+  // photo bytes referenced by `package_photo.storageKey` are never
+  // touched). Runs cross-org in system context.
+  const packagePhotoTokenReaper = createExpiredPackagePhotoUploadTokenReaper(
+    { client: prisma, logger, clock: clock.systemClock },
+    { batchSize: env.PACKAGE_PHOTO_TOKEN_REAPER_BATCH_SIZE }
+  );
+
+  // Package-photo orphan S3 object sweeper (janitor part 2). Only
+  // runs when the dedicated S3 bucket is configured — in-memory dev
+  // storage has no persistent orphans (a redeploy clears it). Lists
+  // `org/*/photo/upload/*` and deletes objects with no backing
+  // `package_photo` row older than the safety window.
+  const packagePhotoObjectSweeper =
+    typeof env.S3_PACKAGE_PHOTOS_BUCKET === "string" && env.S3_PACKAGE_PHOTOS_BUCKET.length > 0
+      ? createOrphanPackagePhotoObjectSweeper(
+          {
+            store: await buildPackagePhotoObjectStore({
+              bucket: env.S3_PACKAGE_PHOTOS_BUCKET,
+              region: env.AWS_REGION,
+            }),
+            prisma,
+            logger,
+            clock: clock.systemClock,
+          },
+          {
+            safetyWindowMs: env.PACKAGE_PHOTO_ORPHAN_SWEEP_SAFETY_WINDOW_MS,
+            maxKeysPerTick: env.PACKAGE_PHOTO_ORPHAN_SWEEP_MAX_KEYS_PER_TICK,
+          }
+        )
+      : null;
+  if (env.NODE_ENV === "production" && packagePhotoObjectSweeper === null) {
+    logger.warn("worker.booted_without_package_photo_orphan_sweep", {
+      reason:
+        "S3_PACKAGE_PHOTOS_BUCKET unset; orphaned package-photo S3 objects (abandoned uploads, failed token inserts) will not be reclaimed.",
+    });
+  }
 
   // Daily Merkle root signing loop (ADR-0024). Resolves the signer +
   // publisher from env via dynamic AWS SDK imports. In production
@@ -512,6 +644,71 @@ async function main(): Promise<void> {
     });
   }
 
+  // Daily audit-chain verifier loop (ADR-0006 + SOC 2 CC7.2). Fires
+  // at 01:30 UTC, BEFORE the 02:00 UTC Merkle signing job, so a
+  // tamper is caught and paged on BEFORE the day's manifest is
+  // signed into the Object Lock bucket. Each per-org outcome is
+  // logged + counted via `pharmax_audit_chain_verifier_runs_total`;
+  // a per-row break increments `pharmax_audit_verifier_failures_total`
+  // (declared inside @pharmax/audit) which is the SEV1 alert source.
+  //
+  // The same chain replay is exposed as a CLI
+  // (`scripts/security/verify-audit-chain-all-orgs.ts`) for on-call
+  // use; the worker loop is the always-on scheduled component
+  // SOC 2 CC7.2 evidence pulls require.
+  const auditChainVerifierLoop = env.DAILY_AUDIT_CHAIN_VERIFIER_ENABLED
+    ? createDailyAuditChainVerifierLoop({
+        prisma,
+        logger,
+        utcHour: env.DAILY_AUDIT_CHAIN_VERIFIER_HOUR_UTC,
+        utcMinute: env.DAILY_AUDIT_CHAIN_VERIFIER_MINUTE_UTC,
+      })
+    : null;
+  if (env.NODE_ENV === "production" && auditChainVerifierLoop === null) {
+    logger.warn("worker.audit_chain_verifier.disabled", {
+      reason:
+        "DAILY_AUDIT_CHAIN_VERIFIER_ENABLED=false in production. No scheduled audit-chain verification will run. " +
+        "Disable only if a separate scheduler is invoking the CLI verifier.",
+    });
+  }
+
+  // Nightly security digest loop (SOC 2 CC4.2 + CC7.2). Fires at
+  // 02:30 UTC, AFTER the Merkle signing job, so today's digest
+  // reports yesterday's signed-manifest URI alongside the
+  // audit-chain status, break-glass session, outbox, Sentry, and
+  // access-review-calendar probes. The publisher selection happened
+  // upstream — `securityDigestPublisher` is undefined when we fall
+  // back to the in-memory + INFO-log path.
+  const nightlySecurityDigestLoop = env.NIGHTLY_SECURITY_DIGEST_ENABLED
+    ? createNightlySecurityDigestLoop({
+        prisma,
+        logger,
+        utcHour: env.NIGHTLY_SECURITY_DIGEST_HOUR_UTC,
+        utcMinute: env.NIGHTLY_SECURITY_DIGEST_MINUTE_UTC,
+        windowHours: env.NIGHTLY_SECURITY_DIGEST_WINDOW_HOURS,
+        ...(securityDigestPublisher !== undefined ? { publisher: securityDigestPublisher } : {}),
+      })
+    : null;
+  if (
+    env.NODE_ENV === "production" &&
+    nightlySecurityDigestLoop !== null &&
+    securityDigestPublisher === undefined
+  ) {
+    // Document exactly WHICH precondition is missing so the operator
+    // can fix the right env var without guessing.
+    const reason = !digestRecipientConfigured
+      ? "NIGHTLY_SECURITY_DIGEST_RECIPIENT_EMAIL is unset; the digest will be logged at INFO only and operators will not receive a daily email."
+      : "RESEND_API_KEY or NOTIFICATION_FROM_EMAIL is unset; the worker's notification channel is the in-memory fallback, so the digest will be logged at INFO only.";
+    logger.warn("worker.nightly_security_digest.log_only_publisher", { reason });
+  }
+  if (env.NODE_ENV === "production" && nightlySecurityDigestLoop === null) {
+    logger.warn("worker.nightly_security_digest.disabled", {
+      reason:
+        "NIGHTLY_SECURITY_DIGEST_ENABLED=false in production. No daily security digest will be produced. " +
+        "Disable only if a separate scheduler is invoking the CLI digest.",
+    });
+  }
+
   // Wrap each drainer's `tick` so its tally result is discarded — the
   // poll-loop contract is `() => Promise<void>` and TypeScript is
   // strict about it. Drainer results are already surfaced via
@@ -570,6 +767,15 @@ async function main(): Promise<void> {
     logger,
   });
 
+  const slaBreachEvaluatorLoop = createPollLoop({
+    name: "sla-breach-evaluator",
+    intervalMs: env.SLA_BREACH_EVAL_INTERVAL_MS,
+    tick: async () => {
+      await slaBreachEvaluator.tick();
+    },
+    logger,
+  });
+
   const npiSyncSchedulerLoop = createPollLoop({
     name: "npi-sync-scheduler",
     intervalMs: env.NPI_SYNC_SCHEDULER_INTERVAL_MS,
@@ -587,6 +793,27 @@ async function main(): Promise<void> {
     },
     logger,
   });
+
+  const packagePhotoTokenReaperLoop = createPollLoop({
+    name: "package-photo-token-reaper",
+    intervalMs: env.PACKAGE_PHOTO_TOKEN_REAPER_INTERVAL_MS,
+    tick: async () => {
+      await packagePhotoTokenReaper.tick();
+    },
+    logger,
+  });
+
+  const packagePhotoObjectSweeperLoop =
+    packagePhotoObjectSweeper !== null
+      ? createPollLoop({
+          name: "package-photo-orphan-sweeper",
+          intervalMs: env.PACKAGE_PHOTO_ORPHAN_SWEEP_INTERVAL_MS,
+          tick: async () => {
+            await packagePhotoObjectSweeper.tick();
+          },
+          logger,
+        })
+      : null;
 
   // Workflow + bucket-size scraper. Refreshes the
   // `pharmax_workflow_queue_depth`, `pharmax_workflow_emergency_bucket_size`,
@@ -613,13 +840,32 @@ async function main(): Promise<void> {
   fedexTrackingLoop.start();
   upsTrackingLoop.start();
   reportSchedulerLoop.start();
+  slaBreachEvaluatorLoop.start();
   npiSyncSchedulerLoop.start();
   npiSyncReaperLoop.start();
+  packagePhotoTokenReaperLoop.start();
+  if (packagePhotoObjectSweeperLoop !== null) {
+    packagePhotoObjectSweeperLoop.start();
+  }
   workflowBucketScraperLoop.start();
+  if (auditChainVerifierLoop !== null) {
+    auditChainVerifierLoop.start();
+  }
   merkleRootLoop.start();
+  if (nightlySecurityDigestLoop !== null) {
+    nightlySecurityDigestLoop.start();
+  }
   if (quarterlyAccessReviewLoop !== null) {
     quarterlyAccessReviewLoop.start();
   }
+
+  // Liveness marker for the ECS/Fargate container health check
+  // (`test -f /tmp/pharmax-worker-alive` in
+  // infra/terraform/modules/ecs/main.tf). Started AFTER the drains are
+  // running so the task only reports healthy once it has actually
+  // booted; the marker is removed during shutdown below.
+  const livenessHeartbeat = createLivenessHeartbeat({ logger });
+  await livenessHeartbeat.start();
 
   await waitForShutdown();
 
@@ -630,6 +876,11 @@ async function main(): Promise<void> {
   }, env.SHUTDOWN_TIMEOUT_MS);
   shutdownTimer.unref();
 
+  // Remove the liveness marker first so a draining task fails its ECS
+  // health check immediately instead of being treated as healthy while
+  // it winds down.
+  await livenessHeartbeat.stop();
+
   await Promise.all([
     stripeLoop.stop(),
     outboxLoop.stop(),
@@ -637,10 +888,15 @@ async function main(): Promise<void> {
     fedexTrackingLoop.stop(),
     upsTrackingLoop.stop(),
     reportSchedulerLoop.stop(),
+    slaBreachEvaluatorLoop.stop(),
     npiSyncSchedulerLoop.stop(),
     npiSyncReaperLoop.stop(),
+    packagePhotoTokenReaperLoop.stop(),
+    ...(packagePhotoObjectSweeperLoop !== null ? [packagePhotoObjectSweeperLoop.stop()] : []),
     workflowBucketScraperLoop.stop(),
+    ...(auditChainVerifierLoop !== null ? [auditChainVerifierLoop.stop()] : []),
     merkleRootLoop.stop(),
+    ...(nightlySecurityDigestLoop !== null ? [nightlySecurityDigestLoop.stop()] : []),
     ...(quarterlyAccessReviewLoop !== null ? [quarterlyAccessReviewLoop.stop()] : []),
   ]);
   await prisma.$disconnect();
@@ -721,6 +977,69 @@ async function buildS3ReportArchiveSurface(
 }
 
 /**
+ * Adapter from a real `@aws-sdk/client-s3` `S3Client` to the narrow
+ * `PackagePhotoObjectStore` the orphan sweeper needs (LIST + batch
+ * DELETE). Dynamic import keeps the SDK off the cold-start path for
+ * worker deployments that don't run the sweep.
+ */
+async function buildPackagePhotoObjectStore(input: {
+  readonly bucket: string;
+  readonly region: string | undefined;
+}): Promise<PackagePhotoObjectStore> {
+  if (input.region === undefined || input.region.length === 0) {
+    throw new Error(
+      "S3_PACKAGE_PHOTOS_BUCKET is set but AWS_REGION is missing. Set both to run the orphan-object sweep."
+    );
+  }
+  const { S3Client, ListObjectsV2Command, DeleteObjectsCommand } =
+    await import("@aws-sdk/client-s3");
+  const client = new S3Client({ region: input.region });
+  return {
+    async listObjects(listInput) {
+      const response = await client.send(
+        new ListObjectsV2Command({
+          Bucket: input.bucket,
+          Prefix: listInput.prefix,
+          MaxKeys: listInput.maxKeys,
+          ...(listInput.continuationToken !== undefined
+            ? { ContinuationToken: listInput.continuationToken }
+            : {}),
+        })
+      );
+      const objects = (response.Contents ?? [])
+        .filter(
+          (c): c is { Key: string; LastModified: Date } =>
+            typeof c.Key === "string" && c.LastModified instanceof Date
+        )
+        .map((c) => ({ key: c.Key, lastModified: c.LastModified }));
+      return {
+        objects,
+        // ListObjectsV2 only returns a continuation token when
+        // truncated; absence means the listing is exhausted.
+        nextContinuationToken:
+          response.IsTruncated === true ? response.NextContinuationToken : undefined,
+      };
+    },
+    async deleteObjects(deleteInput) {
+      if (deleteInput.keys.length === 0) return { deletedCount: 0 };
+      const response = await client.send(
+        new DeleteObjectsCommand({
+          Bucket: input.bucket,
+          Delete: {
+            Objects: deleteInput.keys.map((Key) => ({ Key })),
+            // Quiet mode: only errors are returned in `Errors`;
+            // successful deletes are not echoed back.
+            Quiet: true,
+          },
+        })
+      );
+      const errorCount = response.Errors?.length ?? 0;
+      return { deletedCount: deleteInput.keys.length - errorCount };
+    },
+  };
+}
+
+/**
  * Build and validate the KMS adapter for the worker process. Mirror
  * of the web equivalent in `apps/web/src/server/bootstrap.ts`. Kept
  * separate so the two boot paths can diverge later (e.g. if the
@@ -735,6 +1054,7 @@ async function buildWorkerKmsAdapter(): Promise<{
   const dataKeyId = env.AWS_KMS_DATA_KEY_ID;
   const searchKeyId = env.AWS_KMS_SEARCH_KEY_ID;
   const label = env.AWS_KMS_KEY_LABEL ?? "app-phi";
+  const previousDataKeyKeyIds = parsePreviousDataKeyKeyIds(env.AWS_KMS_PREVIOUS_DATA_KEY_IDS);
 
   const allAwsPresent =
     typeof region === "string" &&
@@ -756,8 +1076,15 @@ async function buildWorkerKmsAdapter(): Promise<{
       dataKeyKeyId: dataKeyId,
       searchKeyKeyId: searchKeyId,
       keyIdLabel: label,
+      ...(previousDataKeyKeyIds.length > 0 ? { previousDataKeyKeyIds } : {}),
     });
     await kms.validate();
+    if (previousDataKeyKeyIds.length > 0) {
+      logger.info("worker.kms_previous_data_keys_configured", {
+        currentDataKeyId: dataKeyId,
+        previousDataKeyCount: previousDataKeyKeyIds.length,
+      });
+    }
     return { kms, adapterName: "AwsKmsAdapter" };
   }
 
@@ -767,6 +1094,7 @@ async function buildWorkerKmsAdapter(): Promise<{
       dataKeyKeyId: dataKeyId,
       searchKeyKeyId: searchKeyId,
       keyIdLabel: label,
+      ...(previousDataKeyKeyIds.length > 0 ? { previousDataKeyKeyIds } : {}),
     });
     await kms.validate();
     logger.warn("worker.aws_kms_in_non_production", {
@@ -786,6 +1114,26 @@ async function buildWorkerKmsAdapter(): Promise<{
     kms: new LocalKmsAdapter({ seed }),
     adapterName: "LocalKmsAdapter",
   };
+}
+
+/**
+ * Parse the worker's `AWS_KMS_PREVIOUS_DATA_KEY_IDS` env var into a
+ * clean string array. Mirrors `apps/web/src/server/bootstrap.ts`'s
+ * helper — both processes MUST agree on the historical-key chain
+ * during a manual CMK identity rotation, so the parsing rules must
+ * be byte-identical here.
+ *
+ * Returns an empty array for the steady-state case (env unset or
+ * empty after trimming) so callers can short-circuit.
+ */
+function parsePreviousDataKeyKeyIds(raw: string | undefined): ReadonlyArray<string> {
+  if (typeof raw !== "string") return [];
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return [];
+  return trimmed
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 }
 
 function waitForShutdown(): Promise<NodeJS.Signals> {

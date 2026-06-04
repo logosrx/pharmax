@@ -33,6 +33,10 @@ import {
   resetReportRunArchiveConfigurationForTests,
 } from "../archive/configure.js";
 import { InMemoryReportRunArchive } from "../archive/in-memory-report-run-archive.js";
+import {
+  configureReportReadScope,
+  resetReportReadScopeConfigurationForTests,
+} from "../replica/configure.js";
 import { RunReport } from "./run-report.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
@@ -136,6 +140,7 @@ afterEach(() => {
   resetCommandBusConfigurationForTests();
   resetRbacConfigurationForTests();
   resetReportRunArchiveConfigurationForTests();
+  resetReportReadScopeConfigurationForTests();
 });
 
 const validParams = {
@@ -346,6 +351,73 @@ describe("RunReport — persistCsv", () => {
 
     expect(out.archive).toBeNull();
     expect(archive.list()).toHaveLength(0);
+  });
+});
+
+describe("RunReport — read-replica scope routing", () => {
+  it("runs the report read on the configured scope's client, not the command tx", async () => {
+    // The command tx fake's groupBy would throw if used — proving
+    // the read was routed to the scope client instead.
+    const fake = buildPrismaFake({});
+    (fake.client as { $transaction: unknown }).$transaction = async (
+      fn: (t: unknown) => Promise<unknown>
+    ) =>
+      fn({
+        order: {
+          groupBy: vi.fn(async () => {
+            throw new Error("read must not run on the command tx when a scope is configured");
+          }),
+        },
+        reportRun: { create: vi.fn(async () => ({ id: "rr-scope" })) },
+        commandLog: { create: vi.fn(async () => ({ id: "cl" })) },
+        auditLog: { create: vi.fn(async () => ({ id: "al" })) },
+        auditChainState: {
+          findUnique: vi.fn(async () => null),
+          upsert: vi.fn(async () => ({
+            organizationId: ORG_ID,
+            latestHash: Buffer.alloc(32),
+            latestSeq: 1n,
+          })),
+        },
+        eventOutbox: { createMany: vi.fn(async () => ({ count: 1 })) },
+        idempotencyKey: { create: vi.fn(async () => ({ ok: true })) },
+        $executeRaw: vi.fn(async () => 0),
+      });
+    configureBus(fake.client);
+
+    // A scope whose client returns a known group set.
+    const scopeClient = {
+      order: {
+        groupBy: vi.fn(async () => [
+          {
+            clinicId: "00000000-0000-4000-8000-000000000010",
+            currentStatus: OrderStatus.SHIPPED,
+            _count: { _all: 7 },
+          },
+        ]),
+      },
+    };
+    let scopeOrgSeen: string | null = null;
+    configureReportReadScope({
+      usingReplica: true,
+      read: async (organizationId, fn) => {
+        scopeOrgSeen = organizationId;
+        return fn(scopeClient);
+      },
+    });
+
+    const out = await withTenancyContext(ctx(), () =>
+      executeCommand(
+        RunReport,
+        { reportId: "order-volume-by-stage", parameters: validParams },
+        { idempotencyKey: "rr-scope-1" }
+      )
+    );
+
+    expect(scopeOrgSeen).toBe(ORG_ID);
+    expect(scopeClient.order.groupBy).toHaveBeenCalledTimes(1);
+    expect(out.rowCount).toBe(1);
+    expect(out.aggregates["totalCount"]).toBe(7);
   });
 });
 

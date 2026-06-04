@@ -996,6 +996,519 @@ describe("AwsKmsAdapter — kid uniqueness across labels", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Manual CMK identity rotation — previousDataKeyKeyIds fallback.
+// ---------------------------------------------------------------------------
+//
+// Closes the `kms2` follow-up (kms-key-inventory.md § 7). The
+// scenario: AWS KMS automatic key-material rotation is transparent
+// and uses the same CMK identity. Manual CMK identity rotation
+// (alias-swap to a NEW CMK) is rarer but supported via the runbook,
+// and during the bake-in window historical envelopes still wrap
+// DEKs under the OLD CMK. The adapter walks `previousDataKeyKeyIds`
+// as a fallback chain when the current-key Decrypt rejects.
+//
+// We use a richer fake that embeds the wrapping key id into the
+// ciphertext blob (mirroring how real KMS bakes the key identity
+// into the blob), and rejects `Decrypt` calls whose KeyId doesn't
+// match the embedded one — that is the exact behavior that
+// motivates this feature.
+
+const ROTATED_DATA_KEY = "alias/pharmax/app-phi-key-v2";
+const PREVIOUS_DATA_KEY_1 = "alias/pharmax/app-phi-key-v1";
+const PREVIOUS_DATA_KEY_2 = "alias/pharmax/app-phi-key-v0";
+
+interface RotationFakeKmsClient extends AwsKmsClient {
+  readonly decryptCalls: AwsKmsDecryptInput[];
+}
+
+function createRotationFakeKmsClient(
+  enabledDataKeys: ReadonlyArray<string>,
+  searchKey: string
+): RotationFakeKmsClient {
+  const decryptCalls: AwsKmsDecryptInput[] = [];
+  const enabledSet = new Set(enabledDataKeys);
+
+  const encodeBlob = (wrappingKeyId: string, ec: Record<string, string>, dek: Uint8Array) => {
+    const keyIdBytes = Buffer.from(wrappingKeyId, "utf8");
+    const keyIdLen = Buffer.alloc(2);
+    keyIdLen.writeUInt16BE(keyIdBytes.length, 0);
+    const ecBytes = Buffer.from(JSON.stringify(ec), "utf8");
+    const ecLen = Buffer.alloc(2);
+    ecLen.writeUInt16BE(ecBytes.length, 0);
+    return new Uint8Array(Buffer.concat([keyIdLen, keyIdBytes, ecLen, ecBytes, Buffer.from(dek)]));
+  };
+
+  const decodeBlob = (blob: Buffer) => {
+    if (blob.length < 4) throw new Error("InvalidCiphertextException: blob too short");
+    const keyIdLen = blob.readUInt16BE(0);
+    if (blob.length < 2 + keyIdLen + 2) throw new Error("InvalidCiphertextException");
+    const embeddedKeyId = blob.subarray(2, 2 + keyIdLen).toString("utf8");
+    const ecLen = blob.readUInt16BE(2 + keyIdLen);
+    const ecStart = 2 + keyIdLen + 2;
+    if (blob.length < ecStart + ecLen + 32) throw new Error("InvalidCiphertextException");
+    const ec = JSON.parse(blob.subarray(ecStart, ecStart + ecLen).toString("utf8")) as Record<
+      string,
+      string
+    >;
+    const plaintext = blob.subarray(ecStart + ecLen);
+    return { embeddedKeyId, ec, plaintext };
+  };
+
+  return {
+    decryptCalls,
+
+    async generateDataKey(input) {
+      if (!enabledSet.has(input.KeyId)) throw new Error(`NotFoundException: ${input.KeyId}`);
+      const Plaintext = new Uint8Array(randomBytes(32));
+      const CiphertextBlob = encodeBlob(input.KeyId, { ...input.EncryptionContext }, Plaintext);
+      return { Plaintext, CiphertextBlob };
+    },
+
+    async decrypt(input) {
+      decryptCalls.push(input);
+      if (!enabledSet.has(input.KeyId)) throw new Error(`NotFoundException: ${input.KeyId}`);
+      const blob = Buffer.from(input.CiphertextBlob);
+      const { embeddedKeyId, ec, plaintext } = decodeBlob(blob);
+
+      // The behavior we're modeling: KMS validates KeyId matches the
+      // CMK identity baked into the ciphertext. Mismatch is the
+      // EXACT failure mode the rotation fallback addresses.
+      if (embeddedKeyId !== input.KeyId) {
+        throw new Error(
+          `InvalidCiphertextException: KeyId ${input.KeyId} does not match embedded ${embeddedKeyId}`
+        );
+      }
+
+      // And EncryptionContext binding — distinct failure mode that
+      // SHOULD propagate to DECRYPT_FAILED even with historical
+      // keys configured (because every historical key rejects for
+      // the same EncryptionContext reason).
+      if (JSON.stringify(ec) !== JSON.stringify(input.EncryptionContext)) {
+        throw new Error("InvalidCiphertextException: EncryptionContext mismatch");
+      }
+
+      return { Plaintext: new Uint8Array(plaintext) };
+    },
+
+    async mac(input) {
+      if (input.KeyId !== searchKey) throw new Error(`NotFoundException: ${input.KeyId}`);
+      const Mac = new Uint8Array(
+        createHmac("sha256", Buffer.from("rotation-fake-seed"))
+          .update(Buffer.from(input.Message))
+          .digest()
+      );
+      return { Mac };
+    },
+
+    async describeKey(input) {
+      if (input.KeyId === searchKey) {
+        return {
+          KeyMetadata: {
+            KeyId: input.KeyId,
+            KeyUsage: "GENERATE_VERIFY_MAC",
+            KeySpec: "HMAC_256",
+            Enabled: true,
+          },
+        };
+      }
+      if (!enabledSet.has(input.KeyId)) throw new Error(`NotFoundException: ${input.KeyId}`);
+      return {
+        KeyMetadata: {
+          KeyId: input.KeyId,
+          KeyUsage: "ENCRYPT_DECRYPT",
+          KeySpec: "SYMMETRIC_DEFAULT",
+          Enabled: true,
+        },
+      };
+    },
+  };
+}
+
+describe("AwsKmsAdapter — previousDataKeyKeyIds construction validation", () => {
+  it("accepts undefined (steady-state, no rotation in flight)", () => {
+    expect(
+      () =>
+        new AwsKmsAdapter({
+          client: createFakeKmsClient(defaultKeys()),
+          dataKeyKeyId: DATA_KEY,
+          searchKeyKeyId: SEARCH_KEY,
+        })
+    ).not.toThrow();
+  });
+
+  it("accepts an empty array (operator opted in but cleared the list)", () => {
+    expect(
+      () =>
+        new AwsKmsAdapter({
+          client: createFakeKmsClient(defaultKeys()),
+          dataKeyKeyId: DATA_KEY,
+          searchKeyKeyId: SEARCH_KEY,
+          previousDataKeyKeyIds: [],
+        })
+    ).not.toThrow();
+  });
+
+  it("rejects an empty-string entry", () => {
+    expect(
+      () =>
+        new AwsKmsAdapter({
+          client: createFakeKmsClient(defaultKeys()),
+          dataKeyKeyId: DATA_KEY,
+          searchKeyKeyId: SEARCH_KEY,
+          previousDataKeyKeyIds: [""],
+        })
+    ).toThrowError(expect.objectContaining({ code: "CRYPTO_VALIDATION" }));
+  });
+
+  it("rejects an entry that duplicates dataKeyKeyId", () => {
+    expect(
+      () =>
+        new AwsKmsAdapter({
+          client: createFakeKmsClient(defaultKeys()),
+          dataKeyKeyId: DATA_KEY,
+          searchKeyKeyId: SEARCH_KEY,
+          previousDataKeyKeyIds: [DATA_KEY],
+        })
+    ).toThrowError(expect.objectContaining({ code: "CRYPTO_VALIDATION" }));
+  });
+
+  it("rejects duplicate entries within the array", () => {
+    expect(
+      () =>
+        new AwsKmsAdapter({
+          client: createFakeKmsClient(defaultKeys()),
+          dataKeyKeyId: DATA_KEY,
+          searchKeyKeyId: SEARCH_KEY,
+          previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1, PREVIOUS_DATA_KEY_1],
+        })
+    ).toThrowError(expect.objectContaining({ code: "CRYPTO_VALIDATION" }));
+  });
+});
+
+describe("AwsKmsAdapter — validate() covers historical CMKs", () => {
+  it("DescribeKey-checks every historical key at boot", async () => {
+    const client = createRotationFakeKmsClient(
+      [ROTATED_DATA_KEY, PREVIOUS_DATA_KEY_1, PREVIOUS_DATA_KEY_2],
+      SEARCH_KEY
+    );
+    const describeSpy = vi.spyOn(client, "describeKey");
+    const adapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: ROTATED_DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+      previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1, PREVIOUS_DATA_KEY_2],
+    });
+    await expect(adapter.validate()).resolves.toBeUndefined();
+    // current data key + search key + 2 historical keys = 4
+    expect(describeSpy).toHaveBeenCalledTimes(4);
+    const describedKeyIds = describeSpy.mock.calls.map((call) => call[0].KeyId);
+    expect(describedKeyIds).toContain(ROTATED_DATA_KEY);
+    expect(describedKeyIds).toContain(SEARCH_KEY);
+    expect(describedKeyIds).toContain(PREVIOUS_DATA_KEY_1);
+    expect(describedKeyIds).toContain(PREVIOUS_DATA_KEY_2);
+  });
+
+  it("rejects a historical key that DescribeKey cannot reach (IAM AccessDenied path)", async () => {
+    const baseClient = createRotationFakeKmsClient([ROTATED_DATA_KEY], SEARCH_KEY);
+    const client: AwsKmsClient = {
+      ...baseClient,
+      describeKey: async (input) => {
+        if (input.KeyId === PREVIOUS_DATA_KEY_1) {
+          throw new Error("AccessDeniedException: missing kms:DescribeKey on historical key");
+        }
+        return baseClient.describeKey(input);
+      },
+    };
+    const adapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: ROTATED_DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+      previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1],
+    });
+    await expect(adapter.validate()).rejects.toMatchObject({ code: "KMS_KEY_NOT_FOUND" });
+  });
+
+  it("rejects a historical key with wrong KeyUsage at boot", async () => {
+    const baseClient = createRotationFakeKmsClient([ROTATED_DATA_KEY], SEARCH_KEY);
+    const client: AwsKmsClient = {
+      ...baseClient,
+      describeKey: async (input) => {
+        if (input.KeyId === PREVIOUS_DATA_KEY_1) {
+          return {
+            KeyMetadata: {
+              KeyId: input.KeyId,
+              KeyUsage: "GENERATE_VERIFY_MAC",
+              KeySpec: "HMAC_256",
+              Enabled: true,
+            },
+          };
+        }
+        return baseClient.describeKey(input);
+      },
+    };
+    const adapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: ROTATED_DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+      previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1],
+    });
+    await expect(adapter.validate()).rejects.toMatchObject({ code: "CRYPTO_VALIDATION" });
+  });
+
+  it("rejects a disabled historical key at boot", async () => {
+    const baseClient = createRotationFakeKmsClient([ROTATED_DATA_KEY], SEARCH_KEY);
+    const client: AwsKmsClient = {
+      ...baseClient,
+      describeKey: async (input) => {
+        if (input.KeyId === PREVIOUS_DATA_KEY_1) {
+          return {
+            KeyMetadata: {
+              KeyId: input.KeyId,
+              KeyUsage: "ENCRYPT_DECRYPT",
+              KeySpec: "SYMMETRIC_DEFAULT",
+              Enabled: false,
+            },
+          };
+        }
+        return baseClient.describeKey(input);
+      },
+    };
+    const adapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: ROTATED_DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+      previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1],
+    });
+    await expect(adapter.validate()).rejects.toMatchObject({ code: "KMS_KEY_NOT_FOUND" });
+  });
+});
+
+describe("AwsKmsAdapter — unwrapDataKey fall-through across historical CMKs", () => {
+  it("regression: with no historical keys configured, unwrap performs exactly one Decrypt call", async () => {
+    const client = createRotationFakeKmsClient([ROTATED_DATA_KEY], SEARCH_KEY);
+    const adapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: ROTATED_DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+    });
+    const gen = await adapter.generateDataKey({ tenantId: "org-1" });
+    const dek = await adapter.unwrapDataKey({
+      tenantId: "org-1",
+      kid: gen.kid,
+      wrappedDek: gen.wrappedDek,
+    });
+    expect(dek.equals(gen.plaintextDek)).toBe(true);
+    expect(client.decryptCalls).toHaveLength(1);
+    expect(client.decryptCalls[0]?.KeyId).toBe(ROTATED_DATA_KEY);
+  });
+
+  it("falls through to the FIRST historical key when the current key fails", async () => {
+    // The "rotation just happened" case: an envelope was wrapped
+    // under PREVIOUS_DATA_KEY_1, the operator deployed
+    // ROTATED_DATA_KEY as the current dataKeyKeyId, and added
+    // PREVIOUS_DATA_KEY_1 to previousDataKeyKeyIds.
+    const client = createRotationFakeKmsClient([ROTATED_DATA_KEY, PREVIOUS_DATA_KEY_1], SEARCH_KEY);
+    // Wrap under the OLD key by using a one-off adapter whose
+    // current key is PREVIOUS_DATA_KEY_1.
+    const preRotationAdapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: PREVIOUS_DATA_KEY_1,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+    });
+    const gen = await preRotationAdapter.generateDataKey({ tenantId: "org-1" });
+
+    // Now decrypt with the post-rotation adapter — current key is
+    // ROTATED_DATA_KEY, historical chain includes PREVIOUS_DATA_KEY_1.
+    const postRotationAdapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: ROTATED_DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+      previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1],
+    });
+    const callsBefore = client.decryptCalls.length;
+    const dek = await postRotationAdapter.unwrapDataKey({
+      tenantId: "org-1",
+      kid: gen.kid,
+      wrappedDek: gen.wrappedDek,
+    });
+    expect(dek.equals(gen.plaintextDek)).toBe(true);
+    // Expect exactly 2 Decrypt calls: 1 against ROTATED_DATA_KEY
+    // (fails with KeyId-mismatch), 1 against PREVIOUS_DATA_KEY_1
+    // (succeeds).
+    const callsAfter = client.decryptCalls.length;
+    expect(callsAfter - callsBefore).toBe(2);
+    expect(client.decryptCalls[callsBefore]?.KeyId).toBe(ROTATED_DATA_KEY);
+    expect(client.decryptCalls[callsBefore + 1]?.KeyId).toBe(PREVIOUS_DATA_KEY_1);
+  });
+
+  it("falls through past the first historical key to the SECOND when the first also fails", async () => {
+    const client = createRotationFakeKmsClient(
+      [ROTATED_DATA_KEY, PREVIOUS_DATA_KEY_1, PREVIOUS_DATA_KEY_2],
+      SEARCH_KEY
+    );
+    // Wrap under PREVIOUS_DATA_KEY_2 — the oldest CMK in the chain.
+    const oldestAdapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: PREVIOUS_DATA_KEY_2,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+    });
+    const gen = await oldestAdapter.generateDataKey({ tenantId: "org-1" });
+
+    const postRotationAdapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: ROTATED_DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+      previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1, PREVIOUS_DATA_KEY_2],
+    });
+    const callsBefore = client.decryptCalls.length;
+    const dek = await postRotationAdapter.unwrapDataKey({
+      tenantId: "org-1",
+      kid: gen.kid,
+      wrappedDek: gen.wrappedDek,
+    });
+    expect(dek.equals(gen.plaintextDek)).toBe(true);
+    // 3 calls total: current → previous[0] → previous[1] succeeds.
+    expect(client.decryptCalls.length - callsBefore).toBe(3);
+    const orderedKeyIds = client.decryptCalls.slice(callsBefore).map((call) => call.KeyId);
+    expect(orderedKeyIds).toEqual([ROTATED_DATA_KEY, PREVIOUS_DATA_KEY_1, PREVIOUS_DATA_KEY_2]);
+  });
+
+  it("stops walking the chain at the first success (does not call later historical keys)", async () => {
+    const client = createRotationFakeKmsClient(
+      [ROTATED_DATA_KEY, PREVIOUS_DATA_KEY_1, PREVIOUS_DATA_KEY_2],
+      SEARCH_KEY
+    );
+    // Wrap under PREVIOUS_DATA_KEY_1 (NOT _2).
+    const midAdapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: PREVIOUS_DATA_KEY_1,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+    });
+    const gen = await midAdapter.generateDataKey({ tenantId: "org-1" });
+
+    const postRotationAdapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: ROTATED_DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+      previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1, PREVIOUS_DATA_KEY_2],
+    });
+    const callsBefore = client.decryptCalls.length;
+    await postRotationAdapter.unwrapDataKey({
+      tenantId: "org-1",
+      kid: gen.kid,
+      wrappedDek: gen.wrappedDek,
+    });
+    // Should stop after the first historical key succeeds.
+    expect(client.decryptCalls.length - callsBefore).toBe(2);
+    expect(client.decryptCalls.slice(callsBefore).map((c) => c.KeyId)).toEqual([
+      ROTATED_DATA_KEY,
+      PREVIOUS_DATA_KEY_1,
+    ]);
+    expect(
+      client.decryptCalls.slice(callsBefore).some((c) => c.KeyId === PREVIOUS_DATA_KEY_2)
+    ).toBe(false);
+  });
+
+  it("when EVERY key fails, throws DECRYPT_FAILED carrying the LAST attempt's error", async () => {
+    const client = createRotationFakeKmsClient(
+      [ROTATED_DATA_KEY, PREVIOUS_DATA_KEY_1, PREVIOUS_DATA_KEY_2],
+      SEARCH_KEY
+    );
+    // Forge a blob whose embedded key id is something nobody
+    // configured ("alias/pharmax/long-deleted-key"). Every Decrypt
+    // attempt rejects with InvalidCiphertextException. The thrown
+    // error surfaces the LAST attempt's reason — which the
+    // post-rotation adapter still has to handle gracefully.
+    const orphanAdapter = new AwsKmsAdapter({
+      client: createRotationFakeKmsClient(["alias/pharmax/long-deleted-key"], SEARCH_KEY),
+      dataKeyKeyId: "alias/pharmax/long-deleted-key",
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+    });
+    const gen = await orphanAdapter.generateDataKey({ tenantId: "org-1" });
+    const postRotationAdapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: ROTATED_DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+      previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1, PREVIOUS_DATA_KEY_2],
+    });
+    const callsBefore = client.decryptCalls.length;
+    await expect(
+      postRotationAdapter.unwrapDataKey({
+        tenantId: "org-1",
+        kid: gen.kid,
+        wrappedDek: gen.wrappedDek,
+      })
+    ).rejects.toMatchObject({ code: "DECRYPT_FAILED" });
+    // Verified that all three keys were tried.
+    expect(client.decryptCalls.length - callsBefore).toBe(3);
+  });
+
+  it("cross-tenant attempt with historical keys configured still surfaces as DECRYPT_FAILED", async () => {
+    // Defence-in-depth check: the EncryptionContext binding is
+    // enforced by KMS even on historical keys. A cross-tenant
+    // unwrap attempt against a current-tenant envelope fails on
+    // EVERY key (current + historical) for the same reason —
+    // operator-visible result is DECRYPT_FAILED with the
+    // EncryptionContext-mismatch message.
+    const client = createRotationFakeKmsClient([ROTATED_DATA_KEY, PREVIOUS_DATA_KEY_1], SEARCH_KEY);
+    const adapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: ROTATED_DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+      previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1],
+    });
+    const gen = await adapter.generateDataKey({ tenantId: "org-A" });
+    // The kid check guards single-tenant attempts (kid embeds
+    // tenantId), so we forge the kid to point at tenant B and let
+    // the call reach KMS, which then rejects on EncryptionContext.
+    await expect(
+      adapter.unwrapDataKey({
+        tenantId: "org-B",
+        kid: "aws:kek:app-phi:org-B:v1",
+        wrappedDek: gen.wrappedDek,
+      })
+    ).rejects.toMatchObject({ code: "DECRYPT_FAILED" });
+  });
+
+  it("after rotation, NEW envelopes round-trip on the first attempt (no fall-through)", async () => {
+    const client = createRotationFakeKmsClient([ROTATED_DATA_KEY, PREVIOUS_DATA_KEY_1], SEARCH_KEY);
+    const adapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: ROTATED_DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+      previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1],
+    });
+    const gen = await adapter.generateDataKey({ tenantId: "org-1" });
+    const callsBefore = client.decryptCalls.length;
+    const dek = await adapter.unwrapDataKey({
+      tenantId: "org-1",
+      kid: gen.kid,
+      wrappedDek: gen.wrappedDek,
+    });
+    expect(dek.equals(gen.plaintextDek)).toBe(true);
+    // Exactly one decrypt — the historical-key list is configured
+    // but the current key matches, so the loop never executes.
+    expect(client.decryptCalls.length - callsBefore).toBe(1);
+    expect(client.decryptCalls[callsBefore]?.KeyId).toBe(ROTATED_DATA_KEY);
+  });
+});
+
 beforeEach(() => {
   // No global state to reset; the cache lives on each adapter
   // instance and the fake client lives per-test.

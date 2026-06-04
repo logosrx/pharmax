@@ -72,6 +72,8 @@ import { OrderShipmentCreatedV1 } from "./events/order/shipment-created-v1.js";
 import { OrderShipmentEscalationReaffirmedV1 } from "./events/order/shipment-escalation-reaffirmed-v1.js";
 import { OrderShipmentLabelPurchasedV1 } from "./events/order/shipment-label-purchased-v1.js";
 import { OrderShippedV1 } from "./events/order/shipped-v1.js";
+import { OrderSlaBreachEscalatedV1 } from "./events/order/sla-breach-escalated-v1.js";
+import { OrderSlaBreachEscalationReaffirmedV1 } from "./events/order/sla-breach-escalation-reaffirmed-v1.js";
 import { OrderTypingCompletedV1 } from "./events/order/typing-completed-v1.js";
 import { OrderTypingMissingInfoV1 } from "./events/order/typing-missing-info-v1.js";
 import { OrderTypingResumedV1 } from "./events/order/typing-resumed-v1.js";
@@ -110,6 +112,7 @@ import { ShipmentTrackingRecordedV1 } from "./events/shipment/tracking-recorded-
 
 // ---- shipping (carrier credentials, dispatch capture) -------------------
 import { ShippingCarrierCredentialRegisteredV1 } from "./events/shipping/carrier-credential-registered-v1.js";
+import { ShippingPackagePhotoArchivedV1 } from "./events/shipping/package-photo-archived-v1.js";
 import { ShippingPackagePhotoCapturedV1 } from "./events/shipping/package-photo-captured-v1.js";
 import { ShippingPackagePhotoMatchResolvedV1 } from "./events/shipping/package-photo-match-resolved-v1.js";
 
@@ -165,6 +168,8 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   OrderShipmentEscalationReaffirmedV1,
   OrderShipmentLabelPurchasedV1,
   OrderShippedV1,
+  OrderSlaBreachEscalatedV1,
+  OrderSlaBreachEscalationReaffirmedV1,
   OrderTypingCompletedV1,
   OrderTypingMissingInfoV1,
   OrderTypingResumedV1,
@@ -195,6 +200,7 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   ShipmentTrackingRecordedV1,
   // shipping
   ShippingCarrierCredentialRegisteredV1,
+  ShippingPackagePhotoArchivedV1,
   ShippingPackagePhotoCapturedV1,
   ShippingPackagePhotoMatchResolvedV1,
   // workflow

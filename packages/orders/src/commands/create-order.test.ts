@@ -17,6 +17,7 @@ import {
   resetCommandBusConfigurationForTests,
 } from "@pharmax/command-bus";
 import { IntakeSourceKind, OrderPriority, RoleScope } from "@pharmax/database";
+import { DEFAULT_END_TO_END_SLA_BUDGET_MS } from "@pharmax/sla";
 import { clock, logger } from "@pharmax/platform-core";
 import {
   configureRbac,
@@ -366,6 +367,13 @@ describe("CreateOrder — happy path", () => {
       priority: "NORMAL",
       intakeSourceKind: "API",
     });
+
+    // SLA deadline computed at intake = receivedAt + full
+    // (NORMAL-priority) end-to-end budget.
+    const receivedAt = orderData["receivedAt"] as Date;
+    const slaDeadlineAt = orderData["slaDeadlineAt"] as Date;
+    expect(slaDeadlineAt).toBeInstanceOf(Date);
+    expect(slaDeadlineAt.getTime()).toBe(receivedAt.getTime() + DEFAULT_END_TO_END_SLA_BUDGET_MS);
 
     // One OrderLine row per input line.
     expect(callsOf(fake.calls, "orderLine", "create")).toHaveLength(2);

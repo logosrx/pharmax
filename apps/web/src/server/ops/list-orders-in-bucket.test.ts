@@ -17,7 +17,8 @@ vi.mock("@pharmax/database", () => ({
   readInTenantContext: (_ctx: unknown, fn: (tx: unknown) => unknown) => fn(prismaMock),
 }));
 
-const { listOrdersInBucketByCode } = await import("./list-orders-in-bucket.js");
+const { listOrdersInBucketByCode, listOrdersInBucketsByCode } =
+  await import("./list-orders-in-bucket.js");
 
 afterEach(() => vi.clearAllMocks());
 
@@ -92,5 +93,45 @@ describe("listOrdersInBucketByCode", () => {
       { receivedAt: "asc" },
     ]);
     expect(calls[0]![0].where["currentBucketId"]).toBe(PV1_BUCKET_ID);
+  });
+
+  it("runs on a provided tx without opening its own scope", async () => {
+    // A caller-supplied transaction (batching) must be used directly;
+    // the module-level prismaMock (which the readInOrgScope mock would
+    // hand in) must stay untouched — proving no dedicated scope opened.
+    const fakeTx = {
+      bucket: { findUnique: vi.fn().mockResolvedValueOnce({ id: PV1_BUCKET_ID, name: "PV1" }) },
+      order: { findMany: vi.fn().mockResolvedValueOnce([]) },
+    };
+    const result = await listOrdersInBucketByCode({
+      organizationId: ORG_ID,
+      bucketCode: "PV1",
+      tx: fakeTx as never,
+    });
+    expect(result.bucketExists).toBe(true);
+    expect(result.bucketName).toBe("PV1");
+    expect(fakeTx.bucket.findUnique).toHaveBeenCalledOnce();
+    expect(prismaMock.bucket.findUnique).not.toHaveBeenCalled();
+    expect(prismaMock.order.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("listOrdersInBucketsByCode", () => {
+  it("batches multiple bucket reads into one scope and keys results by code", async () => {
+    prismaMock.bucket.findUnique
+      .mockResolvedValueOnce({ id: "b-inbox", name: "INBOX" })
+      .mockResolvedValueOnce({ id: "b-typing", name: "TYPING" });
+    prismaMock.order.findMany.mockResolvedValue([]);
+
+    const out = await listOrdersInBucketsByCode({
+      organizationId: ORG_ID,
+      bucketCodes: ["INBOX", "TYPING"],
+    });
+
+    expect(Object.keys(out)).toEqual(["INBOX", "TYPING"]);
+    expect(out["INBOX"]?.bucketName).toBe("INBOX");
+    expect(out["TYPING"]?.bucketName).toBe("TYPING");
+    // One scope, two sequential bucket lookups on the shared tx.
+    expect(prismaMock.bucket.findUnique).toHaveBeenCalledTimes(2);
   });
 });

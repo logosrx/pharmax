@@ -171,7 +171,7 @@ resource "aws_route" "private_nat" {
 
   route_table_id         = each.value.id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id = var.nat_gateway_strategy == "per_az" ? aws_nat_gateway.this[each.key].id : aws_nat_gateway.this[local.nat_az_names[0]].id
+  nat_gateway_id         = var.nat_gateway_strategy == "per_az" ? aws_nat_gateway.this[each.key].id : aws_nat_gateway.this[local.nat_az_names[0]].id
 }
 
 resource "aws_route_table_association" "private" {

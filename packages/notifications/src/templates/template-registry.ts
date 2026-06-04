@@ -143,12 +143,77 @@ export const NOTIFICATION_TEMPLATES = {
       "Notification fired when a scheduled report finishes executing. Carries schedule + report metadata, the run outcome, window covered, row count, a re-run dashboard link, and an OPTIONAL `downloadLink` (when the run persisted its CSV to the archive — present for SUCCEEDED scheduled runs).",
   },
 
+  // ---- Security (operator-facing, not tenant-facing) -------------------
+  /** Nightly security digest. Triggers from the worker's
+   *  `nightly-security-digest-loop` (default 02:30 UTC), AFTER the
+   *  daily Merkle signing job, so the digest reports yesterday's
+   *  signed-manifest URI alongside the audit-chain status,
+   *  break-glass sessions, outbox health, Sentry volume, and the
+   *  access-review calendar.
+   *
+   *  Audience: the platform's on-call security/compliance distribution
+   *  list (e.g. `security@<operator-domain>`). NOT tenant-facing —
+   *  the digest aggregates across orgs by id, and the operator's
+   *  inbox is the trust boundary for the aggregated view.
+   *
+   *  PHI invariant: the digest is non-PHI by construction —
+   *  `composeNightlySecurityDigest` only surfaces counts + ids +
+   *  status enums, never the underlying domain rows. We still leave
+   *  this template `phiAllowed: false` so the channel's PHI sentinel
+   *  gate stays active as a defense-in-depth: a future regression
+   *  that accidentally embedded a `patientName` key in the
+   *  publisher's context payload would fail closed at the channel
+   *  boundary rather than send PHI to the security distribution
+   *  list.
+   *
+   *  Required context fields:
+   *
+   *  - `generatedAtIso` — ISO timestamp the digest was composed.
+   *    The subject line dates the email so a digest queued during
+   *    a slow Resend stretch and a digest sent on time are visually
+   *    distinguishable.
+   *  - `windowFromIso` / `windowToIso` — the 24h window the digest
+   *    covers, surfaced in the body header for at-a-glance scoping.
+   *  - `digestText` — the full plaintext body produced by
+   *    `renderDigestAsText(digest)` upstream of the publisher. The
+   *    renderer wraps this verbatim in the email plaintext part and
+   *    in a `<pre>`-formatted HTML part.
+   *  - `auditOrgCount` / `brokenChainCount` / `breakGlassCount` /
+   *    `outboxDeadCount` — scalar aggregates the renderer composes
+   *    into the subject line so the on-call can triage from the
+   *    inbox without opening the body.
+   */
+  SECURITY_DIGEST_DAILY_V1: {
+    id: "SECURITY_DIGEST_DAILY_V1",
+    channelKinds: ["email"] as const,
+    phiAllowed: false,
+    requiredContextKeys: [
+      "generatedAtIso",
+      "windowFromIso",
+      "windowToIso",
+      "digestText",
+      "auditOrgCount",
+      "brokenChainCount",
+      "breakGlassCount",
+      "outboxDeadCount",
+    ] as const,
+    description:
+      "Operator-facing nightly security digest. Aggregates audit-chain status, break-glass sessions, outbox health, Sentry volume, and upcoming access reviews across every tenant org into a single per-day email. Wired via apps/worker/src/security/notification-channel-digest-publisher.ts.",
+  },
+
   // ---- Shipping --------------------------------------------------------
   /** Order moved into the emergency bucket. Triggers from
    *  `order.escalated_to_emergency.v1`. */
   SHIPMENT_ESCALATED_V1: {
     id: "SHIPMENT_ESCALATED_V1",
-    channelKinds: ["in-app", "email"] as const,
+    // SMS is enabled here (and only here, for now) because the
+    // emergency-bucket escalation is the one notification that
+    // legitimately needs to PAGE an on-call operations lead off-hours.
+    // Its required context is PHI-free by construction (an internal
+    // order number, an escalation reason code, and a carrier tracking
+    // status) — so it can ride a non-PHI-eligible transport. The
+    // structural PHI gate (assertNoPhiInContext) keeps it that way.
+    channelKinds: ["in-app", "email", "sms"] as const,
     phiAllowed: false,
     requiredContextKeys: ["orderExternalNumber", "escalationReason", "lastTrackingStatus"] as const,
     description: "Operations lead alert when an order escalates to the emergency bucket.",

@@ -1,9 +1,36 @@
+import path from "node:path";
+
 import { withSentryConfig } from "@sentry/nextjs";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // Emit a self-contained server bundle for the container image. The
+  // ECS/Fargate runtime runs `node apps/web/server.js` from this output
+  // (see apps/web/Dockerfile) instead of `next start`, so the image
+  // doesn't carry the full monorepo node_modules.
+  output: "standalone",
+  // This is a pnpm monorepo: workspace packages (@pharmax/*) live two
+  // levels up. Pin the file-tracing root at the repo root so Next's
+  // dependency tracer follows the workspace symlinks into the standalone
+  // output. Without this, the traced server is missing the workspace
+  // packages and crashes at boot.
+  outputFileTracingRoot: path.join(import.meta.dirname, "../.."),
+  // OpenTelemetry's Node SDK (pulled in via @pharmax/telemetry through
+  // @pharmax/crypto's KMS client) relies on runtime monkey-patching and
+  // lazy-loaded optional exporters. Bundling it breaks instrumentation
+  // and triggers "Can't resolve '@opentelemetry/exporter-jaeger' /
+  // 'winston-transport'" build noise for optional peer deps. Keep these
+  // external so they're required from node_modules at runtime (and traced
+  // into the standalone output) instead of bundled by webpack.
+  serverExternalPackages: [
+    "@opentelemetry/sdk-node",
+    "@opentelemetry/auto-instrumentations-node",
+    "@opentelemetry/instrumentation-winston",
+    "@opentelemetry/exporter-jaeger",
+    "@opentelemetry/winston-transport",
+  ],
   // Workspace packages publish TypeScript source via `main`/`types`
   // pointing at `src/index.ts`. Next must transpile them.
   transpilePackages: ["@pharmax/crypto", "@pharmax/database", "@pharmax/platform-core"],

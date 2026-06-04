@@ -30,8 +30,10 @@
 
 import { ids } from "@pharmax/platform-core";
 import {
+  applySystemSessionGuc,
   applyTenancySessionGuc,
   buildTenancyContext,
+  withSystemContext,
   withTenancyContext,
   type SessionGucExecutor,
   type TenancyContext,
@@ -52,7 +54,7 @@ import type { PrismaClient } from "./generated/client/index.js";
 // operator context instead.
 const READ_SCOPE_SENTINEL_USER_ID = "00000000-0000-0000-0000-000000000000";
 
-function buildReadScopeContext(organizationId: string): TenancyContext {
+export function buildReadScopeContext(organizationId: string): TenancyContext {
   return buildTenancyContext({
     organizationId,
     actor: { userId: READ_SCOPE_SENTINEL_USER_ID, correlationId: ids.generateUlid() },
@@ -96,8 +98,8 @@ export function readInTenantContext<T>(
  * Queries inside `fn` MUST use the provided `tx`. Because this opens
  * an interactive transaction, do NOT perform slow non-DB work (e.g.
  * KMS decryption) inside `fn` — that would hold the connection. For
- * read flows that interleave KMS/HTTP work, use `withOrgScope`
- * (frame-only) instead and accept ORM-layer isolation only.
+ * read flows that interleave KMS/HTTP work, split into "load rows in
+ * `readInOrgScope` (tx) → process after the tx closes".
  */
 export function readInOrgScope<T>(
   organizationId: string,
@@ -106,9 +108,33 @@ export function readInOrgScope<T>(
   return readInTenantContext(buildReadScopeContext(organizationId), fn);
 }
 
-// NOTE: a frame-only (`withTenancyContext` without the RLS GUC) read
-// scope was deliberately removed. Every read path must engage BOTH
-// layers so the runtime can connect as the non-BYPASSRLS `pharmax_app`
-// role. Reads that interleave slow non-DB work (e.g. PHI decryption)
-// must split into "load rows in `readInOrgScope` (tx) → process after
-// the tx closes" rather than holding the connection open.
+/**
+ * SYSTEM-context read wrapper. Establishes the ALS system frame (the
+ * tenancy extension passes queries through unscoped) AND sets the
+ * Postgres `pharmax.system_context = 'on'` GUC so RLS permits
+ * cross-tenant reads on the connection.
+ *
+ * This is the read-side analogue of the command bus's system-command
+ * path. Use it for the narrow set of supervisor reads that resolve a
+ * tenant from an EXTERNAL identifier before a tenancy frame exists —
+ * RBAC permission loading, operator role-code lookup, Clerk-session →
+ * Pharmax-user resolution, and inbound-webhook tenant resolution.
+ * Without the GUC these reads fail closed under the non-BYPASSRLS
+ * `pharmax_app` runtime role.
+ *
+ * Callers MUST still scope by an explicit `WHERE` (e.g. the external
+ * id) — `system_context` only lifts the RLS predicate; it does not
+ * choose rows. `reason` is recorded in `pharmax.system_context_reason`
+ * for the audit channel.
+ */
+export function readInSystemContext<T>(
+  reason: string,
+  fn: (tx: TenantTransactionClient) => Promise<T>
+): Promise<T> {
+  return withSystemContext(reason, () =>
+    prisma.$transaction(async (tx) => {
+      await applySystemSessionGuc(tx as unknown as SessionGucExecutor, reason);
+      return fn(tx as unknown as TenantTransactionClient);
+    })
+  );
+}

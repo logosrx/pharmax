@@ -207,7 +207,9 @@ describe("S3PackagePhotoStorage.beginUpload — happy path", () => {
     expect(row.contentType).toBe("image/jpeg");
     expect(row.expiresAt.getTime()).toBe(NOW.getTime() + PACKAGE_PHOTO_UPLOAD_TTL_MS);
 
-    expect(prisma.executedRawSqls.length).toBeGreaterThanOrEqual(2);
+    // The tenancy GUC is now applied in a single round trip (both
+    // set_config calls collapsed into one SELECT).
+    expect(prisma.executedRawSqls.length).toBeGreaterThanOrEqual(1);
     expect(prisma.executedRawSqls.some((s) => s.includes("set_config"))).toBe(true);
   });
 
@@ -368,7 +370,9 @@ describe("S3PackagePhotoStorage.resolveUploadToken", () => {
     prisma.executedRawSqls.length = 0;
     await storage.resolveUploadToken(issued.uploadToken);
 
-    expect(prisma.executedRawSqls.length).toBeGreaterThanOrEqual(2);
+    // The system GUC is now applied in a single round trip (org clear
+    // + system_context='on' + reason collapsed into one SELECT).
+    expect(prisma.executedRawSqls.length).toBeGreaterThanOrEqual(1);
     expect(prisma.executedRawSqls.some((s) => s.includes("set_config"))).toBe(true);
   });
 });

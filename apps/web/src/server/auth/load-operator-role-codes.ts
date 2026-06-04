@@ -20,8 +20,7 @@
 
 import "server-only";
 
-import { Prisma, prisma } from "@pharmax/database";
-import { withSystemContext } from "@pharmax/tenancy";
+import { Prisma, readInSystemContext } from "@pharmax/database";
 
 interface RoleCodeRow {
   readonly code: string;
@@ -31,8 +30,12 @@ export async function loadOperatorRoleCodes(input: {
   readonly organizationId: string;
   readonly userId: string;
 }): Promise<ReadonlyArray<string>> {
-  const rows = await withSystemContext("apps/web:load-operator-role-codes", async () =>
-    prisma.$queryRaw<RoleCodeRow[]>(
+  // System-context read: runs BEFORE the per-request tenancy frame.
+  // `readInSystemContext` sets `pharmax.system_context='on'` so the
+  // raw query is permitted under the RLS-subject `pharmax_app` role;
+  // org/user isolation is enforced by the explicit WHERE predicates.
+  const rows = await readInSystemContext("apps/web:load-operator-role-codes", (tx) =>
+    tx.$queryRaw<RoleCodeRow[]>(
       Prisma.sql`
         SELECT DISTINCT r.code AS "code"
         FROM user_role ur

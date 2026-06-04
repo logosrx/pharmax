@@ -33,7 +33,12 @@ import {
   type OrderStatus,
   type ShipmentCarrier,
   type ShipmentStatus,
+  type ShippingProvider,
+  type TenantTransactionClient,
 } from "@pharmax/database";
+
+import { listActiveProviders } from "./list-carrier-credentials.js";
+import { listPharmacySites, type PharmacySiteRow } from "./list-pharmacy-sites.js";
 
 export interface ShippingQueueShipment {
   readonly shipmentId: string;
@@ -72,10 +77,18 @@ export interface ListShippingQueueResult {
 export async function listShippingQueue(input: {
   readonly organizationId: string;
   readonly limit?: number;
+  /**
+   * Optional shared tenant-scoped transaction (batching). Provide it
+   * to run this read inside an outer `readInOrgScope` alongside the
+   * other shipping-page reads — one connection instead of one per
+   * read. Omit to open a dedicated scope. MUST already be scoped to
+   * `organizationId`.
+   */
+  readonly tx?: TenantTransactionClient;
 }): Promise<ListShippingQueueResult> {
   const limit = Math.min(input.limit ?? 100, 500);
 
-  return readInOrgScope(input.organizationId, async (tx) => {
+  const run = async (tx: TenantTransactionClient): Promise<ListShippingQueueResult> => {
     const bucket = await tx.bucket.findUnique({
       where: {
         organizationId_code: {
@@ -190,5 +203,48 @@ export async function listShippingQueue(input: {
         })
       ),
     });
+  };
+
+  return input.tx !== undefined ? run(input.tx) : readInOrgScope(input.organizationId, run);
+}
+
+export interface ShippingQueuePageData {
+  readonly queue: ListShippingQueueResult;
+  /** Providers for which the org has an ACTIVE carrier credential. */
+  readonly availableProviders: ReadonlyArray<ShippingProvider>;
+  readonly sites: ReadonlyArray<PharmacySiteRow>;
+}
+
+/**
+ * Load everything the `/ops/shipping` page needs in ONE tenant-scoped
+ * transaction: the shipping queue (+ batched shipments), the active
+ * carrier providers, and the pharmacy sites (for ship-from address
+ * completeness).
+ *
+ * Previously the page issued these as three independent
+ * `readInOrgScope` calls via `Promise.all`, opening three concurrent
+ * transactions on three pooled connections per render. At enterprise
+ * concurrency that tripled the connection pressure for the shipping
+ * surface. Collapsing into one scope holds a single connection and
+ * pays the BEGIN/GUC/COMMIT once. The reads run sequentially (a Prisma
+ * interactive transaction serializes queries on its one connection),
+ * which is a negligible latency trade for the connection-pressure win.
+ */
+export async function loadShippingQueuePageData(input: {
+  readonly organizationId: string;
+  readonly limit?: number;
+}): Promise<ShippingQueuePageData> {
+  return readInOrgScope(input.organizationId, async (tx) => {
+    const queue = await listShippingQueue({
+      organizationId: input.organizationId,
+      ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      tx,
+    });
+    const availableProviders = await listActiveProviders({
+      organizationId: input.organizationId,
+      tx,
+    });
+    const sites = await listPharmacySites({ organizationId: input.organizationId, tx });
+    return Object.freeze({ queue, availableProviders, sites });
   });
 }

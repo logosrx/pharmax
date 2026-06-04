@@ -508,3 +508,85 @@ describe("dispatchClerkWebhookEvent — unknown event types", () => {
     expect(h.writeAudit).not.toHaveBeenCalled();
   });
 });
+
+// -----------------------------------------------------------------------------
+// Operator-identity cache invalidation
+// -----------------------------------------------------------------------------
+
+describe("dispatchClerkWebhookEvent — operator-identity cache invalidation", () => {
+  function deletedEvent(id: string = CLERK_USER_ID): ClerkWebhookEvent {
+    return { type: "user.deleted", data: { id } };
+  }
+
+  function updatedEvent(email: string): ClerkWebhookEvent {
+    return {
+      type: "user.updated",
+      data: {
+        id: CLERK_USER_ID,
+        primary_email_address_id: "idn_primary",
+        email_addresses: [{ id: "idn_primary", email_address: email }],
+        first_name: "New",
+        last_name: "Name",
+        username: null,
+      },
+    };
+  }
+
+  it("invalidates the identity cache after an applied user.deleted (off-boarding)", async () => {
+    const invalidate = vi.fn(async () => {});
+    const h = harness({
+      findUnique: async () => ({
+        id: USER_ID,
+        organizationId: ORG_ID,
+        email: "operator@acme.test",
+        displayName: "Op",
+        status: UserStatus.ACTIVE,
+        clerkUserId: CLERK_USER_ID,
+      }),
+    });
+
+    const outcome = await dispatchClerkWebhookEvent(deletedEvent(), {
+      ...h.options,
+      invalidateIdentityCache: invalidate,
+    });
+
+    expect(outcome).toBe<DispatchOutcome>("applied");
+    expect(invalidate).toHaveBeenCalledWith(CLERK_USER_ID);
+  });
+
+  it("invalidates after an applied user.updated", async () => {
+    const invalidate = vi.fn(async () => {});
+    const h = harness({
+      findUnique: async () => ({
+        id: USER_ID,
+        organizationId: ORG_ID,
+        email: "old@acme.test",
+        displayName: "Old Name",
+        status: UserStatus.ACTIVE,
+        clerkUserId: CLERK_USER_ID,
+      }),
+      update: async () => ({}) as UserRowShape,
+    });
+
+    const outcome = await dispatchClerkWebhookEvent(updatedEvent("new@acme.test"), {
+      ...h.options,
+      invalidateIdentityCache: invalidate,
+    });
+
+    expect(outcome).toBe<DispatchOutcome>("applied");
+    expect(invalidate).toHaveBeenCalledWith(CLERK_USER_ID);
+  });
+
+  it("does NOT invalidate when the event is a no-op (no linked row)", async () => {
+    const invalidate = vi.fn(async () => {});
+    const h = harness({ findUnique: async () => null });
+
+    const outcome = await dispatchClerkWebhookEvent(deletedEvent(), {
+      ...h.options,
+      invalidateIdentityCache: invalidate,
+    });
+
+    expect(outcome).toBe<DispatchOutcome>("noop_no_link");
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+});

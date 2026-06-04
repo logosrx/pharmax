@@ -1,15 +1,19 @@
 # =============================================================================
 # CloudWatch module — alarms + dashboard.
 #
-# Alarm coverage (per spec):
-#   - RDS CPU > 80%
-#   - RDS free storage < 20% of allocated
-#   - RDS replica lag > 60s
-#   - RDS connection count > threshold
+# Alarm coverage (per spec; Aurora PostgreSQL metrics):
+#   - Aurora writer CPU > 80%               (DBInstanceIdentifier)
+#   - Aurora writer FreeableMemory low      (DBInstanceIdentifier)
+#   - Aurora replica lag > threshold (ms)   (DBClusterIdentifier)
+#   - Aurora writer connection count > threshold (DBInstanceIdentifier)
 #   - ECS unhealthy task count > 0 (per service)
 #   - ALB 5xx rate > 1%
 #   - ALB target response time p99 > 2s
 #   - Custom: AuditChainIntegrityFailure > 0 (nightly job emits this)
+#
+# Aurora has no FreeStorageSpace metric (storage auto-scales), so we watch
+# FreeableMemory on the writer instead. AuroraReplicaLag is reported in
+# milliseconds at the cluster level.
 #
 # All alarms send to a single SNS topic (parameterized). If the topic ARN
 # is empty, the alarm still fires (the metric/state is visible in
@@ -44,16 +48,16 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu_high" {
   tags = var.tags
 }
 
-resource "aws_cloudwatch_metric_alarm" "rds_storage_low" {
-  alarm_name          = "${var.name_prefix}-rds-storage-low"
-  alarm_description   = "RDS FreeStorageSpace dropped below ${var.rds_storage_low_threshold_bytes} bytes."
+resource "aws_cloudwatch_metric_alarm" "rds_freeable_memory_low" {
+  alarm_name          = "${var.name_prefix}-rds-freeable-memory-low"
+  alarm_description   = "Aurora writer FreeableMemory dropped below ${var.rds_freeable_memory_low_threshold_bytes} bytes."
   comparison_operator = "LessThanThreshold"
   evaluation_periods  = 2
-  metric_name         = "FreeStorageSpace"
+  metric_name         = "FreeableMemory"
   namespace           = "AWS/RDS"
   period              = 300
   statistic           = "Average"
-  threshold           = var.rds_storage_low_threshold_bytes
+  threshold           = var.rds_freeable_memory_low_threshold_bytes
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -68,18 +72,18 @@ resource "aws_cloudwatch_metric_alarm" "rds_storage_low" {
 
 resource "aws_cloudwatch_metric_alarm" "rds_replica_lag" {
   alarm_name          = "${var.name_prefix}-rds-replica-lag"
-  alarm_description   = "RDS read replica lag exceeded ${var.rds_replica_lag_threshold_seconds}s."
+  alarm_description   = "Aurora replica lag exceeded ${var.rds_replica_lag_threshold_ms} ms."
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
-  metric_name         = "ReplicaLag"
+  metric_name         = "AuroraReplicaLag"
   namespace           = "AWS/RDS"
   period              = 60
   statistic           = "Maximum"
-  threshold           = var.rds_replica_lag_threshold_seconds
+  threshold           = var.rds_replica_lag_threshold_ms
   treat_missing_data  = "notBreaching"
 
   dimensions = {
-    DBInstanceIdentifier = var.rds_instance_id
+    DBClusterIdentifier = var.rds_cluster_id
   }
 
   alarm_actions = local.alarm_actions
@@ -276,7 +280,7 @@ resource "aws_cloudwatch_metric_alarm" "alb_target_response_p99" {
 
 resource "aws_cloudwatch_metric_alarm" "audit_chain_integrity_failure" {
   alarm_name          = "${var.name_prefix}-audit-chain-integrity"
-  alarm_description   = "Audit chain integrity check reported a break. SEV1 — see RUNBOOK 'Audit chain integrity check'."
+  alarm_description   = "Audit chain integrity check reported a break. SEV1 - see RUNBOOK 'Audit chain integrity check'."
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 1
   metric_name         = var.audit_chain_failure_metric_name
@@ -306,15 +310,15 @@ resource "aws_cloudwatch_dashboard" "this" {
         width  = 12
         height = 6
         properties = {
-          title  = "RDS"
+          title  = "Aurora PostgreSQL"
           region = var.aws_region
           stat   = "Average"
           period = 300
           metrics = [
             ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", var.rds_instance_id],
             [".", "DatabaseConnections", ".", "."],
-            [".", "FreeStorageSpace", ".", "."],
-            [".", "ReplicaLag", ".", "."]
+            [".", "FreeableMemory", ".", "."],
+            ["AWS/RDS", "AuroraReplicaLag", "DBClusterIdentifier", var.rds_cluster_id]
           ]
         }
       },

@@ -25,6 +25,7 @@ Operational procedures for common incidents and routine maintenance. Each sectio
 17. [Verifying every chain + manifest in a run](#verifying-every-chain--manifest-in-a-run)
 18. [Rotating the Merkle signing key](#rotating-the-merkle-signing-key)
 19. [Object Lock retention extension](#object-lock-retention-extension)
+20. [RLS role cutover](#rls-role-cutover)
 
 ---
 
@@ -107,11 +108,24 @@ separate deploys.
    `kms:GenerateDataKey`/`kms:Decrypt`/`kms:DescribeKey`. The old
    key needs `Decrypt` (so historical envelopes still unwrap);
    the new key needs the full set.
-3. **Deploy the web + worker tasks with `AWS_KMS_DATA_KEY_ID`
-   pointing at the NEW alias.** The boot-time `validate()` call
-   exercises `DescribeKey` against the new key — if IAM is
-   wrong, boot fails loudly per the
+3. **Deploy the web + worker tasks with the new historical-key
+   chain configured.** Both processes share two env vars that
+   MUST be set in lock-step:
+   - `AWS_KMS_DATA_KEY_ID` → the NEW alias (`alias/pharmax/app-phi-key-v2`).
+   - `AWS_KMS_PREVIOUS_DATA_KEY_IDS` → the OLD alias
+     (`alias/pharmax/app-phi-key-v1`). Comma-separated if you
+     are rotating through multiple historical keys; the adapter
+     iterates in declared order on Decrypt failure.
+
+   The boot-time `validate()` call exercises `DescribeKey`
+   against every key in the chain (current + historical) — if
+   IAM is wrong on any of them, boot fails loudly per the
    [boot-validation runbook](#kms-boot-validation-failures).
+   Both `apps/web` and `apps/worker` MUST agree on
+   `AWS_KMS_PREVIOUS_DATA_KEY_IDS` byte-for-byte; otherwise an
+   envelope wrapped by one tier becomes unrecoverable when read
+   by the other.
+
 4. **Verify with `pnpm verify:kms`.** See
    [Verifying KMS in production](#verifying-kms-in-production).
    The script wraps + unwraps a synthetic DEK end-to-end against
@@ -131,10 +145,26 @@ separate deploys.
    stable, in which case the kid is unchanged but CloudTrail
    shows traffic moving to the new key ARN).
 
-6. **Decommission the old CMK** after a reasonable bake-in
-   window (we wait at least one quarter to ensure no in-flight
-   request still references the old key):
-   - Remove the alias.
+6. **Watch the historical-key fallback metric.** During the
+   bake-in window, the worker emits
+   `pharmax_kms_decrypt_historical_key_hits_total{key_position="<n>"}`
+   for every unwrap that fell through to a historical key. A
+   non-zero rate is **expected** during bake-in; the rate should
+   asymptote toward zero as the encrypt-side traffic re-wraps
+   PHI under the new CMK over normal write cadence. **Block the
+   IAM revocation in step 7 until this counter has been zero for
+   at least one full week of business traffic.** A non-zero rate
+   after that point indicates dark envelopes (rows the app has
+   not touched since the rotation) still bound to the old CMK —
+   either run a one-off rewrap job or extend the bake-in.
+
+7. **Decommission the old CMK** after the bake-in window AND the
+   historical-key-hit counter has drained:
+   - Remove `AWS_KMS_PREVIOUS_DATA_KEY_IDS` from both web and
+     worker. Redeploy. The adapter reverts to single-Decrypt
+     behavior with the new key only.
+   - Remove the alias (`alias/pharmax/app-phi-key-v1`) from
+     Terraform.
    - Schedule deletion in AWS KMS with a 30-day window.
    - Drop the old key's IAM permissions from the task role.
    - Remove the Terraform resource for `app_phi_v1`.
@@ -309,6 +339,55 @@ if (!result.valid) {
 
 ---
 
+## RLS role cutover
+
+Moving the runtime off the `postgres` superuser (BYPASSRLS) onto the
+RLS-aware roles the baseline migration provisions. This activates the
+DB-layer (RLS) backstop; the ORM tenancy extension is already the
+fail-closed primary control regardless of role.
+
+**Role assignment (per service):**
+
+| Service       | Session role      | RLS       | Why                                                                                                                                                                                                                             |
+| ------------- | ----------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web`    | `pharmax_app`     | subject   | The untrusted request surface. Every tenant read/write sets the `organization_id` GUC; every cross-org system read sets the `system_context` GUC.                                                                               |
+| `apps/worker` | `pharmax_system`  | BYPASSRLS | Cross-org supervisor by construction (outbox drain, webhook resolution, schedulers, merkle/access-review sweeps). Per-tenant work still flows through the ORM extension + command bus; `audit_log` UPDATE/DELETE stays revoked. |
+| migrations    | owner / superuser | n/a       | DDL via `DIRECT_URL`.                                                                                                                                                                                                           |
+
+**Prerequisites (must all be true before flipping):**
+
+1. Web-tier tenant reads run through `readInOrgScope` / `readInTenantContext` (GUC set per tx). ✅ done.
+2. Web-tier cross-org system reads run through `readInSystemContext` or set the system GUC (auth resolver, role-code loader, permission loader, Clerk webhook handlers). ✅ done.
+3. `pnpm check:raw-prisma` is green (no unscoped `systemPrisma` outside the allowlist). ✅ enforced in CI.
+
+**Cutover steps:**
+
+1. Grant role membership to the login the services authenticate as:
+   ```sql
+   GRANT pharmax_app    TO <web_login>;
+   GRANT pharmax_system TO <worker_login>;   -- may be the same login
+   ```
+2. Set per-service `DATABASE_URL` with the session role via the libpq
+   startup option (Prisma forwards `options` ≥ 3.8.0). Keep `DIRECT_URL`
+   pointed at the owner for migrations. See `.env.example` for the
+   exact strings (`?options=-c%20role%3Dpharmax_app` /
+   `...%3Dpharmax_system`).
+3. Validate end-to-end against a **staging** database first:
+   - operator sign-in (exercises `resolve-tenancy` + `loadOperatorRoleCodes`),
+   - a tenant list page (exercises `readInOrgScope`),
+   - a command dispatch (exercises the bus org GUC + permission loader),
+   - a system command (exercises the bus system GUC),
+   - a worker tick (outbox drain + a webhook resolution).
+4. Roll out web first, then worker. Watch for `TENANCY_NO_CONTEXT`
+   (ORM-layer miss) and Postgres `permission denied` / zero-row reads
+   (RLS-layer miss — almost always a forgotten GUC).
+
+**Rollback:** revert the affected service's `DATABASE_URL` to the
+owner/superuser connection and redeploy. RLS goes inert; the ORM
+extension keeps tenant isolation intact, so this is a safe fallback.
+
+---
+
 ## Backup automation + tested restore
 
 **Goal:** "we have backups" is only credible when paired with "we have tested a restore last quarter." This section ties the automated backup configuration to the standing operational procedure that proves it works.
@@ -332,9 +411,9 @@ The [restore-from-backup recipe above](#restoring-from-backup) is the _incident_
 
 **Cadence:** quarterly. Skipping a quarter is a SOC 2 finding.
 
-**Procedure:** [`docs/operations/restore-drill.md`](operations/restore-drill.md) — point-in-time restore into a throwaway RDS instance in the isolated subnet group, verify the audit chain with `verifyAuditChain`, capture evidence per the template, then tear the instance down within 24 hours.
+**Procedure:** [`docs/operations/restore-drill.md`](operations/restore-drill.md) — point-in-time restore into a throwaway Aurora cluster (+ one instance) in the isolated subnet group, verify the audit chain with `verifyAuditChain`, capture evidence per the template, then tear the cluster down within 24 hours.
 
-**Owner:** the drill captain is rotated each quarter. The captain assigns one observer (any other engineer with prod RDS read).
+**Owner:** the drill captain is rotated each quarter. The captain assigns one observer (any other engineer with prod Aurora read).
 
 **Evidence:** the drill captures a structured evidence pack (provisioning command, engine-version match, audit-chain output, row-count snapshot, RLS sanity, RDS configuration screenshot, teardown confirmation). The pack lives in the quarterly drill folder in document storage and is what the SOC 2 auditor reads.
 
@@ -407,48 +486,64 @@ These values go into the postmortem; they also feed step 3.
 
 ### Step 3 — restore data into us-west-2
 
-The DR region's RDS instance is empty by default — capacity-only.
-Restore the most recent cross-region snapshot copy:
+The DR region's Aurora cluster is empty by default — capacity-only.
+Restore the most recent cross-region **cluster**-snapshot copy. Aurora
+restore is two steps (cluster, then instance):
 
 ```bash
-# 1. Copy the latest us-east-1 snapshot to us-west-2 (encrypted with
-#    the us-west-2 RDS CMK). This is a new ciphertext under a new
+# 1. Copy the latest us-east-1 cluster snapshot to us-west-2 (re-encrypted
+#    with the us-west-2 RDS CMK). This is a new ciphertext under a new
 #    key — that's the cross-region invariant; PHI ciphertext does
 #    NOT travel between regions verbatim.
-aws rds copy-db-snapshot \
-  --source-db-snapshot-identifier "arn:aws:rds:us-east-1:<account>:snapshot:<latest>" \
-  --target-db-snapshot-identifier "pharmax-prod-usw2-failover-$(date +%Y%m%d%H%M)" \
+aws rds copy-db-cluster-snapshot \
+  --source-db-cluster-snapshot-identifier "arn:aws:rds:us-east-1:<account>:cluster-snapshot:<latest>" \
+  --target-db-cluster-snapshot-identifier "pharmax-prod-usw2-failover-$(date +%Y%m%d%H%M)" \
   --kms-key-id "arn:aws:kms:us-west-2:<account>:key/<usw2-rds-cmk>" \
   --source-region us-east-1 \
   --region us-west-2
 
 # 2. Wait until COPYING -> AVAILABLE.
-aws rds wait db-snapshot-available \
-  --db-snapshot-identifier pharmax-prod-usw2-failover-... \
+aws rds wait db-cluster-snapshot-available \
+  --db-cluster-snapshot-identifier pharmax-prod-usw2-failover-... \
   --region us-west-2
 
-# 3. Restore into a NEW instance (do not modify the one Terraform manages —
+# 3. Restore into a NEW cluster (do not modify the one Terraform manages —
 #    your next `terraform apply` would conflict).
-aws rds restore-db-instance-from-db-snapshot \
-  --db-instance-identifier pharmax-prod-usw2-postgres-failover \
-  --db-snapshot-identifier pharmax-prod-usw2-failover-... \
-  --multi-az \
+aws rds restore-db-cluster-from-snapshot \
+  --db-cluster-identifier pharmax-prod-usw2-aurora-failover \
+  --snapshot-identifier pharmax-prod-usw2-failover-... \
+  --engine aurora-postgresql \
   --no-publicly-accessible \
   --db-subnet-group-name pharmax-prod-usw2-db \
   --vpc-security-group-ids "$USW2_RDS_SG" \
   --deletion-protection \
   --region us-west-2
+aws rds wait db-cluster-available \
+  --db-cluster-identifier pharmax-prod-usw2-aurora-failover \
+  --region us-west-2
+
+# 4. Attach an instance so the cluster is reachable.
+aws rds create-db-instance \
+  --db-cluster-identifier pharmax-prod-usw2-aurora-failover \
+  --db-instance-identifier pharmax-prod-usw2-aurora-failover-0 \
+  --engine aurora-postgresql \
+  --db-instance-class db.r6g.large \
+  --no-publicly-accessible \
+  --region us-west-2
+aws rds wait db-instance-available \
+  --db-instance-identifier pharmax-prod-usw2-aurora-failover-0 \
+  --region us-west-2
 ```
 
 ### Step 4 — reconfigure secrets in us-west-2
 
-Update the DR `database-url` to point at the restored endpoint:
+Update the DR `database-url` to point at the restored writer endpoint:
 
 ```bash
-RESTORED_ENDPOINT=$(aws rds describe-db-instances \
-  --db-instance-identifier pharmax-prod-usw2-postgres-failover \
+RESTORED_ENDPOINT=$(aws rds describe-db-clusters \
+  --db-cluster-identifier pharmax-prod-usw2-aurora-failover \
   --region us-west-2 \
-  --query 'DBInstances[0].Endpoint.Address' --output text)
+  --query 'DBClusters[0].Endpoint' --output text)
 
 aws secretsmanager put-secret-value \
   --secret-id pharmax-prod-usw2/database-url \

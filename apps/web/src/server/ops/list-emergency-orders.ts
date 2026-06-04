@@ -35,6 +35,9 @@ export interface EmergencyQueueRow {
   readonly enteredEmergencyAt: Date;
   readonly clinicId: string;
   readonly siteId: string;
+  /** End-to-end SLA deadline (null for pre-SLA-wiring orders). Drives
+   *  the SLA badge + the "escalated for SLA breach" reason hint. */
+  readonly slaDeadlineAt: Date | null;
   /** Latest carrier tracking event tied to a shipment for this order, if any. */
   readonly latestShipmentEvent: {
     readonly kind: string;
@@ -86,6 +89,7 @@ export async function listEmergencyOrders(input: {
         clinicId: true,
         siteId: true,
         version: true,
+        slaDeadlineAt: true,
         shipments: {
           select: {
             id: true,
@@ -120,6 +124,7 @@ export async function listEmergencyOrders(input: {
         clinicId: o.clinicId,
         siteId: o.siteId,
         version: o.version,
+        slaDeadlineAt: o.slaDeadlineAt,
         latestShipmentEvent:
           latestEvent !== undefined && latestShipment !== undefined
             ? Object.freeze({

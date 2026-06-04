@@ -25,6 +25,10 @@ import { PrismaPermissionLoader } from "./prisma-permission-loader.js";
 
 interface FakePrisma {
   $queryRaw: (...args: unknown[]) => Promise<unknown>;
+  // The loader runs `$queryRaw` inside a `$transaction` that first
+  // sets the org GUC via `$executeRaw`. The fake invokes the callback
+  // with a tx exposing both, so `spy` still observes the SQL call.
+  $transaction: (fn: (tx: unknown) => unknown) => unknown;
 }
 
 function loaderWith(rows: ReadonlyArray<Record<string, unknown>>): {
@@ -32,7 +36,10 @@ function loaderWith(rows: ReadonlyArray<Record<string, unknown>>): {
   spy: ReturnType<typeof vi.fn>;
 } {
   const spy = vi.fn().mockResolvedValue(rows);
-  const fake: FakePrisma = { $queryRaw: spy };
+  const fake: FakePrisma = {
+    $queryRaw: spy,
+    $transaction: (fn) => fn({ $executeRaw: vi.fn(async () => 0), $queryRaw: spy }),
+  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return { loader: new PrismaPermissionLoader(fake as any), spy };
 }

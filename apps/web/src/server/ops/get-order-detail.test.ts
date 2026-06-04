@@ -165,6 +165,7 @@ describe("getOrderDetail — happy path", () => {
     const selectArg = prismaMock.order.findFirst.mock.calls[0]![0]!.select.packagePhotos;
     expect(selectArg.orderBy).toEqual({ capturedAt: "desc" });
     expect(selectArg.take).toBe(25);
+    expect(selectArg.where).toEqual({ archivedAt: null });
     expect("notesEnc" in selectArg.select).toBe(false);
     // The matchedOrderId/matchedPatientId are redundant on this
     // relation (it IS the matched order) so they're not selected.

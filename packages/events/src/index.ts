@@ -126,6 +126,8 @@ export type { OrderEscalationResolvedV1Payload } from "./events/order/escalation
 export type { OrderShipmentCreatedV1Payload } from "./events/order/shipment-created-v1.js";
 export type { OrderShipmentLabelPurchasedV1Payload } from "./events/order/shipment-label-purchased-v1.js";
 export type { OrderShipmentEscalationReaffirmedV1Payload } from "./events/order/shipment-escalation-reaffirmed-v1.js";
+export type { OrderSlaBreachEscalatedV1Payload } from "./events/order/sla-breach-escalated-v1.js";
+export type { OrderSlaBreachEscalationReaffirmedV1Payload } from "./events/order/sla-breach-escalation-reaffirmed-v1.js";
 
 export type { ShipmentTrackingRecordedV1Payload } from "./events/shipment/tracking-recorded-v1.js";
 export type { ShippingCarrierCredentialRegisteredV1Payload } from "./events/shipping/carrier-credential-registered-v1.js";

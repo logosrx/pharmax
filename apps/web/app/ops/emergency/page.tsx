@@ -25,6 +25,7 @@ import {
 } from "../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../src/server/auth/resolve-tenancy.js";
 import { listEmergencyOrders } from "../../../src/server/ops/list-emergency-orders.js";
+import { SlaBadge, slaRowBorderClass, slaStatusFor } from "../../../src/components/sla-badge.js";
 
 const DISPOSITION_OPTIONS = [
   { value: "RETURN_TO_SHIPPING", label: "Return to Shipping" },
@@ -68,6 +69,7 @@ export default async function EmergencyQueuePage({
   const flash = typeof params["resolved"] === "string" ? params["resolved"] : null;
   const flashError = typeof params["error"] === "string" ? params["error"] : null;
   const now = Date.now();
+  const nowDate = new Date(now);
 
   return (
     <main className="space-y-6">
@@ -103,19 +105,33 @@ export default async function EmergencyQueuePage({
         <ul className="space-y-3">
           {queue.rows.map((row) => {
             const minutesEscalated = Math.floor((now - row.enteredEmergencyAt.getTime()) / 60_000);
+            const slaStatus = slaStatusFor(row.slaDeadlineAt, nowDate);
+            // Reason hint: a breached order with no shipment event was
+            // routed here by the SLA breach-evaluator, not a carrier
+            // exception. Distinguishing the two tells the operator
+            // whether to chase the workflow or the carrier.
+            const isSlaEscalation = row.latestShipmentEvent === null && slaStatus === "BREACHED";
             return (
               <li
                 key={row.orderId}
-                className="space-y-3 rounded-md border border-neutral-800 bg-neutral-950 p-4"
+                className={`space-y-3 rounded-md border ${slaRowBorderClass(slaStatus)} bg-neutral-950 p-4`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="space-y-1">
-                    <Link
-                      href={`/ops/orders/${row.orderId}`}
-                      className="font-mono text-sm text-neutral-100 hover:text-blue-300 hover:underline"
-                    >
-                      {row.externalOrderNumber ?? row.orderId}
-                    </Link>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Link
+                        href={`/ops/orders/${row.orderId}`}
+                        className="font-mono text-sm text-neutral-100 hover:text-blue-300 hover:underline"
+                      >
+                        {row.externalOrderNumber ?? row.orderId}
+                      </Link>
+                      <SlaBadge slaDeadlineAt={row.slaDeadlineAt} now={nowDate} />
+                      {isSlaEscalation ? (
+                        <span className="inline-flex items-center rounded-md border border-red-800 bg-red-950 px-2 py-0.5 text-xs font-medium text-red-300">
+                          Escalated for SLA breach
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="text-xs text-neutral-500">
                       Status <span className="text-neutral-300">{row.currentStatus}</span> ·
                       Priority <span className="text-neutral-300">{row.priority}</span> · Escalated{" "}

@@ -32,15 +32,20 @@ module "stack" {
 
   asymm_sign_key_spec = var.asymm_sign_key_spec
 
-  rds_instance_class                       = var.rds_instance_class
-  rds_allocated_storage_gb                 = var.rds_allocated_storage_gb
-  rds_max_allocated_storage_gb             = var.rds_max_allocated_storage_gb
-  rds_backup_retention_days                = var.rds_backup_retention_days
-  rds_engine_version                       = var.rds_engine_version
-  rds_parameter_group_family               = var.rds_parameter_group_family
-  rds_multi_az                             = var.rds_multi_az
-  rds_deletion_protection                  = var.rds_deletion_protection
-  rds_performance_insights_retention_days  = var.rds_performance_insights_retention_days
+  rds_instance_class                      = var.rds_instance_class
+  rds_allocated_storage_gb                = var.rds_allocated_storage_gb
+  rds_max_allocated_storage_gb            = var.rds_max_allocated_storage_gb
+  rds_backup_retention_days               = var.rds_backup_retention_days
+  rds_engine_version                      = var.rds_engine_version
+  rds_parameter_group_family              = var.rds_parameter_group_family
+  rds_multi_az                            = var.rds_multi_az
+  rds_deletion_protection                 = var.rds_deletion_protection
+  rds_performance_insights_retention_days = var.rds_performance_insights_retention_days
+
+  aurora_capacity_mode      = var.aurora_capacity_mode
+  aurora_serverless_min_acu = var.aurora_serverless_min_acu
+  aurora_serverless_max_acu = var.aurora_serverless_max_acu
+  aurora_reader_count       = var.aurora_reader_count
 
   ecs_web_cpu                    = var.ecs_web_cpu
   ecs_web_memory                 = var.ecs_web_memory

@@ -47,7 +47,7 @@ resource "aws_ecs_cluster_capacity_providers" "this" {
 
 resource "aws_security_group" "tasks" {
   name        = "${var.name_prefix}-ecs-tasks"
-  description = "Pharmax ECS task ENIs — ingress from ALB only"
+  description = "Pharmax ECS task ENIs - ingress from ALB only"
   vpc_id      = var.vpc_id
 
   tags = merge(var.tags, {
@@ -114,7 +114,13 @@ resource "aws_cloudwatch_log_group" "print_agent" {
 #   { name = "<ENV VAR>", valueFrom = "<SecretsManager ARN>" }
 
 locals {
-  web_secret_env = [
+  # REPORTING_DATABASE_URL (Aurora reader endpoint) is injected into web +
+  # worker only when a reader is provisioned and the secret is populated.
+  reporting_secret_env = var.enable_reporting_replica ? [
+    { name = "REPORTING_DATABASE_URL", arn = var.secret_arns["reporting-database-url"] },
+  ] : []
+
+  web_secret_env = concat([
     { name = "DATABASE_URL", arn = var.secret_arns["database-url"] },
     { name = "DIRECT_URL", arn = var.secret_arns["direct-url"] },
     { name = "REDIS_URL", arn = var.secret_arns["redis-url"] },
@@ -126,9 +132,9 @@ locals {
     { name = "CLERK_WEBHOOK_SECRET", arn = var.secret_arns["clerk-webhook-secret"] },
     { name = "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", arn = var.secret_arns["next-public-clerk-publishable-key"] },
     { name = "SENTRY_DSN", arn = var.secret_arns["sentry-dsn"] },
-  ]
+  ], local.reporting_secret_env)
 
-  worker_secret_env = [
+  worker_secret_env = concat([
     { name = "DATABASE_URL", arn = var.secret_arns["database-url"] },
     { name = "DIRECT_URL", arn = var.secret_arns["direct-url"] },
     { name = "REDIS_URL", arn = var.secret_arns["redis-url"] },
@@ -140,7 +146,7 @@ locals {
     { name = "UPS_CLIENT_ID", arn = var.secret_arns["ups-client-id"] },
     { name = "UPS_CLIENT_SECRET", arn = var.secret_arns["ups-client-secret"] },
     { name = "SENTRY_DSN", arn = var.secret_arns["sentry-dsn"] },
-  ]
+  ], local.reporting_secret_env)
 
   print_agent_secret_env = [
     { name = "DATABASE_URL", arn = var.secret_arns["database-url"] },

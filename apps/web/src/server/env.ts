@@ -21,6 +21,19 @@ const schema = z.object({
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   DATABASE_URL: z.string().url(),
   DIRECT_URL: z.string().url().optional(),
+  // Optional read-replica connection for heavy report scans. When
+  // set, `@pharmax/database` routes report READS here (report_run
+  // writes + audit stay on the primary). Unset → reports read the
+  // primary. Consumed by reporting-client.ts via process.env;
+  // declared here for validation + documentation.
+  REPORTING_DATABASE_URL: z.string().url().optional(),
+  // ElastiCache Redis connection string (rediss://:<auth_token>@<primary>:6379),
+  // injected by ECS from Secrets Manager. When set, the web tier backs
+  // @pharmax/cache with a shared RedisCache (cross-request identity /
+  // permission reuse); when unset, the cache degrades to a NoopCache and
+  // every read falls through to Postgres. Optional so dev/test clones boot
+  // without Redis. Provisioned by infra/terraform/modules/elasticache.
+  REDIS_URL: z.string().url().optional(),
   STRIPE_SECRET_KEY: z.string().min(1).optional(),
   STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
   EASYPOST_WEBHOOK_SECRET: z.string().min(1).optional(),
@@ -109,14 +122,32 @@ const schema = z.object({
   //   - AWS_KMS_KEY_LABEL           — optional. Short stable label
   //                                   embedded in the kid we persist.
   //                                   Defaults to "app-phi".
+  //   - AWS_KMS_PREVIOUS_DATA_KEY_IDS — optional. Comma-separated
+  //                                   list of historical CMK
+  //                                   ARNs/aliases used during a
+  //                                   manual CMK identity rotation
+  //                                   bake-in window. See
+  //                                   `AwsKmsAdapterOptions.previousDataKeyKeyIds`
+  //                                   and the RUNBOOK § "Rotating a
+  //                                   KMS data key — Manual CMK
+  //                                   rotation".
   //
-  // All four are OPTIONAL at the schema level so dev clones boot
+  // All five are OPTIONAL at the schema level so dev clones boot
   // without AWS creds. `bootstrap.ts` enforces presence under
   // NODE_ENV=production with a clear hard-fail message.
   AWS_REGION: z.string().min(1).optional(),
   AWS_KMS_DATA_KEY_ID: z.string().min(1).optional(),
   AWS_KMS_SEARCH_KEY_ID: z.string().min(1).optional(),
   AWS_KMS_KEY_LABEL: z.string().min(1).optional(),
+  // Pre-split string of historical CMK ids. `bootstrap.ts` splits on
+  // commas, trims whitespace, and drops empty entries before passing
+  // to `AwsKmsAdapter`. Examples:
+  //   AWS_KMS_PREVIOUS_DATA_KEY_IDS=alias/pharmax/app-phi-key-v1
+  //   AWS_KMS_PREVIOUS_DATA_KEY_IDS=alias/pharmax/app-phi-key-v1,arn:aws:kms:us-east-1:111111111111:key/abcd-1234
+  //
+  // Empty / unset is the steady-state value (no rotation in flight)
+  // and produces zero behavioral change.
+  AWS_KMS_PREVIOUS_DATA_KEY_IDS: z.string().min(1).optional(),
 
   // Report CSV archive — the web tier READS from the same bucket
   // the worker writes to (download route streams CSVs back to the

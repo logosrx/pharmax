@@ -42,3 +42,29 @@ output "database_password_secret_arn" {
 output "ecs_task_role_web_arn" { value = module.stack.ecs_task_role_web_arn }
 output "ecs_task_role_worker_arn" { value = module.stack.ecs_task_role_worker_arn }
 output "ecs_task_role_print_agent_arn" { value = module.stack.ecs_task_role_print_agent_arn }
+
+# ---- CloudFront -------------------------------------------------------------
+output "cloudfront_distribution_domain_name" { value = module.stack.cloudfront_distribution_domain_name }
+output "cloudfront_distribution_id" { value = module.stack.cloudfront_distribution_id }
+output "cloudfront_distribution_hosted_zone_id" { value = module.stack.cloudfront_distribution_hosted_zone_id }
+
+# ---- ElastiCache ------------------------------------------------------------
+output "redis_primary_endpoint_address" { value = module.stack.redis_primary_endpoint_address }
+output "redis_reader_endpoint_address" { value = module.stack.redis_reader_endpoint_address }
+output "redis_port" { value = module.stack.redis_port }
+output "redis_auth_token_secret_arn" {
+  value     = module.stack.redis_auth_token_secret_arn
+  sensitive = true
+}
+
+# ---- CI/CD deploy role ------------------------------------------------------
+output "cicd_deploy_role_arn" { value = module.stack.cicd_deploy_role_arn }
+output "cicd_github_oidc_provider_arn" { value = module.stack.cicd_github_oidc_provider_arn }
+
+# ---- Aurora Global Database -------------------------------------------------
+output "rds_cluster_arn" { value = module.stack.rds_cluster_arn }
+output "rds_global_cluster_id" { value = module.stack.rds_global_cluster_id }
+output "rds_master_password" {
+  value     = module.stack.rds_master_password
+  sensitive = true
+}

@@ -31,3 +31,8 @@ output "target_group_web_arn_suffix" {
 output "https_listener_arn" {
   value = aws_lb_listener.https.arn
 }
+
+output "shield_protection_id" {
+  description = "Shield Advanced protection id for the ALB (null unless enabled)."
+  value       = try(aws_shield_protection.alb[0].id, null)
+}

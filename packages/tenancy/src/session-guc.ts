@@ -85,21 +85,25 @@ export async function applyTenancySessionGuc(
       "applyTenancySessionGuc: ctx.organizationId is required and must be a non-empty string."
     );
   }
-  // Set pharmax.organization_id to the active tenant.
-  // The literal 'pharmax.organization_id' and 'false' for is_local
-  // would be wrong — we MUST use is_local=true so the value is
-  // scoped to the current transaction and does not leak to the next
-  // checkout of this pool connection.
-  await tx.$executeRaw`SELECT set_config('pharmax.organization_id', ${ctx.organizationId}, true)`;
-  // Defensive clear: ensure no stray system_context bypass is still
-  // set on this connection from a prior tx. The empty string flows
-  // through as a BOUND PARAMETER (not a SQL literal) to keep the
-  // injection-safety invariant uniform — every value we hand to
-  // set_config is parameterized, no exceptions. Postgres evaluates
-  // the empty string as "not 'on'", so the RLS predicate denies the
-  // system-context bypass.
+  // Set pharmax.organization_id to the active tenant AND defensively
+  // clear any stray system_context bypass left on this pooled
+  // connection from a prior tx — in a SINGLE round trip.
+  //
+  //   - Both GUCs are independent, so evaluating the two set_config
+  //     calls in one SELECT target list is equivalent to two separate
+  //     statements but costs one network round trip instead of two.
+  //     At enterprise read volume this halves the per-read GUC overhead
+  //     (every tenant-scoped read opens a tx and runs this first).
+  //   - `is_local = true` keeps both values scoped to the current
+  //     transaction so nothing leaks to the next checkout of this pool
+  //     connection.
+  //   - Every value (the org id, the empty string) flows through as a
+  //     BOUND PARAMETER, never interpolated into SQL text — the
+  //     injection-safety invariant is unchanged.
+  //   - The empty system_context evaluates as "not 'on'", so the RLS
+  //     predicate denies the bypass.
   const empty = "";
-  await tx.$executeRaw`SELECT set_config('pharmax.system_context', ${empty}, true)`;
+  await tx.$executeRaw`SELECT set_config('pharmax.organization_id', ${ctx.organizationId}, true), set_config('pharmax.system_context', ${empty}, true)`;
 }
 
 /**
@@ -114,19 +118,23 @@ export async function applySystemSessionGuc(tx: SessionGucExecutor, reason: stri
       "applySystemSessionGuc: reason is required and must be a non-empty string (recorded for audit)."
     );
   }
-  // Clear any prior tenant pin. Setting it to '' means the
-  // NULLIF(...,'')::uuid expression in the RLS policy evaluates to
-  // NULL, so the tenant predicate is false; the system_context
-  // disjunct is what allows access. Belt-and-braces.
+  // Clear any prior tenant pin, set the system_context bypass, and
+  // record the reason — in a SINGLE round trip.
   //
-  // Every value (including the empty string and the literal 'on')
-  // is sent as a BOUND PARAMETER rather than a SQL literal, to keep
-  // the injection-safety invariant uniform across this module.
+  //   - Clearing organization_id to '' makes the NULLIF(...,'')::uuid
+  //     expression in the RLS policy evaluate to NULL, so the tenant
+  //     predicate is false; the system_context disjunct is what allows
+  //     access. Belt-and-braces.
+  //   - The three GUCs are independent, so collapsing the three
+  //     set_config calls into one SELECT target list is semantically
+  //     identical to three statements at a third of the round trips.
+  //   - Every value (the empty string, the literal 'on', and the audit
+  //     reason) is sent as a BOUND PARAMETER rather than a SQL literal,
+  //     to keep the injection-safety invariant uniform across this
+  //     module.
   const empty = "";
   const on = "on";
-  await tx.$executeRaw`SELECT set_config('pharmax.organization_id', ${empty}, true)`;
-  await tx.$executeRaw`SELECT set_config('pharmax.system_context', ${on}, true)`;
-  await tx.$executeRaw`SELECT set_config('pharmax.system_context_reason', ${reason}, true)`;
+  await tx.$executeRaw`SELECT set_config('pharmax.organization_id', ${empty}, true), set_config('pharmax.system_context', ${on}, true), set_config('pharmax.system_context_reason', ${reason}, true)`;
 }
 
 /**
@@ -135,8 +143,9 @@ export async function applySystemSessionGuc(tx: SessionGucExecutor, reason: stri
  * verify the clear-state baseline.
  */
 export async function clearSessionGuc(tx: SessionGucExecutor): Promise<void> {
+  // Single round trip — the three GUCs are independent, so one SELECT
+  // target list clears all of them with the same semantics as three
+  // separate statements.
   const empty = "";
-  await tx.$executeRaw`SELECT set_config('pharmax.organization_id', ${empty}, true)`;
-  await tx.$executeRaw`SELECT set_config('pharmax.system_context', ${empty}, true)`;
-  await tx.$executeRaw`SELECT set_config('pharmax.system_context_reason', ${empty}, true)`;
+  await tx.$executeRaw`SELECT set_config('pharmax.organization_id', ${empty}, true), set_config('pharmax.system_context', ${empty}, true), set_config('pharmax.system_context_reason', ${empty}, true)`;
 }

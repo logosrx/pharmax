@@ -250,6 +250,9 @@ export async function getOrderDetail(input: {
         // surface). Newest-first; capped so a pathological
         // re-capture loop can't unbound the order page.
         packagePhotos: {
+          // Archived captures are dispositioned out of the timeline
+          // (test shots, dupes, fixed-misclicks) — soft-delete gate.
+          where: { archivedAt: null },
           select: {
             id: true,
             capturedAt: true,

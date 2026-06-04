@@ -7,7 +7,7 @@
 
 import "server-only";
 
-import { readInOrgScope, type SiteStatus } from "@pharmax/database";
+import { readInOrgScope, type SiteStatus, type TenantTransactionClient } from "@pharmax/database";
 
 export interface PharmacySiteRow {
   readonly siteId: string;
@@ -48,8 +48,15 @@ function computeAddressComplete(row: {
 
 export async function listPharmacySites(input: {
   readonly organizationId: string;
+  /**
+   * Optional shared tenant-scoped transaction (batching). Provide it
+   * to run this read inside an outer `readInOrgScope` alongside other
+   * page reads — one connection instead of one per read. Omit to open
+   * a dedicated scope. MUST already be scoped to `organizationId`.
+   */
+  readonly tx?: TenantTransactionClient;
 }): Promise<ReadonlyArray<PharmacySiteRow>> {
-  return readInOrgScope(input.organizationId, async (tx) => {
+  const run = async (tx: TenantTransactionClient): Promise<ReadonlyArray<PharmacySiteRow>> => {
     const rows = await tx.pharmacySite.findMany({
       where: { organizationId: input.organizationId },
       select: {
@@ -86,5 +93,7 @@ export async function listPharmacySites(input: {
         addressComplete: computeAddressComplete(r),
       })
     );
-  });
+  };
+
+  return input.tx !== undefined ? run(input.tx) : readInOrgScope(input.organizationId, run);
 }

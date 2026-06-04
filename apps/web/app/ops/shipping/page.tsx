@@ -38,12 +38,11 @@ import {
   loadOperatorPermissions,
 } from "../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../src/server/auth/resolve-tenancy.js";
-import { listActiveProviders } from "../../../src/server/ops/list-carrier-credentials.js";
-import { listPharmacySites } from "../../../src/server/ops/list-pharmacy-sites.js";
 import {
-  listShippingQueue,
+  loadShippingQueuePageData,
   type ShippingQueueRow,
 } from "../../../src/server/ops/list-shipping-queue.js";
+import { SlaBadge, slaRowBorderClass, slaStatusFor } from "../../../src/components/sla-badge.js";
 import { ALLOWED_CARRIERS_BY_PROVIDER } from "../../../src/server/ops/resolve-purchase-context.js";
 
 const SHIPPING_FLASH: Readonly<Record<string, string>> = {
@@ -119,7 +118,8 @@ function QueueRow({
   siteAddressComplete,
 }: RowProps) {
   const ageMs = nowMs - row.receivedAt.getTime();
-  const overSla = row.slaDeadlineAt !== null && row.slaDeadlineAt.getTime() < nowMs;
+  const nowDate = new Date(nowMs);
+  const slaStatus = slaStatusFor(row.slaDeadlineAt, nowDate);
   const isReadyToRelease = row.currentStatus === "FINAL_VERIFICATION_APPROVED_READY_FOR_SHIP";
   const isReadyToShip = row.currentStatus === "READY_TO_SHIP";
   const isShipped = row.currentStatus === "SHIPPED";
@@ -132,9 +132,7 @@ function QueueRow({
 
   return (
     <li
-      className={`space-y-3 rounded-md border bg-neutral-950 p-4 ${
-        overSla ? "border-red-800" : "border-neutral-800"
-      }`}
+      className={`space-y-3 rounded-md border bg-neutral-950 p-4 ${slaRowBorderClass(slaStatus)}`}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
@@ -153,20 +151,9 @@ function QueueRow({
               {row.priority}
             </span>
             <span className="text-xs text-neutral-500">{row.currentStatus}</span>
+            <SlaBadge slaDeadlineAt={row.slaDeadlineAt} now={nowDate} />
           </div>
-          <div className="text-xs text-neutral-500">
-            Received {formatDuration(ageMs)} ago
-            {row.slaDeadlineAt !== null ? (
-              <>
-                {" · "}SLA{" "}
-                <span className={overSla ? "text-red-400" : "text-neutral-300"}>
-                  {overSla
-                    ? "BREACHED"
-                    : `due in ${formatDuration(row.slaDeadlineAt.getTime() - nowMs)}`}
-                </span>
-              </>
-            ) : null}
-          </div>
+          <div className="text-xs text-neutral-500">Received {formatDuration(ageMs)} ago</div>
           {otherAssignee ? (
             <div className="text-xs text-neutral-500">
               Claimed by <code className="text-neutral-300">{row.currentAssigneeUserId}</code>
@@ -415,11 +402,11 @@ export default async function ShippingQueuePage({
   const canConfirm = hasOperatorPermission(permissions, PERMISSIONS.SHIP_CONFIRM);
   const canPurchase = hasOperatorPermission(permissions, PERMISSIONS.SHIP_PURCHASE_LABEL);
 
-  const [queue, availableProviders, sites] = await Promise.all([
-    listShippingQueue({ organizationId: session.tenancy.organizationId }),
-    listActiveProviders({ organizationId: session.tenancy.organizationId }),
-    listPharmacySites({ organizationId: session.tenancy.organizationId }),
-  ]);
+  // All three reads share ONE tenant transaction / connection instead
+  // of three concurrent scopes (see loadShippingQueuePageData).
+  const { queue, availableProviders, sites } = await loadShippingQueuePageData({
+    organizationId: session.tenancy.organizationId,
+  });
 
   const siteAddressCompleteById = new Map(sites.map((s) => [s.siteId, s.addressComplete]));
 

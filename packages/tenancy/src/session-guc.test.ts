@@ -55,27 +55,29 @@ beforeEach(() => {
 });
 
 describe("applyTenancySessionGuc — happy path", () => {
-  it("sets pharmax.organization_id to the active tenant", async () => {
+  it("sets pharmax.organization_id to the active tenant in one round trip", async () => {
     await applyTenancySessionGuc(tx, ctx());
-    expect(tx.calls.length).toBe(2);
+    // Single round trip: org id + system_context clear are collapsed
+    // into one SELECT target list (independent GUCs).
+    expect(tx.calls.length).toBe(1);
     expect(tx.rendered(0)).toContain("pharmax.organization_id");
     expect(tx.calls[0]?.values).toContain("11111111-1111-7111-a111-111111111111");
   });
 
-  it("also defensively clears pharmax.system_context", async () => {
+  it("also defensively clears pharmax.system_context in the same statement", async () => {
     await applyTenancySessionGuc(tx, ctx());
-    expect(tx.rendered(1)).toContain("pharmax.system_context");
-    // Cleared to empty string, NOT 'on'.
-    expect(tx.calls[1]?.values).toContain("");
+    expect(tx.rendered(0)).toContain("pharmax.system_context");
+    // Cleared to empty string, NOT 'on'. The org id and the empty
+    // clear are both bound values on the single call.
+    expect(tx.calls[0]?.values).toContain("");
   });
 
-  it("uses set_config with is_local=true (tx-scoped, not connection-scoped)", async () => {
+  it("uses set_config with is_local=true for every GUC (tx-scoped, not connection-scoped)", async () => {
     await applyTenancySessionGuc(tx, ctx());
-    for (const call of tx.calls) {
-      const joined = call.strings.join("");
-      expect(joined).toMatch(/set_config/);
-      expect(joined).toMatch(/,\s*true\s*\)/);
-    }
+    const joined = tx.calls[0]?.strings.join("") ?? "";
+    expect(joined).toMatch(/set_config/);
+    // Two set_config calls, each with the is_local=true (`, true)`) tail.
+    expect(joined.match(/,\s*true\s*\)/g)?.length).toBe(2);
   });
 
   it("does not log the organization id as a string literal (passes it as a bound parameter)", async () => {
@@ -108,18 +110,17 @@ describe("applyTenancySessionGuc — validation", () => {
 });
 
 describe("applySystemSessionGuc — happy path", () => {
-  it("clears organization_id, sets system_context='on', records the reason", async () => {
+  it("clears organization_id, sets system_context='on', records the reason in one round trip", async () => {
     await applySystemSessionGuc(tx, "CreateOrganization bootstrap");
-    expect(tx.calls.length).toBe(3);
-    // First call: clear org id.
-    expect(tx.rendered(0)).toContain("pharmax.organization_id");
-    expect(tx.calls[0]?.values).toContain("");
-    // Second call: set system_context='on'.
-    expect(tx.rendered(1)).toContain("pharmax.system_context");
-    expect(tx.calls[1]?.values).toContain("on");
-    // Third call: record the reason for audit.
-    expect(tx.rendered(2)).toContain("pharmax.system_context_reason");
-    expect(tx.calls[2]?.values).toContain("CreateOrganization bootstrap");
+    // Single round trip: all three independent GUCs in one SELECT.
+    expect(tx.calls.length).toBe(1);
+    const rendered = tx.rendered(0);
+    expect(rendered).toContain("pharmax.organization_id");
+    expect(rendered).toContain("pharmax.system_context");
+    expect(rendered).toContain("pharmax.system_context_reason");
+    // Bound values, in target-list order: org id cleared, bypass on,
+    // reason recorded.
+    expect(tx.calls[0]?.values).toEqual(["", "on", "CreateOrganization bootstrap"]);
   });
 
   it("passes the reason as a bound parameter (audit message not a SQL literal)", async () => {
@@ -131,7 +132,7 @@ describe("applySystemSessionGuc — happy path", () => {
         expect(s).not.toContain(reason);
       }
     }
-    expect(tx.calls[2]?.values).toContain(reason);
+    expect(tx.calls[0]?.values).toContain(reason);
   });
 });
 
@@ -143,13 +144,16 @@ describe("applySystemSessionGuc — validation", () => {
 });
 
 describe("clearSessionGuc", () => {
-  it("issues three clearing set_config calls", async () => {
+  it("issues one statement clearing all three GUCs", async () => {
     await clearSessionGuc(tx);
-    expect(tx.calls.length).toBe(3);
-    for (const call of tx.calls) {
-      expect(call.strings.join("")).toMatch(/set_config/);
-      expect(call.values).toContain("");
-    }
+    expect(tx.calls.length).toBe(1);
+    const joined = tx.calls[0]?.strings.join("") ?? "";
+    expect(joined).toMatch(/set_config/);
+    expect(joined).toContain("pharmax.organization_id");
+    expect(joined).toContain("pharmax.system_context");
+    expect(joined).toContain("pharmax.system_context_reason");
+    // All three cleared to empty string.
+    expect(tx.calls[0]?.values).toEqual(["", "", ""]);
   });
 });
 
@@ -159,10 +163,12 @@ describe("integration shape — tenancy then system bypass", () => {
     const tenancyCalls = tx.calls.length;
     await applySystemSessionGuc(tx, "supervisor");
     const systemCalls = tx.calls.length - tenancyCalls;
-    // The system path issues 3 calls including the org_id clear.
-    expect(systemCalls).toBe(3);
-    const firstSystemCall = tx.calls[tenancyCalls];
-    expect(firstSystemCall?.strings.join("")).toContain("pharmax.organization_id");
-    expect(firstSystemCall?.values).toContain("");
+    // The system path now issues ONE statement that includes the
+    // org_id clear alongside the bypass + reason.
+    expect(systemCalls).toBe(1);
+    const systemCall = tx.calls[tenancyCalls];
+    expect(systemCall?.strings.join("")).toContain("pharmax.organization_id");
+    // org id cleared to empty in the system statement.
+    expect(systemCall?.values[0]).toBe("");
   });
 });

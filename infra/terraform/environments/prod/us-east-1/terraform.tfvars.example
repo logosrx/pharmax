@@ -23,16 +23,29 @@ alb_idle_timeout_seconds = 60
 # ---- KMS --------------------------------------------------------------------
 asymm_sign_key_spec = "ECC_NIST_P384"
 
-# ---- RDS --------------------------------------------------------------------
-rds_instance_class                      = "db.r6g.large"
-rds_allocated_storage_gb                = 200
-rds_max_allocated_storage_gb            = 2000
-rds_backup_retention_days               = 35
+# ---- Database (Aurora PostgreSQL) -------------------------------------------
+# Prod: provisioned writer + 1 reader. The reader serves the reader endpoint
+# wired into REPORTING_DATABASE_URL so heavy report scans never hit the writer.
+# Scale readers up (and/or size the instance class) from real traffic.
+aurora_capacity_mode = "provisioned"
+aurora_reader_count  = 1
+rds_instance_class   = "db.r6g.large"
+
 rds_engine_version                      = "16.4"
-rds_parameter_group_family              = "postgres16"
-rds_multi_az                            = true
+rds_backup_retention_days               = 35
 rds_deletion_protection                 = true
 rds_performance_insights_retention_days = 731
+
+# Aurora Global Database: this stack is the PRIMARY. After apply, read
+# `terraform output rds_global_cluster_id` and `terraform output rds_cluster_arn`
+# and set them in the us-west-2 (secondary) stack's tfvars.
+rds_global_cluster_role = "primary"
+
+# DEPRECATED (see dev example). Retained so this file stays valid.
+rds_allocated_storage_gb     = 200
+rds_max_allocated_storage_gb = 2000
+rds_parameter_group_family   = "postgres16"
+rds_multi_az                 = true
 
 # ---- ECS --------------------------------------------------------------------
 ecs_web_cpu                    = 1024
@@ -56,6 +69,52 @@ alarm_sns_topic_arn     = "REPLACE_arn:aws:sns:us-east-1:<account>:pharmax-prod-
 # ---- Audit archive ----------------------------------------------------------
 audit_archive_retention_years         = 7
 audit_archive_glacier_transition_days = 90
+
+# ---- Security baseline ------------------------------------------------------
+# CloudTrail + AWS Config + GuardDuty + Security Hub. Account/region
+# singletons — enable here (primary), NOT in the other stacks sharing this
+# account+region. Per-service sub-toggles default on.
+enable_security_baseline = true
+
+# ---- Shield Advanced --------------------------------------------------------
+# Requires an active account-level Shield Advanced subscription (paid, annual,
+# enabled out-of-band). When true, the ALB + CloudFront are registered as
+# protected resources and CloudFront gets automatic L7 DDoS mitigation.
+enable_shield_advanced = true
+
+# ---- CloudFront -------------------------------------------------------------
+# Global edge CDN in front of the ALB. When enabled, the ALB SG is locked to
+# the CloudFront origin-facing prefix list. `cloudfront_origin_domain_name`
+# MUST be a domain covered by the ALB's ACM cert (a Route53 record pointing at
+# the ALB) so the HTTPS origin handshake validates; `cloudfront_aliases` +
+# `cloudfront_acm_certificate_arn` (us-east-1) set the public domain.
+enable_cloudfront              = true
+cloudfront_origin_domain_name  = "REPLACE_origin.app.example.com"
+cloudfront_aliases             = ["REPLACE_app.example.com"]
+cloudfront_acm_certificate_arn = "REPLACE_arn:aws:acm:us-east-1:<account>:certificate/<id>"
+cloudfront_price_class         = "PriceClass_100"
+
+# ---- ElastiCache (Redis) ----------------------------------------------------
+# Backs @pharmax/cache. After apply, read `terraform output
+# redis_primary_endpoint_address` + the AUTH token from the
+# `*-redis-auth-token` secret and store rediss://:<token>@<primary>:6379 in
+# the `redis-url` app secret.
+enable_elasticache        = true
+elasticache_node_type     = "cache.m7g.large"
+elasticache_replica_count = 2
+elasticache_multi_az      = true
+
+# ---- CI/CD deploy role (GitHub Actions OIDC) --------------------------------
+# Enable here (primary region) to provision the account-level GitHub OIDC
+# provider + the deploy role used by .github/workflows/deploy.yml. After
+# `terraform apply`, read `terraform output cicd_deploy_role_arn` and set it
+# as the AWS_DEPLOY_ROLE_ARN repo/Environment variable in GitHub. Other
+# working dirs in the SAME account must set cicd_create_oidc_provider = false
+# and pass cicd_oidc_provider_arn = <this stack's cicd_github_oidc_provider_arn>.
+enable_cicd_deploy_role = true
+cicd_github_repository  = "REPLACE_owner/repo"
+# Scope to a GitHub Environment with required reviewers for prod gating.
+cicd_github_environment = "production"
 
 tags = {
   CostCenter = "engineering-prod"

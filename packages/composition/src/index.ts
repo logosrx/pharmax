@@ -18,6 +18,28 @@ export {
 
 export { BUILT_IN_PRIORITIES, type BuiltInPriority } from "./priorities.js";
 
+export {
+  createCacheFromEnv,
+  createRedisCache,
+  createIoredisRedisClient,
+  type CreateCacheFromEnvInput,
+  type CreateRedisCacheOptions,
+  type IoredisLike,
+  type RedisCacheHandle,
+} from "./cache/ioredis-cache-client.js";
+
+// Re-export the cache port + read-through helpers so consumers (apps/web,
+// apps/worker) import the whole cache surface from the composition layer —
+// the same one-stop-import principle the configurator factories follow.
+export {
+  cached,
+  cacheKey,
+  NoopCache,
+  type Cache,
+  type CacheSetOptions,
+  type CachedOptions,
+} from "@pharmax/cache";
+
 export { createBillingConfigurator } from "./configurators/billing-configurator.js";
 export { createCommandBusConfigurator } from "./configurators/command-bus-configurator.js";
 export { createCryptoConfigurator } from "./configurators/crypto-configurator.js";

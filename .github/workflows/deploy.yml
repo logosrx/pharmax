@@ -1,0 +1,206 @@
+# Pharmax deploy — build container images, push to ECR, roll out to ECS.
+#
+# Pipeline: source → ECR → ECS Fargate. Builds the `web` and `worker`
+# images from apps/<svc>/Dockerfile, pushes immutable release tags to the
+# per-service ECR repos provisioned by infra/terraform/modules/ecr, then
+# registers a new task-definition revision per service and updates the
+# ECS service (with deployment circuit-breaker rollback already configured
+# on the service in Terraform).
+#
+# ---------------------------------------------------------------------------
+# Why this is gated behind a GitHub Environment + repo/Environment vars
+# ---------------------------------------------------------------------------
+#   AWS access is via GitHub Actions OIDC — no long-lived keys. The deploy
+#   role is assumed per the pattern in `terraform-drift.yml` and documented
+#   in `docs/operations/production-deployment.md`. Configure these as
+#   Environment-scoped variables so prod can require reviewers:
+#
+#     vars.AWS_DEPLOY_ROLE_ARN   IAM role assumed via OIDC (REQUIRED)
+#     vars.ECS_NAME_PREFIX       Terraform name_prefix, e.g. "pharmax-prod" (REQUIRED)
+#     vars.AWS_DEPLOY_REGION     Target region (optional; defaults us-east-1)
+#     vars.DEPLOY_ENVIRONMENT    GitHub Environment name (optional; defaults "staging")
+#
+#   If AWS_DEPLOY_ROLE_ARN or ECS_NAME_PREFIX is unset (e.g. a fork, or an
+#   account not yet bootstrapped) the workflow gracefully no-ops instead of
+#   failing — same philosophy as the drift workflow.
+#
+#   The deploy role's policy needs (least privilege):
+#     - ecr:GetAuthorizationToken
+#     - ecr:BatchCheckLayerAvailability, ecr:InitiateLayerUpload,
+#       ecr:UploadLayerPart, ecr:CompleteLayerUpload, ecr:PutImage,
+#       ecr:BatchGetImage (scoped to the pharmax/* repos)
+#     - ecs:DescribeServices, ecs:DescribeTaskDefinition,
+#       ecs:RegisterTaskDefinition, ecs:UpdateService
+#     - iam:PassRole for the task execution + task roles (scoped to the
+#       ARNs from infra/terraform/modules/iam)
+#
+# Naming contract (must match Terraform):
+#   ECR repo   = <name_prefix>/<svc>
+#   TD family  = <name_prefix>-<svc>
+#   container  = <svc>            (matches container_definitions[].name)
+#   service    = <name_prefix>-<svc>
+#   cluster    = <name_prefix>-cluster
+#
+name: deploy
+
+# MANUAL ONLY. This workflow does NOT run on push/merge — a merge to main can
+# never reach live infrastructure on its own. Deploys are triggered explicitly
+# from the Actions tab (workflow_dispatch), which also lets the GitHub
+# Environment's required-reviewer protection gate a production rollout. It
+# still no-ops unless the deploy vars below are configured.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Override image tag (default: release-<date>-<sha>)"
+        required: false
+        type: string
+
+# A failed/rolled-back deploy should not be re-triggered by a stale run.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Required for GitHub Actions OIDC → assume-role.
+  id-token: write
+
+jobs:
+  preflight:
+    name: Preflight — is the deploy target configured?
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+      name_prefix: ${{ vars.ECS_NAME_PREFIX }}
+      region: ${{ steps.check.outputs.region }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: check
+        run: |
+          if [ -n "${{ vars.AWS_DEPLOY_ROLE_ARN }}" ] && [ -n "${{ vars.ECS_NAME_PREFIX }}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Deploy target configured; build + deploy jobs will run."
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AWS_DEPLOY_ROLE_ARN and/or ECS_NAME_PREFIX not set."
+            echo "::notice::Skipping deploy. See docs/operations/production-deployment.md."
+          fi
+          region="${{ vars.AWS_DEPLOY_REGION }}"
+          echo "region=${region:-us-east-1}" >> "$GITHUB_OUTPUT"
+
+      - id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            tag="${{ github.event.inputs.image_tag }}"
+          else
+            tag="release-$(date -u +%Y.%m.%d)-$(git rev-parse --short HEAD)"
+          fi
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $tag"
+
+  build:
+    name: Build + push (${{ matrix.service }})
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ vars.DEPLOY_ENVIRONMENT || 'staging' }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - service: web
+            dockerfile: apps/web/Dockerfile
+          - service: worker
+            dockerfile: apps/worker/Dockerfile
+          - service: print-agent
+            dockerfile: apps/print-agent/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ needs.preflight.outputs.region }}
+          role-session-name: gh-actions-deploy-${{ matrix.service }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          # Immutable release tag (ECR repos are tag-immutable). No
+          # :latest — every deploy is traceable to a commit.
+          tags: ${{ steps.ecr.outputs.registry }}/${{ needs.preflight.outputs.name_prefix }}/${{ matrix.service }}:${{ needs.preflight.outputs.image_tag }}
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    name: Deploy to ECS (${{ matrix.service }})
+    needs: [preflight, build]
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ vars.DEPLOY_ENVIRONMENT || 'staging' }}
+    strategy:
+      # Deploy services independently — a worker rollback shouldn't abort
+      # an already-healthy web rollout.
+      fail-fast: false
+      matrix:
+        service: [web, worker, print-agent]
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ needs.preflight.outputs.region }}
+          role-session-name: gh-actions-deploy-${{ matrix.service }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Fetch current task definition
+        env:
+          FAMILY: ${{ needs.preflight.outputs.name_prefix }}-${{ matrix.service }}
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$FAMILY" \
+            --query 'taskDefinition' \
+            --output json > task-definition.raw.json
+          # Strip read-only fields that RegisterTaskDefinition rejects.
+          jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' \
+            task-definition.raw.json > task-definition.json
+
+      - name: Render new image into the task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ matrix.service }}
+          image: ${{ steps.ecr.outputs.registry }}/${{ needs.preflight.outputs.name_prefix }}/${{ matrix.service }}:${{ needs.preflight.outputs.image_tag }}
+
+      - name: Deploy to ECS service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ needs.preflight.outputs.name_prefix }}-${{ matrix.service }}
+          cluster: ${{ needs.preflight.outputs.name_prefix }}-cluster
+          # Block until ECS reports the new deployment stable. The
+          # service's circuit breaker (Terraform) auto-rolls-back a
+          # failed rollout, which surfaces here as a job failure.
+          wait-for-service-stability: true

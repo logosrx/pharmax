@@ -25,7 +25,7 @@
 # Rotation:
 #   - Symmetric ENCRYPT_DECRYPT keys (rds, secrets, data, audit_archive,
 #     documents, logs): annual automatic rotation.
-#   - HMAC keys (search): automatic rotation supported (AWS, April 2023).
+#   - HMAC keys (search): NOT auto-rotatable by AWS; app-level re-key.
 #   - Asymmetric SIGN_VERIFY keys (asymm_sign): NOT rotatable by AWS;
 #     application-level rotation procedure documented in the runbook.
 #
@@ -247,12 +247,14 @@ resource "aws_kms_alias" "data_legacy_app_phi" {
 # Reference: ADR 0023 — search key under HKDF/HMAC-SHA-256 semantics.
 
 resource "aws_kms_key" "search" {
-  description             = "Pharmax blind-index HMAC (${var.name_prefix}) — AwsKmsAdapter search key"
-  deletion_window_in_days = 30
-  key_usage               = "GENERATE_VERIFY_MAC"
+  description              = "Pharmax blind-index HMAC (${var.name_prefix}) — AwsKmsAdapter search key"
+  deletion_window_in_days  = 30
+  key_usage                = "GENERATE_VERIFY_MAC"
   customer_master_key_spec = "HMAC_256"
-  enable_key_rotation     = true
-  policy                  = data.aws_iam_policy_document.key_admin.json
+  # NOTE: AWS KMS does NOT support automatic rotation for HMAC keys
+  # (EnableKeyRotation → UnsupportedOperationException). Rotation is the
+  # application-level re-key procedure documented in the runbook.
+  policy = data.aws_iam_policy_document.key_admin.json
 
   tags = merge(var.tags, {
     Purpose            = "app-phi-blind-index-search-key"

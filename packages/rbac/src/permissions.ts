@@ -88,6 +88,7 @@ export const PERMISSIONS = Object.freeze({
   SHIP_RESOLVE_ESCALATION: "ship.resolve_escalation",
   SHIP_CAPTURE_PACKAGE_PHOTO: "ship.capture_package_photo",
   SHIP_RESOLVE_PACKAGE_PHOTO_MATCH: "ship.resolve_package_photo_match",
+  SHIP_ARCHIVE_PACKAGE_PHOTO: "ship.archive_package_photo",
 
   // Billing.
   BILLING_READ: "billing.read",
@@ -106,6 +107,9 @@ export const PERMISSIONS = Object.freeze({
 
   // Notifications.
   NOTIFICATIONS_READ: "notifications.read",
+
+  // SLA / operational escalation.
+  ORDERS_ESCALATE_SLA: "orders.escalate_sla",
 
   // Workflow administration (Tier 2 tenant extension; see ADR-0019).
   // Authors per-tenant `WorkflowPolicyOverlay` rows. Overlays can
@@ -333,6 +337,11 @@ export const PERMISSION_METADATA: Readonly<
       "Resolve an unmatched PackagePhoto by linking it to a specific order (operator triage of dock captures that did not auto-match).",
     category: "Shipping",
   },
+  [PERMISSIONS.SHIP_ARCHIVE_PACKAGE_PHOTO]: {
+    description:
+      "Archive a PackagePhoto out of the triage bucket and order timeline with a disposition reason (test capture, duplicate, captured in error, or unresolvable).",
+    category: "Shipping",
+  },
   [PERMISSIONS.BILLING_READ]: { description: "View billing data.", category: "Billing" },
   [PERMISSIONS.BILLING_MANAGE]: {
     description: "Manage invoices and pricing.",
@@ -373,6 +382,11 @@ export const PERMISSION_METADATA: Readonly<
     description:
       "View outbound notification delivery health (per-recipient SENT / DELIVERED / BOUNCED / COMPLAINED status from the Resend delivery webhook). Read-only operator metadata; no PHI.",
     category: "Notifications",
+  },
+  [PERMISSIONS.ORDERS_ESCALATE_SLA]: {
+    description:
+      "Route an SLA-breached order into the EMERGENCY bucket. Held by the machine SLA-evaluator identity (the worker breach-evaluator tick); an operational bucket move, not a workflow-status transition.",
+    category: "Workflow",
   },
   [PERMISSIONS.WORKFLOW_OVERLAY_MANAGE]: {
     description:

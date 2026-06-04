@@ -25,6 +25,7 @@
     "@aws-sdk/client-s3": "^3.703.0",
     "@pharmax/rbac": "workspace:*",
     "@pharmax/shipping": "workspace:*",
+    "@pharmax/sla": "workspace:*",
     "@pharmax/telemetry": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
     "@pharmax/verification": "workspace:*",

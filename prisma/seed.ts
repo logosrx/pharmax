@@ -159,6 +159,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     description:
       "Resolve an unmatched PackagePhoto by linking it to a specific order (operator triage of dock captures that did not auto-match)",
   },
+  {
+    code: "ship.archive_package_photo",
+    description:
+      "Archive a PackagePhoto out of the triage bucket and order timeline with a disposition reason (test capture, duplicate, captured in error, or unresolvable)",
+  },
   { code: "billing.read", description: "View billing data" },
   {
     code: "billing.finalize_invoice",
@@ -196,6 +201,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     code: "notifications.read",
     description:
       "View outbound notification delivery health (per-recipient delivery status from the Resend webhook); read-only operator metadata",
+  },
+  {
+    code: "orders.escalate_sla",
+    description:
+      "Route an SLA-breached order into the EMERGENCY bucket; held by the machine SLA-evaluator identity (worker breach-evaluator tick)",
   },
   {
     code: "workflow.overlay.manage",

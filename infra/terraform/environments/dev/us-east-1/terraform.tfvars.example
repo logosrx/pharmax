@@ -23,16 +23,28 @@ alb_idle_timeout_seconds = 60
 # ---- KMS --------------------------------------------------------------------
 asymm_sign_key_spec = "ECC_NIST_P384"
 
-# ---- RDS --------------------------------------------------------------------
-rds_instance_class                      = "db.t4g.medium"
-rds_allocated_storage_gb                = 50
-rds_max_allocated_storage_gb            = 200
-rds_backup_retention_days               = 7
+# ---- Database (Aurora PostgreSQL) -------------------------------------------
+# Dev favors cost: Aurora Serverless v2, writer-only (no reader). The reader
+# count is 0 so reports read the primary (REPORTING_DATABASE_URL not injected).
+aurora_capacity_mode      = "serverless"
+aurora_serverless_min_acu = 0.5
+aurora_serverless_max_acu = 4
+aurora_reader_count       = 0
+
 rds_engine_version                      = "16.4"
-rds_parameter_group_family              = "postgres16"
-rds_multi_az                            = false
+rds_backup_retention_days               = 7
 rds_deletion_protection                 = false
 rds_performance_insights_retention_days = 7
+
+# instance_class is only used in provisioned mode; kept for when dev switches.
+rds_instance_class = "db.t4g.medium"
+
+# DEPRECATED (Aurora auto-scales storage / derives its param-group family /
+# is inherently Multi-AZ via readers). Retained so this file stays valid.
+rds_allocated_storage_gb     = 50
+rds_max_allocated_storage_gb = 200
+rds_parameter_group_family   = "postgres16"
+rds_multi_az                 = false
 
 # ---- ECS --------------------------------------------------------------------
 ecs_web_cpu                    = 512

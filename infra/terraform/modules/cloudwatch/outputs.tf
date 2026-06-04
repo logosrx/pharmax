@@ -6,7 +6,7 @@ output "alarm_names" {
   value = concat(
     [
       aws_cloudwatch_metric_alarm.rds_cpu_high.alarm_name,
-      aws_cloudwatch_metric_alarm.rds_storage_low.alarm_name,
+      aws_cloudwatch_metric_alarm.rds_freeable_memory_low.alarm_name,
       aws_cloudwatch_metric_alarm.rds_replica_lag.alarm_name,
       aws_cloudwatch_metric_alarm.rds_connections_high.alarm_name,
       aws_cloudwatch_metric_alarm.alb_5xx_rate.alarm_name,

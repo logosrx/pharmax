@@ -44,7 +44,7 @@ describe("listUnmatchedPackagePhotos — scoping + ordering", () => {
     prismaMock.packagePhoto.findMany.mockResolvedValueOnce([]);
     await listUnmatchedPackagePhotos({ organizationId: ORG_ID });
     const call = prismaMock.packagePhoto.findMany.mock.calls[0]![0]!;
-    expect(call.where).toEqual({ organizationId: ORG_ID, matched: false });
+    expect(call.where).toEqual({ organizationId: ORG_ID, matched: false, archivedAt: null });
   });
 
   it("orders newest-first by capturedAt", async () => {

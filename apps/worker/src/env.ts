@@ -13,6 +13,10 @@ const schema = z.object({
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   DATABASE_URL: z.string().url(),
   DIRECT_URL: z.string().url().optional(),
+  // Optional read-replica for heavy report scans (see
+  // apps/web env + @pharmax/database/reporting-client.ts). Unset →
+  // reports read the primary.
+  REPORTING_DATABASE_URL: z.string().url().optional(),
 
   // ---- Stripe webhook drain ---------------------------------------
   STRIPE_DRAIN_BATCH_SIZE: z.coerce.number().int().positive().default(10),
@@ -73,6 +77,11 @@ const schema = z.object({
   REPORT_SCHEDULER_BATCH_SIZE: z.coerce.number().int().positive().default(25),
   REPORT_SCHEDULER_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
 
+  // SLA breach evaluator — scans for orders past `slaDeadlineAt`
+  // and routes them into EMERGENCY.
+  SLA_BREACH_EVAL_BATCH_SIZE: z.coerce.number().int().positive().default(50),
+  SLA_BREACH_EVAL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+
   // ---- NPI registry sync ------------------------------------------
   // Two loops:
   //   1. SCHEDULER — picks orgs whose last successful sync is older
@@ -125,6 +134,44 @@ const schema = z.object({
   // without piling on extra DB load.
   WORKFLOW_BUCKET_SCRAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
 
+  // ---- Package-photo upload-token reaper --------------------------
+  // Sweeps expired `package_photo_upload_token` rows (the ephemeral
+  // upload-resolution claim; the durable bytes + pointer live on the
+  // `package_photo` row and are untouched). Cadence is generous —
+  // the table grows at dock-capture rate and rows are tiny — and the
+  // batch caps each tick so a first-run backlog doesn't issue one
+  // huge DELETE.
+  PACKAGE_PHOTO_TOKEN_REAPER_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(15 * 60_000), // 15 minutes
+  PACKAGE_PHOTO_TOKEN_REAPER_BATCH_SIZE: z.coerce.number().int().positive().default(500),
+
+  // ---- Package-photo orphan S3 object sweep -----------------------
+  // The dedicated S3 bucket holding package-photo bytes. When set
+  // (alongside AWS_REGION), the worker runs the orphan-object sweeper
+  // — listing `org/*/photo/upload/*` objects and deleting those with
+  // no backing `package_photo` row that are older than the safety
+  // window. Unset → the sweeper is not started (dev/in-memory storage
+  // has no persistent orphans; a redeploy clears it). MUST match the
+  // web tier's `S3_PACKAGE_PHOTOS_BUCKET`.
+  S3_PACKAGE_PHOTOS_BUCKET: z.string().min(1).optional(),
+  // Minimum object age before it can be swept as an orphan. MUST be
+  // >> the upload-token TTL (1h) so the upload→dispatch gap and the
+  // PUT-then-INSERT race can never be false positives. Default 24h.
+  PACKAGE_PHOTO_ORPHAN_SWEEP_SAFETY_WINDOW_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(24 * 60 * 60_000), // 24 hours
+  PACKAGE_PHOTO_ORPHAN_SWEEP_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60 * 60_000), // 1 hour
+  PACKAGE_PHOTO_ORPHAN_SWEEP_MAX_KEYS_PER_TICK: z.coerce.number().int().positive().default(1_000),
+
   // ---- Stripe outbound (finalized invoice push) -------------------
   // OPTIONAL. When unset, the outbox handler for
   // `billing.invoice.finalized.v1` no-ops (logs that Stripe is not
@@ -153,14 +200,24 @@ const schema = z.object({
 
   // ---- AWS KMS (production envelope encryption) -------------------
   // See apps/web/src/server/env.ts for the full rationale. Both
-  // processes MUST point at the SAME pair of KMS keys; a wrap by
-  // one and a decrypt by the other would otherwise fail. Optional
-  // at the schema level so dev/test clones don't require AWS
-  // credentials; bootstrap enforces presence under NODE_ENV=production.
+  // processes MUST point at the SAME pair of KMS keys (including
+  // the SAME historical-key chain during a manual CMK identity
+  // rotation); a wrap by one and a decrypt by the other would
+  // otherwise fail. Optional at the schema level so dev/test
+  // clones don't require AWS credentials; bootstrap enforces
+  // presence under NODE_ENV=production.
   AWS_REGION: z.string().min(1).optional(),
   AWS_KMS_DATA_KEY_ID: z.string().min(1).optional(),
   AWS_KMS_SEARCH_KEY_ID: z.string().min(1).optional(),
   AWS_KMS_KEY_LABEL: z.string().min(1).optional(),
+  // Comma-separated list of historical CMK ARNs/aliases used during
+  // a manual CMK identity rotation bake-in window. See
+  // `AwsKmsAdapterOptions.previousDataKeyKeyIds` and the RUNBOOK
+  // § "Rotating a KMS data key — Manual CMK rotation". MUST match
+  // the apps/web value exactly during a rotation; otherwise an
+  // envelope wrapped by one process becomes unrecoverable when read
+  // by the other.
+  AWS_KMS_PREVIOUS_DATA_KEY_IDS: z.string().min(1).optional(),
 
   // ---- Report CSV archive (scheduled-run persistence) ------------
   // When both are set, the worker wires `S3ReportRunArchive` and
@@ -184,6 +241,19 @@ const schema = z.object({
   // line. Production MUST set both.
   RESEND_API_KEY: z.string().min(1).optional(),
   NOTIFICATION_FROM_EMAIL: z.email().optional(),
+  // When all three TWILIO_* values are set, the worker can wire a
+  // `TwilioSmsNotificationChannel` for SMS-capable templates (today:
+  // the emergency-bucket on-call page). Otherwise SMS-targeted sends
+  // fall through to the in-memory/in-app path. SMS is NOT a
+  // PHI-eligible transport in our posture (see the channel header) —
+  // these knobs intentionally carry no patient context.
+  // `TWILIO_AUTH_SID` is optional: set it to a scoped API-key SID
+  // (`SK…`) to Basic-auth with an API key instead of the account
+  // auth token (production SHOULD prefer this).
+  TWILIO_ACCOUNT_SID: z.string().startsWith("AC").optional(),
+  TWILIO_AUTH_TOKEN: z.string().min(1).optional(),
+  TWILIO_AUTH_SID: z.string().startsWith("SK").optional(),
+  TWILIO_MESSAGING_SERVICE_SID: z.string().startsWith("MG").optional(),
   // Base URL of the operator console — used to compose deep-link
   // buttons in scheduled-report email bodies. Defaults to
   // localhost for dev.
@@ -263,6 +333,71 @@ const schema = z.object({
   QUARTERLY_ACCESS_REVIEW_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(0),
   QUARTERLY_ACCESS_REVIEW_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(366).default(92),
   QUARTERLY_ACCESS_REVIEW_EVIDENCE_ROOT: z.string().min(1).default("./evidence"),
+
+  // ---- Nightly security digest (SOC 2 CC4.2 / CC7.2) --------------
+  // Composes the per-day security digest (audit-chain status per org,
+  // break-glass sessions, dead outbox rows, failed-login signal,
+  // Sentry error volume, access-review calendar) and "publishes" it.
+  // Today the default publisher logs the rendered body at INFO; a
+  // future PR will swap in a NotificationChannelDigestPublisher that
+  // emails the body via the existing Resend channel. The loop itself
+  // is the SOC 2 evidence artifact — the structured `digest.published`
+  // log line proves it ran.
+  //
+  // Schedule: 02:30 UTC, intentionally AFTER the 02:00 UTC Merkle
+  // signing job so the digest sees the finalized chain + freshly-
+  // signed manifest pointer.
+  //
+  // When `NIGHTLY_SECURITY_DIGEST_ENABLED=false`, the loop is not
+  // started — useful for dev environments running on a clone with
+  // no orgs, or for staging that wants to drive the script manually
+  // via `pnpm tsx scripts/security/send-nightly-security-digest.ts`.
+  NIGHTLY_SECURITY_DIGEST_ENABLED: z.coerce.boolean().default(true),
+  NIGHTLY_SECURITY_DIGEST_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(2),
+  NIGHTLY_SECURITY_DIGEST_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(30),
+  NIGHTLY_SECURITY_DIGEST_WINDOW_HOURS: z.coerce.number().int().min(1).max(168).default(24),
+
+  // Recipient email for the nightly security digest delivery. When
+  // set AND the worker's Resend channel is wired (RESEND_API_KEY +
+  // NOTIFICATION_FROM_EMAIL both present), the loop swaps the
+  // default in-memory publisher for a NotificationChannelDigestPublisher
+  // that emails the digest body to this address via the same
+  // Resend transport scheduled-report emails ride. When unset, or
+  // when Resend isn't wired, the loop falls back to the in-memory
+  // publisher + INFO log (the structured `digest.published` log
+  // line remains the SOC 2 evidence either way).
+  //
+  // Use a group alias (`security@<operator-domain>`) at the email
+  // vendor / Workspace / Google Groups layer to fan out to multiple
+  // on-call recipients. Do NOT comma-separate addresses here — the
+  // notification channel sends one recipient per call by design,
+  // and Resend's per-send `Idempotency-Key` would double-bill if we
+  // looped client-side.
+  NIGHTLY_SECURITY_DIGEST_RECIPIENT_EMAIL: z.string().email().optional(),
+
+  // ---- Daily audit-chain verifier (ADR-0006 + SOC 2 CC7.2) --------
+  // Per-org chain replay (`verifyChain` from @pharmax/audit) that
+  // re-derives each row's entryHash via the canonical encoder and
+  // asserts (a) seq monotonicity, (b) prevHash linkage, (c) recomputed
+  // entryHash byte-matches the stored one. A break throws
+  // AUDIT_CHAIN_BROKEN with the offending seq and increments the
+  // `pharmax_audit_verifier_failures_total` counter — paired with the
+  // AuditChainVerifierFailing Prometheus alert.
+  //
+  // Schedule: 01:30 UTC, intentionally BEFORE the 02:00 UTC Merkle
+  // signing job so a tamper is caught BEFORE the manifest is signed
+  // and published into the Object Lock bucket. If the verifier finds
+  // a break, the operator has the morning to investigate while the
+  // signed manifest for that day reflects yesterday's tip — not a
+  // signed tamper.
+  //
+  // The same logic is available as a CLI (`scripts/security/
+  // verify-audit-chain-all-orgs.ts`) for on-call use; the worker
+  // loop is the always-on scheduled component the SOC 2 CC7.2
+  // evidence pull requires.
+  DAILY_AUDIT_CHAIN_VERIFIER_ENABLED: z.coerce.boolean().default(true),
+  DAILY_AUDIT_CHAIN_VERIFIER_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(1),
+  DAILY_AUDIT_CHAIN_VERIFIER_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(30),
 });
 
 export const env = envNs.defineEnv(schema, {

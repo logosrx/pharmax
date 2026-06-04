@@ -88,6 +88,13 @@ export {
 } from "./commands/reopen-for-correction.js";
 
 export {
+  EscalateOrderForSlaBreach,
+  type EscalateOrderForSlaBreachInput,
+  type EscalateOrderForSlaBreachOutput,
+  SLA_ESCALATE_BUCKET_NOT_CONFIGURED,
+} from "./commands/escalate-order-for-sla-breach.js";
+
+export {
   REOPEN_REASONS,
   REOPEN_TARGET_STATES,
   isReopenReason,
@@ -104,6 +111,7 @@ import * as cancelOrderModule from "./commands/cancel-order.js";
 import * as placeHoldModule from "./commands/place-hold.js";
 import * as releaseHoldModule from "./commands/release-hold.js";
 import * as reopenForCorrectionModule from "./commands/reopen-for-correction.js";
+import * as escalateForSlaBreachModule from "./commands/escalate-order-for-sla-breach.js";
 
 export const orders = {
   commands: {
@@ -113,5 +121,6 @@ export const orders = {
     PlaceHold: placeHoldModule.PlaceHold,
     ReleaseHold: releaseHoldModule.ReleaseHold,
     ReopenForCorrection: reopenForCorrectionModule.ReopenForCorrection,
+    EscalateOrderForSlaBreach: escalateForSlaBreachModule.EscalateOrderForSlaBreach,
   },
 } as const;

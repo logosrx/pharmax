@@ -18,6 +18,9 @@ const prismaMock = {
   bucket: { findUnique: vi.fn() },
   order: { findMany: vi.fn() },
   shipment: { findMany: vi.fn() },
+  // Delegates the batched page loader reads through the shared tx.
+  carrierCredential: { findMany: vi.fn() },
+  pharmacySite: { findMany: vi.fn() },
 };
 
 vi.mock("@pharmax/database", async () => {
@@ -31,7 +34,7 @@ vi.mock("@pharmax/database", async () => {
   };
 });
 
-const { listShippingQueue } = await import("./list-shipping-queue.js");
+const { listShippingQueue, loadShippingQueuePageData } = await import("./list-shipping-queue.js");
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -149,5 +152,38 @@ describe("listShippingQueue — happy path", () => {
     expect(byId.get("o1")?.shipment?.trackingNumber).toBe("9400-NEW");
     expect(byId.get("o2")?.shipment).toBeNull();
     expect(byId.get("o3")?.shipment?.lastTrackingEventKind).toBe("DELIVERED");
+  });
+});
+
+describe("loadShippingQueuePageData — single-scope batch", () => {
+  it("returns queue + active providers + sites from one tenant scope", async () => {
+    prismaMock.bucket.findUnique.mockResolvedValueOnce({ id: "b1", name: "Shipping" });
+    prismaMock.order.findMany.mockResolvedValueOnce([]); // empty queue → no shipment fan-out
+    prismaMock.carrierCredential.findMany.mockResolvedValueOnce([{ provider: "EASYPOST" }]);
+    prismaMock.pharmacySite.findMany.mockResolvedValueOnce([
+      {
+        id: "s1",
+        code: "MAIN",
+        name: "Main",
+        status: "ACTIVE",
+        timezone: "UTC",
+        addressLine1: "1 A St",
+        addressLine2: null,
+        city: "Town",
+        state: "CA",
+        postalCode: "90001",
+        country: "US",
+        phone: null,
+      },
+    ]);
+
+    const data = await loadShippingQueuePageData({ organizationId: ORG_ID });
+
+    expect(data.queue.rows).toHaveLength(0);
+    expect(data.availableProviders).toEqual(["EASYPOST"]);
+    expect(data.sites).toHaveLength(1);
+    expect(data.sites[0]?.addressComplete).toBe(true);
+    // Shipment fan-out skipped on the empty queue.
+    expect(prismaMock.shipment.findMany).not.toHaveBeenCalled();
   });
 });

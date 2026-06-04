@@ -146,6 +146,14 @@ export {
 } from "./archive/configure.js";
 
 export {
+  configureReportReadScope,
+  getReportReadScope,
+  resetReportReadScopeConfigurationForTests,
+  REPORTING_READ_SCOPE_ALREADY_CONFIGURED,
+  type ReportReadScope,
+} from "./replica/configure.js";
+
+export {
   S3ReportRunArchive,
   type S3ReportRunArchiveSurface,
   type S3ReportRunArchiveOptions,

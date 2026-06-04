@@ -36,6 +36,7 @@ locals {
     "database-url",
     "database-password",
     "direct-url",
+    "reporting-database-url",
     "redis-url",
     "pharmax-local-kms-seed",
     "stripe-secret-key",
@@ -81,19 +82,25 @@ resource "aws_secretsmanager_secret" "this" {
   tags = merge(var.tags, {
     Logical    = each.key
     Rotatable  = contains(local.rotation_candidates, each.key) ? "true" : "false"
-    HipaaScope = contains(["database-url", "direct-url", "database-password", "pharmax-local-kms-seed"], each.key) ? "in-scope" : "operational"
+    HipaaScope = contains(["database-url", "direct-url", "reporting-database-url", "database-password", "pharmax-local-kms-seed"], each.key) ? "in-scope" : "operational"
   })
 }
 
 # Optionally seed an initial value. Most operators leave this empty and
 # populate the secret out-of-band so the value never touches Terraform.
 resource "aws_secretsmanager_secret_version" "this" {
-  for_each = {
-    for k, v in var.initial_values : k => v if contains(local.logical_secrets, k)
-  }
+  # Iterate over the secret NAMES only. `nonsensitive` is safe + necessary
+  # here: the keys are logical secret names (e.g. "database-url"), never
+  # secret material — the value stays sensitive via `var.initial_values[...]`.
+  # Terraform refuses a sensitive value (the whole `initial_values` map) as a
+  # for_each argument, so we unwrap just the key set.
+  for_each = toset([
+    for k in nonsensitive(keys(var.initial_values)) : k
+    if contains(local.logical_secrets, k)
+  ])
 
   secret_id     = aws_secretsmanager_secret.this[each.key].id
-  secret_string = each.value
+  secret_string = var.initial_values[each.key]
 
   # Once an operator rotates a secret out-of-band, do not let Terraform
   # overwrite their rotation on the next apply.

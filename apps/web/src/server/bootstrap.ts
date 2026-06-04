@@ -37,7 +37,7 @@ import {
   LocalKmsAdapter,
   type KmsAdapter,
 } from "@pharmax/crypto";
-import { prisma } from "@pharmax/database";
+import { prisma, readReportingInOrgScope, reportingClientIsReplica } from "@pharmax/database";
 import { clock } from "@pharmax/platform-core";
 import { configureRbac, PrismaPermissionLoader } from "@pharmax/rbac";
 import {
@@ -47,6 +47,7 @@ import {
   type PackagePhotoStorage,
 } from "@pharmax/package-capture";
 import {
+  configureReportReadScope,
   configureReportRunArchive,
   InMemoryReportRunArchive,
   S3ReportRunArchive,
@@ -434,6 +435,24 @@ async function doBootstrap(): Promise<void> {
   const reportArchive: ReportRunArchivePort = await buildReportArchive();
   configureReportRunArchive({ archive: reportArchive });
 
+  // Route report READS to the reporting replica (when
+  // REPORTING_DATABASE_URL is set) so heavy analytical scans don't
+  // burden the OLTP primary. The report_run write + audit + outbox
+  // stay on the primary command tx. No replica configured →
+  // `reportingPrisma` is the primary and reads run there (the
+  // pre-replica behavior); we still wire the scope so the read
+  // runs on its own tenant-scoped read tx rather than the command
+  // write tx.
+  configureReportReadScope({
+    usingReplica: reportingClientIsReplica,
+    read: (organizationId, fn) => readReportingInOrgScope(organizationId, (tx) => fn(tx)),
+  });
+  if (reportingClientIsReplica) {
+    logger.info("apps/web reporting reads routed to replica", {
+      event: "reporting.replica.enabled",
+    });
+  }
+
   // 4. @pharmax/billing — wire the Stripe refund port so the
   // operator-driven `IssueRefund` command can reach Stripe from
   // the web tier (it runs synchronously on operator click; the
@@ -497,6 +516,7 @@ async function buildKmsAdapter(): Promise<{
   const dataKeyId = env.AWS_KMS_DATA_KEY_ID;
   const searchKeyId = env.AWS_KMS_SEARCH_KEY_ID;
   const label = env.AWS_KMS_KEY_LABEL ?? "app-phi";
+  const previousDataKeyKeyIds = parsePreviousDataKeyKeyIds(env.AWS_KMS_PREVIOUS_DATA_KEY_IDS);
 
   const allAwsPresent =
     typeof region === "string" &&
@@ -518,11 +538,24 @@ async function buildKmsAdapter(): Promise<{
       dataKeyKeyId: dataKeyId,
       searchKeyKeyId: searchKeyId,
       keyIdLabel: label,
+      ...(previousDataKeyKeyIds.length > 0 ? { previousDataKeyKeyIds } : {}),
     });
     // Round-trip the IAM contract once at boot. If the task role
     // is missing kms:DescribeKey we want to know now, not at the
     // first PHI write.
     await kms.validate();
+    if (previousDataKeyKeyIds.length > 0) {
+      // Loud structured signal that a manual CMK identity rotation
+      // is currently in flight on this deployment. Operators
+      // expect to see this until the bake-in window closes; the
+      // log line is the operator's confirmation that the historical
+      // chain is wired and validated.
+      logger.info("apps/web booted with KMS historical key chain", {
+        event: "kms.previous_data_keys_configured",
+        currentDataKeyId: dataKeyId,
+        previousDataKeyCount: previousDataKeyKeyIds.length,
+      });
+    }
     return { kms, adapterName: "AwsKmsAdapter" };
   }
 
@@ -533,6 +566,7 @@ async function buildKmsAdapter(): Promise<{
       dataKeyKeyId: dataKeyId,
       searchKeyKeyId: searchKeyId,
       keyIdLabel: label,
+      ...(previousDataKeyKeyIds.length > 0 ? { previousDataKeyKeyIds } : {}),
     });
     await kms.validate();
     logger.warn("apps/web wired AwsKmsAdapter under NODE_ENV != production", {
@@ -576,6 +610,30 @@ async function buildKmsAdapter(): Promise<{
  * entirely (Clerk Keyless dev mode auto-generates keys; the
  * webhook route returns 503 explicitly).
  */
+/**
+ * Parse the `AWS_KMS_PREVIOUS_DATA_KEY_IDS` env var into a clean
+ * string array. The env is comma-separated by convention (matches
+ * how operators paste ARN lists from Terraform output), with
+ * whitespace tolerated around each entry.
+ *
+ * Returns an empty array for the steady-state case (env unset or
+ * empty after trimming) so callers can short-circuit without
+ * worrying about `undefined` semantics.
+ *
+ * Per-entry validation (non-empty, no duplicates) is deferred to
+ * `new AwsKmsAdapter(...)` — keeping it there means the same rule
+ * applies to direct programmatic callers and operators alike.
+ */
+function parsePreviousDataKeyKeyIds(raw: string | undefined): ReadonlyArray<string> {
+  if (typeof raw !== "string") return [];
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return [];
+  return trimmed
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
 function enforceClerkProductionConfig(): void {
   if (env.NODE_ENV !== "production") return;
 

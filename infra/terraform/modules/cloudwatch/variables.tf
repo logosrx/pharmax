@@ -14,8 +14,13 @@ variable "alarm_sns_topic_arn" {
   default     = ""
 }
 
+variable "rds_cluster_id" {
+  description = "Aurora cluster identifier (DBClusterIdentifier dimension) — used for cluster-level metrics like AuroraReplicaLag."
+  type        = string
+}
+
 variable "rds_instance_id" {
-  description = "RDS instance id for dimension lookup."
+  description = "Aurora writer instance id (DBInstanceIdentifier dimension) — used for per-instance metrics: CPU, connections, freeable memory."
   type        = string
 }
 
@@ -55,21 +60,21 @@ variable "rds_cpu_threshold_percent" {
   default     = 80
 }
 
-variable "rds_storage_low_threshold_bytes" {
+variable "rds_freeable_memory_low_threshold_bytes" {
   description = <<-EOT
-    Alarm if FreeStorageSpace drops below this many bytes. Default 20 GB.
-    RDS storage autoscaling raises the ceiling, so an absolute floor is
-    more honest than a percent-of-allocated comparison (the denominator
-    moves out from under you). Tune to ~10-20% of typical allocated size.
+    Alarm if Aurora FreeableMemory on the writer drops below this many bytes.
+    Aurora storage auto-scales (no FreeStorageSpace metric to watch), so memory
+    pressure on the writer is the meaningful capacity signal. Default 1 GiB;
+    tune relative to the instance class RAM (or ACU ceiling for serverless).
   EOT
   type        = number
-  default     = 21474836480
+  default     = 1073741824
 }
 
-variable "rds_replica_lag_threshold_seconds" {
-  description = "Replica lag alarm threshold."
+variable "rds_replica_lag_threshold_ms" {
+  description = "AuroraReplicaLag alarm threshold in milliseconds (Aurora reports replica lag in ms). Default 30000 (30s)."
   type        = number
-  default     = 60
+  default     = 30000
 }
 
 variable "rds_connection_threshold" {

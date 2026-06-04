@@ -43,6 +43,25 @@ variable "rds_multi_az" { type = bool }
 variable "rds_deletion_protection" { type = bool }
 variable "rds_performance_insights_retention_days" { type = number }
 
+# Aurora capacity. Leave at the sentinel defaults ("" / -1) to auto-derive
+# from environment (prod=provisioned+1 reader, else serverless writer-only).
+variable "aurora_capacity_mode" {
+  type    = string
+  default = ""
+}
+variable "aurora_serverless_min_acu" {
+  type    = number
+  default = 0.5
+}
+variable "aurora_serverless_max_acu" {
+  type    = number
+  default = 16
+}
+variable "aurora_reader_count" {
+  type    = number
+  default = -1
+}
+
 variable "ecs_web_cpu" { type = number }
 variable "ecs_web_memory" { type = number }
 variable "ecs_web_desired_count" { type = number }
@@ -70,4 +89,26 @@ variable "audit_archive_retention_years" {
 variable "audit_archive_glacier_transition_days" {
   type    = number
   default = 90
+}
+
+# ---- Shield Advanced --------------------------------------------------------
+
+variable "enable_shield_advanced" {
+  type    = bool
+  default = false
+}
+
+# ---- Aurora Global Database (DR secondary) ----------------------------------
+
+variable "rds_global_cluster_role" {
+  type    = string
+  default = "standalone"
+}
+variable "rds_global_cluster_identifier" {
+  type    = string
+  default = ""
+}
+variable "rds_replication_source_identifier" {
+  type    = string
+  default = ""
 }

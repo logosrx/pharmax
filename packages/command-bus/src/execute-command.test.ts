@@ -130,8 +130,11 @@ describe("executeCommand — happy path", () => {
     // Step 8a — RLS session GUCs MUST be set inside the tx BEFORE
     // any audit/outbox write. We assert (a) the calls happened, and
     // (b) they appear in the call log BEFORE the auditLog create.
+    // The tenancy GUC (organization_id + system_context clear) is
+    // issued as a SINGLE round trip — one `$executeRaw` with both
+    // set_config calls in one SELECT target list.
     const gucCalls = callsTo(prisma, "$executeRaw", "set_config");
-    expect(gucCalls.length).toBeGreaterThanOrEqual(2);
+    expect(gucCalls.length).toBeGreaterThanOrEqual(1);
     const firstGucIdx = prisma.calls.indexOf(gucCalls[0]!);
     const firstAuditIdx = prisma.calls.indexOf(callsTo(prisma, "auditLog", "create")[0]!);
     expect(firstGucIdx).toBeLessThan(firstAuditIdx);

@@ -194,15 +194,19 @@ export async function seedOrderChain(client: Client, tenant: SeededTenant): Prom
   await client.query(
     `INSERT INTO command_log (
        id, "organizationId", "commandName", "actorUserId",
-       "idempotencyKey", "requestHash", status, "createdAt"
+       "idempotencyKey", "requestPayload", status, "startedAt"
      )
-     VALUES ($1, $2, 'ApprovePV1', $3, $4, $5, $6::"CommandStatus", now())`,
+     VALUES ($1, $2, 'ApprovePV1', $3, $4, $5::jsonb, $6::"CommandStatus", now())`,
     [
       commandLogId,
       tenant.organizationId,
       tenant.adminUserId,
       `it-${randomUUID()}`,
-      `req-${randomUUID()}`,
+      // command_log carries a PHI-redacted JSON request snapshot
+      // (`requestPayload`), not a hash. Placeholder is sufficient —
+      // the integration suite pins DB-edge invariants, not payload
+      // shape.
+      "{}",
       CommandStatus.SUCCEEDED,
     ]
   );

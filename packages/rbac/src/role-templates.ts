@@ -125,6 +125,12 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       // workflow-safety pattern where producers and dispositioners
       // are different roles.
       PERMISSIONS.SHIP_RESOLVE_PACKAGE_PHOTO_MATCH,
+      // Disposition a capture that will never match (test shot,
+      // duplicate, misclick, cancelled order) out of the triage
+      // bucket. Held by the dispositioner role alongside resolve —
+      // archiving and resolving are the two ways an unmatched
+      // capture leaves the bucket.
+      PERMISSIONS.SHIP_ARCHIVE_PACKAGE_PHOTO,
     ],
   },
   {
@@ -155,7 +161,13 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
     scope: RoleScope.ORGANIZATION,
     description:
       "Per-org service identity for inbound carrier webhook + tracking-poller dispatch. Machine-only; not assignable to human users.",
-    permissions: [PERMISSIONS.SHIP_RECORD_TRACKING_EVENT, PERMISSIONS.SHIP_ESCALATE_TO_EMERGENCY],
+    permissions: [
+      PERMISSIONS.SHIP_RECORD_TRACKING_EVENT,
+      PERMISSIONS.SHIP_ESCALATE_TO_EMERGENCY,
+      // The same machine identity runs the SLA breach-evaluator
+      // tick, which routes breached orders into EMERGENCY.
+      PERMISSIONS.ORDERS_ESCALATE_SLA,
+    ],
   },
   {
     code: "ReportsScheduler",

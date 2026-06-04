@@ -30,16 +30,42 @@ alb_idle_timeout_seconds = 60
 # ---- KMS --------------------------------------------------------------------
 asymm_sign_key_spec = "ECC_NIST_P384"
 
-# ---- RDS --------------------------------------------------------------------
-rds_instance_class                      = "db.r6g.large"
-rds_allocated_storage_gb                = 200
-rds_max_allocated_storage_gb            = 2000
-rds_backup_retention_days               = 35
+# ---- Database (Aurora PostgreSQL) -------------------------------------------
+# DR warm standby: Serverless v2 scales to near-idle day-to-day and ramps fast
+# during a failover, which is cheaper than a provisioned writer sitting idle.
+# Writer-only (reader_count = 0); promote/scale via `make dr-promote`.
+aurora_capacity_mode      = "serverless"
+aurora_serverless_min_acu = 0.5
+aurora_serverless_max_acu = 16
+aurora_reader_count       = 0
+
 rds_engine_version                      = "16.4"
-rds_parameter_group_family              = "postgres16"
-rds_multi_az                            = true
+rds_backup_retention_days               = 35
 rds_deletion_protection                 = true
 rds_performance_insights_retention_days = 7
+
+# Aurora Global Database: this stack is the SECONDARY (read-only replica with
+# managed promotion on failover). Copy both identifiers from the us-east-1
+# primary stack's outputs (`terraform output rds_global_cluster_id` and
+# `terraform output rds_cluster_arn`). The DB name + master credentials are
+# inherited from the primary via replication — do not set them here.
+rds_global_cluster_role           = "secondary"
+rds_global_cluster_identifier     = "REPLACE_pharmax-prod-use1-global"
+rds_replication_source_identifier = "REPLACE_arn:aws:rds:us-east-1:<account>:cluster:pharmax-prod-use1-aurora"
+
+# AWS Shield Advanced (account-level subscription; protects this region's ALB).
+# The subscription is account-wide, so once it is active the DR ALB can be
+# protected too.
+enable_shield_advanced = true
+
+# Used only if the DR region switches to provisioned capacity.
+rds_instance_class = "db.r6g.large"
+
+# DEPRECATED (see dev example). Retained so this file stays valid.
+rds_allocated_storage_gb     = 200
+rds_max_allocated_storage_gb = 2000
+rds_parameter_group_family   = "postgres16"
+rds_multi_az                 = true
 
 # ---- ECS --------------------------------------------------------------------
 # Warm-standby sizing. Scale up via `make dr-promote` during failover.
