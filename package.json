@@ -92,7 +92,7 @@
     "@prisma/client": "^5.22.0",
     "@types/node": "^22.9.0",
     "@vitest/coverage-v8": "^2.1.4",
-    "eslint": "^9.13.0",
+    "eslint": "^10.4.0",
     "eslint-config-prettier": "^9.1.0",
     "husky": "^9.1.6",
     "lint-staged": "^15.2.10",
