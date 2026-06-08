@@ -14,7 +14,7 @@
     "@pharmax/tenancy": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^22.9.0",
+    "@types/node": "^22.19.20",
     "typescript": "^5.6.3"
   }
 }
