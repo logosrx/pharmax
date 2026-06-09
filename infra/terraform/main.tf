@@ -267,6 +267,9 @@ module "ecs" {
   print_agent_memory        = var.ecs_print_agent_memory
   print_agent_desired_count = var.ecs_print_agent_desired_count
 
+  web_support_email = var.support_email
+  web_app_url       = var.app_url
+
   aws_region = var.region
   tags       = local.common_tags
 }
@@ -380,6 +383,40 @@ module "cicd_deploy" {
     module.iam.task_role_worker_arn,
     module.iam.task_role_print_agent_arn,
   ]
+
+  tags = local.common_tags
+}
+
+# -----------------------------------------------------------------------------
+# Terraform-apply role — GitHub Actions OIDC role for the approval-gated
+# terraform-apply workflow (.github/workflows/terraform-apply.yml). Optional
+# (off by default); enable in one working directory per account. Trust is
+# exact-match scoped to the gated `terraform-apply-<env-region>` GitHub
+# Environment subject claims, so the role is only assumable from a job that
+# has passed required-reviewer approval.
+#
+# Chicken-and-egg: the FIRST apply in a virgin account is operator-driven
+# (this role doesn't exist yet); enabling this module during that first
+# apply creates the role so every subsequent apply can use the CI path.
+# -----------------------------------------------------------------------------
+
+module "terraform_apply_role" {
+  count  = var.enable_terraform_apply_role ? 1 : 0
+  source = "./modules/iam-github-oidc-apply"
+
+  name_prefix    = local.name_prefix
+  aws_account_id = data.aws_caller_identity.current.account_id
+
+  github_repository   = var.tfapply_github_repository
+  github_environments = var.tfapply_github_environments
+
+  # Provider resolution: explicit ARN wins; otherwise re-use the provider the
+  # cicd-deploy module owns in this working directory; otherwise create one
+  # here (tfapply_create_oidc_provider = true).
+  create_oidc_provider = var.tfapply_create_oidc_provider
+  oidc_provider_arn = var.tfapply_oidc_provider_arn != "" ? var.tfapply_oidc_provider_arn : try(
+    module.cicd_deploy[0].oidc_provider_arn, ""
+  )
 
   tags = local.common_tags
 }

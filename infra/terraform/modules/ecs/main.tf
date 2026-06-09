@@ -186,7 +186,11 @@ resource "aws_ecs_task_definition" "web" {
         }
       ]
 
-      environment = [
+      # SUPPORT_EMAIL + APP_URL are appended only when set (the app's prod boot
+      # guard requires SUPPORT_EMAIL, and empty values would fail the Zod
+      # email()/url() validation), so non-prod stacks that leave them blank
+      # don't inject an invalid empty value.
+      environment = concat([
         { name = "NODE_ENV", value = "production" },
         { name = "PORT", value = tostring(var.web_container_port) },
         { name = "PHARMAX_REGION", value = var.aws_region },
@@ -196,7 +200,10 @@ resource "aws_ecs_task_definition" "web" {
         { name = "AWS_KMS_APP_KEY_ID", value = var.data_kms_key_alias },
         { name = "AWS_KMS_DATA_KEY_ID", value = var.data_kms_key_alias },
         { name = "AWS_KMS_SEARCH_KEY_ID", value = var.search_kms_key_alias },
-      ]
+        ],
+        var.web_support_email != "" ? [{ name = "SUPPORT_EMAIL", value = var.web_support_email }] : [],
+        var.web_app_url != "" ? [{ name = "APP_URL", value = var.web_app_url }] : [],
+      )
 
       secrets = [for s in local.web_secret_env : {
         name      = s.name

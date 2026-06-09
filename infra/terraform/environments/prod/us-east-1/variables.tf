@@ -135,6 +135,17 @@ variable "guardduty_finding_publishing_frequency" {
   default = "SIX_HOURS"
 }
 
+# ---- App config -------------------------------------------------------------
+
+variable "support_email" {
+  type    = string
+  default = ""
+}
+variable "app_url" {
+  type    = string
+  default = ""
+}
+
 # ---- Shield Advanced --------------------------------------------------------
 
 variable "enable_shield_advanced" {
@@ -235,6 +246,29 @@ variable "cicd_create_oidc_provider" {
   default = true
 }
 variable "cicd_oidc_provider_arn" {
+  type    = string
+  default = ""
+}
+
+# ---- Terraform-apply role (GitHub Actions OIDC) ------------------------------
+
+variable "enable_terraform_apply_role" {
+  type    = bool
+  default = false
+}
+variable "tfapply_github_repository" {
+  type    = string
+  default = ""
+}
+variable "tfapply_github_environments" {
+  type    = list(string)
+  default = []
+}
+variable "tfapply_create_oidc_provider" {
+  type    = bool
+  default = false
+}
+variable "tfapply_oidc_provider_arn" {
   type    = string
   default = ""
 }

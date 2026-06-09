@@ -171,6 +171,18 @@ variable "print_agent_cpu" { type = number }
 variable "print_agent_memory" { type = number }
 variable "print_agent_desired_count" { type = number }
 
+variable "web_support_email" {
+  description = "Operator-facing support email injected as SUPPORT_EMAIL on the web task. Required by the web app's production boot guard. Empty = not injected (non-prod)."
+  type        = string
+  default     = ""
+}
+
+variable "web_app_url" {
+  description = "Public base URL injected as APP_URL on the web task (e.g. https://app.pharmax.co). Empty = app falls back to its localhost default (non-prod only)."
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Tags applied to every ECS resource."
   type        = map(string)

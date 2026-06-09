@@ -18,6 +18,11 @@ module "stack" {
   acm_certificate_domain   = var.acm_certificate_domain
   alb_idle_timeout_seconds = var.alb_idle_timeout_seconds
 
+  # Non-secret app config injected into the web task (SUPPORT_EMAIL is a prod
+  # boot requirement; APP_URL is the public base URL).
+  support_email = var.support_email
+  app_url       = var.app_url
+
   asymm_sign_key_spec = var.asymm_sign_key_spec
 
   rds_instance_class                      = var.rds_instance_class
@@ -101,4 +106,13 @@ module "stack" {
   cicd_github_subject_claims = var.cicd_github_subject_claims
   cicd_create_oidc_provider  = var.cicd_create_oidc_provider
   cicd_oidc_provider_arn     = var.cicd_oidc_provider_arn
+
+  # Terraform-apply role (GitHub Actions OIDC). One per account — this
+  # primary-region stack provisions the role that BOTH prod env-regions'
+  # gated GitHub Environments may assume.
+  enable_terraform_apply_role  = var.enable_terraform_apply_role
+  tfapply_github_repository    = var.tfapply_github_repository
+  tfapply_github_environments  = var.tfapply_github_environments
+  tfapply_create_oidc_provider = var.tfapply_create_oidc_provider
+  tfapply_oidc_provider_arn    = var.tfapply_oidc_provider_arn
 }

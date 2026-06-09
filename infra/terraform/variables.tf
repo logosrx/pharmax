@@ -350,6 +350,20 @@ variable "ecs_print_agent_image_tag" {
   default     = "latest"
 }
 
+# ---- App config (non-secret env injected into the web task) ----------------
+
+variable "support_email" {
+  description = "Operator-facing support email (SUPPORT_EMAIL). REQUIRED for the web app to boot in production."
+  type        = string
+  default     = ""
+}
+
+variable "app_url" {
+  description = "Public base URL of the operator console (APP_URL), e.g. https://app.pharmax.co."
+  type        = string
+  default     = ""
+}
+
 # ---- WAF --------------------------------------------------------------------
 
 variable "waf_rate_limit_per_5min" {
@@ -640,6 +654,42 @@ variable "cicd_create_oidc_provider" {
 
 variable "cicd_oidc_provider_arn" {
   description = "ARN of an existing GitHub OIDC provider. Required when cicd_create_oidc_provider = false."
+  type        = string
+  default     = ""
+}
+
+# ---- Terraform-apply role (GitHub Actions OIDC) -----------------------------
+# Role assumed by .github/workflows/terraform-apply.yml — surface its ARN as
+# the repo variable AWS_APPLY_ROLE_ARN_PROD (or _STAGING). Trust is
+# exact-match scoped to the gated terraform-apply-<env-region> GitHub
+# Environment subject claims.
+
+variable "enable_terraform_apply_role" {
+  description = "Provision the GitHub Actions OIDC terraform-apply role for this stack."
+  type        = bool
+  default     = false
+}
+
+variable "tfapply_github_repository" {
+  description = "GitHub repository ('owner/repo') trusted to assume the apply role. Required when enable_terraform_apply_role = true."
+  type        = string
+  default     = ""
+}
+
+variable "tfapply_github_environments" {
+  description = "Gated GitHub Environment names trusted to assume the apply role (e.g. [\"terraform-apply-prod-ue1\", \"terraform-apply-prod-uw2\"]). Required when enable_terraform_apply_role = true."
+  type        = list(string)
+  default     = []
+}
+
+variable "tfapply_create_oidc_provider" {
+  description = "Create the account-level GitHub OIDC provider in the apply-role module. Usually false — the cicd-deploy module owns it when enabled in the same working directory (the root composition passes its ARN through automatically)."
+  type        = bool
+  default     = false
+}
+
+variable "tfapply_oidc_provider_arn" {
+  description = "Explicit ARN of an existing GitHub OIDC provider. When empty, falls back to the cicd-deploy module's provider (if enabled here), else the module must create one (tfapply_create_oidc_provider = true)."
   type        = string
   default     = ""
 }
