@@ -32,8 +32,20 @@
 // so test environments that don't install the OTel packages can
 // still import @pharmax/telemetry without throwing. The dynamic
 // import only runs when `enabled === true`.
-
-import "server-only";
+//
+// Bundling note: this file is intended for the Node runtime only
+// (apps/web Next instrumentation hook, apps/worker main, tsx CLI
+// scripts, vitest). We previously used `import "server-only";` as
+// a defense-in-depth gate against accidental Client Component
+// bundling. That gate broke every tsx-via-Node consumer (the
+// `server-only` package's default export throws unconditionally
+// outside a Next bundle, blocking scripts/security/* + scripts/
+// operations/* + the worker's tsx dev mode). The redundant
+// protections — the OTel SDK packages require `fs` / `http` /
+// `pg-pool` so they fail in browsers anyway, and `apps/web/
+// instrumentation.ts` is server-only by Next convention — make
+// the guard's cost (no runnable CLI scripts) higher than its
+// marginal benefit. Removed 2026-06-05.
 
 import type { TelemetryConfig } from "./resolve-config.js";
 

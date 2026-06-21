@@ -41,8 +41,11 @@
 // per-signal endpoint variables (TRACES_ENDPOINT, METRICS_ENDPOINT,
 // etc.) — the default base path + signal-suffix pattern from the
 // OTLP spec covers our needs and keeps the env surface narrow.
-
-import "server-only";
+//
+// Bundling note: see the equivalent comment in `init-telemetry.ts`.
+// The `import "server-only";` guard was removed 2026-06-05 because
+// it broke every tsx-via-Node consumer (workers + CLI scripts) and
+// the protections it provided are redundant.
 
 export interface TelemetryConfig {
   readonly enabled: boolean;
