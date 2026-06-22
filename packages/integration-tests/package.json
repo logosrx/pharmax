@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "pg": "^8.13.1"
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@pharmax/audit": "workspace:*",
