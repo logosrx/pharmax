@@ -14,13 +14,8 @@
 
 import { configureBilling, type StripeInvoicePort } from "@pharmax/billing";
 import { configureCommandBus } from "@pharmax/command-bus";
-import {
-  AwsKmsAdapter,
-  configureCrypto,
-  createAwsKmsClient,
-  LocalKmsAdapter,
-  type KmsAdapter,
-} from "@pharmax/crypto";
+import { buildKmsAdapterFromEnv } from "@pharmax/composition";
+import { configureCrypto } from "@pharmax/crypto";
 import {
   configureNotifications,
   InMemoryNotificationChannel,
@@ -145,7 +140,11 @@ async function main(): Promise<void> {
   // Dev / test: LocalKmsAdapter. MUST share the same
   // PHARMAX_LOCAL_KMS_SEED as apps/web, or rows wrapped by one
   // process are undecryptable by the other.
-  const { kms, adapterName } = await buildWorkerKmsAdapter();
+  const { kms, adapterName } = await buildKmsAdapterFromEnv({
+    env,
+    logger,
+    processName: "apps/worker",
+  });
   configureCrypto({ kms });
 
   // The EasyPost webhook drain executes `RecordShipmentTrackingEvent`
@@ -1039,109 +1038,25 @@ async function buildPackagePhotoObjectStore(input: {
   };
 }
 
-/**
- * Build and validate the KMS adapter for the worker process. Mirror
- * of the web equivalent in `apps/web/src/server/bootstrap.ts`. Kept
- * separate so the two boot paths can diverge later (e.g. if the
- * worker ever needs a different KMS profile from the request tier)
- * without back-references between the apps.
- */
-async function buildWorkerKmsAdapter(): Promise<{
-  readonly kms: KmsAdapter;
-  readonly adapterName: "AwsKmsAdapter" | "LocalKmsAdapter";
-}> {
-  const region = env.AWS_REGION;
-  const dataKeyId = env.AWS_KMS_DATA_KEY_ID;
-  const searchKeyId = env.AWS_KMS_SEARCH_KEY_ID;
-  const label = env.AWS_KMS_KEY_LABEL ?? "app-phi";
-  const previousDataKeyKeyIds = parsePreviousDataKeyKeyIds(env.AWS_KMS_PREVIOUS_DATA_KEY_IDS);
-
-  const allAwsPresent =
-    typeof region === "string" &&
-    region.length > 0 &&
-    typeof dataKeyId === "string" &&
-    dataKeyId.length > 0 &&
-    typeof searchKeyId === "string" &&
-    searchKeyId.length > 0;
-
-  if (env.NODE_ENV === "production") {
-    if (!allAwsPresent) {
-      throw new Error(
-        "Refusing to boot apps/worker in production: AWS_REGION, AWS_KMS_DATA_KEY_ID, and AWS_KMS_SEARCH_KEY_ID must all be set. " +
-          "Provision the KMS keys via infra/terraform/modules/kms and inject the ARNs through Secrets Manager."
-      );
-    }
-    const kms = new AwsKmsAdapter({
-      client: createAwsKmsClient({ region }),
-      dataKeyKeyId: dataKeyId,
-      searchKeyKeyId: searchKeyId,
-      keyIdLabel: label,
-      ...(previousDataKeyKeyIds.length > 0 ? { previousDataKeyKeyIds } : {}),
-    });
-    await kms.validate();
-    if (previousDataKeyKeyIds.length > 0) {
-      logger.info("worker.kms_previous_data_keys_configured", {
-        currentDataKeyId: dataKeyId,
-        previousDataKeyCount: previousDataKeyKeyIds.length,
-      });
-    }
-    return { kms, adapterName: "AwsKmsAdapter" };
-  }
-
-  if (allAwsPresent) {
-    const kms = new AwsKmsAdapter({
-      client: createAwsKmsClient({ region }),
-      dataKeyKeyId: dataKeyId,
-      searchKeyKeyId: searchKeyId,
-      keyIdLabel: label,
-      ...(previousDataKeyKeyIds.length > 0 ? { previousDataKeyKeyIds } : {}),
-    });
-    await kms.validate();
-    logger.warn("worker.aws_kms_in_non_production", {
-      reason: "AWS_KMS_* env present in non-prod environment",
-    });
-    return { kms, adapterName: "AwsKmsAdapter" };
-  }
-
-  const seed = env.PHARMAX_LOCAL_KMS_SEED;
-  if (typeof seed !== "string" || seed.length < 32) {
-    throw new Error(
-      "Refusing to boot apps/worker: neither AWS KMS config nor PHARMAX_LOCAL_KMS_SEED is present. " +
-        "Set PHARMAX_LOCAL_KMS_SEED (>=32 chars) for local dev, or wire AWS_KMS_DATA_KEY_ID / AWS_KMS_SEARCH_KEY_ID."
-    );
-  }
-  return {
-    kms: new LocalKmsAdapter({ seed }),
-    adapterName: "LocalKmsAdapter",
-  };
-}
-
-/**
- * Parse the worker's `AWS_KMS_PREVIOUS_DATA_KEY_IDS` env var into a
- * clean string array. Mirrors `apps/web/src/server/bootstrap.ts`'s
- * helper — both processes MUST agree on the historical-key chain
- * during a manual CMK identity rotation, so the parsing rules must
- * be byte-identical here.
- *
- * Returns an empty array for the steady-state case (env unset or
- * empty after trimming) so callers can short-circuit.
- */
-function parsePreviousDataKeyKeyIds(raw: string | undefined): ReadonlyArray<string> {
-  if (typeof raw !== "string") return [];
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return [];
-  return trimmed
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-}
-
 function waitForShutdown(): Promise<NodeJS.Signals> {
   return new Promise((resolve) => {
+    // Hold the event loop open until a signal arrives. Every poll loop
+    // (runtime/poll-loop.ts) and the liveness heartbeat (runtime/
+    // liveness.ts) deliberately `.unref()` their timers so shutdown is
+    // gated by the drain sequence, not by a stray timer. A pending
+    // Promise plus signal listeners do NOT keep Node alive on their own,
+    // and the Prisma 7 pg driver-adapter does not hold a ref'd socket
+    // while idle — so without this one ref'd handle the event loop
+    // drains and the process exits 0 immediately after boot (the worker
+    // "boots then disappears" failure). This no-op interval is the
+    // single ref'd handle that keeps the worker resident; it is cleared
+    // on signal so the shutdown sequence can complete and exit cleanly.
+    const keepAlive = setInterval(() => {}, 60_000);
     const onSignal = (signal: NodeJS.Signals): void => {
       logger.info("worker.signal_received", { signal });
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
+      clearInterval(keepAlive);
       resolve(signal);
     };
     process.on("SIGINT", onSignal);

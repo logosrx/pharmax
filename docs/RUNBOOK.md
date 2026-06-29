@@ -449,8 +449,8 @@ offline.
 ### Pre-conditions
 
 - The DR stack `environments/prod/us-west-2/` has been applied at
-  least once and is healthy (`make plan-prod-usw2` reports no diff).
-- The DR Secrets Manager entries (`pharmax-prod-usw2/*`) are populated
+  least once and is healthy (`make plan-prod-uw2` reports no diff).
+- The DR Secrets Manager entries (`pharmax-prod-uw2/*`) are populated
   with current secret values. The rotation runbook covers this; the
   invariant is "every prod secret rotation also writes to us-west-2."
 - The us-west-2 ALB has a Route53 `dr.pharmax.example.com` ALIAS
@@ -473,7 +473,7 @@ Snapshot what we know about the primary's state at the cutover moment:
 ```bash
 # Most recent RDS snapshot id in us-east-1.
 aws rds describe-db-snapshots \
-  --db-instance-identifier pharmax-prod-use1-postgres \
+  --db-instance-identifier pharmax-prod-ue1-postgres \
   --region us-east-1 \
   --query 'reverse(sort_by(DBSnapshots, &SnapshotCreateTime))[0].DBSnapshotIdentifier' \
   --output text
@@ -497,41 +497,41 @@ restore is two steps (cluster, then instance):
 #    NOT travel between regions verbatim.
 aws rds copy-db-cluster-snapshot \
   --source-db-cluster-snapshot-identifier "arn:aws:rds:us-east-1:<account>:cluster-snapshot:<latest>" \
-  --target-db-cluster-snapshot-identifier "pharmax-prod-usw2-failover-$(date +%Y%m%d%H%M)" \
-  --kms-key-id "arn:aws:kms:us-west-2:<account>:key/<usw2-rds-cmk>" \
+  --target-db-cluster-snapshot-identifier "pharmax-prod-uw2-failover-$(date +%Y%m%d%H%M)" \
+  --kms-key-id "arn:aws:kms:us-west-2:<account>:key/<uw2-rds-cmk>" \
   --source-region us-east-1 \
   --region us-west-2
 
 # 2. Wait until COPYING -> AVAILABLE.
 aws rds wait db-cluster-snapshot-available \
-  --db-cluster-snapshot-identifier pharmax-prod-usw2-failover-... \
+  --db-cluster-snapshot-identifier pharmax-prod-uw2-failover-... \
   --region us-west-2
 
 # 3. Restore into a NEW cluster (do not modify the one Terraform manages —
 #    your next `terraform apply` would conflict).
 aws rds restore-db-cluster-from-snapshot \
-  --db-cluster-identifier pharmax-prod-usw2-aurora-failover \
-  --snapshot-identifier pharmax-prod-usw2-failover-... \
+  --db-cluster-identifier pharmax-prod-uw2-aurora-failover \
+  --snapshot-identifier pharmax-prod-uw2-failover-... \
   --engine aurora-postgresql \
   --no-publicly-accessible \
-  --db-subnet-group-name pharmax-prod-usw2-db \
+  --db-subnet-group-name pharmax-prod-uw2-db \
   --vpc-security-group-ids "$USW2_RDS_SG" \
   --deletion-protection \
   --region us-west-2
 aws rds wait db-cluster-available \
-  --db-cluster-identifier pharmax-prod-usw2-aurora-failover \
+  --db-cluster-identifier pharmax-prod-uw2-aurora-failover \
   --region us-west-2
 
 # 4. Attach an instance so the cluster is reachable.
 aws rds create-db-instance \
-  --db-cluster-identifier pharmax-prod-usw2-aurora-failover \
-  --db-instance-identifier pharmax-prod-usw2-aurora-failover-0 \
+  --db-cluster-identifier pharmax-prod-uw2-aurora-failover \
+  --db-instance-identifier pharmax-prod-uw2-aurora-failover-0 \
   --engine aurora-postgresql \
   --db-instance-class db.r6g.large \
   --no-publicly-accessible \
   --region us-west-2
 aws rds wait db-instance-available \
-  --db-instance-identifier pharmax-prod-usw2-aurora-failover-0 \
+  --db-instance-identifier pharmax-prod-uw2-aurora-failover-0 \
   --region us-west-2
 ```
 
@@ -541,12 +541,12 @@ Update the DR `database-url` to point at the restored writer endpoint:
 
 ```bash
 RESTORED_ENDPOINT=$(aws rds describe-db-clusters \
-  --db-cluster-identifier pharmax-prod-usw2-aurora-failover \
+  --db-cluster-identifier pharmax-prod-uw2-aurora-failover \
   --region us-west-2 \
   --query 'DBClusters[0].Endpoint' --output text)
 
 aws secretsmanager put-secret-value \
-  --secret-id pharmax-prod-usw2/database-url \
+  --secret-id pharmax-prod-uw2/database-url \
   --secret-string "postgres://pharmax_admin:<password>@$RESTORED_ENDPOINT:5432/pharmax?sslmode=require" \
   --region us-west-2
 ```
@@ -558,10 +558,10 @@ Either edit `environments/prod/us-west-2/terraform.tfvars` to bump
 the AWS CLI for speed (and reconcile to IaC after the incident):
 
 ```bash
-aws ecs update-service --cluster pharmax-prod-usw2-cluster \
-  --service pharmax-prod-usw2-web --desired-count 5 --region us-west-2
-aws ecs update-service --cluster pharmax-prod-usw2-cluster \
-  --service pharmax-prod-usw2-worker --desired-count 3 --region us-west-2
+aws ecs update-service --cluster pharmax-prod-uw2-cluster \
+  --service pharmax-prod-uw2-web --desired-count 5 --region us-west-2
+aws ecs update-service --cluster pharmax-prod-uw2-cluster \
+  --service pharmax-prod-uw2-worker --desired-count 3 --region us-west-2
 ```
 
 The ECS deployment circuit breaker will roll back on a failed task
@@ -671,8 +671,8 @@ runbook entry is the "what do I run when X happens" reference.
 
 ```bash
 cd infra/terraform
-make plan-staging-use1   # plan only, dry-run
-make plan-prod-use1      # plan only, dry-run
+make plan-staging-ue1   # plan only, dry-run
+make plan-prod-ue1      # plan only, dry-run
 
 # After review:
 cd environments/prod/us-east-1
@@ -690,8 +690,8 @@ A nightly job runs:
 
 ```bash
 cd infra/terraform
-make drift-prod-use1
-make drift-prod-usw2
+make drift-prod-ue1
+make drift-prod-uw2
 ```
 
 Each target runs `terraform plan -detailed-exitcode -lock=false`.
@@ -712,7 +712,7 @@ Per `infra/terraform/README.md` § "First-time bootstrap":
 3. Edit `terraform.tfvars` (region, vpc_cidr, ACM cert domain).
 4. `terraform init && terraform plan && terraform apply`.
 
-The Makefile init targets (`make init-prod-use1` etc.) are the
+The Makefile init targets (`make init-prod-ue1` etc.) are the
 operator-shortcut for step 4.
 
 ### Rotating the Merkle-signing key
@@ -1027,8 +1027,8 @@ scripts/security/verify-kms-keys.ts`). Dispatch it as a
 
 ```bash
 aws ecs run-task \
-  --cluster pharmax-prod-use1-cluster \
-  --task-definition pharmax-prod-use1-verify-kms \
+  --cluster pharmax-prod-ue1-cluster \
+  --task-definition pharmax-prod-ue1-verify-kms \
   --launch-type FARGATE \
   --region us-east-1 \
   --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNETS],securityGroups=[$KMS_VERIFY_SG],assignPublicIp=DISABLED}"
@@ -1158,7 +1158,7 @@ alias and the
    `aws_kms_key.data_drill_q<N>` sibling resource with the
    same key spec + policy as the production data key. Plan +
    apply. Capture the plan output.
-3. **Add the drill alias.** `alias/pharmax-staging-use1-data-drill-q<N>`
+3. **Add the drill alias.** `alias/pharmax-staging-ue1-data-drill-q<N>`
    pointing at the drill CMK. Capture the alias creation
    CloudTrail line.
 4. **Update IAM.** The staging ECS task role's IAM policy must

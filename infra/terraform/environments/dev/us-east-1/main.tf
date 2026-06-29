@@ -66,4 +66,13 @@ module "stack" {
 
   audit_archive_retention_years         = var.audit_archive_retention_years
   audit_archive_glacier_transition_days = var.audit_archive_glacier_transition_days
+
+  # CI/CD deploy role for .github/workflows/deploy.yml. dev owns the
+  # account-level GitHub OIDC provider (cicd_create_oidc_provider = true)
+  # since no other working directory in this account has created one yet.
+  enable_cicd_deploy_role   = var.enable_cicd_deploy_role
+  cicd_github_repository    = var.cicd_github_repository
+  cicd_github_environment   = var.cicd_github_environment
+  cicd_create_oidc_provider = var.cicd_create_oidc_provider
+  cicd_oidc_provider_arn    = var.cicd_oidc_provider_arn
 }

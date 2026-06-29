@@ -24,6 +24,9 @@
 import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
 
+import { Button } from "../src/components/ui/button.js";
+import { Icon } from "../src/components/ui/icon.js";
+
 interface ErrorBoundaryProps {
   readonly error: Error & { readonly digest?: string };
   readonly reset: () => void;
@@ -40,24 +43,25 @@ export default function SegmentError({ error, reset }: ErrorBoundaryProps) {
   }, [error]);
 
   return (
-    <main className="mx-auto max-w-2xl space-y-4 px-6 py-10">
-      <h1 className="text-2xl font-semibold text-neutral-50">Something went wrong</h1>
-      <p className="text-sm text-neutral-400">
-        An unexpected error occurred while rendering this page. The incident has been captured for
-        our on-call team.
-      </p>
+    <main className="mx-auto flex max-w-lg flex-col items-center gap-4 px-6 py-20 text-center">
+      <span className="flex h-12 w-12 items-center justify-center rounded-full border border-red-500/30 bg-red-500/10 text-red-400">
+        <Icon name="alert" size={22} />
+      </span>
+      <div className="space-y-1.5">
+        <h1 className="text-xl font-semibold text-fg">Something went wrong</h1>
+        <p className="text-sm text-muted">
+          An unexpected error occurred while rendering this page. The incident has been captured for
+          our on-call team.
+        </p>
+      </div>
       {error.digest !== undefined ? (
-        <p className="text-xs text-neutral-500">
-          Reference id: <code className="font-mono text-neutral-300">{error.digest}</code>
+        <p className="text-xs text-subtle">
+          Reference id: <code className="font-mono text-muted">{error.digest}</code>
         </p>
       ) : null}
-      <button
-        type="button"
-        onClick={() => reset()}
-        className="rounded-md border border-blue-700 bg-blue-900 px-3 py-1.5 text-sm text-blue-100 hover:bg-blue-800"
-      >
+      <Button onClick={() => reset()} icon="history">
         Try again
-      </button>
+      </Button>
     </main>
   );
 }

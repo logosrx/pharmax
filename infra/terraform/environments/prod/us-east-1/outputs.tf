@@ -61,6 +61,9 @@ output "redis_auth_token_secret_arn" {
 output "cicd_deploy_role_arn" { value = module.stack.cicd_deploy_role_arn }
 output "cicd_github_oidc_provider_arn" { value = module.stack.cicd_github_oidc_provider_arn }
 
+# ---- Terraform-apply role ----------------------------------------------------
+output "terraform_apply_role_arn" { value = module.stack.terraform_apply_role_arn }
+
 # ---- Aurora Global Database -------------------------------------------------
 output "rds_cluster_arn" { value = module.stack.rds_cluster_arn }
 output "rds_global_cluster_id" { value = module.stack.rds_global_cluster_id }

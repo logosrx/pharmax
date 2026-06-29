@@ -1,0 +1,227 @@
+# Pharmax DR restore-drill cadence — scheduled quarterly check.
+# Operating evidence for SOC 2 A1.2 / CC7.5 (backup restoration).
+#
+# Why this exists:
+#
+#   "A backup you've never restored is a hypothesis." A DR plan that
+#   is documented but never exercised reads, to an auditor or a
+#   buyer, exactly like a plan that doesn't work. This workflow makes
+#   the quarterly restore drill (docs/operations/restore-drill.md)
+#   impossible to silently skip:
+#
+#     1. It ALWAYS opens (or refreshes) a tracking issue each quarter
+#        with the runbook checklist, assigned via the `dr/restore-drill`
+#        label, so the cadence survives even when nobody remembers.
+#     2. When a read-only AWS OIDC role is configured, it ALSO runs the
+#        drill's read-only PREFLIGHT phase — confirming backups are
+#        actually restorable to a recent point in time (KMS health +
+#        retention window + LatestRestorableTime) — and attaches the
+#        result to the issue. The destructive provision/restore/teardown
+#        steps remain human-in-the-loop by design (see the runbook).
+#
+# Cadence note: quarterly to match docs/operations/restore-drill.md and
+#   docs/policies/business-continuity-and-disaster-recovery.md — a single
+#   source of truth for the drill schedule. Change all three together.
+#
+# AWS access (optional preflight only):
+#
+#   Assumes an IAM role via GitHub Actions OIDC, exposed as the repo
+#   variable `AWS_DRILL_ROLE_ARN`. The role needs ONLY read-only
+#   describes: `rds:Describe*`, `kms:DescribeKey`, `kms:ListAliases`,
+#   `backup:Describe*` / `backup:List*`. NO restore / create / delete —
+#   the actual restore is operator-driven. If the variable (or the
+#   `DRILL_SOURCE_CLUSTER_ID` / `DRILL_KMS_ALIAS` vars) are unset, the
+#   preflight job no-ops and only the reminder issue is posted.
+
+name: restore-drill
+
+on:
+  schedule:
+    # 09:00 UTC on the 1st of Jan / Apr / Jul / Oct — the first business
+    # day window of each quarter.
+    - cron: "0 9 1 1,4,7,10 *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # OIDC token issuance for assume-role (preflight only).
+  id-token: write
+  # Reminder / evidence issue.
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "11.1.1"
+  CI: "true"
+
+jobs:
+  gate:
+    name: Preflight — is the read-only OIDC role configured?
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ vars.AWS_DRILL_ROLE_ARN }}" ] \
+             && [ -n "${{ vars.DRILL_SOURCE_CLUSTER_ID }}" ] \
+             && [ -n "${{ vars.DRILL_KMS_ALIAS }}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Drill preflight inputs present; the read-only preflight will run."
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AWS_DRILL_ROLE_ARN / DRILL_SOURCE_CLUSTER_ID / DRILL_KMS_ALIAS not all set."
+            echo "::notice::Skipping the read-only preflight; only the reminder issue will be posted."
+          fi
+
+  preflight:
+    name: Read-only restore preflight
+    needs: gate
+    if: needs.gate.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      result: ${{ steps.run.outputs.result }}
+    env:
+      AWS_REGION: ${{ vars.DRILL_AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DRILL_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gh-actions-restore-drill-preflight
+
+      - name: Run drill preflight (read-only)
+        id: run
+        run: |
+          set +e
+          # Validate restorability to a recent point in time (1h ago is
+          # safely inside any sane backup-retention + restorable window).
+          RESTORE_TIME="$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"
+          pnpm drill:preflight \
+            --source-cluster-id="${{ vars.DRILL_SOURCE_CLUSTER_ID }}" \
+            --restore-time="$RESTORE_TIME" \
+            --region="${{ env.AWS_REGION }}" \
+            --kms-alias="${{ vars.DRILL_KMS_ALIAS }}" \
+            --out-dir=drill-evidence 2>&1 | tee preflight-output.txt
+          code=${PIPESTATUS[0]}
+          if [ "$code" -eq 0 ]; then
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+          fi
+          tail -n 80 preflight-output.txt > preflight-tail.txt
+          exit 0
+
+      - name: Upload preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: restore-drill-preflight-${{ github.run_id }}
+          path: |
+            drill-evidence/
+            preflight-output.txt
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Fail if backups are not restorable
+        if: steps.run.outputs.result == 'fail'
+        run: |
+          echo "::error::Restore-drill preflight FAILED — backups may not be restorable to the requested point in time. See the uploaded evidence artifact."
+          exit 1
+
+  remind:
+    name: Open / refresh the quarterly drill issue
+    needs: [gate, preflight]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download preflight tail (if any)
+        if: needs.preflight.result == 'success' || needs.preflight.result == 'failure'
+        uses: actions/download-artifact@v4
+        with:
+          name: restore-drill-preflight-${{ github.run_id }}
+          path: preflight-artifact
+        continue-on-error: true
+
+      - name: Open / update the drill tracking issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const preflightResult = '${{ needs.preflight.result }}';      // success|failure|skipped
+            const preflightOutcome = '${{ needs.preflight.outputs.result }}'; // pass|fail|''
+            const quarter = (() => {
+              const d = new Date();
+              return `${d.getUTCFullYear()}-Q${Math.floor(d.getUTCMonth() / 3) + 1}`;
+            })();
+
+            let preflightLine;
+            if (preflightResult === 'skipped') {
+              preflightLine = '- Automated preflight: **skipped** (no read-only OIDC role configured — set `AWS_DRILL_ROLE_ARN`, `DRILL_SOURCE_CLUSTER_ID`, `DRILL_KMS_ALIAS`).';
+            } else if (preflightOutcome === 'pass') {
+              preflightLine = '- Automated preflight: **PASS** — backups confirmed restorable to a recent point in time.';
+            } else {
+              preflightLine = '- Automated preflight: **FAIL** — investigate immediately; backups may not be restorable.';
+            }
+
+            const title = `DR restore drill due — ${quarter}`;
+            const body = [
+              '**Quarterly restore drill** (SOC 2 A1.2 / CC7.5).',
+              '',
+              `- Workflow run: <${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}>`,
+              `- Opened (UTC): ${new Date().toISOString()}`,
+              preflightLine,
+              '',
+              '## Checklist (see docs/operations/restore-drill.md)',
+              '',
+              '- [ ] `pnpm drill:preflight` — confirm restorable window',
+              '- [ ] `pnpm drill:provision-commands` → run provision.sh',
+              '- [ ] Point DATABASE_URL at the restored cluster',
+              '- [ ] `pnpm drill:verify` — audit-chain + row counts',
+              '- [ ] RLS sanity per runbook §2.4',
+              '- [ ] `pnpm drill:teardown-commands` → run teardown.sh',
+              '- [ ] `pnpm drill:finalize` — capture evidence.{md,json}',
+              '- [ ] File the evidence pack and record the date + result',
+              '',
+              'Close this issue once the drill is complete and evidence is filed.',
+            ].join('\n');
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'dr/restore-drill',
+            });
+            const match = existing.data.find((i) => i.title === title);
+            if (match) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body,
+              });
+              core.info(`Refreshed drill issue #${match.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['dr/restore-drill'],
+              });
+              core.info(`Opened drill issue #${created.data.number}`);
+            }

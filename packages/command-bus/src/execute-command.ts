@@ -30,6 +30,8 @@
 //   - Auto-write order_event rows. Order-targeted commands write
 //     their own order_event (the bus doesn't know event types).
 
+import { randomUUID } from "node:crypto";
+
 import { ulid } from "ulid";
 import type { ZodError } from "zod";
 
@@ -154,7 +156,9 @@ export async function executeCommand<TInput, TOutput>(
   }
 
   // Step 7 — Create command_log (PRE-TX so a crash leaves a record).
-  const commandLogId = ulid();
+  // UUID, not ULID: `command_log.id` is `@db.Uuid`. The idempotency
+  // key above stays a ULID (String column; sortable is a feature).
+  const commandLogId = randomUUID();
   await createCommandLog(config.prisma, {
     id: commandLogId,
     organizationId: ctx.organizationId,

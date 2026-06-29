@@ -222,6 +222,7 @@ export const EVENT_REGISTRATION_ALLOWLIST: ReadonlyArray<string> = Object.freeze
   "order.shipped.v2", // forward-compat placeholder in packages/events/src/compatibility.ts
   "sample.executed.v1", // fixture in packages/command-bus/* tests
   "some.unregistered.event.v1", // fixture in packages/events/src/emit.test.ts
+  "totally.unknown.v1", // fixture in packages/order-contracts/src/event-permissions.test.ts (asserts the null-mapping branch of orderEventTypeToPermission)
 
   // ---- 2. Documented aspirational blockers ----
   // BLOCKER: producer command not yet implemented. Schema is

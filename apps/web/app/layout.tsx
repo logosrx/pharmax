@@ -21,9 +21,16 @@ export const metadata: Metadata = {
   description: "Enterprise pharmacy operating system",
 };
 
+// Applied before paint so a saved light/dark choice never flashes.
+// Defaults to dark (the console's primary mode) when nothing is saved.
+const THEME_BOOTSTRAP = `(function(){try{var t=localStorage.getItem("pharmax-theme");if(t==="light"){document.documentElement.classList.add("light")}}catch(e){}})();`;
+
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
+      </head>
       <body className="antialiased">
         <ClerkProvider dynamic>{children}</ClerkProvider>
       </body>

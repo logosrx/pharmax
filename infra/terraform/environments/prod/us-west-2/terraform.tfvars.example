@@ -50,8 +50,8 @@ rds_performance_insights_retention_days = 7
 # `terraform output rds_cluster_arn`). The DB name + master credentials are
 # inherited from the primary via replication — do not set them here.
 rds_global_cluster_role           = "secondary"
-rds_global_cluster_identifier     = "REPLACE_pharmax-prod-use1-global"
-rds_replication_source_identifier = "REPLACE_arn:aws:rds:us-east-1:<account>:cluster:pharmax-prod-use1-aurora"
+rds_global_cluster_identifier     = "REPLACE_pharmax-prod-ue1-global"
+rds_replication_source_identifier = "REPLACE_arn:aws:rds:us-east-1:<account>:cluster:pharmax-prod-ue1-aurora"
 
 # AWS Shield Advanced (account-level subscription; protects this region's ALB).
 # The subscription is account-wide, so once it is active the DR ALB can be

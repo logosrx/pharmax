@@ -426,6 +426,28 @@ describe("AwsKmsAdapter — deriveSearchKey", () => {
     expect(client.macCalls[0]?.MacAlgorithm).toBe("HMAC_SHA_256");
     expect(client.macCalls[0]?.KeyId).toBe(SEARCH_KEY);
   });
+
+  it("returns a defensive copy: zeroing one result does not corrupt the cache (B-2 regression)", async () => {
+    // `blindIndex()` calls `key.fill(0)` after computing the HMAC. If
+    // deriveSearchKey handed out the cached buffer by reference, the
+    // first blind index for a (tenant, purpose) would zero the shared
+    // key and every subsequent one would HMAC with an all-zero key.
+    const { adapter, client } = makeAdapter();
+    const first = await adapter.deriveSearchKey({ tenantId: "org-1", purpose: "p" });
+    const reference = Buffer.from(first); // snapshot before mutation
+
+    // Simulate the blind-index consumer zeroing its copy.
+    first.fill(0);
+
+    const second = await adapter.deriveSearchKey({ tenantId: "org-1", purpose: "p" });
+    // Still served from cache (no second KMS round-trip)...
+    expect(client.macCalls).toHaveLength(1);
+    // ...but the bytes are intact, not zeroed.
+    expect(second.equals(reference)).toBe(true);
+    expect(second.every((b) => b === 0)).toBe(false);
+    // And the two handed-out buffers are distinct instances.
+    expect(second).not.toBe(first);
+  });
 });
 
 describe("AwsKmsAdapter — validate()", () => {

@@ -58,20 +58,29 @@ export class PrismaPermissionLoader implements EffectivePermissionLoader {
     const rows = await this.prisma.$transaction(async (tx) => {
       await applyTenancySessionGuc(tx as unknown as SessionGucExecutor, ctx);
       return tx.$queryRaw<PermissionRow[]>(
+        // Column identifiers are quoted camelCase because the Prisma
+        // schema maps TABLE names to snake_case (`@@map`) but leaves
+        // COLUMN names as the camelCase field names (no `@map`). The
+        // baseline migration creates `"userId"`, `"roleId"`,
+        // `"organizationId"`, `"siteId"`, `"clinicId"`, `"teamId"`,
+        // `"permissionId"` as quoted identifiers. Unquoted snake_case
+        // (`ur.user_id`) would be folded to lowercase by Postgres and
+        // fail with `column ... does not exist`. Single-word lowercase
+        // columns (`id`, `scope`, `code`) are safe unquoted.
         Prisma.sql`
           SELECT
-            ur.id              AS "userRoleId",
-            r.scope            AS "roleScope",
-            ur.site_id         AS "siteId",
-            ur.clinic_id       AS "clinicId",
-            ur.team_id         AS "teamId",
-            p.code             AS "permissionCode"
+            ur.id                AS "userRoleId",
+            r.scope              AS "roleScope",
+            ur."siteId"          AS "siteId",
+            ur."clinicId"        AS "clinicId",
+            ur."teamId"          AS "teamId",
+            p.code               AS "permissionCode"
           FROM user_role ur
-          JOIN role r              ON r.id = ur.role_id
-          JOIN role_permission rp  ON rp.role_id = r.id
-          JOIN permission p        ON p.id = rp.permission_id
-          WHERE ur.organization_id = ${input.organizationId}::uuid
-            AND ur.user_id         = ${input.userId}::uuid
+          JOIN role r              ON r.id = ur."roleId"
+          JOIN role_permission rp  ON rp."roleId" = r.id
+          JOIN permission p        ON p.id = rp."permissionId"
+          WHERE ur."organizationId" = ${input.organizationId}::uuid
+            AND ur."userId"         = ${input.userId}::uuid
         `
       );
     });

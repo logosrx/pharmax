@@ -55,4 +55,13 @@ module "stack" {
 
   audit_archive_retention_years         = var.audit_archive_retention_years
   audit_archive_glacier_transition_days = var.audit_archive_glacier_transition_days
+
+  # Terraform-apply role (GitHub Actions OIDC). The staging account has no
+  # cicd-deploy module, so the apply-role module owns the account-level
+  # OIDC provider here (tfapply_create_oidc_provider = true in tfvars).
+  enable_terraform_apply_role  = var.enable_terraform_apply_role
+  tfapply_github_repository    = var.tfapply_github_repository
+  tfapply_github_environments  = var.tfapply_github_environments
+  tfapply_create_oidc_provider = var.tfapply_create_oidc_provider
+  tfapply_oidc_provider_arn    = var.tfapply_oidc_provider_arn
 }

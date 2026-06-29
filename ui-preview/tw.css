@@ -1,0 +1,5 @@
+/* Tailwind entry for the standalone UI preview. Reuses the real
+   design tokens from the app's globals.css, and scans preview.html
+   for the utility classes to generate. */
+@import "../apps/web/app/globals.css";
+@source "./preview.html";

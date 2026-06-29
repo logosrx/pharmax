@@ -25,6 +25,8 @@
 //      loses pre-tx crash visibility — acceptable for ops-driven
 //      bootstrap commands run interactively.
 
+import { randomUUID } from "node:crypto";
+
 import { ulid } from "ulid";
 import type { ZodError } from "zod";
 
@@ -76,7 +78,9 @@ export async function executeSystemCommand<TInput, TOutput>(
   const input = parsed.data;
   const redactedRequest = redactPayload(input, command.redactFields);
 
-  const commandLogId = ulid();
+  // UUID, not ULID: `command_log.id` is `@db.Uuid`. correlationId +
+  // idempotencyKey stay ULIDs (String columns; sortable is a feature).
+  const commandLogId = randomUUID();
   const correlationId = ulid();
   const idempotencyKey = options.idempotencyKey ?? ulid();
 

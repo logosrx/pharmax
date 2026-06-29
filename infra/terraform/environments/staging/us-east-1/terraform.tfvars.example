@@ -67,6 +67,17 @@ alarm_sns_topic_arn     = "REPLACE_arn:aws:sns:us-east-1:<account>:pharmax-stagi
 audit_archive_retention_years         = 7
 audit_archive_glacier_transition_days = 90
 
+# ---- Terraform-apply role (GitHub Actions OIDC) ------------------------------
+# Role assumed by the approval-gated terraform-apply workflow for the
+# staging-ue1 env-region. The staging account has no cicd-deploy module, so
+# this module owns the account-level OIDC provider (create = true). After
+# apply, read `terraform output terraform_apply_role_arn` and set it as the
+# AWS_APPLY_ROLE_ARN_STAGING repository variable in GitHub.
+enable_terraform_apply_role  = true
+tfapply_github_repository    = "REPLACE_owner/repo"
+tfapply_github_environments  = ["terraform-apply-staging-ue1"]
+tfapply_create_oidc_provider = true
+
 tags = {
   CostCenter = "engineering-staging"
 }

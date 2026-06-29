@@ -121,7 +121,7 @@ output "kms_asymm_sign_key_arn" {
 }
 
 output "kms_asymm_sign_key_alias" {
-  description = "Alias of the Merkle-root signing CMK. Set AWS_KMS_AUDIT_SIGN_KEY_ID to this."
+  description = "Alias of the Merkle-root signing CMK. Set MERKLE_SIGNER_KMS_KEY_ID to this."
   value       = module.kms.asymm_sign_key_alias
 }
 
@@ -308,4 +308,11 @@ output "cicd_deploy_role_arn" {
 output "cicd_github_oidc_provider_arn" {
   description = "ARN of the GitHub OIDC provider in use (null unless enable_cicd_deploy_role = true). Pass to other working directories in the same account via cicd_oidc_provider_arn."
   value       = try(module.cicd_deploy[0].oidc_provider_arn, null)
+}
+
+# ---- Terraform-apply role ---------------------------------------------------
+
+output "terraform_apply_role_arn" {
+  description = "ARN of the GitHub Actions terraform-apply role (null unless enable_terraform_apply_role = true). Set as the AWS_APPLY_ROLE_ARN_PROD (or _STAGING) repository variable."
+  value       = try(module.terraform_apply_role[0].apply_role_arn, null)
 }

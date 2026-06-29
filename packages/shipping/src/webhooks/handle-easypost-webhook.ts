@@ -26,6 +26,7 @@ import {
   EASYPOST_TRACKER_EVENT_DESCRIPTIONS,
   EasyPostPayloadError,
   parseEasyPostTrackerWebhook,
+  projectTrackerEventForStorage,
   type EasyPostTrackerWebhookPayload,
 } from "../carriers/easypost-payload.js";
 import { verifyEasyPostSignature } from "../carriers/easypost-signature.js";
@@ -199,8 +200,12 @@ export async function handleEasyPostWebhook(
   }
 
   const signatureVerifiedAt = clock();
+  // Persist only the PHI-free projection. EasyPost tracker bodies can
+  // carry recipient name/address; we store exactly the fields the
+  // worker replays so no recipient PHI lands in the ledger row.
+  const storedEvent = projectTrackerEventForStorage(payload);
   const { record, inserted } = await deps.eventStore.recordReceived({
-    event: payload,
+    event: storedEvent,
     receivedAt: signatureVerifiedAt,
     signatureVerifiedAt,
     initialStatus: "PENDING",

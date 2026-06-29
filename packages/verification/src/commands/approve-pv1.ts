@@ -116,7 +116,7 @@
 
 import { defineCommand, ORDER_VERSION_MISMATCH } from "@pharmax/command-bus";
 import { OrderStatus, VerificationDecision, VerificationStage } from "@pharmax/database";
-import { orderEventTypeToPermission } from "@pharmax/orders";
+import { orderEventTypeToPermission } from "@pharmax/order-contracts";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { applyCommandStageIntervalTransition } from "@pharmax/sla";

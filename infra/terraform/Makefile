@@ -7,12 +7,12 @@
 #   make validate            # init -backend=false + validate every module
 #   make lint                # tflint --recursive
 #
-#   make plan-dev-use1       # plan against environments/dev/us-east-1
-#   make plan-staging-use1   # plan against environments/staging/us-east-1
-#   make plan-prod-use1      # plan against environments/prod/us-east-1
-#   make plan-prod-usw2      # plan against environments/prod/us-west-2
+#   make plan-dev-ue1       # plan against environments/dev/us-east-1
+#   make plan-staging-ue1   # plan against environments/staging/us-east-1
+#   make plan-prod-ue1      # plan against environments/prod/us-east-1
+#   make plan-prod-uw2      # plan against environments/prod/us-west-2
 #
-#   make init-dev-use1       # init the dev/use1 working directory
+#   make init-dev-ue1       # init the dev/ue1 working directory
 #   make ...
 #
 # All targets shell out to terraform / tflint; this Makefile owns the
@@ -89,41 +89,41 @@ lint: ## Run tflint --recursive against every directory
 
 # ---- Init ------------------------------------------------------------------
 
-.PHONY: init-dev-use1 init-staging-use1 init-prod-use1 init-prod-usw2 init-bootstrap
+.PHONY: init-dev-ue1 init-staging-ue1 init-prod-ue1 init-prod-uw2 init-bootstrap
 
 init-bootstrap: ## terraform init in bootstrap/ (run BEFORE any env init)
 	cd bootstrap && terraform init -input=false
 
-init-dev-use1: ## terraform init in environments/dev/us-east-1
+init-dev-ue1: ## terraform init in environments/dev/us-east-1
 	cd environments/dev/us-east-1 && terraform init -input=false
 
-init-staging-use1: ## terraform init in environments/staging/us-east-1
+init-staging-ue1: ## terraform init in environments/staging/us-east-1
 	cd environments/staging/us-east-1 && terraform init -input=false
 
-init-prod-use1: ## terraform init in environments/prod/us-east-1
+init-prod-ue1: ## terraform init in environments/prod/us-east-1
 	cd environments/prod/us-east-1 && terraform init -input=false
 
-init-prod-usw2: ## terraform init in environments/prod/us-west-2
+init-prod-uw2: ## terraform init in environments/prod/us-west-2
 	cd environments/prod/us-west-2 && terraform init -input=false
 
 # ---- Plan ------------------------------------------------------------------
 
-.PHONY: plan-dev plan-dev-use1 plan-staging plan-staging-use1 plan-prod plan-prod-use1 plan-prod-usw2
+.PHONY: plan-dev plan-dev-ue1 plan-staging plan-staging-ue1 plan-prod plan-prod-ue1 plan-prod-uw2
 
-plan-dev: plan-dev-use1
-plan-staging: plan-staging-use1
-plan-prod: plan-prod-use1
+plan-dev: plan-dev-ue1
+plan-staging: plan-staging-ue1
+plan-prod: plan-prod-ue1
 
-plan-dev-use1: ## terraform plan against dev/us-east-1
+plan-dev-ue1: ## terraform plan against dev/us-east-1
 	cd environments/dev/us-east-1 && terraform plan -var-file=terraform.tfvars -out=tfplan
 
-plan-staging-use1: ## terraform plan against staging/us-east-1
+plan-staging-ue1: ## terraform plan against staging/us-east-1
 	cd environments/staging/us-east-1 && terraform plan -var-file=terraform.tfvars -out=tfplan
 
-plan-prod-use1: ## terraform plan against prod/us-east-1 (PRIMARY)
+plan-prod-ue1: ## terraform plan against prod/us-east-1 (PRIMARY)
 	cd environments/prod/us-east-1 && terraform plan -var-file=terraform.tfvars -out=tfplan
 
-plan-prod-usw2: ## terraform plan against prod/us-west-2 (DR)
+plan-prod-uw2: ## terraform plan against prod/us-west-2 (DR)
 	cd environments/prod/us-west-2 && terraform plan -var-file=terraform.tfvars -out=tfplan
 
 # ---- Apply (gated; no apply targets — operator runs explicitly) ------------
@@ -134,12 +134,12 @@ plan-prod-usw2: ## terraform plan against prod/us-west-2 (DR)
 
 # ---- Drift detection (CI-friendly) -----------------------------------------
 
-.PHONY: drift-prod-use1 drift-prod-usw2
+.PHONY: drift-prod-ue1 drift-prod-uw2
 
-drift-prod-use1: ## Plan with -detailed-exitcode against prod/us-east-1; non-zero == drift
+drift-prod-ue1: ## Plan with -detailed-exitcode against prod/us-east-1; non-zero == drift
 	cd environments/prod/us-east-1 && terraform plan -var-file=terraform.tfvars -detailed-exitcode -lock=false || ([ $$? -eq 2 ] && echo "DRIFT DETECTED" && exit 2)
 
-drift-prod-usw2:
+drift-prod-uw2:
 	cd environments/prod/us-west-2 && terraform plan -var-file=terraform.tfvars -detailed-exitcode -lock=false || ([ $$? -eq 2 ] && echo "DRIFT DETECTED" && exit 2)
 
 # ---- All-in-one CI gate ----------------------------------------------------

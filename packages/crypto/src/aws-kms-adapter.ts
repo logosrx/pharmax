@@ -639,12 +639,21 @@ export class AwsKmsAdapter implements KmsAdapter {
     // failure would poison the cache for the process lifetime).
     const cacheKey = `${input.tenantId}::${input.purpose}`;
     const cached = this.searchKeyCache.get(cacheKey);
-    if (cached !== undefined) return cached;
+    // Return a DEFENSIVE COPY, never the cached buffer itself. The
+    // blind-index consumer zeroes the key it receives (`key.fill(0)`
+    // in blind-index.ts) after computing the HMAC. If we handed out
+    // the cached buffer by reference, the first blind index for a
+    // (tenant, purpose) would zero the shared key and every
+    // subsequent blind index in this process would HMAC with an
+    // all-zero key — silently breaking search AND weakening the
+    // blind-index secrecy guarantee. The cache still collapses the
+    // KMS round-trip; only the bytes handed to the caller are a copy.
+    if (cached !== undefined) return Buffer.from(await cached);
 
     const pending = this.computeSearchKey(input.tenantId, input.purpose);
     this.searchKeyCache.set(cacheKey, pending);
     try {
-      return await pending;
+      return Buffer.from(await pending);
     } catch (cause) {
       this.searchKeyCache.delete(cacheKey);
       throw cause;

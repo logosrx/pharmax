@@ -136,6 +136,11 @@ module "rds" {
   global_cluster_identifier     = var.rds_global_cluster_identifier
   replication_source_identifier = var.rds_replication_source_identifier
 
+  # Connection pooler. Off by default; enabling it provisions an RDS Proxy in
+  # front of the cluster (operator then repoints DATABASE_URL at the proxy
+  # endpoint). See modules/rds/proxy.tf.
+  enable_rds_proxy = var.rds_enable_proxy
+
   tags = local.phi_tags
 }
 

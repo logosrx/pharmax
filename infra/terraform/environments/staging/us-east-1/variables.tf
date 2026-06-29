@@ -91,3 +91,26 @@ variable "audit_archive_glacier_transition_days" {
   type    = number
   default = 90
 }
+
+# ---- Terraform-apply role (GitHub Actions OIDC) ------------------------------
+
+variable "enable_terraform_apply_role" {
+  type    = bool
+  default = false
+}
+variable "tfapply_github_repository" {
+  type    = string
+  default = ""
+}
+variable "tfapply_github_environments" {
+  type    = list(string)
+  default = []
+}
+variable "tfapply_create_oidc_provider" {
+  type    = bool
+  default = false
+}
+variable "tfapply_oidc_provider_arn" {
+  type    = string
+  default = ""
+}

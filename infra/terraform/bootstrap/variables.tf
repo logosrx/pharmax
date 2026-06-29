@@ -5,7 +5,7 @@ variable "project" {
 }
 
 variable "environment" {
-  description = "Logical environment this state bucket holds (dev, staging, prod, prod-usw2)."
+  description = "Logical environment this state bucket holds (dev, staging, prod, prod-uw2)."
   type        = string
 }
 

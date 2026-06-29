@@ -133,18 +133,18 @@ export function createWorkflowBucketScraper(deps: WorkflowBucketScraperDeps): {
             // express "join then group by org" in one query without
             // pulling the bucket rows into memory.
             deps.client.$queryRaw<Array<{ organization_id: string; count: bigint }>>`
-              SELECT o."organization_id" AS organization_id, COUNT(*)::bigint AS count
+              SELECT o."organizationId" AS organization_id, COUNT(*)::bigint AS count
               FROM "order" o
-              JOIN "bucket" b ON b.id = o."current_bucket_id"
+              JOIN "bucket" b ON b.id = o."currentBucketId"
               WHERE b."kind" = 'EMERGENCY'
-              GROUP BY o."organization_id"
+              GROUP BY o."organizationId"
             `,
             deps.client.$queryRaw<Array<{ organization_id: string; count: bigint }>>`
-              SELECT o."organization_id" AS organization_id, COUNT(*)::bigint AS count
+              SELECT o."organizationId" AS organization_id, COUNT(*)::bigint AS count
               FROM "order" o
-              JOIN "bucket" b ON b.id = o."current_bucket_id"
+              JOIN "bucket" b ON b.id = o."currentBucketId"
               WHERE b."kind" = 'EXCEPTION'
-              GROUP BY o."organization_id"
+              GROUP BY o."organizationId"
             `,
           ]);
           return { queueRows, emergencyRows, exceptionRows };

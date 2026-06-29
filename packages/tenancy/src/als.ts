@@ -30,7 +30,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import { errors } from "@pharmax/platform-core";
+import { errors, runtime } from "@pharmax/platform-core";
 
 import type { TenancyContext } from "./context.js";
 
@@ -38,7 +38,19 @@ type StoredContext =
   | { readonly kind: "user"; readonly ctx: TenancyContext }
   | { readonly kind: "system"; readonly reason: string };
 
-const storage = new AsyncLocalStorage<StoredContext>();
+// globalThis-backed (NOT module-scope): Next.js compiles the
+// instrumentation hook and each route into separate bundles, each
+// with its own copy of this module. The PrismaClient is a globalThis
+// singleton shared across those bundles, so the tenancy extension
+// bound to it must consult the SAME ALS instance that
+// `withTenancyContext` / `withSystemContext` write to — otherwise a
+// context entered in a route bundle is invisible to the extension
+// created in the instrumentation bundle, and every tenant query
+// fails with TENANCY_NO_CONTEXT.
+const storage = runtime.globalSingleton(
+  "pharmax:tenancy:als",
+  () => new AsyncLocalStorage<StoredContext>()
+);
 
 /**
  * Run `fn` inside a user-tenancy context. All queries on tenant-

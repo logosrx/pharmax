@@ -21,7 +21,7 @@
 // command surfaces `BILLING_NOT_CONFIGURED` rather than throwing
 // the bus's generic config error.
 
-import { errors } from "@pharmax/platform-core";
+import { errors, runtime } from "@pharmax/platform-core";
 
 import type { StripeRefundPort } from "./ports/stripe-refund-port.js";
 
@@ -38,21 +38,25 @@ export interface BillingConfiguration {
   readonly stripeRefundPort: StripeRefundPort | null;
 }
 
-let configured: BillingConfiguration | null = null;
+// globalThis-backed so boot (Next instrumentation bundle) and use
+// (route bundles) share ONE configuration despite webpack giving each
+// bundle its own copy of this module. See platform-core
+// runtime/global-singleton.ts for the full rationale.
+const box = runtime.globalSingletonBox<BillingConfiguration>("pharmax:billing:config");
 
 export function configureBilling(config: BillingConfiguration): void {
-  configured = Object.freeze({ stripeRefundPort: config.stripeRefundPort });
+  box.value = Object.freeze({ stripeRefundPort: config.stripeRefundPort });
 }
 
 export function getBillingConfiguration(): BillingConfiguration {
-  if (configured === null) {
+  if (box.value === null) {
     throw new errors.InternalError({
       code: BILLING_NOT_CONFIGURED,
       message:
         "@pharmax/billing is not configured. Call configureBilling({ stripeRefundPort }) at boot before invoking refund commands.",
     });
   }
-  return configured;
+  return box.value;
 }
 
 export function getStripeRefundPort(): StripeRefundPort {
@@ -68,5 +72,5 @@ export function getStripeRefundPort(): StripeRefundPort {
 }
 
 export function resetBillingConfigurationForTests(): void {
-  configured = null;
+  box.value = null;
 }

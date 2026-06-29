@@ -10,6 +10,7 @@
 import { AssignRole } from "@pharmax/orgs";
 
 import { dispatchOpsCommandWithMfa } from "../../../../../../../src/server/auth/dispatch-ops-with-mfa.js";
+import { invalidateOperatorPermissionCache } from "../../../../../../../src/server/auth/operator-permission-cache.js";
 
 interface RouteParams {
   readonly params: Promise<{ readonly userId: string }>;
@@ -40,6 +41,9 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
         ...(teamId !== null ? { teamId } : {}),
       };
     },
+    // Drop the target user's cached grants so the new role takes effect
+    // immediately (not after the TTL). `userId` is the grant target.
+    onSuccess: ({ organizationId }) => invalidateOperatorPermissionCache(organizationId, userId),
     successRedirect: () => `/ops/admin/users?flash=${encodeURIComponent("Role granted.")}`,
     failureRedirect: `/ops/admin/users`,
     successLogEvent: "ops.admin.user.assign_role.applied",

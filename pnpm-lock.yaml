@@ -56,6 +56,9 @@ importers:
       '@pharmax/notifications':
         specifier: workspace:*
         version: link:packages/notifications
+      '@pharmax/order-contracts':
+        specifier: workspace:*
+        version: link:packages/order-contracts
       '@pharmax/orders':
         specifier: workspace:*
         version: link:packages/orders
@@ -762,6 +765,22 @@ importers:
         specifier: ^2.1.4
         version: 2.1.9(@types/node@22.19.19)(lightningcss@1.32.0)(terser@5.48.0)
 
+  packages/order-contracts:
+    dependencies:
+      '@pharmax/command-bus':
+        specifier: workspace:*
+        version: link:../command-bus
+      '@pharmax/rbac':
+        specifier: workspace:*
+        version: link:../rbac
+    devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.19
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
   packages/orders:
     dependencies:
       '@pharmax/command-bus':
@@ -770,6 +789,9 @@ importers:
       '@pharmax/database':
         specifier: workspace:*
         version: link:../database
+      '@pharmax/order-contracts':
+        specifier: workspace:*
+        version: link:../order-contracts
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../platform-core
@@ -1176,9 +1198,9 @@ importers:
       '@pharmax/database':
         specifier: workspace:*
         version: link:../database
-      '@pharmax/orders':
+      '@pharmax/order-contracts':
         specifier: workspace:*
-        version: link:../orders
+        version: link:../order-contracts
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../platform-core

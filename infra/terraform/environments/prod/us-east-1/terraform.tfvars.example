@@ -116,6 +116,20 @@ cicd_github_repository  = "REPLACE_owner/repo"
 # Scope to a GitHub Environment with required reviewers for prod gating.
 cicd_github_environment = "production"
 
+# ---- Terraform-apply role (GitHub Actions OIDC) ------------------------------
+# Enable here (primary region) to provision the role assumed by the
+# approval-gated terraform-apply workflow. One role per account — list every
+# gated GitHub Environment for this account's env-regions. After apply, read
+# `terraform output terraform_apply_role_arn` and set it as the
+# AWS_APPLY_ROLE_ARN_PROD repository variable in GitHub. The OIDC provider
+# is re-used from the cicd-deploy module above automatically.
+enable_terraform_apply_role = true
+tfapply_github_repository   = "REPLACE_owner/repo"
+tfapply_github_environments = [
+  "terraform-apply-prod-ue1",
+  "terraform-apply-prod-uw2",
+]
+
 tags = {
   CostCenter = "engineering-prod"
 }

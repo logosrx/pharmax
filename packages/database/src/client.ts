@@ -22,7 +22,10 @@
 // each hot-module reload during `next dev`, which would otherwise
 // exhaust Postgres connections in a few seconds.
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -48,10 +51,31 @@ const isProduction = process.env["NODE_ENV"] === "production";
 // tune via the deployment's pool config if needed. Prisma-specific
 // URL params (`connection_limit`, `pgbouncer`) are ignored by `pg`;
 // the libpq `options=-c role=...` param IS honored.
+/**
+ * TLS options for the `pg` driver adapter.
+ *
+ * Production RDS/Aurora enforces TLS (`rds.force_ssl = 1`) and rejects
+ * plaintext connections (`28000 … no encryption`). `pg` does NOT enable
+ * TLS by default and the connection-string secrets carry no `sslmode`,
+ * so we configure it here and VERIFY the server certificate against the
+ * bundled AWS RDS global CA (`certs/rds-global-bundle.pem`) —
+ * encryption WITH authentication, not `rejectUnauthorized:false`.
+ *
+ * Local dev / CI connect to a localhost Postgres with no TLS, so SSL is
+ * disabled outside production (keyed on NODE_ENV, same as the client
+ * caching above).
+ */
+export function buildPgSslOptions(): false | { ca: string; rejectUnauthorized: boolean } {
+  if (!isProduction) return false;
+  const caPath = join(dirname(fileURLToPath(import.meta.url)), "certs", "rds-global-bundle.pem");
+  return { ca: readFileSync(caPath, "utf8"), rejectUnauthorized: true };
+}
+
 function buildSystemAdapter(): PrismaPg {
   return new PrismaPg({
     connectionString: process.env["DATABASE_URL"],
     connectionTimeoutMillis: 5_000,
+    ssl: buildPgSslOptions(),
   });
 }
 

@@ -48,6 +48,9 @@ const isPublicRoute = createRouteMatcher([
   "/api/webhooks/(.*)",
   "/sign-in(.*)",
   "/sign-up(.*)",
+  // Design-system showcase — no auth, no DB, mock data only. Safe to
+  // expose; renders presentation components for visual review.
+  "/preview(.*)",
 ]);
 
 const isSignUpRoute = createRouteMatcher(["/sign-up(.*)"]);

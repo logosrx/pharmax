@@ -9,6 +9,7 @@
 import { RevokeUserRole } from "@pharmax/orgs";
 
 import { dispatchOpsCommandWithMfa } from "../../../../../../../src/server/auth/dispatch-ops-with-mfa.js";
+import { invalidateOperatorPermissionCache } from "../../../../../../../src/server/auth/operator-permission-cache.js";
 
 interface RouteParams {
   readonly params: Promise<{ readonly userId: string }>;
@@ -30,6 +31,10 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
       if (userRoleId === null) return { error: "userRoleId is required." };
       return { userRoleId };
     },
+    // Drop the target user's cached grants so the revocation takes
+    // effect immediately (not after the TTL). The `:userId` path
+    // segment is the grant's owner.
+    onSuccess: ({ organizationId }) => invalidateOperatorPermissionCache(organizationId, userId),
     successRedirect: () => `/ops/admin/users?flash=${encodeURIComponent("Role revoked.")}`,
     failureRedirect: `/ops/admin/users`,
     successLogEvent: "ops.admin.user.revoke_role.applied",

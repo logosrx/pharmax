@@ -235,6 +235,12 @@ variable "rds_global_cluster_role" {
   }
 }
 
+variable "rds_enable_proxy" {
+  description = "Provision an RDS Proxy connection pooler in front of Aurora (standalone clusters only). Off by default; see modules/rds/proxy.tf."
+  type        = bool
+  default     = false
+}
+
 variable "rds_global_cluster_identifier" {
   description = "Secondary stacks only: the global cluster id from the primary stack's rds_global_cluster_id output."
   type        = string

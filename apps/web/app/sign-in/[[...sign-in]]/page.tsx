@@ -1,18 +1,24 @@
-// Clerk hosted sign-in surface. The `[[...sign-in]]` catch-all
-// route lets Clerk render its multi-step flow (email → password →
-// MFA → success) at any nested path under `/sign-in`.
+// Clerk hosted sign-in surface. The `[[...sign-in]]` catch-all route
+// lets Clerk render its multi-step flow (email → password → MFA →
+// success) at any nested path under `/sign-in`.
 //
-// Public route (allowlisted in `proxy.ts`). The proxy's
-// `auth.protect()` skips this path; an authenticated visitor lands
-// here and Clerk's component redirects them to `redirectUrl` (the
-// dashboard).
+// Public route (allowlisted in `proxy.ts`). An authenticated visitor
+// landing here is redirected by Clerk to `forceRedirectUrl`.
 
 import { SignIn } from "@clerk/nextjs";
 
+import { AuthShell, clerkAppearance } from "../../../src/components/shell/auth-shell.js";
+
 export default function Page() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-neutral-950 px-4 py-16">
-      <SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" forceRedirectUrl="/" />
-    </main>
+    <AuthShell title="Welcome back" subtitle="Sign in to the Pharmax operations console.">
+      <SignIn
+        routing="path"
+        path="/sign-in"
+        signUpUrl="/sign-up"
+        forceRedirectUrl="/ops"
+        appearance={clerkAppearance}
+      />
+    </AuthShell>
   );
 }

@@ -78,6 +78,22 @@ export interface DispatchOpsCommandInput<TIn, TOut> {
   readonly successLogEvent: string;
   /** Logger event name on failure. */
   readonly failureLogEvent: string;
+  /**
+   * Optional best-effort hook fired AFTER the command commits
+   * successfully, BEFORE the success redirect. Use for post-commit
+   * side effects that are not part of the command's transaction —
+   * notably cache invalidation (e.g. dropping the operator-permission
+   * cache after a role change). Runs in the operator's resolved org.
+   *
+   * A throw is caught + logged and does NOT convert a successful
+   * command into a failed request: the authoritative state already
+   * committed, so the redirect must still reflect success.
+   */
+  readonly onSuccess?: (result: {
+    readonly output: TOut;
+    readonly organizationId: string;
+    readonly operatorUserId: string;
+  }) => Promise<void> | void;
 }
 
 export async function dispatchOpsCommand<TIn, TOut>(
@@ -180,6 +196,24 @@ export async function dispatchOpsCommand<TIn, TOut>(
           executeCommand(input.command, built as TIn, { idempotencyKey })
         );
         logger.info(input.successLogEvent, { operatorUserId: session.operator.userId });
+        if (input.onSuccess !== undefined) {
+          // Best-effort post-commit side effect (e.g. cache
+          // invalidation). The command already committed; a hook
+          // failure must not turn success into an error redirect.
+          try {
+            await input.onSuccess({
+              output,
+              organizationId: session.tenancy.organizationId,
+              operatorUserId: session.operator.userId,
+            });
+          } catch (hookCause) {
+            logger.warn(`${input.successLogEvent}.on_success_failed`, {
+              operatorUserId: session.operator.userId,
+              commandName: input.command.name,
+              error: hookCause,
+            });
+          }
+        }
         return NextResponse.redirect(
           new URL(input.successRedirect(output), "http://internal").toString(),
           { status: 303 }

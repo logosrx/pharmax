@@ -95,3 +95,59 @@ jobs:
 
       - name: Run integration tests
         run: pnpm test:integration
+
+  # Migration <-> schema drift guard. Runs in its OWN Postgres service
+  # (not the integration job's) because `check:drift` replays every
+  # migration into a shadow database, and the RLS baseline creates
+  # CLUSTER-GLOBAL roles (pharmax_app / pharmax_system). Replaying into a
+  # shadow that shares a cluster with an already-migrated `pharmax` DB
+  # would collide on the role creation; a dedicated fresh cluster creates
+  # those roles exactly once. The pharmax DB here is only used to DERIVE
+  # the shadow URL (DATABASE_URL + "_drift_shadow"); it is never migrated.
+  drift:
+    name: Prisma migration↔schema drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pharmax
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pharmax"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pharmax
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/pharmax
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The shadow DB must exist + be empty; check:drift resets it and
+      # replays the migration history into it. (Prisma resets objects but
+      # does not CREATE the database itself.)
+      - name: Create drift shadow database
+        run: PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE pharmax_drift_shadow;'
+
+      - name: Check migration↔schema drift
+        run: pnpm check:drift

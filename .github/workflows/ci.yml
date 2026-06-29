@@ -168,6 +168,21 @@ jobs:
     #   - check:raw-prisma bans importing the raw, unscoped
     #     `systemPrisma` client outside the reviewed allowlist, so the
     #     tenancy-enforced `prisma` stays the only client app code uses.
+    #   - check:raw-sql bans calling Prisma's raw-SQL escape hatches
+    #     ($queryRaw/$executeRaw/*Unsafe) in non-test app/package code
+    #     outside the reviewed allowlist — raw SQL is where RLS
+    #     bypasses hide.
+    #   - check:terraform-apply-workflow asserts the structural
+    #     invariants on .github/workflows/terraform-apply.yml — the
+    #     approval-gated production-apply workflow. Catches regressions
+    #     like an accidentally-added `push:` trigger or a `terraform
+    #     apply -auto-approve` slip-through. Closes the `tf1-applyflow`
+    #     follow-up.
+    #   - check:layers enforces the internal `@pharmax/*` package
+    #     dependency graph: it must stay acyclic and domain packages may
+    #     not import sibling domains except over the allowlisted edges.
+    #     Pure static analysis (reads package.json graph), so it belongs
+    #     in this no-database job rather than only behind `pnpm verify`.
     # Each is a TypeScript file under `scripts/`. They run sequentially
     # in this job because each is fast (sub-second).
     steps:
@@ -182,6 +197,11 @@ jobs:
       - run: pnpm check:commands
       - run: pnpm check:kms-inventory
       - run: pnpm check:raw-prisma
+      - run: pnpm check:raw-sql
+      - run: pnpm check:terraform-apply-workflow
+      - run: pnpm check:layers
+      - run: pnpm events:validate
+      - run: pnpm events:migrate-check
 
   test:
     name: Unit tests + coverage

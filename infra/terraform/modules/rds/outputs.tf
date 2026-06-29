@@ -59,3 +59,13 @@ output "master_password" {
   value       = try(random_password.master[0].result, null)
   sensitive   = true
 }
+
+output "proxy_endpoint" {
+  description = "RDS Proxy endpoint (null unless enable_rds_proxy = true). Point DATABASE_URL's host here to pool connections."
+  value       = try(aws_db_proxy.this[0].endpoint, null)
+}
+
+output "proxy_security_group_id" {
+  description = "Security group id of the RDS Proxy ENIs (null unless enable_rds_proxy = true)."
+  value       = try(aws_security_group.proxy[0].id, null)
+}

@@ -405,7 +405,10 @@ describe("RejectPV1 — happy path", () => {
       workflowPolicyId: POLICY_ID,
       workflowPolicyVersion: 1,
       rejectionReasonCode: "DOSE_INCORRECT",
-      commandLogId: expect.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/),
+      // Bus-generated UUID (command_log.id is @db.Uuid).
+      commandLogId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+      ),
     });
 
     // Domain write: state + bucket + ASSIGNEE-CLEAR.

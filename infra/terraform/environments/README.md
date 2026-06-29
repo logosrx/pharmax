@@ -55,7 +55,7 @@ environments/prod/eu-west-1`, then change two values:
 5. **Apply.** `terraform apply -var-file=terraform.tfvars`.
 
 The `Makefile` at `infra/terraform/Makefile` exposes shortcuts
-(`make plan-prod-use1`, `make plan-prod-usw2`, etc.).
+(`make plan-prod-ue1`, `make plan-prod-uw2`, etc.).
 
 ## Never commit `terraform.tfvars` or `backend.tf`
 

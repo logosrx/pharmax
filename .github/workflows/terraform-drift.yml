@@ -107,7 +107,7 @@ jobs:
             echo "::notice::Skipping drift detection. See docs/operations/production-deployment.md for the one-time OIDC role setup."
           fi
 
-  drift-prod-use1:
+  drift-prod-ue1:
     name: drift — prod / us-east-1
     needs: preflight
     if: needs.preflight.outputs.configured == 'true'
@@ -129,7 +129,7 @@ jobs:
           aws-region: us-east-1
           # Distinct session name so CloudTrail entries are clearly
           # attributable to drift detection vs. an operator apply.
-          role-session-name: gh-actions-drift-prod-use1
+          role-session-name: gh-actions-drift-prod-ue1
 
       - name: terraform init (prod / us-east-1)
         working-directory: infra/terraform/environments/prod/us-east-1
@@ -156,7 +156,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: drift-plan-prod-use1-${{ github.run_id }}
+          name: drift-plan-prod-ue1-${{ github.run_id }}
           path: infra/terraform/environments/prod/us-east-1/plan-output.txt
           retention-days: 30
 
@@ -181,14 +181,14 @@ jobs:
               '## What to do',
               '',
               '1. Read the full plan artifact attached to the run',
-              '   (`drift-plan-prod-use1-' + context.runId + '`).',
+              '   (`drift-plan-prod-ue1-' + context.runId + '`).',
               '2. For each drifted resource, decide:',
               '   - **Console change should be reverted** → open a PR that',
               '     restores the world to match HCL (no .tf change).',
               '   - **Console change should be ratified** → open a PR',
               '     updating HCL to match the world. This is the',
               '     CC8.1-compliant path.',
-              '3. Close this issue once `make plan-prod-use1` is green.',
+              '3. Close this issue once `make plan-prod-ue1` is green.',
               '',
               '## Plan tail (last 200 lines)',
               '',
@@ -203,7 +203,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              labels: 'infra/drift,prod-use1',
+              labels: 'infra/drift,prod-ue1',
             });
             if (existing.data.length > 0) {
               const issue = existing.data[0];
@@ -220,7 +220,7 @@ jobs:
                 repo: context.repo.repo,
                 title: title,
                 body: body,
-                labels: ['infra/drift', 'prod-use1'],
+                labels: ['infra/drift', 'prod-ue1'],
               });
               core.info(`Opened drift issue #${created.data.number}`);
             }
@@ -231,7 +231,7 @@ jobs:
           echo "::error::terraform plan exited with ${{ steps.plan.outputs.exit_code }} (0=clean, 2=drift, 1=error). See uploaded plan artifact."
           exit 1
 
-  drift-prod-usw2:
+  drift-prod-uw2:
     name: drift — prod / us-west-2
     needs: preflight
     if: needs.preflight.outputs.configured == 'true'
@@ -251,7 +251,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_DRIFT_ROLE_ARN }}
           aws-region: us-west-2
-          role-session-name: gh-actions-drift-prod-usw2
+          role-session-name: gh-actions-drift-prod-uw2
 
       - name: terraform init (prod / us-west-2)
         working-directory: infra/terraform/environments/prod/us-west-2
@@ -274,7 +274,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: drift-plan-prod-usw2-${{ github.run_id }}
+          name: drift-plan-prod-uw2-${{ github.run_id }}
           path: infra/terraform/environments/prod/us-west-2/plan-output.txt
           retention-days: 30
 
@@ -312,7 +312,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              labels: 'infra/drift,prod-usw2',
+              labels: 'infra/drift,prod-uw2',
             });
             if (existing.data.length > 0) {
               const issue = existing.data[0];
@@ -329,7 +329,7 @@ jobs:
                 repo: context.repo.repo,
                 title: title,
                 body: body,
-                labels: ['infra/drift', 'prod-usw2'],
+                labels: ['infra/drift', 'prod-uw2'],
               });
               core.info(`Opened drift issue #${created.data.number}`);
             }

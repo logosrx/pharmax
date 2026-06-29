@@ -8,6 +8,16 @@ restorer, (b) Aurora backup ↔ KMS key bindings, (c) the application's
 behavior against a fresh database, and (d) the audit-chain verifier
 against historical data — all things that quietly rot.
 
+> **Helper script:** the drill is run via
+> [`scripts/operations/run-restore-drill.ts`](../../scripts/operations/run-restore-drill.ts)
+> (see [§5 below](#5-helper-script)). The script automates the parts
+> that benefit from code — deterministic id computation, read-only
+> preflight (KMS health + retention + LatestRestorableTime cross-check),
+> exact-runnable AWS-CLI emission, audit-chain verification across all
+> orgs, and SOC 2-shaped evidence composition. The destructive AWS
+> calls (`restore-db-cluster-to-point-in-time`, `delete-db-cluster`)
+> are still run by the human drill captain.
+
 > **Aurora restores are cluster-based, not instance-based.** Point-in-time
 > recovery restores a new **cluster** (storage volume); you then attach one
 > or more **instances** to it before you can connect. Teardown is the
@@ -35,10 +45,10 @@ tear the restored cluster down. The live primary is never touched.
 - [ ] Confirm the prod KMS `rds` CMK is healthy — restores fail silently
       with a misconfigured CMK alias.
 - [ ] Confirm the prod Aurora cluster has a healthy backup retention
-      (`aws rds describe-db-clusters --db-cluster-identifier pharmax-prod-use1-aurora --query 'DBClusters[0].BackupRetentionPeriod'`
+      (`aws rds describe-db-clusters --db-cluster-identifier pharmax-prod-ue1-aurora --query 'DBClusters[0].BackupRetentionPeriod'`
       returns ≥ 35).
 - [ ] Note the prod cluster id and the most recent restorable time
-      (`aws rds describe-db-clusters --db-cluster-identifier pharmax-prod-use1-aurora --query 'DBClusters[0].LatestRestorableTime'`).
+      (`aws rds describe-db-clusters --db-cluster-identifier pharmax-prod-ue1-aurora --query 'DBClusters[0].LatestRestorableTime'`).
 
 ---
 
@@ -54,11 +64,11 @@ volume), then attach a single **instance** so you can connect.
 
 ```bash
 # Variables (fill these for the drill day):
-SRC_CLUSTER_ID="pharmax-prod-use1-aurora"
+SRC_CLUSTER_ID="pharmax-prod-ue1-aurora"
 RESTORE_TIME="2026-01-15T12:00:00Z"             # within retention window
-NEW_CLUSTER_ID="pharmax-prod-use1-aurora-drill-$(date +%Y%m%d)"
+NEW_CLUSTER_ID="pharmax-prod-ue1-aurora-drill-$(date +%Y%m%d)"
 NEW_INSTANCE_ID="${NEW_CLUSTER_ID}-0"
-SUBNET_GROUP="pharmax-prod-use1-db"
+SUBNET_GROUP="pharmax-prod-ue1-db"
 DRILL_SG="sg-XXXXXXXXXXXXXXXXX"                  # drill-only SG; NOT the prod app SG
 
 # 1a. Restore the cluster (storage) to the chosen point in time. KMS key,
@@ -267,6 +277,115 @@ Close the quarterly drill ticket with a link to the evidence folder.
 
 ---
 
+## 5. Helper script
+
+`scripts/operations/run-restore-drill.ts` (npm aliases
+`pnpm drill:preflight | drill:provision-commands | drill:verify |
+drill:teardown-commands | drill:finalize`) is the canonical executor
+for this runbook. It automates the parts that benefit from code and
+keeps the destructive AWS calls human-driven — exactly the design the
+drill exists to test.
+
+What each phase does (and what it doesn't):
+
+| Phase                | Does                                                                                                                                                                                                                                                                                                                                                                 | Doesn't                                                                             |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `preflight`          | Read-only `kms:DescribeKey` on the cluster CMK (Enabled + ENCRYPT_DECRYPT + SYMMETRIC_DEFAULT), `rds:DescribeDBClusters` on the source (asserts `BackupRetentionPeriod ≥ 35` and `LatestRestorableTime ≥ --restore-time`), writes `preflight.json` to the drill folder. Exits non-zero on any failure.                                                               | Any write to AWS.                                                                   |
+| `provision-commands` | Computes the deterministic drill cluster + instance ids (`<src>-drill-YYYYMMDD` + `-0` suffix), emits `provision.sh` populated with the operator's variables — the operator copy-pastes a generated script rather than hand-substituting variables in the runbook (eliminates the "I typo'd the security group on a drill day" failure mode).                        | Run `provision.sh` for you — it's printed + saved, never executed.                  |
+| `verify`             | Connects to the RESTORED cluster (operator points `DATABASE_URL` at the restored endpoint), runs `SELECT version()` (engine version drift = finding), walks `verifyChain` across every org, captures critical-table row counts, writes `verify.json`. Exits non-zero on any chain break or smoke-connect failure.                                                    | The RLS sanity check from §2.4 — that one stays manual (psql under `pharmax_app`).  |
+| `teardown-commands`  | Emits `teardown.sh` with the same deterministic ids used at provision (so the destroy targets the same cluster even if days have passed and the operator forgot the suffix).                                                                                                                                                                                         | Run `teardown.sh` for you — same reason as `provision-commands`.                    |
+| `finalize`           | Reads every sidecar JSON the prior phases wrote, recovers the cluster ids by parsing `provision.sh`, composes `evidence.{json,md}` matching the [Evidence-capture template](#evidence-capture-template) below. Captain + observer + sign-off + findings are passed via `--captain`, `--observer`, `--sign-off`, `--findings`. Writes both files to the drill folder. | Take a screenshot of the RDS console — operator captures that for the audit folder. |
+
+Default drill folder: `evidence/dr-drills/<YYYY-Q#>/<YYYYMMDD>/`,
+override with `--out-dir`. The folder ends up containing:
+
+```text
+evidence/dr-drills/2026-Q2/20260615/
+├── preflight.json
+├── provision.sh
+├── verify.json
+├── teardown.sh
+├── evidence.json
+└── evidence.md
+```
+
+Phases are **resumable across terminal sessions**: each writes its
+own sidecar JSON / shell script, so the drill captain can run
+`preflight` in the morning, hand off to a different operator for the
+provision step, come back hours later for `verify` after the cluster
+is up, and finalize at end of day. The deterministic id naming
+(`<src>-drill-YYYYMMDD`) means re-running `provision-commands` or
+`teardown-commands` with the same `--now` (or naturally the same UTC
+date) computes the same identifiers.
+
+End-to-end drill sequence with the helper:
+
+```bash
+# ---- Pre-flight (drill day, morning) -----------------------------
+pnpm drill:preflight \
+  --source-cluster-id=pharmax-prod-use1-aurora \
+  --restore-time=2026-06-15T12:00:00Z \
+  --region=us-east-1 \
+  --kms-alias=alias/pharmax-prod-use1-rds
+
+# ---- Generate the provision script -------------------------------
+pnpm drill:provision-commands \
+  --source-cluster-id=pharmax-prod-use1-aurora \
+  --restore-time=2026-06-15T12:00:00Z \
+  --subnet-group=pharmax-prod-use1-db \
+  --drill-sg=sg-XXXXXXXXXXXXXXXXX
+
+# ---- Run the provision script (HUMAN — destructive AWS call) ----
+bash evidence/dr-drills/2026-Q2/20260615/provision.sh
+
+# ---- Resolve restored cluster credentials + DATABASE_URL --------
+# (the provision.sh tail prints the export line; copy it)
+
+# ---- Verify -----------------------------------------------------
+DATABASE_URL='postgres://...restored-endpoint...' \
+  PHARMAX_LOCAL_KMS_SEED='...' \
+  pnpm drill:verify
+
+# ---- RLS sanity (HUMAN — see §2.4) ------------------------------
+psql "$DATABASE_URL" -c 'RESET ALL; SELECT count(*) FROM "patient";'
+# expect: 0
+
+# ---- Generate the teardown script -------------------------------
+pnpm drill:teardown-commands \
+  --source-cluster-id=pharmax-prod-use1-aurora
+
+# ---- Run the teardown script (HUMAN — destructive AWS call) ----
+bash evidence/dr-drills/2026-Q2/20260615/teardown.sh
+
+# ---- Compose the final evidence artifact ------------------------
+pnpm drill:finalize \
+  --captain="Alice Pharmacist" \
+  --observer="Bob Engineer" \
+  --sign-off="Drill captain confirms the production restore path is exercised end-to-end. Signed: Alice Pharmacist"
+```
+
+Required env (verify phase only):
+
+| Env var                  | Purpose                                                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`           | Postgres connection string of the RESTORED cluster (not the prod primary).                                       |
+| `PHARMAX_LOCAL_KMS_SEED` | ≥32 chars; envelope-encryption seed (the script doesn't decrypt anything, but `@pharmax/crypto` boot probes it). |
+
+PHI invariant: the helper script never reads PHI columns. The verify
+phase runs `verifyChain` (which hashes audit_log row metadata — no
+PHI), counts rows on four tenant-scoped tables, and queries
+`SELECT version()`. The composed `evidence.json` is non-PHI by
+construction.
+
+If the verify phase reports a chain break or the smoke connect
+fails, **do not run the teardown script** — the restored cluster is
+now evidence per [§ Failure mode](#failure-mode-the-drill-fails)
+below. The `finalize` phase will render `Destroy confirmed: NO` and
+embed the failure-mode banner in `evidence.md` so the auditor sees
+the right disposition.
+
+---
+
 ## Evidence-capture template
 
 Copy this block into the quarterly drill ticket and fill it in.
@@ -279,9 +398,9 @@ Captain:        <name>
 Observer:       <name>
 Started:        <ISO timestamp>
 Completed:      <ISO timestamp>
-Drill cluster:  pharmax-prod-use1-aurora-drill-YYYYMMDD
-Drill instance: pharmax-prod-use1-aurora-drill-YYYYMMDD-0
-Source:         pharmax-prod-use1-aurora
+Drill cluster:  pharmax-prod-ue1-aurora-drill-YYYYMMDD
+Drill instance: pharmax-prod-ue1-aurora-drill-YYYYMMDD-0
+Source:         pharmax-prod-ue1-aurora
 Restore time:   <ISO timestamp within retention window>
 
 §1. Provision
@@ -351,7 +470,7 @@ machinery still works).
 - The Aurora backup window covers your target restore point
   (35 days for prod by Terraform default — see
   `infra/terraform/modules/rds/main.tf` `backup_retention_period`).
-- The RDS CMK (`alias/pharmax-prod-use1-rds`) is healthy. Restores
+- The RDS CMK (`alias/pharmax-prod-ue1-rds`) is healthy. Restores
   fail silently with a misconfigured CMK alias.
 - You know the precise restore time (ISO timestamp, UTC).
 - You have IAM permission to call `rds:RestoreDBClusterToPointInTime`
@@ -364,7 +483,7 @@ Find the latest restorable time:
 
 ```bash
 aws rds describe-db-clusters \
-  --db-cluster-identifier pharmax-prod-use1-aurora \
+  --db-cluster-identifier pharmax-prod-ue1-aurora \
   --query 'DBClusters[0].LatestRestorableTime' \
   --output text
 ```
@@ -377,11 +496,11 @@ Pick a time **just before** the bad event. For "the migration ran at
 ### Step 2 — provision the restored cluster + instance
 
 ```bash
-SRC_CLUSTER_ID="pharmax-prod-use1-aurora"
+SRC_CLUSTER_ID="pharmax-prod-ue1-aurora"
 RESTORE_TIME="2026-04-12T14:31:00Z"
-NEW_CLUSTER_ID="pharmax-prod-use1-aurora-restore-$(date +%Y%m%d%H%M)"
+NEW_CLUSTER_ID="pharmax-prod-ue1-aurora-restore-$(date +%Y%m%d%H%M)"
 NEW_INSTANCE_ID="${NEW_CLUSTER_ID}-0"
-SUBNET_GROUP="pharmax-prod-use1-db"
+SUBNET_GROUP="pharmax-prod-ue1-db"
 RESTORE_SG="sg-XXXXXXXXXXXXXXXXX"  # break-glass-only SG; not the prod app SG
 
 # Restore the cluster (storage) to the point just before the bad event.
@@ -512,7 +631,7 @@ and `terraform apply`.
 
 ```bash
 aws rds describe-db-cluster-snapshots \
-  --db-cluster-identifier pharmax-prod-use1-aurora \
+  --db-cluster-identifier pharmax-prod-ue1-aurora \
   --query 'reverse(sort_by(DBClusterSnapshots, &SnapshotCreateTime))[0].KmsKeyId' \
   --output text
 ```

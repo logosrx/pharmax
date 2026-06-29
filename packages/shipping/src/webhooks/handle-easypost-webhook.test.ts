@@ -67,6 +67,48 @@ describe("handleEasyPostWebhook", () => {
     }
   });
 
+  it("does NOT persist recipient PHI present on the inbound body (B-5 projection)", async () => {
+    // EasyPost bodies can carry recipient name/address. The parse
+    // schema is `.passthrough()`, so these survive parsing — but the
+    // ingestion path must project the payload down to the PHI-free
+    // replay subset before persisting it to the ledger row.
+    const body = trackerBody({
+      // Top-level PHI-adjacent extras EasyPost may include.
+      to_address: { name: "Jordan Patient", street1: "123 Real St", zip: "90210" },
+      result: {
+        id: "trk_phi",
+        tracking_code: "9400111899223344556677",
+        status: "in_transit",
+        updated_at: "2026-05-24T18:00:00Z",
+        carrier: "USPS",
+        // PHI nested inside result.
+        recipient_name: "Jordan Patient",
+        to_address: { name: "Jordan Patient", street1: "123 Real St", zip: "90210" },
+      },
+    });
+    const result = await handleEasyPostWebhook(
+      { rawBody: body, signatureHeader: sign(body) },
+      { eventStore, webhookSecret: TEST_SECRET, logger: loggerNs.noopLogger }
+    );
+    expect(result.status).toBe("accepted");
+    if (result.status === "accepted") {
+      const stored = result.record.payload as Record<string, unknown>;
+      const storedResult = stored.result as Record<string, unknown>;
+      // Replay-critical fields are retained.
+      expect(storedResult.tracking_code).toBe("9400111899223344556677");
+      expect(storedResult.status).toBe("in_transit");
+      expect(storedResult.updated_at).toBe("2026-05-24T18:00:00Z");
+      expect(storedResult.carrier).toBe("USPS");
+      // PHI / unknown extras are dropped, top-level and nested.
+      expect(stored.to_address).toBeUndefined();
+      expect(storedResult.recipient_name).toBeUndefined();
+      expect(storedResult.to_address).toBeUndefined();
+      // Serialized form carries no recipient string anywhere.
+      expect(JSON.stringify(stored)).not.toContain("Jordan Patient");
+      expect(JSON.stringify(stored)).not.toContain("123 Real St");
+    }
+  });
+
   it("returns duplicate on a redelivered event", async () => {
     const body = trackerBody({ id: "evt_dup_1" });
     const deps = { eventStore, webhookSecret: TEST_SECRET, logger: loggerNs.noopLogger };

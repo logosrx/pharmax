@@ -2,41 +2,27 @@
 // declarative `parameterFields` descriptor.
 //
 // Server component, no client JS: every control is a plain form
-// element posting to the run route. Sticky values come from the
-// URL searchParams (a failed run redirects back with `?error=`
-// and the operator's inputs preserved). Date fields pre-fill from
-// their declared `defaultValue` (resolved against `now`) when the
-// URL doesn't already carry a value.
-//
-// Field kinds → controls:
-//   date       → <input type="date">
-//   enum       → <select>
-//   multi-enum → a checkbox group (one <input type="checkbox">
-//                per option, all sharing the field name so the
-//                route's FormData.getAll collects the selection)
-//   text       → <input type="text">
-//   number     → <input type="number">
-//
-// Reports without `parameterFields` fall back to the standard
-// date-range pair at the call site (the run page passes
-// `dateRangeFields()` in that case), so this component always
-// receives a non-empty field list.
+// element posting to the run route (which streams the CSV download —
+// so this stays a native form, not a client ActionForm). Sticky
+// values come from the URL searchParams; date fields pre-fill from
+// their declared default resolved against `now`.
 
 import { resolveDateFieldDefault, type ReportParameterField } from "@pharmax/reporting";
+
+import { Field, inputClass, selectClass } from "./ui/field.js";
+import { buttonClass } from "./ui/button.js";
+import { Icon } from "./ui/icon.js";
 
 interface ReportParameterFormProps {
   readonly reportId: string;
   readonly fields: ReadonlyArray<ReportParameterField>;
-  /** Sticky values from the URL searchParams (string or string[]). */
   readonly values: Record<string, string | ReadonlyArray<string> | undefined>;
-  /** Clock anchor for resolving date defaults. */
   readonly now: Date;
 }
 
 function stickyString(values: ReportParameterFormProps["values"], key: string): string | undefined {
   const v = values[key];
-  if (typeof v === "string") return v;
-  return undefined;
+  return typeof v === "string" ? v : undefined;
 }
 
 function stickySet(values: ReportParameterFormProps["values"], key: string): ReadonlySet<string> {
@@ -51,7 +37,7 @@ export function ReportParameterForm({ reportId, fields, values, now }: ReportPar
     <form
       action={`/api/ops/reports/${reportId}/run`}
       method="POST"
-      className="space-y-4 rounded-md border border-neutral-800 bg-neutral-950 p-4"
+      className="space-y-5 rounded-lg border border-line bg-surface p-5"
     >
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {fields.map((field) => (
@@ -59,15 +45,13 @@ export function ReportParameterForm({ reportId, fields, values, now }: ReportPar
         ))}
       </div>
 
-      <div className="flex items-center justify-between gap-3 border-t border-neutral-800 pt-4">
-        <p className="text-xs text-neutral-500">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+        <p className="max-w-md text-xs text-subtle">
           The download streams immediately on success. A <code>report_run</code> row is persisted
-          with these parameters + row count + aggregates for SOC-2 audit.
+          with these parameters, row count, and aggregates for SOC-2 audit.
         </p>
-        <button
-          type="submit"
-          className="shrink-0 rounded-md border border-blue-700 bg-blue-900 px-3 py-1.5 text-sm text-blue-100 hover:bg-blue-800"
-        >
+        <button type="submit" className={buttonClass({ variant: "primary" })}>
+          <Icon name="reports" size={16} />
           Run + download CSV
         </button>
       </div>
@@ -84,46 +68,35 @@ function FieldControl({
   readonly values: ReportParameterFormProps["values"];
   readonly now: Date;
 }) {
-  const labelText = (
-    <span className="block text-xs font-medium uppercase tracking-wide text-neutral-400">
-      {field.label}
-      {field.required ? <span className="text-red-400"> *</span> : null}
-    </span>
-  );
-
-  const help =
-    field.help !== undefined ? (
-      <span className="mt-1 block text-xs text-neutral-500">{field.help}</span>
-    ) : null;
+  const help = field.help;
 
   switch (field.kind) {
     case "date": {
-      const sticky = stickyString(values, field.key);
-      const value = sticky ?? resolveDateFieldDefault(field.defaultValue, now);
+      const value =
+        stickyString(values, field.key) ?? resolveDateFieldDefault(field.defaultValue, now);
       return (
-        <label className="space-y-1">
-          {labelText}
+        <Field label={field.label} required={field.required} help={help} htmlFor={field.key}>
           <input
+            id={field.key}
             type="date"
             name={field.key}
             required={field.required}
             defaultValue={value}
-            className="block w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 font-mono text-sm text-neutral-100"
+            className={inputClass("font-mono")}
           />
-          {help}
-        </label>
+        </Field>
       );
     }
     case "enum": {
       const sticky = stickyString(values, field.key) ?? field.defaultValue ?? "";
       return (
-        <label className="space-y-1">
-          {labelText}
+        <Field label={field.label} required={field.required} help={help} htmlFor={field.key}>
           <select
+            id={field.key}
             name={field.key}
             required={field.required}
             defaultValue={sticky}
-            className="block w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm text-neutral-100"
+            className={selectClass()}
           >
             {!field.required ? <option value="">— any —</option> : null}
             {field.options.map((opt) => (
@@ -132,52 +105,50 @@ function FieldControl({
               </option>
             ))}
           </select>
-          {help}
-        </label>
+        </Field>
       );
     }
     case "multi-enum": {
       const selected = stickySet(values, field.key);
       return (
-        <fieldset className="space-y-1 sm:col-span-2">
-          {labelText}
-          <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto rounded-md border border-neutral-800 bg-neutral-900 p-2">
-            {field.options.map((opt) => (
-              <label
-                key={opt.value}
-                className="flex items-center gap-1.5 rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-xs text-neutral-200"
-              >
-                <input
-                  type="checkbox"
-                  name={field.key}
-                  value={opt.value}
-                  defaultChecked={selected.has(opt.value)}
-                  className="accent-blue-600"
-                />
-                {opt.label}
-              </label>
-            ))}
-          </div>
-          {help}
-        </fieldset>
+        <div className="sm:col-span-2">
+          <Field label={field.label} required={field.required} help={help}>
+            <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto rounded-md border border-line bg-surface-2 p-2">
+              {field.options.map((opt) => (
+                <label
+                  key={opt.value}
+                  className="flex cursor-pointer items-center gap-1.5 rounded-md border border-line-strong bg-surface px-2 py-1 text-xs text-fg transition-colors hover:border-brand/50"
+                >
+                  <input
+                    type="checkbox"
+                    name={field.key}
+                    value={opt.value}
+                    defaultChecked={selected.has(opt.value)}
+                    className="accent-brand"
+                  />
+                  {opt.label}
+                </label>
+              ))}
+            </div>
+          </Field>
+        </div>
       );
     }
     case "text": {
       const sticky = stickyString(values, field.key) ?? "";
       return (
-        <label className="space-y-1">
-          {labelText}
+        <Field label={field.label} required={field.required} help={help} htmlFor={field.key}>
           <input
+            id={field.key}
             type="text"
             name={field.key}
             required={field.required}
             defaultValue={sticky}
             placeholder={field.placeholder}
             maxLength={field.maxLength}
-            className="block w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm text-neutral-100"
+            className={inputClass()}
           />
-          {help}
-        </label>
+        </Field>
       );
     }
     case "number": {
@@ -185,19 +156,18 @@ function FieldControl({
         stickyString(values, field.key) ??
         (field.defaultValue !== undefined ? String(field.defaultValue) : "");
       return (
-        <label className="space-y-1">
-          {labelText}
+        <Field label={field.label} required={field.required} help={help} htmlFor={field.key}>
           <input
+            id={field.key}
             type="number"
             name={field.key}
             required={field.required}
             defaultValue={sticky}
             min={field.min}
             max={field.max}
-            className="block w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm text-neutral-100"
+            className={inputClass()}
           />
-          {help}
-        </label>
+        </Field>
       );
     }
     default: {

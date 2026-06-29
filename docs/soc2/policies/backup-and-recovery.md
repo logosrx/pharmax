@@ -62,11 +62,22 @@ retention window — current engineering posture is 35 days>`.
 
 ### 3.5 Recovery objectives
 
-| Metric                                        | Target                                                                                              | Notes |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------- | ----- |
-| RPO (Recovery Point Objective)                | `<TBD by SOC 2 auditor: confirm — current engineering posture is ≤ 5 minutes via RDS PITR>`         |       |
-| RTO (Recovery Time Objective)                 | `<TBD by SOC 2 auditor: confirm — current engineering posture is ≤ 4 hours for a regional failure>` |       |
-| MTPD (Maximum Tolerable Period of Disruption) | `<TBD by legal counsel: confirm against customer SLAs>`                                             |       |
+These objectives are TIERED by failure scenario and are owned by the
+authoritative
+[`business-continuity-and-disaster-recovery.md`](../../policies/business-continuity-and-disaster-recovery.md)
+(§3 Recovery objectives, §6 Failover scenarios). This table MUST NOT
+restate them in a way that diverges; it mirrors that source so the SOC 2
+data room has one set of numbers, not three. The `<TBD>` wrappers are the
+auditor/legal confirmation gate, not a second opinion on the values.
+
+| Metric                                  | Target                                                                                    | Notes                                                                               |
+| --------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| RPO — AZ failover                       | near zero (synchronous standby)                                                           | BCP/DR §6.1.                                                                        |
+| RPO — in-region disaster (PITR restore) | `<TBD by SOC 2 auditor: confirm — engineering posture is ≤ 5 minutes via RDS PITR>`       | BCP/DR §3.2.                                                                        |
+| RTO — AZ failover                       | < 15 minutes (automatic Multi-AZ failover)                                                | BCP/DR §6.1.                                                                        |
+| RTO — in-region disaster                | `<TBD by SOC 2 auditor: confirm — engineering posture is ≤ 4 hours>`                      | BCP/DR §3.1. NOT a full-region figure.                                              |
+| RTO — full-region failure               | `> 4 hours — OUT OF SCOPE` for the current single-region architecture                     | BCP/DR §6.2; residual risk in the risk register. Mitigation: ADR-0022 multi-region. |
+| MTD / MTPD (Maximum Tolerable Downtime) | `<TBD by legal counsel: confirm against customer SLAs — engineering posture is 24 hours>` | BCP/DR §3.3.                                                                        |
 
 ## 4. Roles and responsibilities
 

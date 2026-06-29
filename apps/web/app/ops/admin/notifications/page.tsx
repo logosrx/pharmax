@@ -1,18 +1,10 @@
 // /ops/admin/notifications — notification delivery health.
 //
-// Lists the 100 most-recent notification_delivery rows for the
-// org (recipient, template, status, last event, failure reason).
-// A `?problems=1` filter narrows to BOUNCED / COMPLAINED /
-// DELIVERY_DELAYED / FAILED — the rows an operator should chase
-// (a bouncing recipient on a schedule means the report isn't
-// reaching someone).
+// Lists the 100 most-recent notification_delivery rows (recipient,
+// template, status, last event, failure reason). A "Problems only"
+// filter narrows to BOUNCED / COMPLAINED / DELIVERY_DELAYED / FAILED.
 //
-// Permission gate: `notifications.read` — a dedicated read
-// permission so delivery-health visibility is decoupled from
-// schedule management (and from reports entirely, ahead of
-// notifications expanding beyond scheduled reports).
-
-import Link from "next/link";
+// Permission gate: `notifications.read`.
 
 import { PERMISSIONS } from "@pharmax/rbac";
 
@@ -22,54 +14,45 @@ import {
 } from "../../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../../src/server/auth/resolve-tenancy.js";
 import { listNotificationDeliveries } from "../../../../src/server/ops/list-notification-deliveries.js";
+import { PageHeader, FilterTabs } from "../../../../src/components/ui/page.js";
+import { Badge, type Tone } from "../../../../src/components/ui/badge.js";
+import { EmptyState, PermissionDenied } from "../../../../src/components/ui/feedback.js";
+import { Table, THead, TH, TBody, TR, TD } from "../../../../src/components/ui/data.js";
 
 function formatDate(d: Date | null): string {
-  if (d === null) return "—";
-  return d.toISOString().replace("T", " ").slice(0, 19) + "Z";
+  return d === null ? "—" : d.toISOString().replace("T", " ").slice(0, 19) + "Z";
 }
 
-function statusBadgeClass(status: string): string {
+function statusTone(status: string): Tone {
   switch (status) {
     case "DELIVERED":
-      return "border-emerald-700 bg-emerald-950 text-emerald-200";
+      return "success";
     case "SENT":
-      return "border-sky-700 bg-sky-950 text-sky-200";
+      return "info";
     case "QUEUED":
-      return "border-neutral-700 bg-neutral-900 text-neutral-300";
+      return "neutral";
     case "DELIVERY_DELAYED":
-      return "border-amber-700 bg-amber-950 text-amber-200";
-    case "BOUNCED":
-    case "COMPLAINED":
-    case "FAILED":
-    case "CANCELLED":
+      return "warning";
     default:
-      return "border-rose-700 bg-rose-950 text-rose-200";
+      return "danger";
   }
 }
 
-interface PageProps {
+export default async function NotificationsHealthPage({
+  searchParams,
+}: {
   readonly searchParams: Promise<{ readonly problems?: string }>;
-}
-
-export default async function NotificationsHealthPage({ searchParams }: PageProps) {
+}) {
   const result = await resolveOperatorTenancyContext();
-  if (!result.ok) {
-    return (
-      <main className="space-y-2 p-6 text-neutral-100">
-        <h1 className="text-2xl font-semibold">Notification delivery</h1>
-        <p className="text-rose-300">Tenancy resolution failed: {result.reason}</p>
-      </main>
-    );
-  }
+  if (!result.ok) return null;
+
   const permissions = await loadOperatorPermissions(result.tenancy);
   if (!hasOperatorPermission(permissions, PERMISSIONS.NOTIFICATIONS_READ)) {
     return (
-      <main className="space-y-2 p-6 text-neutral-100">
-        <h1 className="text-2xl font-semibold">Notification delivery</h1>
-        <p className="text-rose-300">
-          Your role does not include <code>notifications.read</code>.
-        </p>
-      </main>
+      <div className="space-y-6">
+        <PageHeader eyebrow="Administration" title="Notification delivery" />
+        <PermissionDenied grant="notifications.read" />
+      </div>
     );
   }
 
@@ -82,91 +65,71 @@ export default async function NotificationsHealthPage({ searchParams }: PageProp
   });
 
   return (
-    <main className="space-y-6 p-6 text-neutral-100">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Notification delivery</h1>
-          <p className="mt-1 text-sm text-neutral-400">
-            Per-recipient delivery health for outbound notifications. Rows are written when a send
-            is attempted (QUEUED → SENT) and advanced by the Resend delivery webhook (DELIVERED /
-            BOUNCED / COMPLAINED / DELIVERY_DELAYED). A bouncing recipient on a schedule means the
-            report isn&apos;t reaching someone.
-          </p>
-        </div>
-        <div className="flex shrink-0 gap-2">
-          <Link
-            href="/ops/admin/notifications"
-            className={`rounded-md border px-3 py-2 text-sm ${
-              problemsOnly
-                ? "border-neutral-700 bg-neutral-900 text-neutral-300 hover:bg-neutral-800"
-                : "border-sky-700 bg-sky-950 text-sky-200"
-            }`}
-          >
-            All
-          </Link>
-          <Link
-            href="/ops/admin/notifications?problems=1"
-            className={`rounded-md border px-3 py-2 text-sm ${
-              problemsOnly
-                ? "border-rose-700 bg-rose-950 text-rose-200"
-                : "border-neutral-700 bg-neutral-900 text-neutral-300 hover:bg-neutral-800"
-            }`}
-          >
-            Problems only
-          </Link>
-        </div>
-      </header>
+    <div className="space-y-6 animate-fade-in">
+      <PageHeader
+        eyebrow="Administration"
+        title="Notification delivery"
+        description="Per-recipient delivery health for outbound notifications. Rows advance via the Resend webhook (DELIVERED / BOUNCED / COMPLAINED / DELAYED). A bouncing recipient on a schedule means a report isn't reaching someone."
+        actions={
+          <FilterTabs
+            items={[
+              { href: "/ops/admin/notifications", label: "All", active: !problemsOnly },
+              {
+                href: "/ops/admin/notifications?problems=1",
+                label: "Problems only",
+                active: problemsOnly,
+              },
+            ]}
+          />
+        }
+      />
 
       {rows.length === 0 ? (
-        <div className="rounded-md border border-neutral-800 bg-neutral-950 p-6 text-sm text-neutral-400">
-          {problemsOnly
-            ? "No problem deliveries — every recent notification was accepted or delivered."
-            : "No notification deliveries recorded yet."}
-        </div>
+        <EmptyState
+          icon="notifications"
+          title={problemsOnly ? "No problem deliveries" : "No notification deliveries yet"}
+          description={
+            problemsOnly
+              ? "Every recent notification was accepted or delivered."
+              : "Outbound notification attempts will appear here."
+          }
+        />
       ) : (
-        <div className="overflow-hidden rounded-md border border-neutral-800">
-          <table className="w-full divide-y divide-neutral-800 text-sm">
-            <thead className="bg-neutral-950 text-xs uppercase tracking-wide text-neutral-500">
-              <tr>
-                <th className="px-3 py-2 text-left">Recipient</th>
-                <th className="px-3 py-2 text-left">Template</th>
-                <th className="px-3 py-2 text-left">Status</th>
-                <th className="px-3 py-2 text-left">Last event</th>
-                <th className="px-3 py-2 text-left">Sent</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-800 bg-neutral-950">
-              {rows.map((row) => (
-                <tr key={row.id} className="hover:bg-neutral-900/60">
-                  <td className="px-3 py-2 font-medium text-neutral-100">{row.recipientAddress}</td>
-                  <td className="px-3 py-2 text-neutral-300">
-                    <code className="rounded bg-neutral-900 px-1.5 py-0.5 text-xs">
-                      {row.template}
-                    </code>
-                  </td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={`inline-block rounded border px-2 py-0.5 text-xs font-medium ${statusBadgeClass(row.status)}`}
-                    >
-                      {row.status}
-                    </span>
-                    {row.failureReason !== null ? (
-                      <div className="mt-1 text-xs text-rose-300">{row.failureReason}</div>
-                    ) : null}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-neutral-300">
-                    <div>{row.lastEventType ?? "—"}</div>
-                    <div className="text-neutral-500">{formatDate(row.lastEventAt)}</div>
-                  </td>
-                  <td className="px-3 py-2 text-xs text-neutral-300">
-                    {formatDate(row.createdAt)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table>
+          <THead>
+            <TH>Recipient</TH>
+            <TH>Template</TH>
+            <TH>Status</TH>
+            <TH>Last event</TH>
+            <TH align="right">Sent</TH>
+          </THead>
+          <TBody>
+            {rows.map((row) => (
+              <TR key={row.id}>
+                <TD>
+                  <span className="font-medium text-fg">{row.recipientAddress}</span>
+                </TD>
+                <TD>
+                  <code className="rounded bg-surface-2 px-1.5 py-0.5 text-xs">{row.template}</code>
+                </TD>
+                <TD>
+                  <Badge tone={statusTone(row.status)}>{row.status}</Badge>
+                  {row.failureReason !== null ? (
+                    <div className="mt-1 text-xs text-red-300">{row.failureReason}</div>
+                  ) : null}
+                </TD>
+                <TD>
+                  <div className="text-xs text-muted">{row.lastEventType ?? "—"}</div>
+                  <div className="text-xs text-subtle">{formatDate(row.lastEventAt)}</div>
+                </TD>
+                <TD align="right">
+                  <span className="text-xs text-muted">{formatDate(row.createdAt)}</span>
+                </TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
       )}
-    </main>
+    </div>
   );
 }

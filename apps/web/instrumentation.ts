@@ -13,11 +13,24 @@
 // `src/server/bootstrap.ts`.
 
 export async function register(): Promise<void> {
-  // `bootstrap` is server-only; importing it from this file (which is
-  // also server-only by virtue of being instrumentation) keeps the
-  // boundary clean. Awaited so the process does not begin handling
-  // requests until KMS, RBAC, and the command bus are wired (and, in
-  // production, the AwsKmsAdapter's IAM has been verified).
-  const { bootstrap } = await import("./src/server/bootstrap.js");
-  await bootstrap();
+  // Node-only guard (official Next.js instrumentation pattern).
+  //
+  // `register()` is invoked in BOTH the Node.js and Edge runtimes
+  // (the latter because `proxy.ts` middleware runs on Edge). `bootstrap`
+  // pulls in node-only subsystems (OpenTelemetry sdk-node + gRPC
+  // exporters, the Prisma client, ioredis) that cannot compile for the
+  // Edge runtime — `node:stream`/`fs`/`tls` don't resolve there, which
+  // crashes the whole dev server.
+  //
+  // The bootstrap import MUST live inside a POSITIVE
+  // `=== "nodejs"` block: Next's bundler statically replaces
+  // `process.env.NEXT_RUNTIME` per-compile, so this branch is
+  // dead-code-eliminated from the Edge bundle and the node-only graph
+  // is never compiled there. (An early `!== "nodejs"` return does NOT
+  // trigger that elimination.) The KMS/RBAC/command-bus boot is only
+  // meaningful in the Node runtime anyway.
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { bootstrap } = await import("./src/server/bootstrap.js");
+    await bootstrap();
+  }
 }

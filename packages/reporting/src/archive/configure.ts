@@ -11,7 +11,7 @@
 // environments without S3 still work; the operator console's
 // download page renders a "this run wasn't archived" empty state.
 
-import { errors } from "@pharmax/platform-core";
+import { errors, runtime } from "@pharmax/platform-core";
 
 import type { ReportRunArchivePort } from "./report-run-archive.js";
 
@@ -21,7 +21,11 @@ export interface ReportRunArchiveConfiguration {
   readonly archive: ReportRunArchivePort;
 }
 
-let active: ReportRunArchivePort | null = null;
+// globalThis-backed so boot (Next instrumentation bundle) and use
+// (route bundles) share ONE configuration despite webpack giving each
+// bundle its own copy of this module. See platform-core
+// runtime/global-singleton.ts for the full rationale.
+const box = runtime.globalSingletonBox<ReportRunArchivePort>("pharmax:reporting:archive");
 
 /**
  * Wire the archive port. Idempotent re-call with the same instance
@@ -30,14 +34,14 @@ let active: ReportRunArchivePort | null = null;
  * uses `resetReportRunArchiveConfigurationForTests` for that.
  */
 export function configureReportRunArchive(config: ReportRunArchiveConfiguration): void {
-  if (active !== null && active !== config.archive) {
+  if (box.value !== null && box.value !== config.archive) {
     throw new errors.InvariantViolationError({
       code: REPORTING_ARCHIVE_ALREADY_CONFIGURED,
       message:
         "configureReportRunArchive was called with a different adapter instance; only the test harness may swap.",
     });
   }
-  active = config.archive;
+  box.value = config.archive;
 }
 
 /**
@@ -48,10 +52,10 @@ export function configureReportRunArchive(config: ReportRunArchiveConfiguration)
  * available" page.
  */
 export function getReportRunArchive(): ReportRunArchivePort | null {
-  return active;
+  return box.value;
 }
 
 /** Drop the wired adapter. Test-harness only. */
 export function resetReportRunArchiveConfigurationForTests(): void {
-  active = null;
+  box.value = null;
 }

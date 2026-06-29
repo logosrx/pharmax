@@ -112,6 +112,16 @@ resource "aws_cloudwatch_log_group" "print_agent" {
 #
 # Format expected by ECS:
 #   { name = "<ENV VAR>", valueFrom = "<SecretsManager ARN>" }
+#
+# DATABASE_URL role split (defense-in-depth for RLS):
+#   - web         -> `database-url`         (selects the RLS-subject
+#                                            `pharmax_app` role)
+#   - worker      -> `database-url-system`  (selects `pharmax_system`,
+#   - print-agent -> `database-url-system`   BYPASSRLS — cross-tenant
+#                                            claim drains)
+# Wiring distinct secrets here makes it impossible to accidentally point
+# the web tier at a BYPASSRLS role. `direct-url` (the migration/owner
+# connection) is shared and never used for request-path queries.
 
 locals {
   # REPORTING_DATABASE_URL (Aurora reader endpoint) is injected into web +
@@ -135,7 +145,7 @@ locals {
   ], local.reporting_secret_env)
 
   worker_secret_env = concat([
-    { name = "DATABASE_URL", arn = var.secret_arns["database-url"] },
+    { name = "DATABASE_URL", arn = var.secret_arns["database-url-system"] },
     { name = "DIRECT_URL", arn = var.secret_arns["direct-url"] },
     { name = "REDIS_URL", arn = var.secret_arns["redis-url"] },
     { name = "PHARMAX_LOCAL_KMS_SEED", arn = var.secret_arns["pharmax-local-kms-seed"] },
@@ -149,7 +159,7 @@ locals {
   ], local.reporting_secret_env)
 
   print_agent_secret_env = [
-    { name = "DATABASE_URL", arn = var.secret_arns["database-url"] },
+    { name = "DATABASE_URL", arn = var.secret_arns["database-url-system"] },
     { name = "DIRECT_URL", arn = var.secret_arns["direct-url"] },
     { name = "PHARMAX_LOCAL_KMS_SEED", arn = var.secret_arns["pharmax-local-kms-seed"] },
     { name = "SENTRY_DSN", arn = var.secret_arns["sentry-dsn"] },
@@ -329,9 +339,17 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "AWS_KMS_APP_KEY_ID", value = var.data_kms_key_alias },
         { name = "AWS_KMS_DATA_KEY_ID", value = var.data_kms_key_alias },
         { name = "AWS_KMS_SEARCH_KEY_ID", value = var.search_kms_key_alias },
-        { name = "AWS_KMS_AUDIT_SIGN_KEY_ID", value = var.asymm_sign_kms_key_alias },
-        { name = "AUDIT_ARCHIVE_BUCKET", value = var.audit_archive_bucket_name },
-        { name = "AUDIT_ARCHIVE_KMS_KEY_ID", value = var.audit_archive_kms_key_alias },
+        # Env-var names MUST match apps/worker/src/env.ts. The worker hard-
+        # fails to boot in production if the nightly Merkle-root loop cannot
+        # resolve its signer (MERKLE_SIGNER_KMS_KEY_ID) and Object-Lock
+        # publisher (AUDIT_ARCHIVE_S3_BUCKET + AUDIT_ARCHIVE_S3_KMS_KEY_ID).
+        # These were previously injected under non-matching names
+        # (AWS_KMS_AUDIT_SIGN_KEY_ID / AUDIT_ARCHIVE_BUCKET /
+        # AUDIT_ARCHIVE_KMS_KEY_ID), which the app never reads — see
+        # daily-merkle-root-loop.ts buildMerkleSigner / buildMerklePublisher.
+        { name = "MERKLE_SIGNER_KMS_KEY_ID", value = var.asymm_sign_kms_key_alias },
+        { name = "AUDIT_ARCHIVE_S3_BUCKET", value = var.audit_archive_bucket_name },
+        { name = "AUDIT_ARCHIVE_S3_KMS_KEY_ID", value = var.audit_archive_kms_key_alias },
       ]
 
       secrets = [for s in local.worker_secret_env : {

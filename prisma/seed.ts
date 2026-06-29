@@ -37,6 +37,7 @@ import {
   DEFAULT_VIAL_ZPL_TEMPLATE,
 } from "@pharmax/labels";
 import { ROLE_TEMPLATES } from "@pharmax/rbac";
+import { withSystemContext } from "@pharmax/tenancy";
 
 // ---------------------------------------------------------------------------
 // 1. System permission vocabulary
@@ -737,8 +738,15 @@ async function seedDemoOrganization(): Promise<{ orgId: string }> {
 }
 
 async function main(): Promise<void> {
-  await seedPermissions();
-  await seedDemoOrganization();
+  // The tenancy Prisma extension fail-closes any tenant-scoped query
+  // outside a tenancy frame. The seed is a system-tier operation by
+  // definition (it creates the org the frames would scope to), so it
+  // runs inside an explicit system context — same posture as
+  // scripts/bootstrap-org.ts.
+  await withSystemContext("seed:demo-data", async () => {
+    await seedPermissions();
+    await seedDemoOrganization();
+  });
   console.log("✓ Seed complete");
 }
 

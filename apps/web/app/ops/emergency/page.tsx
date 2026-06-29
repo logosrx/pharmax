@@ -1,20 +1,12 @@
-// EMERGENCY-queue operator page.
+// /ops/emergency — escalated-order disposition.
 //
-// Lists orders currently in the EMERGENCY bucket for the operator's
-// tenancy. Each row carries a "Resolve" form that POSTs to the
-// /api/ops/orders/:id/resolve-escalation route — which dispatches
-// the standard `ResolveOrderEscalation` command through the bus.
+// Lists orders currently in the EMERGENCY bucket. Each row carries a
+// "Resolve" form that POSTs to /api/ops/orders/:id/resolve-escalation
+// (dispatches `ResolveOrderEscalation` through the bus) to return the
+// order to a workflow bucket or acknowledge ongoing triage.
 //
-// Why server-rendered form (vs. client-side fetch):
-//   - Zero client JS for the simplest path. Operators on slow
-//     terminals get a working page even before any JS hydrates.
-//   - Failures surface as a clean re-render with the typed error
-//     code in the URL — no client-side error-handling boilerplate.
-//   - When the operator console grows a SPA-shell, individual
-//     forms can upgrade to client components incrementally without
-//     re-plumbing the auth + dispatch path.
+// PHI: non-PHI structural columns only.
 
-import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { PERMISSIONS } from "@pharmax/rbac";
@@ -25,7 +17,12 @@ import {
 } from "../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../src/server/auth/resolve-tenancy.js";
 import { listEmergencyOrders } from "../../../src/server/ops/list-emergency-orders.js";
-import { SlaBadge, slaRowBorderClass, slaStatusFor } from "../../../src/components/sla-badge.js";
+import { PageHeader } from "../../../src/components/ui/page.js";
+import { EmptyState, PermissionDenied, Banner } from "../../../src/components/ui/feedback.js";
+import { Badge } from "../../../src/components/ui/badge.js";
+import { Field, Select, Input } from "../../../src/components/ui/field.js";
+import { QueueRow } from "../../../src/components/ops/queue-row.js";
+import { ActionForm, SubmitButton } from "../../../src/components/ops/action-form.js";
 
 const DISPOSITION_OPTIONS = [
   { value: "RETURN_TO_SHIPPING", label: "Return to Shipping" },
@@ -33,11 +30,9 @@ const DISPOSITION_OPTIONS = [
   { value: "KEEP_IN_EMERGENCY", label: "Keep in Emergency (audit only)" },
 ] as const;
 
-function formatDuration(ms: number): string {
-  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
-  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
-  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
-  return `${Math.floor(ms / 86_400_000)}d`;
+function pick(p: Record<string, string | string[] | undefined>, k: string): string | null {
+  const v = p[k];
+  return typeof v === "string" ? v : null;
 }
 
 export default async function EmergencyQueuePage({
@@ -52,144 +47,109 @@ export default async function EmergencyQueuePage({
   const permissions = await loadOperatorPermissions(result.tenancy);
   if (!hasOperatorPermission(permissions, PERMISSIONS.SHIP_RESOLVE_ESCALATION)) {
     return (
-      <main className="space-y-3">
-        <h1 className="text-2xl font-semibold text-neutral-50">Emergency queue</h1>
-        <p className="text-neutral-400">
-          You don&apos;t have permission to disposition emergency orders. Contact your admin to
-          request the <code className="text-neutral-200">ship.resolve_escalation</code> grant.
-        </p>
-      </main>
+      <div className="space-y-6">
+        <PageHeader eyebrow="Exceptions" title="Emergency queue" />
+        <PermissionDenied grant="ship.resolve_escalation" />
+      </div>
     );
   }
 
-  const queue = await listEmergencyOrders({
-    organizationId: result.tenancy.organizationId,
-  });
-
-  const flash = typeof params["resolved"] === "string" ? params["resolved"] : null;
-  const flashError = typeof params["error"] === "string" ? params["error"] : null;
+  const queue = await listEmergencyOrders({ organizationId: result.tenancy.organizationId });
+  const resolved = pick(params, "resolved");
+  const error = pick(params, "error");
   const now = Date.now();
   const nowDate = new Date(now);
 
   return (
-    <main className="space-y-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold text-neutral-50">Emergency queue</h1>
-        <p className="text-sm text-neutral-400">
-          Orders currently escalated to the EMERGENCY bucket. Disposition each to return it to a
-          workflow bucket or acknowledge ongoing triage.
-        </p>
-      </header>
+    <div className="space-y-6 animate-fade-in">
+      <PageHeader
+        eyebrow="Exceptions"
+        title="Emergency queue"
+        description="Orders escalated to the emergency bucket. Disposition each to return it to a workflow bucket or acknowledge ongoing triage."
+      />
 
-      {flash !== null ? (
-        <div className="rounded-md border border-emerald-700 bg-emerald-950 px-4 py-3 text-sm text-emerald-200">
-          Resolved order <code className="font-mono">{flash}</code>.
-        </div>
+      {resolved !== null ? (
+        <Banner tone="success">
+          Resolved order <code>{resolved}</code>.
+        </Banner>
       ) : null}
-      {flashError !== null ? (
-        <div className="rounded-md border border-red-700 bg-red-950 px-4 py-3 text-sm text-red-200">
-          {flashError}
-        </div>
+      {error !== null ? (
+        <Banner tone="danger" title="That action didn't go through">
+          {error}
+        </Banner>
       ) : null}
 
       {!queue.bucketExists ? (
-        <div className="rounded-md border border-neutral-800 bg-neutral-950 p-6 text-sm text-neutral-400">
-          The EMERGENCY bucket is not provisioned for this organization. Run{" "}
-          <code className="text-neutral-200">ProvisionDefaultBuckets</code> to create it.
-        </div>
+        <Banner tone="warning" title="EMERGENCY bucket not provisioned">
+          Run <code>ProvisionDefaultBuckets</code> to create it for this organization.
+        </Banner>
       ) : queue.rows.length === 0 ? (
-        <div className="rounded-md border border-neutral-800 bg-neutral-950 p-6 text-sm text-neutral-400">
-          No orders in the EMERGENCY bucket. Nothing to disposition.
-        </div>
+        <EmptyState
+          icon="check"
+          title="Nothing on fire"
+          description="No orders are currently escalated. SLA breaches and shipping exceptions surface here."
+        />
       ) : (
         <ul className="space-y-3">
           {queue.rows.map((row) => {
-            const minutesEscalated = Math.floor((now - row.enteredEmergencyAt.getTime()) / 60_000);
-            const slaStatus = slaStatusFor(row.slaDeadlineAt, nowDate);
-            // Reason hint: a breached order with no shipment event was
-            // routed here by the SLA breach-evaluator, not a carrier
-            // exception. Distinguishing the two tells the operator
-            // whether to chase the workflow or the carrier.
-            const isSlaEscalation = row.latestShipmentEvent === null && slaStatus === "BREACHED";
+            const isSlaEscalation =
+              row.latestShipmentEvent === null &&
+              row.slaDeadlineAt !== null &&
+              row.slaDeadlineAt.getTime() < now;
             return (
-              <li
-                key={row.orderId}
-                className={`space-y-3 rounded-md border ${slaRowBorderClass(slaStatus)} bg-neutral-950 p-4`}
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Link
-                        href={`/ops/orders/${row.orderId}`}
-                        className="font-mono text-sm text-neutral-100 hover:text-blue-300 hover:underline"
-                      >
-                        {row.externalOrderNumber ?? row.orderId}
-                      </Link>
-                      <SlaBadge slaDeadlineAt={row.slaDeadlineAt} now={nowDate} />
-                      {isSlaEscalation ? (
-                        <span className="inline-flex items-center rounded-md border border-red-800 bg-red-950 px-2 py-0.5 text-xs font-medium text-red-300">
-                          Escalated for SLA breach
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="text-xs text-neutral-500">
-                      Status <span className="text-neutral-300">{row.currentStatus}</span> ·
-                      Priority <span className="text-neutral-300">{row.priority}</span> · Escalated{" "}
-                      <span className="text-neutral-300">
-                        {formatDuration(now - row.enteredEmergencyAt.getTime())}
-                      </span>{" "}
-                      ago
-                    </div>
-                    {row.latestShipmentEvent !== null ? (
-                      <div className="text-xs text-neutral-500">
-                        Latest shipment event:{" "}
-                        <span className="text-neutral-300">{row.latestShipmentEvent.kind}</span> (
-                        {row.latestShipmentEvent.carrierStatus})
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="text-right text-xs text-neutral-600">{minutesEscalated} min</div>
-                </div>
-
-                <form
-                  action={`/api/ops/orders/${row.orderId}/resolve-escalation`}
-                  method="POST"
-                  className="flex flex-wrap items-center gap-2"
+              <li key={row.orderId}>
+                <QueueRow
+                  orderId={row.orderId}
+                  externalOrderNumber={row.externalOrderNumber}
+                  priority={row.priority}
+                  status={row.currentStatus}
+                  slaDeadlineAt={row.slaDeadlineAt}
+                  receivedAt={row.enteredEmergencyAt}
+                  now={nowDate}
+                  headerExtra={
+                    isSlaEscalation ? (
+                      <Badge tone="danger" icon="alert">
+                        SLA breach
+                      </Badge>
+                    ) : undefined
+                  }
+                  note={
+                    row.latestShipmentEvent !== null
+                      ? `Latest shipment event: ${row.latestShipmentEvent.kind} (${row.latestShipmentEvent.carrierStatus})`
+                      : undefined
+                  }
                 >
-                  <label className="sr-only" htmlFor={`disposition-${row.orderId}`}>
-                    Disposition
-                  </label>
-                  <select
-                    id={`disposition-${row.orderId}`}
-                    name="disposition"
-                    defaultValue="RETURN_TO_SHIPPING"
-                    className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
+                  <ActionForm
+                    action={`/api/ops/orders/${row.orderId}/resolve-escalation`}
+                    className="flex w-full flex-wrap items-end gap-2"
                   >
-                    {DISPOSITION_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    name="reasonText"
-                    placeholder="Optional operator note"
-                    maxLength={2000}
-                    className="min-w-0 flex-1 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
-                  />
-                  <button
-                    type="submit"
-                    className="rounded-md border border-emerald-700 bg-emerald-900 px-4 py-2 text-sm text-emerald-100 hover:bg-emerald-800"
-                  >
-                    Resolve
-                  </button>
-                </form>
+                    <Field label="Disposition">
+                      <Select name="disposition" defaultValue="RETURN_TO_SHIPPING">
+                        {DISPOSITION_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="Note" className="min-w-0 flex-1">
+                      <Input
+                        type="text"
+                        name="reasonText"
+                        placeholder="Optional operator note"
+                        maxLength={2000}
+                      />
+                    </Field>
+                    <SubmitButton variant="go" icon="check">
+                      Resolve
+                    </SubmitButton>
+                  </ActionForm>
+                </QueueRow>
               </li>
             );
           })}
         </ul>
       )}
-    </main>
+    </div>
   );
 }

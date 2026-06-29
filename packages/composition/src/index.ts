@@ -18,6 +18,18 @@ export {
 
 export { BUILT_IN_PRIORITIES, type BuiltInPriority } from "./priorities.js";
 
+// Shared KMS adapter construction. The single source of truth for
+// the "which KMS adapter, built how" decision tree that apps/web and
+// apps/worker both boot with — extracted so the two processes cannot
+// drift into deriving different data-key identities.
+export {
+  buildKmsAdapterFromEnv,
+  parsePreviousDataKeyKeyIds,
+  type BuildKmsAdapterInput,
+  type BuiltKmsAdapter,
+  type KmsAdapterEnv,
+} from "./kms/build-kms-adapter.js";
+
 export {
   createCacheFromEnv,
   createRedisCache,

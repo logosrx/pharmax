@@ -19,6 +19,7 @@
 // boot, before any traffic.
 
 import type { PrismaClient } from "@pharmax/database";
+import { runtime } from "@pharmax/platform-core";
 import type { clock as clockTypes, logger as loggerTypes } from "@pharmax/platform-core";
 import type {
   OrderWorkflowPolicy,
@@ -109,14 +110,18 @@ export interface CommandBusConfiguration {
   readonly overlayResolution?: OverlayResolutionConfig;
 }
 
-let configured: CommandBusConfiguration | null = null;
+// globalThis-backed so boot (Next instrumentation bundle) and use
+// (route bundles) share ONE configuration despite webpack giving each
+// bundle its own copy of this module. See platform-core
+// runtime/global-singleton.ts for the full rationale.
+const box = runtime.globalSingletonBox<CommandBusConfiguration>("pharmax:command-bus:config");
 
 /**
  * Wire the process-wide command bus. Call once at boot (apps/web,
  * apps/worker, migrations that issue commands).
  */
 export function configureCommandBus(config: CommandBusConfiguration): void {
-  configured = Object.freeze({ ...config });
+  box.value = Object.freeze({ ...config });
 }
 
 /**
@@ -125,10 +130,10 @@ export function configureCommandBus(config: CommandBusConfiguration): void {
  * was never called.
  */
 export function getCommandBusConfiguration(): CommandBusConfiguration {
-  if (configured === null) {
+  if (box.value === null) {
     throw commandBusNotConfiguredError();
   }
-  return configured;
+  return box.value;
 }
 
 /**
@@ -136,5 +141,5 @@ export function getCommandBusConfiguration(): CommandBusConfiguration {
  * call this.
  */
 export function resetCommandBusConfigurationForTests(): void {
-  configured = null;
+  box.value = null;
 }

@@ -18,7 +18,7 @@
 // only output IS the photo bytes — a missed configuration must
 // fail loudly at the first dispatch.
 
-import { errors } from "@pharmax/platform-core";
+import { errors, runtime } from "@pharmax/platform-core";
 
 import type { PackagePhotoStorage } from "./package-photo-storage.js";
 
@@ -26,23 +26,29 @@ export interface PackagePhotoStorageConfiguration {
   readonly storage: PackagePhotoStorage;
 }
 
-let configured: PackagePhotoStorageConfiguration | null = null;
+// globalThis-backed so boot (Next instrumentation bundle) and use
+// (route bundles) share ONE configuration despite webpack giving each
+// bundle its own copy of this module. See platform-core
+// runtime/global-singleton.ts for the full rationale.
+const box = runtime.globalSingletonBox<PackagePhotoStorageConfiguration>(
+  "pharmax:package-capture:storage"
+);
 
 export function configurePackagePhotoStorage(config: PackagePhotoStorageConfiguration): void {
-  configured = Object.freeze({ storage: config.storage });
+  box.value = Object.freeze({ storage: config.storage });
 }
 
 export function getPackagePhotoStorage(): PackagePhotoStorage {
-  if (configured === null) {
+  if (box.value === null) {
     throw new errors.InternalError({
       code: "PACKAGE_PHOTO_STORAGE_NOT_CONFIGURED",
       message:
         "@pharmax/package-capture storage is not configured. Call configurePackagePhotoStorage({ storage }) at boot before dispatching CapturePackagePhoto.",
     });
   }
-  return configured.storage;
+  return box.value.storage;
 }
 
 export function resetPackagePhotoStorageConfigurationForTests(): void {
-  configured = null;
+  box.value = null;
 }

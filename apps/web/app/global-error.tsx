@@ -32,22 +32,40 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
 
   return (
     <html lang="en">
-      <body className="min-h-screen bg-neutral-950 text-neutral-100">
-        <main className="mx-auto max-w-2xl space-y-4 px-6 py-10">
-          <h1 className="text-2xl font-semibold">Something went wrong</h1>
-          <p className="text-sm text-neutral-400">
-            A fatal error occurred and the application could not recover. The incident has been
-            captured for our on-call team.
-          </p>
+      <body className="min-h-screen bg-canvas text-fg antialiased">
+        <main className="mx-auto flex max-w-lg flex-col items-center gap-4 px-6 py-20 text-center">
+          <span className="flex h-12 w-12 items-center justify-center rounded-full border border-red-500/30 bg-red-500/10 text-red-400">
+            <svg
+              viewBox="0 0 24 24"
+              width={22}
+              height={22}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.6}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="8.5" />
+              <path d="M12 8v4.5M12 15.5h.01" />
+            </svg>
+          </span>
+          <div className="space-y-1.5">
+            <h1 className="text-xl font-semibold">Something went wrong</h1>
+            <p className="text-sm text-muted">
+              A fatal error occurred and the application could not recover. The incident has been
+              captured for our on-call team.
+            </p>
+          </div>
           {error.digest !== undefined ? (
-            <p className="text-xs text-neutral-500">
-              Reference id: <code className="font-mono text-neutral-300">{error.digest}</code>
+            <p className="text-xs text-subtle">
+              Reference id: <code className="font-mono text-muted">{error.digest}</code>
             </p>
           ) : null}
           <button
             type="button"
             onClick={() => reset()}
-            className="rounded-md border border-blue-700 bg-blue-900 px-3 py-1.5 text-sm text-blue-100 hover:bg-blue-800"
+            className="inline-flex h-9 items-center justify-center rounded-md bg-brand px-4 text-sm font-medium text-brand-fg shadow-sm transition-colors hover:bg-brand-hover"
           >
             Try again
           </button>

@@ -1,0 +1,657 @@
+# Pharmax Terraform Apply — approval-gated production-apply workflow.
+#
+# Closes `tf1-applyflow` (the SOC 2 follow-up from G2 / production
+# deployment). Before this workflow shipped, routine production
+# `terraform apply` ran from operator workstations following the
+# `docs/operations/production-deployment.md` § 3 + § 4 procedure.
+# That was operationally fine for the first few deploys but did not
+# scale — the apply happened with the operator's local AWS creds
+# (long-lived if not paired with SSO; SSO-issued if paired), the
+# plan-was-reviewed-by-a-human invariant was a checklist item not a
+# system gate, and the apply output landed in a deploy ticket rather
+# than a tamper-evident artifact.
+#
+# This workflow ships the same procedure as a system gate:
+#
+#   1. workflow_dispatch ONLY. No push, no schedule. Production
+#      changes are always a deliberate human-initiated action; merge
+#      to main is what makes the HCL "deployable," NOT what makes it
+#      "deployed."
+#   2. Two jobs: `plan` then `apply`. `apply` is gated behind a
+#      GitHub Environment (`terraform-apply-<env-region>`) with
+#      required reviewers (two-person rule) and main-branch
+#      deployment restriction. The reviewer sees the plan output
+#      (posted to the run summary + uploaded as an artifact) before
+#      clicking Approve.
+#   3. Apply executes THE EXACT PLAN saved by the plan job — never a
+#      fresh re-plan. If state changes between plan and apply, the
+#      lock-table catches it (apply fails to acquire the lock or
+#      detects the stale serial). Re-planning at apply time would
+#      defeat the entire review.
+#   4. Two operator-supplied guards before approval is even
+#      requested:
+#        - `reason` (required, ≥10 chars) — the justification that
+#          gets stamped into the apply record.
+#        - `expected_changes` (required) — operator's predicted
+#          "N to add, N to change, N to destroy" line. Mismatch with
+#          the actual plan summary stops the workflow before the
+#          approval gate. This catches "I thought my PR was tiny but
+#          drift snuck a 47-resource delta into the plan."
+#   5. Protected-resource destroy detection. Any plan that wants to
+#      destroy aws_kms_key, aws_rds_cluster*, aws_s3_bucket, or
+#      aws_iam_role* fails the plan job loudly (with the matching
+#      lines surfaced in the summary). Override is intentionally
+#      friction-heavy: revise the PR with a `removed { ... }` block
+#      and explicit ratification in the commit message.
+#   6. Concurrency: one apply at a time per env-region. Concurrent
+#      applies against the same env-region would race on the state
+#      lock anyway, but failing at workflow-dispatch time is much
+#      clearer than failing partway through `terraform apply`.
+#   7. Plan + apply outputs are uploaded as artifacts (90-day
+#      retention) and form the SOC 2 evidence for CC8.1 / CC6.6 /
+#      CC7.2 / CC8.1-2: the auditor walks the apply audit trail by
+#      looking at the workflow run + the apply-output artifact +
+#      the GitHub deployment record.
+#
+# What this workflow DOES NOT do (intentionally):
+#
+#   - It does NOT run on `push` to main. Merging an HCL change does
+#     not auto-deploy. Deploy is a separate, deliberate dispatch.
+#   - It does NOT fan out across env-regions. A single dispatch
+#     targets exactly one env-region. To deploy to both prod-ue1
+#     and prod-uw2 the operator dispatches twice (and waits for the
+#     first to pass smoke before the second — that's the rollback
+#     blast-radius posture).
+#   - It does NOT auto-deploy application containers. ECS service
+#     rollout has its own workflow (`deploy.yml`) using the
+#     `cicd-deploy` IAM role.
+#   - It does NOT cover the `bootstrap` working directory.
+#     Bootstrap is one-shot per account and runs from an operator
+#     workstation; see `docs/operations/production-deployment.md` § 1.
+#
+# AWS access (per `docs/operations/production-deployment.md` § 2):
+#
+#   Production applies use the `AWS_APPLY_ROLE_ARN_PROD` repository
+#   variable; staging uses `AWS_APPLY_ROLE_ARN_STAGING`. Both are
+#   GitHub Actions OIDC roles assumed via federation, NOT long-lived
+#   access keys. The apply role is a SEPARATE role from the
+#   read-only `AWS_DRIFT_ROLE_ARN` used by `terraform-drift.yml` —
+#   the drift role has zero write actions; the apply role has the
+#   create/update/delete actions the modules need. Splitting the
+#   roles keeps the daily-running drift workflow within the
+#   "principle of least privilege" boundary.
+#
+#   The role's trust policy MUST restrict
+#   `token.actions.githubusercontent.com:sub` to claims of the form
+#   `repo:<org>/<repo>:environment:terraform-apply-<env-region>` so
+#   the role can ONLY be assumed by a job running inside the gated
+#   GitHub Environment. A workflow that omits the `environment:`
+#   key (and therefore bypasses the approval) will fail OIDC
+#   federation at the STS step. This is defense-in-depth on top of
+#   the workflow-level gate.
+#
+# Pre-merge invariants:
+#
+#   `scripts/check-terraform-apply-workflow.ts` (wired into the
+#   `safety-linters` CI job) asserts the structural invariants on
+#   this file BEFORE it can land in `main`:
+#     - workflow_dispatch is the only trigger
+#     - env_region enum matches the env-region directories on disk
+#     - plan precedes apply (`needs:`)
+#     - apply uses the saved plan artifact (positional `tfplan`),
+#       never a bare `terraform apply` or `-auto-approve` without
+#       a plan file
+#     - apply job declares `environment:` (which enables the
+#       GH-native approval gate)
+#     - concurrency.group is keyed on inputs.env_region
+
+name: terraform-apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      env_region:
+        description: "Target env-region (apply runs against exactly one per dispatch)."
+        type: choice
+        required: true
+        options:
+          - staging-ue1
+          - prod-ue1
+          - prod-uw2
+      reason:
+        description: "Justification for this apply (≥10 chars; stamped into the deploy record)."
+        type: string
+        required: true
+      expected_changes:
+        description: "Predicted plan summary, e.g. '1 to add, 0 to change, 0 to destroy'. Mismatch with the actual plan stops the workflow before approval."
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  # OIDC token issuance for assume-role.
+  id-token: write
+  # Create a GitHub Deployment record so the apply shows up in the
+  # repo's deployments view + the env-region's deployment history.
+  deployments: write
+
+# One apply at a time per env-region. Two simultaneous dispatches
+# against prod-ue1 would race on the DynamoDB state lock anyway;
+# failing at queue time is clearer than failing mid-apply.
+# `cancel-in-progress: false` — once an apply is approved and
+# running, NEVER cancel it. A cancelled `terraform apply` can leave
+# AWS in a partial state that requires manual reconciliation.
+concurrency:
+  group: terraform-apply-${{ inputs.env_region }}
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: "1.9.8"
+  # Protected resource types — destroying any of these in a plan
+  # halts the workflow before the approval gate. To intentionally
+  # destroy one of these, the operator must add a `removed { ... }`
+  # block + explicit commit-message ratification, which is a
+  # PR-level change (not a dispatch-input change), so the two-person
+  # review happens at code-review time too.
+  PROTECTED_DESTROY_TYPES: "aws_kms_key aws_rds_cluster aws_rds_cluster_instance aws_s3_bucket aws_iam_role aws_dynamodb_table"
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Preflight: input validation. Runs without credentials so a malformed
+  # dispatch fails fast and clearly.
+  # ---------------------------------------------------------------------
+  preflight:
+    name: Preflight — validate inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      work_dir: ${{ steps.resolve.outputs.work_dir }}
+      aws_region: ${{ steps.resolve.outputs.aws_region }}
+      env_name: ${{ steps.resolve.outputs.env_name }}
+      role_var_name: ${{ steps.resolve.outputs.role_var_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate `reason` length
+        env:
+          REASON: ${{ inputs.reason }}
+        run: |
+          # Bash parameter expansion — counts characters, never
+          # evaluates the input as a command.
+          if [ "${#REASON}" -lt 10 ]; then
+            echo "::error::reason must be at least 10 characters (got ${#REASON}). Provide a real justification — this stamps the SOC 2 audit trail."
+            exit 1
+          fi
+          echo "reason length: ${#REASON} chars (ok)"
+
+      - name: Validate `expected_changes` shape
+        env:
+          EXPECTED: ${{ inputs.expected_changes }}
+        run: |
+          # Canonical plan summary line:
+          #   "Plan: N to add, N to change, N to destroy."
+          # We accept either the full sentence OR the inner triple
+          # ("N to add, N to change, N to destroy"). Either way the
+          # three numbers must be present.
+          if ! echo "$EXPECTED" | grep -qE '[0-9]+ to add,[[:space:]]*[0-9]+ to change,[[:space:]]*[0-9]+ to destroy'; then
+            echo "::error::expected_changes must match 'N to add, N to change, N to destroy' (got: $EXPECTED)."
+            echo "::error::Tip: run terraform plan locally first; copy the summary line verbatim."
+            exit 1
+          fi
+          echo "expected_changes shape: ok"
+
+      - name: Resolve env-region → working dir + AWS region + role
+        id: resolve
+        env:
+          ENV_REGION: ${{ inputs.env_region }}
+        run: |
+          # Single source of truth. If the on-disk layout ever
+          # changes, this case + the workflow's choice enum + the
+          # checker script (scripts/check-terraform-apply-workflow.ts)
+          # are the three places to update — kept in lock-step by the
+          # checker's filesystem-vs-enum invariant.
+          case "$ENV_REGION" in
+            staging-ue1)
+              work_dir=infra/terraform/environments/staging/us-east-1
+              aws_region=us-east-1
+              env_name=staging
+              role_var_name=AWS_APPLY_ROLE_ARN_STAGING
+              ;;
+            prod-ue1)
+              work_dir=infra/terraform/environments/prod/us-east-1
+              aws_region=us-east-1
+              env_name=prod
+              role_var_name=AWS_APPLY_ROLE_ARN_PROD
+              ;;
+            prod-uw2)
+              work_dir=infra/terraform/environments/prod/us-west-2
+              aws_region=us-west-2
+              env_name=prod
+              role_var_name=AWS_APPLY_ROLE_ARN_PROD
+              ;;
+            *)
+              echo "::error::Unknown env_region: $ENV_REGION"
+              exit 1
+              ;;
+          esac
+
+          if [ ! -d "$work_dir" ]; then
+            echo "::error::Working dir does not exist: $work_dir"
+            exit 1
+          fi
+
+          {
+            echo "work_dir=$work_dir"
+            echo "aws_region=$aws_region"
+            echo "env_name=$env_name"
+            echo "role_var_name=$role_var_name"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Echo dispatch summary
+        env:
+          ENV_REGION: ${{ inputs.env_region }}
+          REASON: ${{ inputs.reason }}
+          EXPECTED: ${{ inputs.expected_changes }}
+          WORK_DIR: ${{ steps.resolve.outputs.work_dir }}
+          AWS_REGION: ${{ steps.resolve.outputs.aws_region }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          {
+            echo "## Dispatch summary"
+            echo ""
+            echo "| Field             | Value |"
+            echo "| ----------------- | ----- |"
+            echo "| env_region        | \`$ENV_REGION\` |"
+            echo "| working dir       | \`$WORK_DIR\` |"
+            echo "| AWS region        | \`$AWS_REGION\` |"
+            echo "| dispatched by     | @$ACTOR |"
+            echo "| expected_changes  | $EXPECTED |"
+            echo "| reason            | $REASON |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # Plan: assumes the apply role (needs S3 state write + DynamoDB
+  # lock + AWS describe) and produces the plan binary + text. The
+  # apply role is intentionally re-used here (rather than the
+  # read-only drift role) because:
+  #   - The plan needs to acquire the DynamoDB state lock so it
+  #     serialises against concurrent applies.
+  #   - The plan needs s3:PutObject on the tfplan-state.json path
+  #     to persist the planned state delta into the backend.
+  #   - Using one role for plan + apply means the CloudTrail entries
+  #     for both phases of a single deploy are attributable to the
+  #     same federated session, which is the audit story we want.
+  # The plan binary itself never touches AWS resources beyond state
+  # bucket + lock table; the actual resource mutations all happen
+  # during apply.
+  # ---------------------------------------------------------------------
+  plan:
+    name: Terraform plan
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # NOTE: no `environment:` key here. The plan is gated only by
+    # the workflow_dispatch trigger + preflight validation. The
+    # approval gate fires at the apply job.
+    env:
+      WORK_DIR: ${{ needs.preflight.outputs.work_dir }}
+      AWS_REGION: ${{ needs.preflight.outputs.aws_region }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve apply-role ARN from variable
+        id: role
+        env:
+          ROLE_VAR_NAME: ${{ needs.preflight.outputs.role_var_name }}
+          STAGING_ROLE: ${{ vars.AWS_APPLY_ROLE_ARN_STAGING }}
+          PROD_ROLE: ${{ vars.AWS_APPLY_ROLE_ARN_PROD }}
+        run: |
+          case "$ROLE_VAR_NAME" in
+            AWS_APPLY_ROLE_ARN_STAGING) role_arn="$STAGING_ROLE" ;;
+            AWS_APPLY_ROLE_ARN_PROD)    role_arn="$PROD_ROLE" ;;
+            *) echo "::error::Unknown role var: $ROLE_VAR_NAME"; exit 1 ;;
+          esac
+
+          if [ -z "$role_arn" ]; then
+            echo "::error::Repository variable $ROLE_VAR_NAME is not set."
+            echo "::error::See docs/operations/production-deployment.md § 2 for the OIDC role bootstrap procedure."
+            exit 1
+          fi
+
+          # `add-mask` so the role ARN doesn't appear in logs even
+          # though it's not a credential (it IS sensitive — knowing
+          # the ARN narrows the attack surface for a stolen OIDC
+          # token from a forked workflow).
+          echo "::add-mask::$role_arn"
+          echo "role_arn=$role_arn" >> "$GITHUB_OUTPUT"
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.role.outputs.role_arn }}
+          aws-region: ${{ env.AWS_REGION }}
+          # Distinct session name so CloudTrail clearly attributes
+          # the entries to this workflow run, not to drift or to a
+          # local operator.
+          role-session-name: gh-actions-apply-${{ inputs.env_region }}-${{ github.run_id }}
+
+      - name: terraform init
+        working-directory: ${{ env.WORK_DIR }}
+        run: terraform init -input=false
+
+      - name: terraform plan -out=tfplan
+        id: plan
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          # -detailed-exitcode: 0=no diff, 1=error, 2=diff present.
+          # -lock-timeout=2m: brief wait if a transient lock is
+          # held (e.g. drift workflow finishing); fail loudly past
+          # that rather than queue indefinitely.
+          set +e
+          terraform plan \
+            -input=false \
+            -lock-timeout=2m \
+            -detailed-exitcode \
+            -no-color \
+            -var-file=terraform.tfvars \
+            -out=tfplan 2>&1 | tee plan-output.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "Plan exit code: $code (0=no-diff, 2=diff present, 1=error)"
+
+      - name: Reject no-op plans
+        if: steps.plan.outputs.exit_code == '0'
+        run: |
+          echo "::error::Plan shows zero changes. Nothing to apply."
+          echo "::error::If you intended a no-op apply (e.g. to refresh state), use \`terraform refresh\` locally instead — it doesn't waste a reviewer's attention."
+          exit 1
+
+      - name: Reject failed plans
+        if: steps.plan.outputs.exit_code == '1'
+        run: |
+          echo "::error::Plan exited with error (code 1). See plan-output.txt artifact for details."
+          exit 1
+
+      - name: Compare plan summary against expected_changes
+        env:
+          EXPECTED: ${{ inputs.expected_changes }}
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          # Extract the canonical "Plan: X to add, Y to change, Z to destroy." line.
+          actual_line=$(grep -E '^Plan:[[:space:]]+[0-9]+ to add' plan-output.txt | tail -n 1 || true)
+          if [ -z "$actual_line" ]; then
+            echo "::error::Could not extract 'Plan: N to add, N to change, N to destroy' from plan output."
+            echo "::error::This is unexpected for exit code 2; review plan-output.txt manually."
+            exit 1
+          fi
+
+          # Normalize both sides to a triple "N N N" of (add, change, destroy).
+          normalize() {
+            echo "$1" | grep -oE '[0-9]+ to add,[[:space:]]*[0-9]+ to change,[[:space:]]*[0-9]+ to destroy' \
+              | sed -E 's/([0-9]+) to add,[[:space:]]*([0-9]+) to change,[[:space:]]*([0-9]+) to destroy/\1 \2 \3/'
+          }
+
+          actual_triple=$(normalize "$actual_line")
+          expected_triple=$(normalize "$EXPECTED")
+
+          echo "Actual:   $actual_triple"
+          echo "Expected: $expected_triple"
+
+          if [ "$actual_triple" != "$expected_triple" ]; then
+            echo "::error::Plan summary does not match expected_changes."
+            echo "::error::Expected ($EXPECTED) normalises to: $expected_triple"
+            echo "::error::Actual   ($actual_line) normalises to: $actual_triple"
+            echo "::error::Either your prediction was wrong, OR drift has accumulated between PR review and now. Re-review the plan artifact and re-dispatch with the corrected expected_changes."
+            exit 1
+          fi
+
+          echo "Plan summary matches expected_changes (ok)."
+
+      - name: Reject destroys of protected resource types
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          # Terraform marks destroys with a leading "  # <addr> will be destroyed".
+          # We grep for that line and check the resource type.
+          found_violations=0
+          violations=""
+          for type in $PROTECTED_DESTROY_TYPES; do
+            matches=$(grep -E "^[[:space:]]+# ${type}\.[A-Za-z0-9_]+ will be destroyed" plan-output.txt || true)
+            if [ -n "$matches" ]; then
+              found_violations=1
+              violations+="$matches"$'\n'
+            fi
+          done
+
+          if [ "$found_violations" = "1" ]; then
+            echo "::error::Plan wants to destroy one or more protected resource types."
+            echo "::error::Protected types: $PROTECTED_DESTROY_TYPES"
+            echo "$violations" | while read -r line; do echo "::error::$line"; done
+            echo "::error::To intentionally destroy a protected resource, revise the PR with an explicit removed { } block + ratification in the commit message, then re-merge + re-dispatch. The friction here is intentional."
+            exit 1
+          fi
+
+          echo "No destroys of protected resource types (ok)."
+
+      - name: Upload tfplan binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.env_region }}-${{ github.run_id }}
+          path: ${{ env.WORK_DIR }}/tfplan
+          # The tfplan binary contains rendered HCL including any
+          # values that were resolved from data sources (e.g.
+          # Secrets Manager lookups during plan). Short retention
+          # to minimise the exposure window; the human-readable
+          # plan-output.txt is the long-retention SOC 2 evidence
+          # artifact.
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload plan-output.txt
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-output-${{ inputs.env_region }}-${{ github.run_id }}
+          path: ${{ env.WORK_DIR }}/plan-output.txt
+          # 90-day retention — this is the SOC 2 CC8.1 evidence the
+          # auditor reads alongside the GitHub deployment record.
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Plan summary
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          {
+            echo "## Plan summary"
+            echo ""
+            echo '```'
+            grep -E '^Plan:[[:space:]]+[0-9]+ to add' plan-output.txt | tail -n 1 || echo "no plan summary"
+            echo '```'
+            echo ""
+            echo "### Plan tail (last 100 lines)"
+            echo ""
+            echo '```hcl'
+            tail -n 100 plan-output.txt
+            echo '```'
+            echo ""
+            echo "Full plan artifact: \`plan-output-${{ inputs.env_region }}-${{ github.run_id }}\`"
+            echo "Plan binary (apply input): \`tfplan-${{ inputs.env_region }}-${{ github.run_id }}\` (7-day retention)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # Apply: GATED. The `environment:` key references a GitHub
+  # Environment that MUST be configured (one-time, per env-region,
+  # per `docs/operations/production-deployment.md` § 2.3) with:
+  #   - Required reviewers (two-person rule via CODEOWNERS)
+  #   - Deployment branch restriction: `main` only
+  #   - No wait timer (reviewer presence IS the gate; a timer adds
+  #     frustration without adding safety once the reviewer has
+  #     clicked Approve)
+  # The reviewer sees the plan summary + plan-output artifact link
+  # in the run UI before clicking Approve.
+  #
+  # CRITICAL: this job MUST `terraform apply tfplan` (positional
+  # plan-file argument), NEVER `terraform apply` or
+  # `terraform apply -auto-approve` without a positional plan file.
+  # Re-planning at apply time would defeat the approval — the
+  # reviewer approved a specific plan, and that exact plan is what
+  # gets executed. The pre-merge checker
+  # (scripts/check-terraform-apply-workflow.ts) enforces this
+  # invariant against future regressions.
+  # ---------------------------------------------------------------------
+  apply:
+    name: Terraform apply (gated)
+    needs: [preflight, plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: terraform-apply-${{ inputs.env_region }}
+      # `url` shows up in the deployment record; we point it at the
+      # workflow run itself (the apply artifact + the GitHub
+      # deployment record are the canonical references).
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    env:
+      WORK_DIR: ${{ needs.preflight.outputs.work_dir }}
+      AWS_REGION: ${{ needs.preflight.outputs.aws_region }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve apply-role ARN from variable
+        id: role
+        env:
+          ROLE_VAR_NAME: ${{ needs.preflight.outputs.role_var_name }}
+          STAGING_ROLE: ${{ vars.AWS_APPLY_ROLE_ARN_STAGING }}
+          PROD_ROLE: ${{ vars.AWS_APPLY_ROLE_ARN_PROD }}
+        run: |
+          case "$ROLE_VAR_NAME" in
+            AWS_APPLY_ROLE_ARN_STAGING) role_arn="$STAGING_ROLE" ;;
+            AWS_APPLY_ROLE_ARN_PROD)    role_arn="$PROD_ROLE" ;;
+            *) echo "::error::Unknown role var: $ROLE_VAR_NAME"; exit 1 ;;
+          esac
+
+          if [ -z "$role_arn" ]; then
+            echo "::error::Repository variable $ROLE_VAR_NAME is not set."
+            exit 1
+          fi
+
+          echo "::add-mask::$role_arn"
+          echo "role_arn=$role_arn" >> "$GITHUB_OUTPUT"
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.role.outputs.role_arn }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gh-actions-apply-${{ inputs.env_region }}-${{ github.run_id }}
+
+      - name: Download tfplan binary
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ inputs.env_region }}-${{ github.run_id }}
+          path: ${{ env.WORK_DIR }}
+
+      - name: terraform init
+        working-directory: ${{ env.WORK_DIR }}
+        run: terraform init -input=false
+
+      # ⚠️ DO NOT change to `terraform apply` without a positional
+      # plan file. The scripts/check-terraform-apply-workflow.ts
+      # pre-merge linter will reject any such regression.
+      - name: terraform apply tfplan
+        id: apply
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          set +e
+          terraform apply \
+            -input=false \
+            -lock-timeout=2m \
+            -no-color \
+            tfplan 2>&1 | tee apply-output.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -ne 0 ]; then
+            echo "::error::terraform apply failed with exit code $code. See apply-output.txt artifact + AWS CloudWatch for the resource(s) that failed."
+            exit "$code"
+          fi
+          echo "Apply succeeded."
+
+      - name: Upload apply-output.txt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apply-output-${{ inputs.env_region }}-${{ github.run_id }}
+          path: ${{ env.WORK_DIR }}/apply-output.txt
+          # 90-day retention — SOC 2 CC8.1 evidence pairs with the
+          # plan-output artifact under the same run id.
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Apply summary
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          ACTOR: ${{ github.actor }}
+          ENV_REGION: ${{ inputs.env_region }}
+          APPLY_EXIT: ${{ steps.apply.outputs.exit_code }}
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          if [ -f apply-output.txt ]; then
+            apply_tail=$(tail -n 50 apply-output.txt)
+          else
+            apply_tail="(apply-output.txt missing — apply did not start)"
+          fi
+
+          {
+            echo "## Apply summary"
+            echo ""
+            echo "| Field         | Value |"
+            echo "| ------------- | ----- |"
+            echo "| env_region    | \`$ENV_REGION\` |"
+            echo "| dispatched by | @$ACTOR |"
+            echo "| reason        | $REASON |"
+            echo "| apply exit    | $APPLY_EXIT |"
+            echo "| run url       | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |"
+            echo ""
+            echo "### Apply tail (last 50 lines)"
+            echo ""
+            echo '```'
+            echo "$apply_tail"
+            echo '```'
+            echo ""
+            echo "Full apply artifact: \`apply-output-${{ inputs.env_region }}-${{ github.run_id }}\` (90-day retention)"
+            echo "Plan that was applied: \`plan-output-${{ inputs.env_region }}-${{ github.run_id }}\` (90-day retention)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # Aggregator. Single status check downstream tooling can require.
+  # Mirrors the `ci-pass` / `terraform-ci-pass` pattern in the other
+  # workflows. Reports failed when the dispatch was cancelled at the
+  # approval gate (so cancelled approvals don't read as success).
+  # ---------------------------------------------------------------------
+  terraform-apply-pass:
+    name: terraform-apply-pass
+    runs-on: ubuntu-latest
+    needs: [preflight, plan, apply]
+    if: always()
+    steps:
+      - name: All apply-pipeline jobs succeeded
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::One or more apply-pipeline jobs failed or were cancelled."
+          echo "::error::Preflight: ${{ needs.preflight.result }}"
+          echo "::error::Plan:      ${{ needs.plan.result }}"
+          echo "::error::Apply:     ${{ needs.apply.result }}"
+          exit 1
+      - run: echo "Apply pipeline completed successfully."

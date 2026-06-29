@@ -11,7 +11,7 @@
   "dependencies": {
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/database": "workspace:*",
-    "@pharmax/orders": "workspace:*",
+    "@pharmax/order-contracts": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",
     "@pharmax/sla": "workspace:*",

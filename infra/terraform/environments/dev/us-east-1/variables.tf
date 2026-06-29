@@ -96,3 +96,27 @@ variable "audit_archive_glacier_transition_days" {
   type    = number
   default = 90
 }
+
+# ---- CI/CD deploy role (GitHub Actions OIDC) --------------------------------
+# Enables the deploy role assumed by .github/workflows/deploy.yml. When off
+# (default) the stack omits the role and the deploy workflow no-ops.
+variable "enable_cicd_deploy_role" {
+  type    = bool
+  default = false
+}
+variable "cicd_github_repository" {
+  type    = string
+  default = ""
+}
+variable "cicd_github_environment" {
+  type    = string
+  default = ""
+}
+variable "cicd_create_oidc_provider" {
+  type    = bool
+  default = true
+}
+variable "cicd_oidc_provider_arn" {
+  type    = string
+  default = ""
+}

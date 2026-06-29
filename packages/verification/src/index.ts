@@ -66,8 +66,8 @@ export {
 // ApprovePV1 is the FIRST `sodRules`-bearing command in the
 // codebase — it exercises the bus's
 // `requireNoSoDViolationForOrder` path against real `order_event`
-// history (using `orderEventTypeToPermission` from `@pharmax/orders`
-// as the translator). The relevant rule is
+// history (using `orderEventTypeToPermission` from
+// `@pharmax/order-contracts` as the translator). The relevant rule is
 // `sod.typing-pv1-same-actor` from
 // `@pharmax/rbac/separation-of-duties.ts`. Callers handling
 // approval failures must surface `SOD_VIOLATION`

@@ -30,13 +30,8 @@ import "server-only";
 
 import { configureBilling } from "@pharmax/billing";
 import { configureCommandBus } from "@pharmax/command-bus";
-import {
-  AwsKmsAdapter,
-  configureCrypto,
-  createAwsKmsClient,
-  LocalKmsAdapter,
-  type KmsAdapter,
-} from "@pharmax/crypto";
+import { buildKmsAdapterFromEnv } from "@pharmax/composition";
+import { configureCrypto } from "@pharmax/crypto";
 import { prisma, readReportingInOrgScope, reportingClientIsReplica } from "@pharmax/database";
 import { clock } from "@pharmax/platform-core";
 import { configureRbac, PrismaPermissionLoader } from "@pharmax/rbac";
@@ -380,7 +375,11 @@ async function doBootstrap(): Promise<void> {
   // are mutually exclusive — production refuses LocalKmsAdapter,
   // dev refuses to silently fall back to AwsKmsAdapter if AWS env
   // is partially configured (we'd rather fail loud).
-  const { kms, adapterName } = await buildKmsAdapter();
+  const { kms, adapterName } = await buildKmsAdapterFromEnv({
+    env,
+    logger,
+    processName: "apps/web",
+  });
   configureCrypto({ kms });
 
   // 3. @pharmax/shipping — register one factory per supported
@@ -490,105 +489,6 @@ async function doBootstrap(): Promise<void> {
 }
 
 /**
- * Build and validate the KMS adapter for this process. The decision
- * tree:
- *
- *   NODE_ENV=production
- *     ALL FOUR of AWS_REGION / AWS_KMS_DATA_KEY_ID / AWS_KMS_SEARCH_KEY_ID
- *       (the fourth, AWS_KMS_KEY_LABEL, has a default) are required.
- *     If any is missing → throw a clear hard-fail (refuse to boot).
- *     If all present → `new AwsKmsAdapter(...)` + `validate()`.
- *
- *   NODE_ENV=development | test
- *     If AWS_KMS_DATA_KEY_ID is set → use AwsKmsAdapter (engineer is
- *       explicitly testing against AWS). PHARMAX_LOCAL_KMS_SEED is
- *       ignored.
- *     Otherwise → LocalKmsAdapter against PHARMAX_LOCAL_KMS_SEED
- *       (which the env schema requires when present, so we'll error
- *       at env-validation time if both are unset and we're not in
- *       production).
- */
-async function buildKmsAdapter(): Promise<{
-  readonly kms: KmsAdapter;
-  readonly adapterName: "AwsKmsAdapter" | "LocalKmsAdapter";
-}> {
-  const region = env.AWS_REGION;
-  const dataKeyId = env.AWS_KMS_DATA_KEY_ID;
-  const searchKeyId = env.AWS_KMS_SEARCH_KEY_ID;
-  const label = env.AWS_KMS_KEY_LABEL ?? "app-phi";
-  const previousDataKeyKeyIds = parsePreviousDataKeyKeyIds(env.AWS_KMS_PREVIOUS_DATA_KEY_IDS);
-
-  const allAwsPresent =
-    typeof region === "string" &&
-    region.length > 0 &&
-    typeof dataKeyId === "string" &&
-    dataKeyId.length > 0 &&
-    typeof searchKeyId === "string" &&
-    searchKeyId.length > 0;
-
-  if (env.NODE_ENV === "production") {
-    if (!allAwsPresent) {
-      throw new Error(
-        "Refusing to boot apps/web in production: AWS_REGION, AWS_KMS_DATA_KEY_ID, and AWS_KMS_SEARCH_KEY_ID must all be set. " +
-          "Provision the KMS keys via infra/terraform/modules/kms and inject the ARNs through Secrets Manager."
-      );
-    }
-    const kms = new AwsKmsAdapter({
-      client: createAwsKmsClient({ region }),
-      dataKeyKeyId: dataKeyId,
-      searchKeyKeyId: searchKeyId,
-      keyIdLabel: label,
-      ...(previousDataKeyKeyIds.length > 0 ? { previousDataKeyKeyIds } : {}),
-    });
-    // Round-trip the IAM contract once at boot. If the task role
-    // is missing kms:DescribeKey we want to know now, not at the
-    // first PHI write.
-    await kms.validate();
-    if (previousDataKeyKeyIds.length > 0) {
-      // Loud structured signal that a manual CMK identity rotation
-      // is currently in flight on this deployment. Operators
-      // expect to see this until the bake-in window closes; the
-      // log line is the operator's confirmation that the historical
-      // chain is wired and validated.
-      logger.info("apps/web booted with KMS historical key chain", {
-        event: "kms.previous_data_keys_configured",
-        currentDataKeyId: dataKeyId,
-        previousDataKeyCount: previousDataKeyKeyIds.length,
-      });
-    }
-    return { kms, adapterName: "AwsKmsAdapter" };
-  }
-
-  // dev / test
-  if (allAwsPresent) {
-    const kms = new AwsKmsAdapter({
-      client: createAwsKmsClient({ region }),
-      dataKeyKeyId: dataKeyId,
-      searchKeyKeyId: searchKeyId,
-      keyIdLabel: label,
-      ...(previousDataKeyKeyIds.length > 0 ? { previousDataKeyKeyIds } : {}),
-    });
-    await kms.validate();
-    logger.warn("apps/web wired AwsKmsAdapter under NODE_ENV != production", {
-      reason: "AWS_KMS_* env present in non-prod environment",
-    });
-    return { kms, adapterName: "AwsKmsAdapter" };
-  }
-
-  const seed = env.PHARMAX_LOCAL_KMS_SEED;
-  if (typeof seed !== "string" || seed.length < 32) {
-    throw new Error(
-      "Refusing to boot apps/web: neither AWS KMS config nor PHARMAX_LOCAL_KMS_SEED is present. " +
-        "Set PHARMAX_LOCAL_KMS_SEED (>=32 chars) for local dev, or wire AWS_KMS_DATA_KEY_ID / AWS_KMS_SEARCH_KEY_ID."
-    );
-  }
-  return {
-    kms: new LocalKmsAdapter({ seed }),
-    adapterName: "LocalKmsAdapter",
-  };
-}
-
-/**
  * Hard-fail the boot when production is missing any Clerk identity
  * variable or `SUPPORT_EMAIL`.
  *
@@ -610,30 +510,6 @@ async function buildKmsAdapter(): Promise<{
  * entirely (Clerk Keyless dev mode auto-generates keys; the
  * webhook route returns 503 explicitly).
  */
-/**
- * Parse the `AWS_KMS_PREVIOUS_DATA_KEY_IDS` env var into a clean
- * string array. The env is comma-separated by convention (matches
- * how operators paste ARN lists from Terraform output), with
- * whitespace tolerated around each entry.
- *
- * Returns an empty array for the steady-state case (env unset or
- * empty after trimming) so callers can short-circuit without
- * worrying about `undefined` semantics.
- *
- * Per-entry validation (non-empty, no duplicates) is deferred to
- * `new AwsKmsAdapter(...)` — keeping it there means the same rule
- * applies to direct programmatic callers and operators alike.
- */
-function parsePreviousDataKeyKeyIds(raw: string | undefined): ReadonlyArray<string> {
-  if (typeof raw !== "string") return [];
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return [];
-  return trimmed
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-}
-
 function enforceClerkProductionConfig(): void {
   if (env.NODE_ENV !== "production") return;
 

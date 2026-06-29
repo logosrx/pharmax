@@ -43,6 +43,8 @@ infra/terraform/
 │   ├── ecr/                 ← three repos (web / worker / print-agent)
 │   ├── ecs/                 ← Fargate cluster + three services
 │   ├── iam/                 ← per-service task roles, least-privilege
+│   ├── iam-github-oidc-apply/ ← OIDC role for the gated terraform-apply
+│   │                          workflow (trust scoped to GH Environments)
 │   ├── kms/                 ← eight CMKs (rds / docs / audit-archive /
 │   │                          secrets / data / search / asymm-sign / logs)
 │   ├── network/             ← VPC + 3 subnet tiers + NAT + flow logs
@@ -155,21 +157,36 @@ Two GitHub workflows automate the parts that can be automated:
   tail. The workflow gracefully no-ops when the `AWS_DRIFT_ROLE_ARN`
   repository variable is unset (forks, pre-bootstrap repos).
 
-Production `terraform apply` is deliberately operator-driven (run
-locally with the captured plan + 2-person review) rather than
-auto-applied from CI. This is the SOC 2 CC8.1 posture documented
-in the deployment runbook. An approval-gated `terraform-apply`
-workflow is queued (`tf1-applyflow`) for when the team grows past
-two engineers.
+Production `terraform apply` can run two ways:
+
+1. **CI dispatch (preferred)** — the
+   [`terraform-apply`](../../.github/workflows/terraform-apply.yml)
+   workflow. Operator dispatches `workflow_dispatch` with
+   `env_region`, `reason`, and `expected_changes`. The workflow runs
+   plan, fails closed on no-op / unexpected-diff / protected-destroy
+   conditions, then waits at the `terraform-apply-<env-region>`
+   GitHub Environment for required-reviewer approval (2 reviewers
+   for prod). On Approve, the workflow executes the EXACT saved
+   plan via `terraform apply tfplan`. The dispatch surface +
+   approval flow is documented in
+   [`docs/operations/production-deployment.md`](../../docs/operations/production-deployment.md) §§ 2.3–2.4 and § 4.5.
+2. **Operator-driven** — the original `terraform plan` +
+   `terraform apply tfplan` flow from a local workstation, retained
+   for the first apply per env-region (when no apply-role exists
+   yet) and emergencies.
+
+Both paths satisfy SOC 2 CC8.1; the CI path additionally produces a
+deployment record + plan/apply output artifacts (90-day retention)
+as tamper-evident evidence per run.
 
 The Makefile at `infra/terraform/Makefile` exposes shortcuts for every
 env-region:
 
 ```bash
-make plan-dev-use1
-make plan-staging-use1
-make plan-prod-use1
-make plan-prod-usw2
+make plan-dev-ue1
+make plan-staging-ue1
+make plan-prod-ue1
+make plan-prod-uw2
 make ci    # fmt-check + validate + lint, the CI gate
 ```
 
@@ -198,8 +215,8 @@ A nightly job runs `terraform plan -detailed-exitcode -lock=false` and
 pages on-call if the exit code is `2` (drift detected). Targets:
 
 ```bash
-make drift-prod-use1
-make drift-prod-usw2
+make drift-prod-ue1
+make drift-prod-uw2
 ```
 
 The expected hot spots are RDS pending maintenance and CloudWatch
@@ -220,8 +237,8 @@ to keep cost down; failover scales it up.
 | Layer           | Status                                                                                                                                                                                                                               |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | ECR images      | Replicated cross-region via the deploy pipeline (a build pushes both regions concurrently).                                                                                                                                          |
-| Secrets Manager | `pharmax-prod-usw2/*` exists in parallel; values are populated by the same out-of-band rotation procedure (the DR rotation runbook covers this).                                                                                     |
-| State           | `pharmax-tfstate-prod-usw2` lives in `us-west-2` so a `us-east-1` outage cannot brick our DR Terraform.                                                                                                                              |
+| Secrets Manager | `pharmax-prod-uw2/*` exists in parallel; values are populated by the same out-of-band rotation procedure (the DR rotation runbook covers this).                                                                                      |
+| State           | `pharmax-tfstate-prod-uw2` lives in `us-west-2` so a `us-east-1` outage cannot brick our DR Terraform.                                                                                                                               |
 | KMS keys        | Independent per-region keys. **Cross-region key access does not work** — envelope-encrypted PHI from `us-east-1` is unreadable from `us-west-2` and vice versa. This is by design (ADR 0022 §3 KMS regionality).                     |
 | RDS             | Multi-AZ inside `us-west-2`. Cross-region replicas are NOT configured today — RPO during a true regional failure is "the most recent restorable time of the most recent cross-region snapshot" (which is currently a manual export). |
 | ALB / Route53   | Two ALBs, one per region. Failover is a Route53 record swap (manual today; a health-check-driven automatic swap is a planned enhancement).                                                                                           |
@@ -240,11 +257,11 @@ the short version:
    cluster-snapshot copy into a fresh `us-west-2` cluster via
    `aws rds restore-db-cluster-from-snapshot` + `aws rds
 create-db-instance` (see `docs/RUNBOOK.md` § DR Step 3). Update the
-   `database-url` secret in `pharmax-prod-usw2/*` to point at the
+   `database-url` secret in `pharmax-prod-uw2/*` to point at the
    restored writer endpoint.
 4. **Capacity.** Scale ECS desired counts up:
-   `aws ecs update-service --cluster pharmax-prod-usw2-cluster --service pharmax-prod-usw2-web --desired-count 5`
-   (or run `make plan-prod-usw2` after editing the .tfvars to bake the
+   `aws ecs update-service --cluster pharmax-prod-uw2-cluster --service pharmax-prod-uw2-web --desired-count 5`
+   (or run `make plan-prod-uw2` after editing the .tfvars to bake the
    new floor into IaC).
 5. **Worker continuity.** The Merkle-root signer and outbox drains in
    `us-west-2` start running against `us-west-2` PHI immediately.
@@ -332,11 +349,11 @@ After apply, populate the empty secrets:
 
 ```bash
 aws secretsmanager put-secret-value \
-  --secret-id pharmax-prod-use1/clerk-secret-key \
+  --secret-id pharmax-prod-ue1/clerk-secret-key \
   --secret-string "$CLERK_SECRET_KEY"
 
 aws secretsmanager put-secret-value \
-  --secret-id pharmax-prod-use1/clerk-webhook-secret \
+  --secret-id pharmax-prod-ue1/clerk-webhook-secret \
   --secret-string "$CLERK_WEBHOOK_SECRET"
 
 # … repeat for stripe-secret-key, stripe-webhook-secret, easypost-api-key,
@@ -352,14 +369,33 @@ aws secretsmanager put-secret-value \
 The Aurora module uses `manage_master_user_password = true`, so the master
 password is generated by AWS and stored in an AWS-managed Secrets Manager
 secret — Terraform never sees it. The app reads its connection string from the
-`database-url` / `direct-url` / `reporting-database-url` secrets (injected into
-ECS as env vars), which we assemble **once after apply** from the Terraform
-outputs and the managed master secret. These are PHI-scope secrets — run this
-from an audited admin session, never paste the result into a file or chat.
+`database-url` / `database-url-system` / `direct-url` / `reporting-database-url`
+secrets (injected into ECS as env vars), which we assemble **once after apply**
+from the Terraform outputs and the managed master secret. These are PHI-scope
+secrets — run this from an audited admin session, never paste the result into a
+file or chat.
+
+**Role split (defense-in-depth for RLS).** The request-path connection strings
+select a _non-owner, non-superuser_ Postgres role via the libpq `options`
+parameter, so Row-Level Security is actually enforced:
+
+- `database-url` (apps/web) → `pharmax_app` (RLS-subject)
+- `database-url-system` (apps/worker, apps/print-agent) → `pharmax_system`
+  (`BYPASSRLS`; cross-tenant claim drains that resolve a tenant before entering
+  its tenancy)
+- `direct-url` (migrations only) → the master/owner role, no role override
+
+This requires the login to be a member of both roles (run once, as the master
+user, after the RLS-baseline migration has created the roles):
+
+```sql
+GRANT pharmax_app TO <login>;
+GRANT pharmax_system TO <login>;
+```
 
 ```bash
 cd infra/terraform/environments/prod/us-east-1
-PREFIX=pharmax-prod-use1
+PREFIX=pharmax-prod-ue1
 
 # 1. Endpoints + the managed-master-secret ARN (writer, reader, port).
 WRITER=$(terraform output -raw rds_endpoint)
@@ -375,13 +411,19 @@ DBPASS=$(aws secretsmanager get-secret-value --secret-id "$MASTER_SECRET_ARN" \
 
 # 3. URL-encode the password (it may contain reserved characters) and build
 #    the connection strings. sslmode=require because rds.force_ssl = 1.
+#    `options=-c role=...` is URL-encoded (%20 space, %3D '=') and switches the
+#    active role on connect so RLS applies to the web tier.
 ENC=$(jq -rn --arg p "$DBPASS" '$p|@uri')
-DATABASE_URL="postgresql://${DBUSER}:${ENC}@${WRITER}:${PORT}/pharmax?sslmode=require"
-REPORTING_DATABASE_URL="postgresql://${DBUSER}:${ENC}@${READER}:${PORT}/pharmax?sslmode=require"
+BASE="postgresql://${DBUSER}:${ENC}@${WRITER}:${PORT}/pharmax?sslmode=require"
+DATABASE_URL="${BASE}&options=-c%20role%3Dpharmax_app"
+DATABASE_URL_SYSTEM="${BASE}&options=-c%20role%3Dpharmax_system"
+DIRECT_URL="${BASE}"
+REPORTING_DATABASE_URL="postgresql://${DBUSER}:${ENC}@${READER}:${PORT}/pharmax?sslmode=require&options=-c%20role%3Dpharmax_app"
 
-# 4. Store them. DIRECT_URL == DATABASE_URL (Aurora has no separate pooler).
+# 4. Store them. DIRECT_URL is the owner connection used only by migrations.
 aws secretsmanager put-secret-value --secret-id "$PREFIX/database-url"           --secret-string "$DATABASE_URL"
-aws secretsmanager put-secret-value --secret-id "$PREFIX/direct-url"             --secret-string "$DATABASE_URL"
+aws secretsmanager put-secret-value --secret-id "$PREFIX/database-url-system"    --secret-string "$DATABASE_URL_SYSTEM"
+aws secretsmanager put-secret-value --secret-id "$PREFIX/direct-url"             --secret-string "$DIRECT_URL"
 aws secretsmanager put-secret-value --secret-id "$PREFIX/reporting-database-url" --secret-string "$REPORTING_DATABASE_URL"
 ```
 
@@ -449,11 +491,11 @@ The IAM scoping is in `modules/iam/main.tf` — task roles hold
 The worker writes signed manifests to the audit-archive bucket using
 the asymmetric signing CMK. Wiring:
 
-| env var                     | source                         | notes                                           |
-| --------------------------- | ------------------------------ | ----------------------------------------------- |
-| `AWS_KMS_AUDIT_SIGN_KEY_ID` | `kms_asymm_sign_key_alias`     | `kms:Sign` only — never `kms:Verify`/`Decrypt`. |
-| `AUDIT_ARCHIVE_BUCKET`      | `s3_audit_archive_bucket_name` | Object-Lock COMPLIANCE bucket name.             |
-| `AUDIT_ARCHIVE_KMS_KEY_ID`  | `kms_audit_archive_key_alias`  | SSE-KMS roundtrip on Merkle-manifest writes.    |
+| env var                       | source                         | notes                                           |
+| ----------------------------- | ------------------------------ | ----------------------------------------------- |
+| `MERKLE_SIGNER_KMS_KEY_ID`    | `kms_asymm_sign_key_alias`     | `kms:Sign` only — never `kms:Verify`/`Decrypt`. |
+| `AUDIT_ARCHIVE_S3_BUCKET`     | `s3_audit_archive_bucket_name` | Object-Lock COMPLIANCE bucket name.             |
+| `AUDIT_ARCHIVE_S3_KMS_KEY_ID` | `kms_audit_archive_key_alias`  | SSE-KMS roundtrip on Merkle-manifest writes.    |
 
 ### `apps/web`, `apps/worker`, `apps/print-agent`
 

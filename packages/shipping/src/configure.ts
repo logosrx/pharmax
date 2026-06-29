@@ -23,7 +23,7 @@
 // is the worst possible outcome for a label-purchase flow.
 
 import type { ShippingProvider } from "@pharmax/database";
-import { errors } from "@pharmax/platform-core";
+import { errors, runtime } from "@pharmax/platform-core";
 
 import type { ShippingAdapter } from "./carriers/shipping-adapter.js";
 
@@ -53,7 +53,11 @@ export interface ShippingConfiguration {
   readonly factories: Partial<Record<ShippingProvider, ShippingAdapterFactory>>;
 }
 
-let configured: ShippingConfiguration | null = null;
+// globalThis-backed so boot (Next instrumentation bundle) and use
+// (route bundles) share ONE configuration despite webpack giving each
+// bundle its own copy of this module. See platform-core
+// runtime/global-singleton.ts for the full rationale.
+const box = runtime.globalSingletonBox<ShippingConfiguration>("pharmax:shipping:config");
 
 /**
  * Register one factory per provider you want to support. Call once
@@ -62,20 +66,20 @@ let configured: ShippingConfiguration | null = null;
  * `resetShippingConfigurationForTests`.
  */
 export function configureShipping(config: ShippingConfiguration): void {
-  configured = Object.freeze({
+  box.value = Object.freeze({
     factories: Object.freeze({ ...config.factories }),
   });
 }
 
 export function getShippingConfiguration(): ShippingConfiguration {
-  if (configured === null) {
+  if (box.value === null) {
     throw new errors.InternalError({
       code: "SHIPPING_NOT_CONFIGURED",
       message:
         "@pharmax/shipping is not configured. Call configureShipping({ factories: { ... } }) at boot before invoking a shipping command.",
     });
   }
-  return configured;
+  return box.value;
 }
 
 /**
@@ -96,5 +100,5 @@ export function getShippingAdapterFactory(provider: ShippingProvider): ShippingA
 }
 
 export function resetShippingConfigurationForTests(): void {
-  configured = null;
+  box.value = null;
 }

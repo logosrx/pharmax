@@ -357,7 +357,8 @@ describe("PlaceHold — happy path", () => {
     expect(holdData["heldAt"]).toEqual(new Date("2026-05-23T19:00:00.000Z"));
     const commandLogId = holdData["placeCommandLogId"];
     expect(typeof commandLogId).toBe("string");
-    expect(commandLogId).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    // Bus-generated UUID (command_log.id is @db.Uuid).
+    expect(commandLogId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 
     // Order flip: status + assignee null. NO bucket change.
     const updateCalls = callsOf(fake.calls, "order", "update");

@@ -92,12 +92,21 @@ durable (encrypted backup, password manager attachment, etc.).
 
 ---
 
-## 2. One-time per account: GitHub Actions OIDC role
+## 2. One-time per account: GitHub Actions OIDC roles
 
-The `terraform-drift` workflow needs to read AWS resources to detect
-drift. The future `terraform-apply` workflow (queued, not yet shipped —
-see [Open follow-ups](#open-follow-ups)) will need to modify them. Both
-authenticate via GitHub OIDC, NOT long-lived AWS access keys.
+Two workflows authenticate to AWS via GitHub Actions OIDC (NOT
+long-lived AWS access keys):
+
+| Workflow                                                             | Role variable                                            | Permissions                                             | When it runs                                          |
+| -------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------- |
+| [`terraform-drift.yml`](../../.github/workflows/terraform-drift.yml) | `AWS_DRIFT_ROLE_ARN`                                     | READ-ONLY — `Describe*` / `Get*` / `List*` only         | Daily schedule + `workflow_dispatch`                  |
+| [`terraform-apply.yml`](../../.github/workflows/terraform-apply.yml) | `AWS_APPLY_ROLE_ARN_STAGING` / `AWS_APPLY_ROLE_ARN_PROD` | WRITE — the IAM the modules need (creates/updates/etc.) | `workflow_dispatch` only, gated by GitHub Environment |
+
+The two roles MUST be separate. The drift role runs unattended every
+day; keeping it read-only means a hypothetical token compromise
+cannot mutate AWS. The apply role is more powerful but only assumable
+inside the gated `terraform-apply-<env-region>` GitHub Environment,
+which requires a human reviewer to click Approve.
 
 ### 2.1 Configure the OIDC trust relationship
 
@@ -157,9 +166,7 @@ In each AWS account that GitHub Actions needs to touch:
 
 4. Capture the role ARN.
 
-### 2.2 Register the role with the repo
-
-Two values go into the GitHub repository:
+### 2.2 Register the drift role with the repo
 
 | Where               | Name                 | Value        | Why                                                                                                                                         |
 | ------------------- | -------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -167,6 +174,136 @@ Two values go into the GitHub repository:
 
 The drift workflow gracefully no-ops when this variable is unset, so
 forks and pre-bootstrap repos do not see false failures.
+
+### 2.3 Create the terraform-apply OIDC role
+
+The apply role is a SEPARATE role from the drift role — broader
+permissions, scoped trust. Provision once per AWS account that the
+apply workflow targets (typically two: one for the staging account,
+one for the production account; production may host multiple regions
+under the same account).
+
+**Preferred path — the Terraform module.** The role's trust policy and
+permissions live in version control as
+[`infra/terraform/modules/iam-github-oidc-apply/`](../../infra/terraform/modules/iam-github-oidc-apply/main.tf).
+Enable it in the account's primary working directory via
+`terraform.tfvars` (see the `tfapply_*` block in
+`environments/prod/us-east-1/terraform.tfvars.example` and
+`environments/staging/us-east-1/terraform.tfvars.example`), apply, then
+read `terraform output terraform_apply_role_arn`. The module:
+
+- Builds the trust policy with **exact-match** (`StringEquals`)
+  subject claims, one per gated `terraform-apply-<env-region>` GitHub
+  Environment — tighter than the `StringLike` the manual procedure
+  below shows.
+- Attaches `PowerUserAccess` plus a narrow inline IAM supplement
+  (read-only `iam:Get*/List*` everywhere; IAM writes only on
+  `pharmax-<env>-<region>-*` names; `iam:PassRole` only for stack
+  roles and only to AWS services; service-linked-role creation).
+- Re-uses the account's GitHub OIDC provider from the `cicd-deploy`
+  module automatically when both are enabled in the same working
+  directory (set `tfapply_create_oidc_provider = true` in accounts
+  without it, e.g. staging).
+
+Because the role must exist BEFORE the first CI apply, enable the
+module during the operator-driven first apply (§ 3) — the
+chicken-and-egg resolves itself in one pass.
+
+**Manual fallback (first-bootstrap or break-glass).** The CLI
+procedure below produces the same role shape out-of-band:
+
+1. Create the role with a trust policy that restricts the OIDC
+   subject claim to the gated GitHub Environment:
+
+   ```bash
+   aws iam create-role \
+     --role-name pharmax-gh-actions-apply-prod \
+     --assume-role-policy-document file://trust-policy-apply-prod.json
+   ```
+
+   `trust-policy-apply-prod.json` example:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Principal": {
+           "Federated": "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com"
+         },
+         "Action": "sts:AssumeRoleWithWebIdentity",
+         "Condition": {
+           "StringEquals": {
+             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+           },
+           "StringLike": {
+             "token.actions.githubusercontent.com:sub": [
+               "repo:<org>/<repo>:environment:terraform-apply-prod-ue1",
+               "repo:<org>/<repo>:environment:terraform-apply-prod-uw2"
+             ]
+           }
+         }
+       }
+     ]
+   }
+   ```
+
+   The `environment:` restriction is load-bearing — the role can
+   ONLY be assumed by a job running inside the gated GitHub
+   Environment, which requires reviewer approval. This is
+   defense-in-depth on top of the workflow-level gate.
+
+2. Attach a permissions policy that covers every action the
+   Terraform modules need. The pragmatic shortcut is the AWS-managed
+   `arn:aws:iam::aws:policy/PowerUserAccess` plus a narrow inline
+   policy for IAM (`PowerUserAccess` excludes IAM by design). For a
+   tighter scope, use the per-service `Full*` policies for ec2, rds,
+   s3, kms, ecs, ecr, logs, secretsmanager, elasticloadbalancing,
+   wafv2, cloudwatch, sns + a narrow inline IAM policy. Iterate the
+   policy by running an apply, capturing AccessDenied errors from
+   the apply-output artifact, and granting exactly those actions.
+
+3. Capture the role ARN and set the repository variable:
+
+   | Where               | Name (per account)                                                                        | Value        |
+   | ------------------- | ----------------------------------------------------------------------------------------- | ------------ |
+   | Repository variable | `AWS_APPLY_ROLE_ARN_STAGING` (staging account) / `AWS_APPLY_ROLE_ARN_PROD` (prod account) | The role ARN |
+
+### 2.4 Create the GitHub Environments
+
+The apply workflow gates each env-region behind a GitHub Environment
+(one per env-region). One-time setup per env-region, in **Settings →
+Environments → New environment**:
+
+| Environment name              | Required reviewers                       | Deployment branches | Wait timer |
+| ----------------------------- | ---------------------------------------- | ------------------- | ---------- |
+| `terraform-apply-staging-ue1` | 1 reviewer (any platform team member)    | `main` only         | 0 minutes  |
+| `terraform-apply-prod-ue1`    | 2 reviewers (platform + infra CODEOWNER) | `main` only         | 0 minutes  |
+| `terraform-apply-prod-uw2`    | 2 reviewers (platform + infra CODEOWNER) | `main` only         | 0 minutes  |
+
+Why these settings:
+
+- **Reviewers (2 for prod).** SOC 2 CC8.1 two-person rule. The
+  reviewers see the plan summary and a link to the plan-output
+  artifact in the run UI before clicking Approve. Staging is 1
+  reviewer because the staging account is a learning environment;
+  prod is 2.
+- **Branch restriction (main only).** A workflow-dispatch run from a
+  feature branch cannot deploy. The PR must land on main first; the
+  merged commit is what gets applied. Aligns with the
+  `git pull → terraform plan → terraform apply` mental model.
+- **Wait timer 0.** Reviewer presence IS the gate. A cooling-off
+  timer after Approve adds frustration without adding safety —
+  there's no actor between the reviewer and the apply who could
+  intervene during the timer window. (A timer would matter if the
+  approver and the operator were different humans; here they're the
+  same workflow run.)
+
+No environment secrets are needed — the role ARN is a repo variable
+(not a secret) per § 2.2 / § 2.3, and the AWS resources the apply
+role touches (Secrets Manager values, KMS keys) are read at AWS-API
+time using the role's permissions.
 
 ---
 
@@ -215,15 +352,28 @@ the freshly-populated secrets.
 
 ## 4. Routine applies after the first one
 
-```bash
-cd infra/terraform/environments/prod/us-east-1
+There are two valid paths, in priority order:
 
-git pull                              # pick up the merged HCL change
-terraform plan -var-file=terraform.tfvars -out=tfplan
-# Review.
+1. **CI apply (preferred)** — dispatch
+   [`terraform-apply.yml`](../../.github/workflows/terraform-apply.yml).
+   Plan + apply both run in GitHub Actions; the apply step is gated
+   behind the `terraform-apply-<env-region>` GitHub Environment
+   (two-person rule for prod). This is the path the platform team
+   uses by default; see § 4.5.
+2. **Operator-driven apply** — the original `terraform plan` +
+   `terraform apply` flow from a workstation, retained for
+   emergencies and for the first-apply per env-region (when no
+   apply-role exists yet). Step-by-step:
 
-terraform apply tfplan
-```
+   ```bash
+   cd infra/terraform/environments/prod/us-east-1
+
+   git pull                              # pick up the merged HCL change
+   terraform plan -var-file=terraform.tfvars -out=tfplan
+   # Review.
+
+   terraform apply tfplan
+   ```
 
 Plans should be small (a handful of resource changes per PR). If a
 plan wants to change >10 resources, treat it as a code-review smell —
@@ -233,6 +383,93 @@ The CI workflow [`terraform-ci.yml`](../../.github/workflows/terraform-ci.yml)
 gates every PR that touches `infra/terraform/**` with `fmt-check +
 validate + tflint`. A red CI is grounds to NOT apply — the HCL itself
 is broken before AWS even sees it.
+
+---
+
+## 4.5 CI apply (the `terraform-apply` workflow)
+
+The [`terraform-apply.yml`](../../.github/workflows/terraform-apply.yml)
+workflow runs `terraform plan` then a gated `terraform apply` against
+exactly one env-region per dispatch. It closes the `tf1-applyflow`
+follow-up that was previously listed under [Open follow-ups](#8-open-follow-ups).
+
+### How to dispatch
+
+1. Confirm pre-conditions:
+   - `terraform-ci` is green on `main`.
+   - `terraform-drift` is green on the target env-region (no open
+     drift issue).
+   - You have an _expected_ "N to add, N to change, N to destroy"
+     summary from a local `terraform plan` against the same commit.
+     If you don't — run `make plan-prod-ue1` locally first. The
+     workflow REFUSES to proceed past plan if your prediction
+     doesn't match the actual plan summary (catches "I thought my
+     PR was tiny but drift snuck a 47-resource delta in").
+2. In GitHub, open **Actions → terraform-apply → Run workflow**.
+3. Fill the inputs:
+   - **env_region** (choice) — exactly one of `staging-ue1`,
+     `prod-ue1`, `prod-uw2`.
+   - **reason** (string, ≥10 chars) — the justification stamped
+     into the apply record (e.g. _"Add CloudWatch alarm threshold
+     for fill-stage SLA per ADR-0021"_).
+   - **expected_changes** (string) — paste your local plan summary
+     line, e.g. _"1 to add, 0 to change, 0 to destroy"_.
+4. Click **Run workflow**.
+
+### What happens next
+
+| Phase                  | Where it runs                                     | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `preflight`            | Ungated                                           | Validates `reason` length, `expected_changes` shape, env-region maps to an existing working dir.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `plan`                 | Ungated (assumes apply role via OIDC)             | Runs `terraform plan -out=tfplan -detailed-exitcode`. Fails the workflow if the plan is a no-op (nothing to apply), if the plan summary doesn't match `expected_changes`, OR if the plan wants to destroy a protected resource type (`aws_kms_key`, `aws_rds_cluster*`, `aws_s3_bucket`, `aws_iam_role*`, `aws_dynamodb_table`). Uploads `tfplan` (7-day retention) + `plan-output.txt` (90-day retention, SOC 2 evidence) as artifacts. Posts the plan summary + last 100 lines to the workflow run summary. |
+| **APPROVAL GATE**      | GitHub Environment `terraform-apply-<env-region>` | Reviewer(s) see the plan summary in the run UI; they read the plan-output artifact, click Approve, OR Reject + leave a comment. Two reviewers required for `prod-*`.                                                                                                                                                                                                                                                                                                                                          |
+| `apply`                | Gated (assumes apply role via OIDC)               | Downloads the `tfplan` artifact, runs `terraform apply tfplan` (NEVER a re-plan; the saved plan is what was reviewed). Uploads `apply-output.txt` (90-day retention). Posts apply summary including reason, operator, and apply tail to the workflow run summary.                                                                                                                                                                                                                                             |
+| `terraform-apply-pass` | Aggregator                                        | Single status check downstream tooling can require.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+
+### Hard interlocks
+
+The workflow REFUSES to apply if any of these is true:
+
+- The dispatch came from a non-`main` branch (GitHub Environment
+  branch restriction).
+- Fewer than the configured number of reviewers Approve.
+- The plan diff is zero (no-op apply — wastes reviewer attention).
+- The plan summary doesn't match `expected_changes` (a stale plan
+  or drift-introduced delta).
+- The plan wants to destroy a protected resource type. To
+  intentionally destroy one, revise the PR with a `removed { ... }`
+  block + explicit ratification in the commit message, re-merge,
+  then re-dispatch.
+- Two apply runs target the same env-region simultaneously
+  (concurrency group serialises them).
+
+### SOC 2 evidence after each apply
+
+Each successful apply produces:
+
+- A GitHub deployment record in the `terraform-apply-<env-region>`
+  environment (who dispatched, who approved, when).
+- A `plan-output-<env-region>-<run-id>` artifact (90-day retention).
+- An `apply-output-<env-region>-<run-id>` artifact (90-day
+  retention).
+- A workflow run summary with the dispatch reason, the plan/apply
+  tails, and the apply exit code.
+
+This four-tuple IS the auditor-facing CC8.1 evidence for the
+specific apply. The quarterly evidence pack
+([`docs/compliance/evidence-collection-guide.md`](../compliance/evidence-collection-guide.md))
+snapshots the deployment record list for the period.
+
+### Pre-merge invariants
+
+`scripts/check-terraform-apply-workflow.ts` (wired into the
+[`safety-linters` CI job](../../.github/workflows/ci.yml)) asserts
+the workflow's structural invariants on every PR that touches it:
+dispatch-only trigger, env-region enum matches the on-disk
+directories, plan precedes apply, apply uses the saved plan
+(positional `tfplan` argument, no `-auto-approve`), apply job has
+`environment:` (the approval gate), concurrency keyed on env-region,
+permissions narrow to `id-token:write + contents:read`.
 
 ---
 
@@ -255,7 +492,7 @@ When you receive a drift alert:
    - **Console change should be ratified.** Open a PR updating HCL to
      match the world. This is the CC8.1-compliant path — the change
      ends up in version control, gets reviewed, and lands in main.
-3. **Re-run** `make plan-prod-use1` to confirm clean. Close the issue.
+3. **Re-run** `make plan-prod-ue1` to confirm clean. Close the issue.
 
 Common false-positive sources:
 
@@ -339,20 +576,23 @@ cancel-key-deletion`; see RUNBOOK § "Rotating the data-encryption key."
 These are queued for future slices, not blockers for the first
 deployment:
 
-- **Production `terraform-apply` workflow** (`tf1-applyflow`):
+- ~~**Production `terraform-apply` workflow** (`tf1-applyflow`):
   approval-gated `workflow_dispatch` workflow that runs `terraform
 apply` via OIDC, posts a comment to a deploy ticket, and only
-  proceeds after a GitHub Environment approval. Today, apply is
-  operator-driven from a local workstation, which is operationally
-  fine for the first few deploys but should move to CI before the
-  team grows past two.
+  proceeds after a GitHub Environment approval.~~ **Shipped** as
+  [`terraform-apply.yml`](../../.github/workflows/terraform-apply.yml).
+  See § 4.5 for the dispatch procedure.
 - **Cross-region RDS read replica** for true RPO < 1h instead of
   "most recent cross-region snapshot." Tracked under DR posture
   refinement; today's "warm standby" is documented as such.
-- **CI drift check between `docs/security/kms-key-inventory.md` and
-  `infra/terraform/modules/kms/main.tf`** (`kms3`): a static check
-  that fails the PR if the inventory document falls out of sync with
-  the Terraform module.
+- ~~**CI drift check between `docs/security/kms-key-inventory.md` and
+  `infra/terraform/modules/kms/main.tf`** (`kms3`)~~ — **Shipped** as
+  `scripts/check-kms-inventory.ts` (closed previously).
+- ~~**Apply-role provisioned by Terraform.**~~ **Shipped** as
+  [`infra/terraform/modules/iam-github-oidc-apply/`](../../infra/terraform/modules/iam-github-oidc-apply/main.tf)
+  — see § 2.3. The chicken-and-egg resolves by enabling the module
+  during the operator-driven first apply; the manual CLI procedure
+  remains documented as the break-glass fallback.
 
 ---
 
@@ -360,13 +600,13 @@ apply` via OIDC, posts a comment to a deploy ticket, and only
 
 This runbook contributes to the following SOC 2 controls:
 
-| Control | What this runbook provides                                                                                                                                                                                     |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CC6.1   | Per-deploy plan review + IAM read/write split for OIDC roles documented in § 2.                                                                                                                                |
-| CC6.6   | First-apply checklist confirms ACM cert is ISSUED before the ALB module ships, which is the source of the HTTPS-only listener.                                                                                 |
-| CC7.2   | Daily `terraform-drift` workflow (§ 5) is the operating evidence that infrastructure-level anomalies surface within 24h.                                                                                       |
-| CC8.1   | Two-person plan review (§ 3) + branch-protected `infra/terraform/**` PRs (§ 4) + drift-ratification path (§ 5) constitute the CC8.1 "authorized, reviewed, tested change" evidence at the infrastructure tier. |
-| C1.2    | Rollback procedure (§ 6) documents the limits of rollback for KMS / audit-archive / RDS — i.e. exactly when crypto-shred and Object Lock are operating as designed.                                            |
+| Control | What this runbook provides                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CC6.1   | Per-deploy plan review + IAM read/write split for OIDC roles documented in § 2. The apply role (§ 2.3) is trust-scoped to the gated GH Environment subject claim, so even a stolen OIDC token can't bypass the approval.                                                                                                                                                                                                                                                                                      |
+| CC6.6   | First-apply checklist confirms ACM cert is ISSUED before the ALB module ships, which is the source of the HTTPS-only listener.                                                                                                                                                                                                                                                                                                                                                                                |
+| CC7.2   | Daily `terraform-drift` workflow (§ 5) is the operating evidence that infrastructure-level anomalies surface within 24h.                                                                                                                                                                                                                                                                                                                                                                                      |
+| CC8.1   | Two-person plan review enforced either by the operator-driven path (§ 3) OR by the CI apply workflow's GitHub Environment required-reviewers gate (§ 4.5). Branch-protected `infra/terraform/**` PRs (§ 4) + drift-ratification path (§ 5) + pre-merge `check:terraform-apply-workflow` linter constitute the CC8.1 "authorized, reviewed, tested change" evidence at the infrastructure tier. Each CI apply emits a four-artefact evidence pack (deployment record, plan-output, apply-output, run summary). |
+| C1.2    | Rollback procedure (§ 6) documents the limits of rollback for KMS / audit-archive / RDS — i.e. exactly when crypto-shred and Object Lock are operating as designed.                                                                                                                                                                                                                                                                                                                                           |
 
 The fuller SOC 2 mapping is in
 [`docs/soc2/code-evidence-map.md`](../soc2/code-evidence-map.md).

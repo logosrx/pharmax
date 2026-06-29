@@ -255,7 +255,7 @@ to "show me how the cryptography lands on real AWS resources."
                            │ Forward to web target group (port 3000)
                            ▼
         ┌──────────────────────────────────────────────────┐
-        │ ECS Fargate cluster — pharmax-prod-use1-cluster  │
+        │ ECS Fargate cluster — pharmax-prod-ue1-cluster  │
         │                                                  │
         │  ┌──────┐  ┌────────┐  ┌───────────────┐         │
         │  │ web  │  │ worker │  │ print-agent   │         │
@@ -315,7 +315,7 @@ When an operator opens a patient record, the read path is precisely:
    ECS task security group (which only accepts ingress from the ALB SG).
    The web task lives in a private subnet — no public IP, no inbound
    internet route.
-3. **ECS web task → RDS.** The task's `pharmax-prod-use1-task-web` IAM
+3. **ECS web task → RDS.** The task's `pharmax-prod-ue1-task-web` IAM
    role assumes itself; the Prisma client connects to RDS over TLS.
    RDS lives in **isolated** subnets — no NAT, no IGW. The
    `pharmax_app` Postgres role has RLS forced; the per-connection GUC

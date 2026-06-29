@@ -42,3 +42,6 @@ output "database_password_secret_arn" {
 output "ecs_task_role_web_arn" { value = module.stack.ecs_task_role_web_arn }
 output "ecs_task_role_worker_arn" { value = module.stack.ecs_task_role_worker_arn }
 output "ecs_task_role_print_agent_arn" { value = module.stack.ecs_task_role_print_agent_arn }
+
+# ---- Terraform-apply role ----------------------------------------------------
+output "terraform_apply_role_arn" { value = module.stack.terraform_apply_role_arn }

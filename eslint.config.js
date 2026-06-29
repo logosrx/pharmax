@@ -209,6 +209,19 @@ export default tseslint.config(
     },
   },
 
+  // Override 3a: prisma/seed.ts is the database seed — a
+  // system-bootstrap entry point that creates the org the tenancy
+  // frames would scope to, the same category as scripts/. It
+  // legitimately calls withSystemContext (and prints progress to
+  // stdout, hence the file-level eslint-disable for no-console).
+  // The Prisma-client ban stays in force.
+  {
+    files: ["prisma/seed.ts"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
   // Override 3c: apps/web/src/server/auth/** is the system-context
   // bridge layer for the Clerk identity → Pharmax tenancy hop.
   // Same shape as the worker drain bridge (3b): a tenant-less

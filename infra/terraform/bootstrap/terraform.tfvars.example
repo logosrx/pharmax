@@ -3,7 +3,7 @@
 #
 # Copy to `terraform.tfvars` (gitignored) before applying. Run ONCE per
 # (account, env, region) tuple — typically once per env in us-east-1, plus
-# once for the prod-usw2 DR backend.
+# once for the prod-uw2 DR backend.
 # =============================================================================
 
 project        = "pharmax"

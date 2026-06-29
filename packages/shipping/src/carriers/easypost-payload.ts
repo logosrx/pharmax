@@ -72,3 +72,41 @@ export function parseEasyPostTrackerWebhook(
   }
   return parsed.data;
 }
+
+/**
+ * Project a parsed tracker webhook down to the PHI-FREE subset we
+ * persist and replay.
+ *
+ * The parse schema above is intentionally tolerant (`.passthrough()`)
+ * so a new EasyPost field never breaks ingestion. But that tolerance
+ * means recipient name / address (PHI by linkage) on the inbound body
+ * would otherwise be carried verbatim into
+ * `easypost_webhook_event.payload` and stored at rest in an
+ * RLS-exempt ledger table, outside the envelope-encryption scheme.
+ *
+ * The worker only ever reads `id`, `description`, and
+ * `result.{id, tracking_code, status, status_detail, updated_at,
+ * carrier}` (see process-easypost-webhook-event.ts). We store EXACTLY
+ * those, so no recipient PHI is ever written to the row. Apply this
+ * at the ingestion choke point (handle-easypost-webhook) before
+ * `recordReceived`, so every store implementation and the downstream
+ * `rawPayload` see only the minimized shape.
+ */
+export function projectTrackerEventForStorage(
+  payload: EasyPostTrackerWebhookPayload
+): EasyPostTrackerWebhookPayload {
+  return {
+    id: payload.id,
+    description: payload.description,
+    result: {
+      id: payload.result.id,
+      tracking_code: payload.result.tracking_code,
+      status: payload.result.status,
+      ...(typeof payload.result.status_detail === "string"
+        ? { status_detail: payload.result.status_detail }
+        : {}),
+      updated_at: payload.result.updated_at,
+      ...(typeof payload.result.carrier === "string" ? { carrier: payload.result.carrier } : {}),
+    },
+  };
+}

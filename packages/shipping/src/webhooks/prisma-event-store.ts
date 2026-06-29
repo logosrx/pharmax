@@ -14,11 +14,15 @@
 //     store performs unconditional updates and does NOT defend against
 //     two workers racing on the same row without that upstream lock.
 //
-// PHI: EasyPost tracker payloads may contain recipient name and
-// address. The raw payload is stored verbatim in
-// `easypost_webhook_event.payload` so the worker can replay; downstream
-// audit + outbox stay PHI-free (shipment id + carrier status +
-// occurredAt only) via `RecordShipmentTrackingEvent`.
+// PHI: EasyPost tracker payloads CAN contain recipient name and
+// address. We do NOT store them. The ingestion choke point
+// (`handleEasyPostWebhook`) projects the parsed body down to the
+// PHI-free replay subset via `projectTrackerEventForStorage` BEFORE
+// calling `recordReceived`, so `easypost_webhook_event.payload` only
+// ever holds `{id, description, result.{id, tracking_code, status,
+// status_detail, updated_at, carrier}}`. Downstream audit + outbox
+// stay PHI-free (shipment id + carrier status + occurredAt only) via
+// `RecordShipmentTrackingEvent`.
 
 import { Prisma, type EasyPostWebhookEvent } from "@pharmax/database";
 

@@ -20,6 +20,8 @@
 // NOT thread-safe for production — but Node is single-threaded and
 // production configuration happens before any traffic.
 
+import { runtime } from "@pharmax/platform-core";
+
 import type { EffectivePermissionLoader } from "./loader.js";
 import { rbacNotConfiguredError } from "./errors.js";
 
@@ -27,13 +29,17 @@ export interface RbacConfiguration {
   readonly loader: EffectivePermissionLoader;
 }
 
-let configured: RbacConfiguration | null = null;
+// globalThis-backed so boot (Next instrumentation bundle) and use
+// (route bundles) share ONE configuration despite webpack giving each
+// bundle its own copy of this module. See platform-core
+// runtime/global-singleton.ts for the full rationale.
+const box = runtime.globalSingletonBox<RbacConfiguration>("pharmax:rbac:config");
 
 /**
  * Wire the process-wide RBAC loader. Call once at boot.
  */
 export function configureRbac(config: RbacConfiguration): void {
-  configured = Object.freeze({ ...config });
+  box.value = Object.freeze({ ...config });
 }
 
 /**
@@ -42,10 +48,10 @@ export function configureRbac(config: RbacConfiguration): void {
  * never called.
  */
 export function getRbacConfiguration(): RbacConfiguration {
-  if (configured === null) {
+  if (box.value === null) {
     throw rbacNotConfiguredError();
   }
-  return configured;
+  return box.value;
 }
 
 /**
@@ -53,5 +59,5 @@ export function getRbacConfiguration(): RbacConfiguration {
  * call this.
  */
 export function resetRbacConfigurationForTests(): void {
-  configured = null;
+  box.value = null;
 }

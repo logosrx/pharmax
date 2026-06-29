@@ -38,6 +38,7 @@ import {
   type SessionGucExecutor,
 } from "@pharmax/tenancy";
 
+import { buildPgSslOptions } from "./client.js";
 import { PrismaClient } from "./generated/client/client.js";
 import { prisma } from "./scoped-client.js";
 import { buildReadScopeContext, type TenantTransactionClient } from "./scoped-read.js";
@@ -59,6 +60,7 @@ function buildReplicaClient(url: string): PrismaClient {
   const adapter = new PrismaPg({
     connectionString: url,
     connectionTimeoutMillis: 5_000,
+    ssl: buildPgSslOptions(),
   });
   const raw = new PrismaClient({
     adapter,

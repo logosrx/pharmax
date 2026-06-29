@@ -6,8 +6,8 @@
 # Terraform run for this AWS account / env.
 #
 # Why a separate state per env-region:
-#   - Concurrency: a `terraform apply` against prod-use1 must not block a
-#     `terraform plan` against dev-use1.
+#   - Concurrency: a `terraform apply` against prod-ue1 must not block a
+#     `terraform plan` against dev-ue1.
 #   - Blast radius: state corruption in one env-region cannot cascade.
 #   - Compliance: prod state is in a more locked-down bucket; dev state is
 #     in a permissive bucket. Same primitive, different policy.

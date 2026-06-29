@@ -362,11 +362,11 @@ describe("CancelOrder — happy path", () => {
       workflowPolicyVersion: 1,
     });
     expect(cancellationData["cancelledAt"]).toEqual(new Date("2026-05-23T18:30:00.000Z"));
-    // commandLogId is a bus-generated ULID; assert it's a string and
-    // that the SAME id flows into audit metadata.
+    // commandLogId is a bus-generated UUID (command_log.id is @db.Uuid);
+    // assert it's a string and that the SAME id flows into audit metadata.
     const commandLogId = cancellationData["commandLogId"];
     expect(typeof commandLogId).toBe("string");
-    expect(commandLogId).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(commandLogId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 
     // Order flip: status + assignee, NO bucket change.
     const updateCalls = callsOf(fake.calls, "order", "update");

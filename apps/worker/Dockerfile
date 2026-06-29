@@ -1,42 +1,50 @@
-# syntax=docker/dockerfile:1.7
-# =============================================================================
-# Background worker (apps/worker) — production container image.
+# syntax=docker/dockerfile:1
 #
-# IMPORTANT: build context MUST be the repo root (pnpm workspace):
+# Worker image (apps/worker). pnpm monorepo + Prisma 7 `prisma-client`
+# generator (Rust-free, ESM, pg driver adapter) + tsx runtime.
 #
-#   docker build -f apps/worker/Dockerfile -t pharmax/worker .
+# Build context is the REPO ROOT (see .dockerignore). Build for
+# linux/amd64 to match the Fargate task's X86_64 runtime platform:
 #
-# The worker executes its TypeScript entrypoint directly via tsx (see
-# apps/worker/package.json `start`), so the runtime image carries the
-# workspace source + the generated Prisma client rather than a compiled
-# JS bundle. The ECS health check tests for /tmp/pharmax-worker-alive,
-# which the process writes on boot (apps/worker/src/runtime/liveness.ts).
-# =============================================================================
+#   docker buildx build --platform linux/amd64 \
+#     -f apps/worker/Dockerfile \
+#     -t <registry>/pharmax-prod-ue1/worker:<tag> --push .
+#
+# The CI path (.github/workflows/deploy.yml) builds this on an amd64
+# runner natively.
 
-# ---- Base: pinned Node + pnpm via corepack ---------------------------------
-FROM node:22-bookworm-slim AS base
-ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable
-WORKDIR /app
-# OpenSSL is a runtime dependency of Prisma's query engine.
+FROM node:22-bookworm-slim
+
+# ca-certificates + openssl for TLS to RDS / Secrets Manager / KMS.
+# corepack pins pnpm from package.json `packageManager`.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable
 
-# ---- Deps: install workspace deps + generate Prisma client -----------------
-FROM base AS deps
-COPY . .
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-  pnpm install --frozen-lockfile
+ENV NODE_ENV=production \
+    CI=true
 
-# ---- Runner ----------------------------------------------------------------
-FROM base AS runner
-ENV NODE_ENV=production
+WORKDIR /app
+RUN chown node:node /app
 USER node
-# Bring the fully-installed monorepo (node_modules incl. tsx, the
-# @pharmax/* workspace packages, and the generated Prisma client) from
-# the deps stage.
-COPY --chown=node:node --from=deps /app ./
 
-CMD ["pnpm", "--filter", "pharmacy-worker", "start"]
+# Copy the whole workspace (node_modules / build output excluded by
+# .dockerignore) owned by the runtime user, then install once. Running
+# `pnpm install` as `node` during build bakes the corepack pnpm@11.1.1
+# download into the image, so container start does not hit the network
+# for the package manager.
+COPY --chown=node:node . .
+
+# Frozen install of the full workspace, then generate the Prisma client
+# into packages/database/src/generated/client. `db:generate` also runs
+# in postinstall; calling it explicitly guards against a stale client.
+RUN pnpm install --frozen-lockfile \
+    && pnpm db:generate
+
+WORKDIR /app/apps/worker
+
+# main.ts starts the poll loops, writes the /tmp/pharmax-worker-alive
+# liveness marker the ECS health check probes, and waits on SIGTERM for
+# graceful shutdown. `pnpm start` -> `tsx src/main.ts`.
+CMD ["pnpm", "start"]

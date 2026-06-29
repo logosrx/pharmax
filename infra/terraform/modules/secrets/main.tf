@@ -33,7 +33,19 @@ locals {
   # downstream consumers (the ECS module's `var.secret_arns` map) can
   # reference by key without breakage.
   logical_secrets = [
+    # DATABASE_URL for the RLS-SUBJECT services (apps/web). Its value
+    # MUST select the non-owner, non-superuser `pharmax_app` role, e.g.
+    #   postgresql://<login>:<pw>@<host>:5432/pharmax?options=-c%20role%3Dpharmax_app
+    # so Postgres Row-Level Security is actually enforced on every query.
     "database-url",
+    # DATABASE_URL for the SYSTEM/BYPASSRLS services (apps/worker,
+    # apps/print-agent). Its value selects the `pharmax_system` role
+    # (BYPASSRLS), e.g. ...?options=-c%20role%3Dpharmax_system. These
+    # services resolve a tenant from an external id (webhook / claim
+    # drain) BEFORE entering that org's tenancy, so they legitimately
+    # need to read across orgs — but they are a SEPARATE credential so
+    # the web tier can never be pointed at a BYPASSRLS role by mistake.
+    "database-url-system",
     "database-password",
     "direct-url",
     "reporting-database-url",
@@ -82,7 +94,7 @@ resource "aws_secretsmanager_secret" "this" {
   tags = merge(var.tags, {
     Logical    = each.key
     Rotatable  = contains(local.rotation_candidates, each.key) ? "true" : "false"
-    HipaaScope = contains(["database-url", "direct-url", "reporting-database-url", "database-password", "pharmax-local-kms-seed"], each.key) ? "in-scope" : "operational"
+    HipaaScope = contains(["database-url", "database-url-system", "direct-url", "reporting-database-url", "database-password", "pharmax-local-kms-seed"], each.key) ? "in-scope" : "operational"
   })
 }
 

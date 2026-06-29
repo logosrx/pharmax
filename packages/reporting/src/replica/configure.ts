@@ -25,7 +25,7 @@
 // used before). The scope only needs to hand back SOMETHING the
 // report can query; the report definition owns the read shape.
 
-import { errors } from "@pharmax/platform-core";
+import { errors, runtime } from "@pharmax/platform-core";
 
 export interface ReportReadScope {
   /** True when the scope routes to a dedicated replica (vs. the
@@ -42,7 +42,11 @@ export interface ReportReadScope {
 export const REPORTING_READ_SCOPE_ALREADY_CONFIGURED =
   "REPORTING_READ_SCOPE_ALREADY_CONFIGURED" as const;
 
-let active: ReportReadScope | null = null;
+// globalThis-backed so boot (Next instrumentation bundle) and use
+// (route bundles) share ONE configuration despite webpack giving each
+// bundle its own copy of this module. See platform-core
+// runtime/global-singleton.ts for the full rationale.
+const box = runtime.globalSingletonBox<ReportReadScope>("pharmax:reporting:read-scope");
 
 /**
  * Wire the report read scope. Idempotent re-call with the same
@@ -50,14 +54,14 @@ let active: ReportReadScope | null = null;
  * harness swaps, via the reset helper).
  */
 export function configureReportReadScope(scope: ReportReadScope): void {
-  if (active !== null && active !== scope) {
+  if (box.value !== null && box.value !== scope) {
     throw new errors.InvariantViolationError({
       code: REPORTING_READ_SCOPE_ALREADY_CONFIGURED,
       message:
         "configureReportReadScope was called with a different scope instance; only the test harness may swap.",
     });
   }
-  active = scope;
+  box.value = scope;
 }
 
 /**
@@ -66,10 +70,10 @@ export function configureReportReadScope(scope: ReportReadScope): void {
  * behavior).
  */
 export function getReportReadScope(): ReportReadScope | null {
-  return active;
+  return box.value;
 }
 
 /** Test-only: drop the wired scope. */
 export function resetReportReadScopeConfigurationForTests(): void {
-  active = null;
+  box.value = null;
 }

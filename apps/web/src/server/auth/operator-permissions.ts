@@ -26,19 +26,28 @@ import { prisma } from "@pharmax/database";
 import {
   PrismaPermissionLoader,
   resolveEffectivePermissions,
+  type EffectivePermissionLoader,
   type PermissionCode,
 } from "@pharmax/rbac";
 import type { TenancyContext } from "@pharmax/tenancy";
 
-let cachedLoader: PrismaPermissionLoader | null = null;
+import { getServerCache } from "../cache.js";
+import { CachedPermissionLoader } from "./operator-permission-cache.js";
 
-function getLoader(): PrismaPermissionLoader {
-  // Lazy singleton — the constructor allocates per-org caches that
-  // benefit from being shared across requests in the same process.
-  if (cachedLoader === null) {
-    cachedLoader = new PrismaPermissionLoader(prisma);
+let loader: EffectivePermissionLoader | null = null;
+
+function getLoader(): EffectivePermissionLoader {
+  // Lazy singleton. The production loader is the `PrismaPermissionLoader`
+  // (one four-table join) wrapped in a cross-request `CachedPermissionLoader`
+  // so a hot operator's repeated navigations reuse the grants instead of
+  // re-running the join. The cache is `getServerCache()` — Redis when
+  // REDIS_URL is set, NoopCache otherwise (so this is a no-op without
+  // Redis, identical to the uncached behavior). Per-request dedupe still
+  // happens one level up in `resolveEffectivePermissions`' WeakMap.
+  if (loader === null) {
+    loader = new CachedPermissionLoader(new PrismaPermissionLoader(prisma), getServerCache());
   }
-  return cachedLoader;
+  return loader;
 }
 
 /**

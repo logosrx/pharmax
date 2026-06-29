@@ -29,6 +29,9 @@ import { SignUp } from "@clerk/nextjs";
 
 import { env } from "@/server/env";
 
+import { AuthShell, clerkAppearance } from "../../../src/components/shell/auth-shell.js";
+import { buttonClass } from "../../../src/components/ui/button.js";
+
 import { resolveSignUpSurface } from "./resolve-surface";
 
 interface PageProps {
@@ -54,38 +57,42 @@ export default async function Page({ searchParams }: PageProps) {
     // forced env (e.g. `NODE_ENV=production pnpm dev`).
     const supportEmail = env.SUPPORT_EMAIL ?? "";
     return (
-      <main className="flex min-h-screen items-center justify-center bg-neutral-950 px-4 py-16">
-        <div className="w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-8 text-neutral-100 shadow-lg">
-          <h1 className="text-xl font-semibold tracking-tight">Sign-up is closed.</h1>
-          <p className="mt-3 text-sm text-neutral-300">
-            Pharmax operator accounts are invitation-only. If you have an invitation email, follow
-            the link in that email — it will bring you here with the right credentials.
+      <AuthShell
+        title="Sign-up is closed"
+        subtitle="Pharmax operator accounts are invitation-only."
+        footer={
+          <a className="text-brand underline-offset-4 hover:underline" href="/sign-in">
+            Return to sign in
+          </a>
+        }
+      >
+        <div className="w-full space-y-3 rounded-lg border border-line bg-surface p-6 text-sm text-muted">
+          <p>
+            If you have an invitation email, follow the link in that email — it will bring you here
+            with the right credentials.
           </p>
           {supportEmail.length > 0 && (
-            <p className="mt-3 text-sm text-neutral-300">
-              Otherwise contact your pharmacy administrator at{" "}
-              <a
-                className="text-blue-400 underline-offset-4 hover:underline"
-                href={`mailto:${supportEmail}`}
-              >
-                {supportEmail}
-              </a>
-              .
-            </p>
-          )}
-          <p className="mt-6 text-sm">
-            <a className="text-blue-400 underline-offset-4 hover:underline" href="/sign-in">
-              Return to sign in
+            <a
+              href={`mailto:${supportEmail}`}
+              className={buttonClass({ variant: "secondary", size: "sm", className: "w-full" })}
+            >
+              Contact your administrator
             </a>
-          </p>
+          )}
         </div>
-      </main>
+      </AuthShell>
     );
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-neutral-950 px-4 py-16">
-      <SignUp routing="path" path="/sign-up" signInUrl="/sign-in" forceRedirectUrl="/" />
-    </main>
+    <AuthShell title="Create your account" subtitle="Complete your Pharmax operator enrollment.">
+      <SignUp
+        routing="path"
+        path="/sign-up"
+        signInUrl="/sign-in"
+        forceRedirectUrl="/ops"
+        appearance={clerkAppearance}
+      />
+    </AuthShell>
   );
 }

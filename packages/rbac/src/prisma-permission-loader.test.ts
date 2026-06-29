@@ -150,4 +150,44 @@ describe("PrismaPermissionLoader.load", () => {
     expect(callArg.values).toContain("org-1");
     expect(callArg.values).toContain("user-1");
   });
+
+  it("references quoted camelCase columns that actually exist (B-1 regression)", async () => {
+    // The schema maps TABLE names to snake_case (@@map) but leaves
+    // COLUMN names camelCase (no @map), so Postgres columns are
+    // quoted identifiers: "userId", "roleId", "organizationId",
+    // "siteId", "clinicId", "teamId", "permissionId". Unquoted
+    // snake_case (ur.user_id) folds to lowercase and fails with
+    // `column ... does not exist`. This guard catches that drift
+    // without needing a live database.
+    const { loader, spy } = loaderWith([]);
+    await loader.load({ organizationId: "org-1", userId: "user-1" });
+    const callArg = spy.mock.calls[0]?.[0] as { strings?: string[] };
+    const sql = (callArg.strings ?? []).join("");
+
+    // Correct, quoted camelCase identifiers are present.
+    for (const col of [
+      '"userId"',
+      '"roleId"',
+      '"organizationId"',
+      '"siteId"',
+      '"clinicId"',
+      '"teamId"',
+      '"permissionId"',
+    ]) {
+      expect(sql).toContain(col);
+    }
+
+    // The broken unquoted snake_case identifiers must NOT appear.
+    for (const bad of [
+      "user_id",
+      "role_id",
+      "organization_id",
+      "site_id",
+      "clinic_id",
+      "team_id",
+      "permission_id",
+    ]) {
+      expect(sql).not.toContain(bad);
+    }
+  });
 });

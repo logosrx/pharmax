@@ -123,7 +123,7 @@ variable "search_kms_key_alias" {
 }
 
 variable "asymm_sign_kms_key_alias" {
-  description = "Alias of the asymmetric Merkle-root signing CMK. Injected as AWS_KMS_AUDIT_SIGN_KEY_ID into the worker container only."
+  description = "Alias of the asymmetric Merkle-root signing CMK. Injected as MERKLE_SIGNER_KMS_KEY_ID into the worker container only (the name apps/worker/src/env.ts reads)."
   type        = string
 }
 

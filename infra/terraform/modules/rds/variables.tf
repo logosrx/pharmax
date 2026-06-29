@@ -127,6 +127,37 @@ variable "tags" {
   default     = {}
 }
 
+# ---- RDS Proxy (connection pooler) -----------------------------------------
+#
+# Opt-in. When enabled (on a standalone, managed-password cluster) it creates
+# an RDS Proxy in front of the cluster so autoscaled compute multiplexes onto a
+# warm connection pool instead of opening direct backends. Repoint DATABASE_URL
+# at the `proxy_endpoint` output to use it.
+
+variable "enable_rds_proxy" {
+  description = "Provision an RDS Proxy connection pooler in front of the cluster. Requires global_cluster_role = 'standalone' (managed master password)."
+  type        = bool
+  default     = false
+}
+
+variable "proxy_max_connections_percent" {
+  description = "RDS Proxy: max % of the cluster's max_connections the proxy may open to the backend."
+  type        = number
+  default     = 100
+}
+
+variable "proxy_max_idle_connections_percent" {
+  description = "RDS Proxy: max % of backend connections the proxy keeps idle in the pool."
+  type        = number
+  default     = 50
+}
+
+variable "proxy_idle_client_timeout_seconds" {
+  description = "RDS Proxy: seconds an idle client connection is held before the proxy closes it."
+  type        = number
+  default     = 1800
+}
+
 # ---- Aurora Global Database (cross-region DR) -------------------------------
 #
 # Aurora Global Database links a primary cluster (read/write) in one region to

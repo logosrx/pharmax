@@ -1,8 +1,139 @@
 @import "tailwindcss";
 
+/*
+ * Pharmax design system — token layer.
+ *
+ * "Clinical precision": a calm, dense-but-breathable enterprise
+ * console. Everything an operator sees is composed from the tokens
+ * below — no page should hardcode a hex value or a raw neutral-XXX
+ * scale. Semantic surface/line/text tokens flip between dark (default)
+ * and light themes via the `.light` class on <html>; the brand and
+ * status accents stay constant so workflow signalling reads the same
+ * in both themes.
+ *
+ * Layers:
+ *   @theme         → static design tokens (brand scale, radii, fonts,
+ *                    shadows, motion). Generate `bg-iris-500`, etc.
+ *   @theme inline  → semantic tokens that reference theme-flipping CSS
+ *                    vars. Generate `bg-surface`, `text-fg`, etc.
+ *   :root / .light → the actual values per theme.
+ */
+
+@theme {
+  --font-sans:
+    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas,
+    monospace;
+
+  /* Brand — "iris": a refined indigo-violet. Deliberately not the
+     cookie-cutter pharmacy green; green is reserved for "go". */
+  --color-iris-50: #eef0ff;
+  --color-iris-100: #e0e3ff;
+  --color-iris-200: #c7cbfe;
+  --color-iris-300: #a5a8fc;
+  --color-iris-400: #8483f8;
+  --color-iris-500: #6b66f1;
+  --color-iris-600: #5a4ee4;
+  --color-iris-700: #4d3fc9;
+  --color-iris-800: #4036a2;
+  --color-iris-900: #383280;
+  --color-iris-950: #221d4c;
+
+  /* Radii — soft, consistent. */
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+
+  /* Elevation — tuned for dark surfaces (subtle, never muddy). */
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.16);
+  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.24), 0 1px 2px -1px rgb(0 0 0 / 0.24);
+  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.32), 0 2px 6px -2px rgb(0 0 0 / 0.28);
+  --shadow-lg: 0 16px 40px -8px rgb(0 0 0 / 0.44), 0 6px 16px -6px rgb(0 0 0 / 0.36);
+  --shadow-glow: 0 0 0 1px rgb(107 102 241 / 0.4), 0 8px 28px -6px rgb(107 102 241 / 0.45);
+
+  /* Motion — quick and confident; nothing floaty. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  --animate-fade-in: fade-in 0.18s var(--ease-out);
+  --animate-slide-up: slide-up 0.22s var(--ease-out);
+  --animate-shimmer: shimmer 1.4s ease-in-out infinite;
+  --animate-pulse-dot: pulse-dot 2s var(--ease-in-out) infinite;
+}
+
+/* Semantic tokens — these reference theme-flipping CSS vars so the
+   same utility (`bg-surface`) resolves correctly in either theme. */
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-fg: var(--brand-fg);
+  --color-brand-subtle: var(--brand-subtle);
+  --color-ring: var(--ring);
+}
+
+/* ---- Dark theme (default) ---- */
+:root {
+  color-scheme: dark;
+
+  --canvas: #090b11;
+  --surface: #0f131c;
+  --surface-2: #161b27;
+  --surface-3: #1d2332;
+  --line: #232a3a;
+  --line-strong: #323b50;
+  --fg: #e9edf5;
+  --muted: #98a4ba;
+  --subtle: #687287;
+
+  --brand: #6b66f1;
+  --brand-hover: #7e7af4;
+  --brand-fg: #ffffff;
+  --brand-subtle: #1a1838;
+
+  --ring: #8483f8;
+}
+
+/* ---- Light theme ---- */
+.light {
+  color-scheme: light;
+
+  --canvas: #f5f7fa;
+  --surface: #ffffff;
+  --surface-2: #f3f5f9;
+  --surface-3: #e9edf4;
+  --line: #e3e8f0;
+  --line-strong: #cdd5e2;
+  --fg: #101626;
+  --muted: #56607a;
+  --subtle: #8a93a8;
+
+  --brand: #5a4ee4;
+  --brand-hover: #4d3fc9;
+  --brand-fg: #ffffff;
+  --brand-subtle: #eef0ff;
+
+  --ring: #6b66f1;
+}
+
 @layer base {
-  :root {
-    color-scheme: dark;
+  *,
+  ::before,
+  ::after {
+    border-color: var(--line);
   }
 
   html,
@@ -11,14 +142,113 @@
   }
 
   body {
-    background-color: #0a0a0a;
-    color: #f5f5f5;
-    font-family:
-      ui-sans-serif,
-      system-ui,
-      -apple-system,
-      "Segoe UI",
-      Roboto,
-      sans-serif;
+    background-color: var(--canvas);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Accessible, on-brand focus ring everywhere. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--brand) 36%, transparent);
+    color: var(--fg);
+  }
+
+  /* Quiet, theme-aware scrollbars. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--line-strong);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--subtle);
+  }
+
+  /* Numeric/tabular alignment for IDs, counts, timers. */
+  .tabular,
+  code,
+  kbd,
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* A subtle top-lit gradient used on hero/dashboard surfaces. */
+  .surface-sheen {
+    background-image: linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--fg) 4%, transparent) 0%,
+      transparent 120px
+    );
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 }

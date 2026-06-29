@@ -11,9 +11,14 @@
 #      additionally pick up `phi_tags` (the inherited `common_tags` plus
 #      `DataClassification = phi` and `HipaaScope = in-scope`).
 #
-# Region short-codes match the AWS naming convention (us-east-1 → use1,
-# us-west-2 → usw2, eu-west-1 → euw1) and are derived programmatically;
-# no manual list to drift.
+# Region short-codes are derived programmatically as: first letter of the
+# first region word + first letter of the second region word + the trailing
+# number (us-east-1 → ue1, us-west-2 → uw2, eu-west-1 → ew1). NOTE: this is
+# deliberately NOT the conventional AWS short code (use1/usw2/euw1) — it is
+# whatever the format() below produces, and it is baked into every deployed
+# resource name (RDS, ECS, Secrets Manager, KMS aliases, …). Treat `ue1` as
+# canonical for us-east-1; all runbooks/docs must use it. Changing this
+# format would force a rename/recreate of every resource, so it is frozen.
 # =============================================================================
 
 locals {
