@@ -83,7 +83,6 @@
     "@pharmax/integration-tests": "workspace:*",
     "@pharmax/labels": "workspace:*",
     "@pharmax/notifications": "workspace:*",
-    "@pharmax/order-contracts": "workspace:*",
     "@pharmax/orders": "workspace:*",
     "@pharmax/orgs": "workspace:*",
     "@pharmax/package-capture": "workspace:*",
