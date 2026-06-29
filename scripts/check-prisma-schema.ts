@@ -68,11 +68,51 @@
 // organizationId + index + RLS + classification" enforcement net.
 
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Prisma } from "@pharmax/database";
 import { TENANT_EXCLUDED_MODELS, TENANT_SCOPED_MODELS } from "@pharmax/tenancy";
+
+// Prisma 7 removed the runtime `Prisma.dmmf` value from the generated
+// client (only the `DMMF` *type* remains). The schema's DMMF is now
+// obtained from the schema file via `@prisma/internals.getDMMF`, the
+// supported programmatic API. `@prisma/internals` is CommonJS; under
+// ESM + tsx a `createRequire` load is the interop-stable way to reach
+// its named export.
+const requireCjs = createRequire(import.meta.url);
+
+/** Minimal projection of the classic DMMF shape this linter reads. */
+interface DmmfField {
+  readonly name: string;
+  readonly kind: "scalar" | "object" | "enum" | "unsupported";
+  readonly type: string;
+  readonly isRequired: boolean;
+  readonly isList: boolean;
+  readonly isUnique: boolean;
+  readonly isId: boolean;
+  readonly relationOnDelete?: string;
+}
+interface DmmfModel {
+  readonly name: string;
+  readonly dbName: string | null;
+  readonly fields: ReadonlyArray<DmmfField>;
+  readonly uniqueIndexes: ReadonlyArray<{ readonly fields: ReadonlyArray<string> }>;
+  readonly primaryKey: { readonly fields: ReadonlyArray<string> } | null;
+}
+interface DmmfDocument {
+  readonly datamodel: {
+    readonly models: ReadonlyArray<DmmfModel>;
+    readonly enums: ReadonlyArray<{ readonly name: string }>;
+  };
+}
+
+function loadSchemaDmmf(schemaSource: string): Promise<DmmfDocument> {
+  const { getDMMF } = requireCjs("@prisma/internals") as {
+    getDMMF: (options: { datamodel: string }) => Promise<DmmfDocument>;
+  };
+  return getDMMF({ datamodel: schemaSource });
+}
 
 /** Severity tier. WARN prints but does not fail the build. */
 export type Severity = "FAIL" | "WARN";
@@ -362,7 +402,7 @@ export function extractIndexesPerModel(
  * indexes into ModelLike.
  */
 export function dmmfToModelLikes(
-  models: ReadonlyArray<Prisma.DMMF.Model>,
+  models: ReadonlyArray<DmmfModel>,
   indexesByModel: ReadonlyMap<string, ReadonlyArray<{ fields: ReadonlyArray<string> }>>
 ): ReadonlyArray<ModelLike> {
   return models.map((m) => {
@@ -417,8 +457,9 @@ async function main(): Promise<void> {
   const source = readFileSync(schemaPath, "utf8");
   const indexesByModel = extractIndexesPerModel(source);
 
-  const models = dmmfToModelLikes(Prisma.dmmf.datamodel.models, indexesByModel);
-  const enumNames = new Set(Prisma.dmmf.datamodel.enums.map((e) => e.name));
+  const dmmf = await loadSchemaDmmf(source);
+  const models = dmmfToModelLikes(dmmf.datamodel.models, indexesByModel);
+  const enumNames = new Set(dmmf.datamodel.enums.map((e) => e.name));
   const scopedKindByName = buildScopedKindByName(TENANT_SCOPED_MODELS);
   const excludedNames = TENANT_EXCLUDED_MODELS;
 

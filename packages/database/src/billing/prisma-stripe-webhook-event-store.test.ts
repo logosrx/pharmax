@@ -9,8 +9,8 @@ import type { billing } from "@pharmax/platform-core";
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { Prisma } from "../generated/client/index.js";
-import type { StripeWebhookEvent } from "../generated/client/index.js";
+import { Prisma } from "../generated/client/client.js";
+import type { StripeWebhookEvent } from "../generated/client/client.js";
 import {
   PrismaStripeWebhookEventStore,
   type StripeWebhookEventClient,

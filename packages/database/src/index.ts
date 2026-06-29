@@ -86,7 +86,7 @@ export {
   WorkflowPolicyOverlayStatus,
   WorkflowPolicyStatus,
   WorkstationStatus,
-} from "./generated/client/index.js";
+} from "./generated/client/client.js";
 
 // Row types (re-exported so consumers depend on @pharmax/database, not
 // on @prisma/client or the generated client path directly). Add new
@@ -143,4 +143,4 @@ export type {
   VerificationRecord,
   WorkflowPolicy,
   Workstation,
-} from "./generated/client/index.js";
+} from "./generated/client/client.js";

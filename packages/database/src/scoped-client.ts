@@ -41,7 +41,7 @@ import process from "node:process";
 import { applyTenancyExtension } from "@pharmax/tenancy";
 
 import { systemPrisma } from "./client.js";
-import type { PrismaClient } from "./generated/client/index.js";
+import type { PrismaClient } from "./generated/client/client.js";
 
 type GlobalWithScopedPrisma = typeof globalThis & {
   __pharmaxScopedPrisma?: PrismaClient;

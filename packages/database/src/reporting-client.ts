@@ -30,6 +30,7 @@
 
 import process from "node:process";
 
+import { PrismaPg } from "@prisma/adapter-pg";
 import {
   applyTenancyExtension,
   applyTenancySessionGuc,
@@ -37,7 +38,7 @@ import {
   type SessionGucExecutor,
 } from "@pharmax/tenancy";
 
-import { PrismaClient } from "./generated/client/index.js";
+import { PrismaClient } from "./generated/client/client.js";
 import { prisma } from "./scoped-client.js";
 import { buildReadScopeContext, type TenantTransactionClient } from "./scoped-read.js";
 
@@ -51,10 +52,16 @@ const isProduction = process.env["NODE_ENV"] === "production";
 const reportingUrl = process.env["REPORTING_DATABASE_URL"];
 
 function buildReplicaClient(url: string): PrismaClient {
-  // `datasourceUrl` overrides the schema datasource connection
-  // string without depending on the datasource block's name.
+  // Prisma 7: point a dedicated `pg` driver adapter at the replica URL
+  // (the v6 `datasourceUrl` override no longer exists — connections are
+  // owned by the adapter, not a schema datasource block). Same 5s
+  // connection timeout as the primary client (see `client.ts`).
+  const adapter = new PrismaPg({
+    connectionString: url,
+    connectionTimeoutMillis: 5_000,
+  });
   const raw = new PrismaClient({
-    datasourceUrl: url,
+    adapter,
     log: isProduction ? ["error"] : ["warn", "error"],
   });
   return applyTenancyExtension(raw);

@@ -30,6 +30,15 @@ const nextConfig = {
     "@opentelemetry/instrumentation-winston",
     "@opentelemetry/exporter-jaeger",
     "@opentelemetry/winston-transport",
+    // Prisma 7 is Rust-free and connects through the `pg` driver
+    // adapter. Keep the Prisma runtime, the adapter, and `pg` external
+    // so they're required from node_modules at runtime (and traced into
+    // the standalone output) rather than bundled by webpack — `pg`
+    // dynamically `require()`s its optional `pg-native` binding, which
+    // webpack cannot statically resolve.
+    "@prisma/client",
+    "@prisma/adapter-pg",
+    "pg",
   ],
   // Workspace packages publish TypeScript source via `main`/`types`
   // pointing at `src/index.ts`. Next must transpile them.
@@ -63,30 +72,42 @@ const nextConfig = {
   },
 };
 
-// Wrap with Sentry config. This enables:
-//   - Source-map upload (requires SENTRY_AUTH_TOKEN at build time)
-//   - Tunneling endpoint to bypass ad-blockers
-//   - Auto-instrumentation of routes / server actions
+// Sentry is only wired when a DSN is configured.
 //
+// `withSentryConfig` injects the Sentry SDK + auto-instrumentation
+// into the client AND edge webpack compilations. With no DSN (local
+// dev, most PR previews) that injection is pure overhead — and worse,
+// it pulls the node-only instrumentation/bootstrap graph
+// (OpenTelemetry sdk-node + gRPC, Prisma, ioredis) into the browser
+// and edge bundles, where `node:`/`fs`/`stream` cannot resolve and the
+// whole dev server fails to compile. Gate the wrapper on a real DSN so
+// `next dev` boots cleanly without observability creds, while staging
+// and production (which set SENTRY_DSN) keep the full integration.
+const sentryEnabled = Boolean(process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN);
+
 // All knobs are documented at https://docs.sentry.io/platforms/javascript/guides/nextjs/manual-setup/
 // When SENTRY_AUTH_TOKEN is unset (local dev, PR previews without
 // org-level secrets), source-map upload is silently skipped — the
 // rest of the integration still works.
-export default withSentryConfig(nextConfig, {
-  org: process.env.SENTRY_ORG,
-  project: process.env.SENTRY_PROJECT,
-  // Suppress Sentry CLI logs in CI unless explicitly enabled.
-  silent: !process.env.CI,
-  // Don't auto-upload source maps unless we have an auth token.
-  // The flag is harmless when the token is set.
-  widenClientFileUpload: true,
-  // Tunnel browser SDK events through the app to bypass ad-blockers.
-  // Keeps the surface area small — Next will generate /monitoring.
-  tunnelRoute: "/monitoring",
-  // Hide the original source map files from the production bundle.
-  hideSourceMaps: true,
-  // Auto-disable when no DSN is configured. Prevents "Sentry is set
-  // up but doing nothing" warnings during local builds.
-  disableLogger: true,
-  automaticVercelMonitors: false,
-});
+const config = sentryEnabled
+  ? withSentryConfig(nextConfig, {
+      org: process.env.SENTRY_ORG,
+      project: process.env.SENTRY_PROJECT,
+      // Suppress Sentry CLI logs in CI unless explicitly enabled.
+      silent: !process.env.CI,
+      // Don't auto-upload source maps unless we have an auth token.
+      // The flag is harmless when the token is set.
+      widenClientFileUpload: true,
+      // Tunnel browser SDK events through the app to bypass ad-blockers.
+      // Keeps the surface area small — Next will generate /monitoring.
+      tunnelRoute: "/monitoring",
+      // Hide the original source map files from the production bundle.
+      hideSourceMaps: true,
+      // Auto-disable when no DSN is configured. Prevents "Sentry is set
+      // up but doing nothing" warnings during local builds.
+      disableLogger: true,
+      automaticVercelMonitors: false,
+    })
+  : nextConfig;
+
+export default config;

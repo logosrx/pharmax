@@ -33,19 +33,24 @@
 // index columns (suffix `Bi`). All other sections MUST stay PHI-free.
 
 // The client is emitted INTO the @pharmax/database package so consumers
-// import from `@pharmax/database`, not from `@prisma/client` directly.
+// import from `@pharmax/database`, not from the generated path directly.
 // The generated directory is gitignored and rebuilt on `pnpm install` and
 // after every schema or migration change (`pnpm db:generate`).
+//
+// Prisma 7: the Rust-free `prisma-client` generator emits an ESM
+// TypeScript client into `output`. The client is instantiated with a
+// `pg` driver adapter (see `packages/database/src/client.ts`), and the
+// connection URLs + migration settings live in `prisma.config.ts` at
+// the repo root rather than in the `datasource` block.
 generator client {
-  provider        = "prisma-client-js"
-  output          = "../packages/database/src/generated/client"
-  previewFeatures = []
+  provider     = "prisma-client"
+  output       = "../packages/database/src/generated/client"
+  runtime      = "nodejs"
+  moduleFormat = "esm"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
 }
 
 // ===========================================================================
@@ -1526,11 +1531,13 @@ model EasyPostWebhookEvent {
   trackingCode    String?
   carrierStatus   String?
 
-  // Raw event payload as received from EasyPost. Stored verbatim so
-  // the worker can replay processing without re-fetching. May
-  // contain recipient name/address — this row is the only place
-  // that recipient info is held; the audit log + outbox stay
-  // PHI-free downstream.
+  // PHI-minimized tracker projection (NOT the verbatim body). The
+  // webhook ingestion path strips the inbound EasyPost body down to
+  // the replay-only subset {id, description, result.{id,
+  // tracking_code, status, status_detail, updated_at, carrier}} via
+  // projectTrackerEventForStorage BEFORE persisting, so recipient
+  // name/address never lands in this RLS-exempt ledger row. The audit
+  // log + outbox stay PHI-free downstream.
   payload Json
 
   status    EasyPostWebhookEventStatus @default(PENDING)

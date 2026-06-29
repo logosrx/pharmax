@@ -14,10 +14,39 @@
 //      adds `socialSecurityNumberEnc` triggers this test BEFORE the
 //      column lands in production.
 
-import { Prisma } from "@pharmax/database";
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { PATIENT_REDACTED_FIELD_NAMES, redactPatient } from "./redact-patient.js";
+
+// Prisma 7 removed the runtime `Prisma.dmmf` value. Load the schema's
+// DMMF from the schema file via `@prisma/internals.getDMMF` instead
+// (CommonJS → `createRequire` for ESM interop under vitest).
+const requireCjs = createRequire(import.meta.url);
+
+interface DmmfModel {
+  readonly name: string;
+  readonly fields: ReadonlyArray<{ readonly name: string }>;
+}
+
+async function loadPatientModel(): Promise<DmmfModel | undefined> {
+  const schemaPath = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../..",
+    "prisma/schema.prisma"
+  );
+  const { getDMMF } = requireCjs("@prisma/internals") as {
+    getDMMF: (options: {
+      datamodel: string;
+    }) => Promise<{ datamodel: { models: ReadonlyArray<DmmfModel> } }>;
+  };
+  const dmmf = await getDMMF({ datamodel: readFileSync(schemaPath, "utf8") });
+  return dmmf.datamodel.models.find((m) => m.name === "Patient");
+}
 
 const NOW = new Date("2026-01-15T12:00:00Z");
 const NOT_PHI_SENTINEL = "0000-AAAA-NOT-PHI";
@@ -99,8 +128,13 @@ describe("redactPatient", () => {
 });
 
 describe("PATIENT_REDACTED_FIELD_NAMES — deny-list completeness", () => {
-  // The Prisma model name for the `patient` table.
-  const PATIENT_MODEL = Prisma.dmmf.datamodel.models.find((m) => m.name === "Patient");
+  // The Prisma model for the `patient` table, loaded from the schema's
+  // DMMF (see `loadPatientModel`).
+  let PATIENT_MODEL: DmmfModel | undefined;
+
+  beforeAll(async () => {
+    PATIENT_MODEL = await loadPatientModel();
+  });
 
   it("Patient model is present in the Prisma dmmf", () => {
     expect(PATIENT_MODEL, "schema regression: Patient model not found in dmmf").toBeDefined();

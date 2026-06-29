@@ -21,7 +21,7 @@
   [+] Added foreign key on columns (commandLogId)
 
 [*] Changed the `invoice` table
-  [+] Added unique index on columns (stripeChargeId)
+  [*] Renamed index `invoice_stripeChargeId_unique` to `invoice_stripeChargeId_key`
 
 [*] Changed the `notification_delivery` table
   [-] Removed foreign key on columns (organizationId)
@@ -67,7 +67,6 @@
   [-] Removed foreign key on columns (organizationId)
   [-] Removed foreign key on columns (runByUserId)
   [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
-  [+] Added index on columns (organizationId, runByUserId, generatedAt)
   [+] Added foreign key on columns (organizationId)
   [+] Added foreign key on columns (runByUserId)
   [+] Added foreign key on columns (commandLogId)
@@ -91,7 +90,7 @@
   [*] Renamed index `shipment_tracking_event_source_external_idx` to `shipment_tracking_event_organizationId_source_externalEvent_key`
 
 [*] Changed the `user` table
-  [+] Added unique index on columns (clerkUserId)
+  [*] Renamed index `user_clerkUserId_unique` to `user_clerkUserId_key`
 
 [*] Changed the `verification_record` table
   [*] Renamed index `verification_record_organizationId_pharmacistUserId_occurredAt_` to `verification_record_organizationId_pharmacistUserId_occurre_idx`

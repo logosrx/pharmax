@@ -19,8 +19,8 @@
 
 import type { billing } from "@pharmax/platform-core";
 
-import { Prisma } from "../generated/client/index.js";
-import type { StripeWebhookEvent } from "../generated/client/index.js";
+import { Prisma } from "../generated/client/client.js";
+import type { StripeWebhookEvent } from "../generated/client/client.js";
 
 // Type alias for the deserialized webhook payload. Equals `Stripe.Event`
 // transitively through the platform-core contract; we don't import the

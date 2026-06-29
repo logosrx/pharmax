@@ -17,9 +17,12 @@
 // and asks Prisma to diff the result against the schema datamodel:
 //
 //   prisma migrate diff
-//     --from-migrations     ./prisma/migrations
-//     --to-schema-datamodel ./prisma/schema.prisma
-//     --shadow-database-url <shadow>
+//     --from-migrations ./prisma/migrations
+//     --to-schema       ./prisma/schema.prisma
+//   (Prisma 7: `--to-schema-datamodel` was renamed to `--to-schema`,
+//    and the shadow DB comes from `prisma.config.ts`'s
+//    `shadowDatabaseUrl`, sourced from `SHADOW_DATABASE_URL` below,
+//    rather than the removed `--shadow-database-url` flag.)
 //
 // The summary it prints is compared against a COMMITTED baseline
 // (prisma/migrations/drift-baseline.txt). The baseline captures the
@@ -166,13 +169,18 @@ interface DiffResult {
 }
 
 function runMigrateDiff(shadowUrl: string): DiffResult {
-  // The datasource block references env("DATABASE_URL")/env("DIRECT_URL");
-  // prisma errors if they are undefined even though `migrate diff` does
-  // not connect to them here. Point them at the shadow URL.
+  // Prisma 7: `--shadow-database-url` was removed from `migrate diff`;
+  // the shadow connection is read from `prisma.config.ts`, which sources
+  // it from `SHADOW_DATABASE_URL`. We still derive that URL dynamically
+  // here (per the repo's shadow-DB convention) and inject it into the
+  // child env. `prisma.config.ts` also resolves `datasource.url` from
+  // DIRECT_URL/DATABASE_URL; `migrate diff` does not connect to those in
+  // this mode, but the config still reads them, so keep them defined.
   const childEnv = {
     ...process.env,
     DATABASE_URL: process.env.DATABASE_URL ?? shadowUrl,
     DIRECT_URL: process.env.DIRECT_URL ?? process.env.DATABASE_URL ?? shadowUrl,
+    SHADOW_DATABASE_URL: shadowUrl,
   };
   const r = spawnSync(
     "pnpm",
@@ -183,10 +191,8 @@ function runMigrateDiff(shadowUrl: string): DiffResult {
       "diff",
       "--from-migrations",
       MIGRATIONS_DIR,
-      "--to-schema-datamodel",
+      "--to-schema",
       SCHEMA_PATH,
-      "--shadow-database-url",
-      shadowUrl,
     ],
     { cwd: ROOT, env: childEnv, encoding: "utf8" }
   );

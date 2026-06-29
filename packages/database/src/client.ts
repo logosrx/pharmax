@@ -24,7 +24,9 @@
 
 import process from "node:process";
 
-import { PrismaClient } from "./generated/client/index.js";
+import { PrismaPg } from "@prisma/adapter-pg";
+
+import { PrismaClient } from "./generated/client/client.js";
 
 type GlobalWithPrisma = typeof globalThis & {
   __pharmaxPrisma?: PrismaClient;
@@ -33,6 +35,25 @@ type GlobalWithPrisma = typeof globalThis & {
 const globalForPrisma = globalThis as GlobalWithPrisma;
 
 const isProduction = process.env["NODE_ENV"] === "production";
+
+// Prisma 7 is Rust-engine-free: the client connects through a driver
+// adapter built on `pg`. The pool is created lazily (no connection is
+// opened until the first query), so importing this module never
+// connects — the same lazy behavior the v6 client had.
+//
+// Connection-pool note: unlike the v6 Rust engine, `pg` has NO
+// connection timeout by default. We restore the v6 5s timeout so a
+// saturated/unreachable database fails fast instead of hanging a
+// request indefinitely. Pool sizing follows the `pg` default (max 10);
+// tune via the deployment's pool config if needed. Prisma-specific
+// URL params (`connection_limit`, `pgbouncer`) are ignored by `pg`;
+// the libpq `options=-c role=...` param IS honored.
+function buildSystemAdapter(): PrismaPg {
+  return new PrismaPg({
+    connectionString: process.env["DATABASE_URL"],
+    connectionTimeoutMillis: 5_000,
+  });
+}
 
 /**
  * The raw, UNSCOPED Prisma client. Does NOT enforce tenant isolation.
@@ -43,6 +64,7 @@ const isProduction = process.env["NODE_ENV"] === "production";
 export const systemPrisma: PrismaClient =
   globalForPrisma.__pharmaxPrisma ??
   new PrismaClient({
+    adapter: buildSystemAdapter(),
     log: isProduction ? ["error"] : ["warn", "error"],
   });
 

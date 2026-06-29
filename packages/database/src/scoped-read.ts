@@ -40,7 +40,7 @@ import {
 } from "@pharmax/tenancy";
 
 import { prisma } from "./scoped-client.js";
-import type { PrismaClient } from "./generated/client/index.js";
+import type { PrismaClient } from "./generated/client/client.js";
 
 // Sentinel actor for server-side READ scopes that have authenticated
 // the operator and resolved their org, but do not have (or need) the

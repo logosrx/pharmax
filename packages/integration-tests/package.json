@@ -9,14 +9,18 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "^7.8.0",
     "pg": "^8.13.1"
   },
   "devDependencies": {
+    "@prisma/generator-helper": "^7.8.0",
+    "@prisma/internals": "^7.8.0",
     "@pharmax/audit": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
+    "@pharmax/rbac": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
     "@types/node": "^22.9.0",
     "@types/pg": "^8.11.10",

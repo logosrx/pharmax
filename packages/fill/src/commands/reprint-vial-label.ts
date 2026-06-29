@@ -158,7 +158,9 @@ export const ReprintVialLabel = defineCommand<ReprintVialLabelInput, ReprintVial
         printTemplateVersion: template.version,
         status: PrintJobStatus.PENDING,
         renderedZpl,
-        contentHash,
+        // Prisma 7 `Bytes` write inputs are `Uint8Array<ArrayBuffer>`;
+        // copy the (ArrayBufferLike-backed) hash Buffer into one.
+        contentHash: new Uint8Array(contentHash),
         isReprint: true,
         reprintReasonCode: input.reprintReasonCode,
         requestedByUserId: ctx.actor.userId,

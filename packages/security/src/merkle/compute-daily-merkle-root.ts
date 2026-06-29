@@ -240,8 +240,11 @@ export interface PrismaAuditChainSourceClient {
       Array<{
         organizationId: string;
         seq: bigint;
-        prevHash: Buffer | null;
-        entryHash: Buffer;
+        // Prisma 7 types `Bytes` columns as `Uint8Array` (was `Buffer`).
+        // Widen here so the generated client is structurally assignable;
+        // the iterator below re-wraps with `Buffer.from(...)`.
+        prevHash: Uint8Array | null;
+        entryHash: Uint8Array;
         action: string;
         resourceType: string;
         resourceId: string | null;

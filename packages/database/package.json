@@ -7,14 +7,17 @@
   "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "prisma:generate": "prisma generate --schema ../../prisma/schema.prisma"
+    "prisma:generate": "prisma generate --config ../../prisma.config.ts"
   },
   "dependencies": {
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
-    "@prisma/client": "^5.22.0"
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
-    "prisma": "^5.22.0"
+    "@types/pg": "^8.11.10",
+    "prisma": "^7.8.0"
   }
 }
