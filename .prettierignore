@@ -13,3 +13,7 @@ pnpm-lock.yaml
 # Prisma artifacts
 packages/database/src/generated
 prisma/migrations
+
+# Non-source artifacts: scratch UI preview output + Clerk keyless dev tmp
+ui-preview
+**/.clerk
