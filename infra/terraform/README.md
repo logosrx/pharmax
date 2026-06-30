@@ -410,15 +410,22 @@ DBPASS=$(aws secretsmanager get-secret-value --secret-id "$MASTER_SECRET_ARN" \
   --query SecretString --output text | jq -r .password)
 
 # 3. URL-encode the password (it may contain reserved characters) and build
-#    the connection strings. sslmode=require because rds.force_ssl = 1.
+#    the connection strings. sslmode=verify-full because rds.force_ssl = 1 AND
+#    the Prisma 7 `pg` driver verifies the full TLS chain (the RDS CA bundle is
+#    trusted via NODE_EXTRA_CA_CERTS on the ECS tasks — see apps/*/Dockerfile +
+#    modules/ecs). We pin `verify-full` explicitly rather than `require`:
+#    pg-connection-string >= 2.x currently treats `require` AS verify-full, but
+#    a future pg v9 / pg-connection-string v3 reverts `require` to libpq
+#    semantics (encrypt, NO cert verification) — a silent downgrade. Pinning
+#    verify-full keeps full verification across that upgrade.
 #    `options=-c role=...` is URL-encoded (%20 space, %3D '=') and switches the
 #    active role on connect so RLS applies to the web tier.
 ENC=$(jq -rn --arg p "$DBPASS" '$p|@uri')
-BASE="postgresql://${DBUSER}:${ENC}@${WRITER}:${PORT}/pharmax?sslmode=require"
+BASE="postgresql://${DBUSER}:${ENC}@${WRITER}:${PORT}/pharmax?sslmode=verify-full"
 DATABASE_URL="${BASE}&options=-c%20role%3Dpharmax_app"
 DATABASE_URL_SYSTEM="${BASE}&options=-c%20role%3Dpharmax_system"
 DIRECT_URL="${BASE}"
-REPORTING_DATABASE_URL="postgresql://${DBUSER}:${ENC}@${READER}:${PORT}/pharmax?sslmode=require&options=-c%20role%3Dpharmax_app"
+REPORTING_DATABASE_URL="postgresql://${DBUSER}:${ENC}@${READER}:${PORT}/pharmax?sslmode=verify-full&options=-c%20role%3Dpharmax_app"
 
 # 4. Store them. DIRECT_URL is the owner connection used only by migrations.
 aws secretsmanager put-secret-value --secret-id "$PREFIX/database-url"           --secret-string "$DATABASE_URL"
