@@ -62,7 +62,6 @@ import type * as TraceExporterMod from "@opentelemetry/exporter-trace-otlp-http"
 import type * as MetricsExporterMod from "@opentelemetry/exporter-metrics-otlp-http";
 import type * as SdkMetricsMod from "@opentelemetry/sdk-metrics";
 import type * as ResourcesMod from "@opentelemetry/resources";
-import type * as SemconvMod from "@opentelemetry/semantic-conventions";
 import type * as AutoinstMod from "@opentelemetry/auto-instrumentations-node";
 
 export interface TelemetryInitOptions {
@@ -118,26 +117,17 @@ export async function initTelemetry(options: TelemetryInitOptions): Promise<Tele
   let metricsExporterMod: typeof MetricsExporterMod;
   let sdkMetricsMod: typeof SdkMetricsMod;
   let resourcesMod: typeof ResourcesMod;
-  let semconvMod: typeof SemconvMod;
   let autoinstMod: typeof AutoinstMod;
   try {
-    [
-      sdkMod,
-      traceExporterMod,
-      metricsExporterMod,
-      sdkMetricsMod,
-      resourcesMod,
-      semconvMod,
-      autoinstMod,
-    ] = await Promise.all([
-      import("@opentelemetry/sdk-node"),
-      import("@opentelemetry/exporter-trace-otlp-http"),
-      import("@opentelemetry/exporter-metrics-otlp-http"),
-      import("@opentelemetry/sdk-metrics"),
-      import("@opentelemetry/resources"),
-      import("@opentelemetry/semantic-conventions"),
-      import("@opentelemetry/auto-instrumentations-node"),
-    ]);
+    [sdkMod, traceExporterMod, metricsExporterMod, sdkMetricsMod, resourcesMod, autoinstMod] =
+      await Promise.all([
+        import("@opentelemetry/sdk-node"),
+        import("@opentelemetry/exporter-trace-otlp-http"),
+        import("@opentelemetry/exporter-metrics-otlp-http"),
+        import("@opentelemetry/sdk-metrics"),
+        import("@opentelemetry/resources"),
+        import("@opentelemetry/auto-instrumentations-node"),
+      ]);
   } catch (cause) {
     log("warn", "telemetry.sdk_unavailable", {
       serviceName: cfg.serviceName,
@@ -151,11 +141,16 @@ export async function initTelemetry(options: TelemetryInitOptions): Promise<Tele
   const { OTLPTraceExporter } = traceExporterMod;
   const { OTLPMetricExporter } = metricsExporterMod;
   const { PeriodicExportingMetricReader } = sdkMetricsMod;
-  const { Resource } = resourcesMod;
-  const { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION, ATTR_DEPLOYMENT_ENVIRONMENT_NAME } = semconvMod;
-  // `host.name` is a stable OTel attribute key, but the typed
-  // constant is not re-exported in every semantic-conventions
-  // minor. The string literal is part of the OTel spec.
+  // OTel JS 2.0 (@opentelemetry/resources >= 2.x) removed the `Resource`
+  // class constructor in favor of the `resourceFromAttributes` factory.
+  const { resourceFromAttributes } = resourcesMod;
+  // Resource attribute keys as spec-stable string literals. We avoid the
+  // `@opentelemetry/semantic-conventions` ATTR_* constants on purpose: their
+  // export names and module location (main vs `/incubating`) churn across
+  // minors, while the attribute keys themselves are fixed by the OTel spec.
+  const ATTR_SERVICE_NAME = "service.name";
+  const ATTR_SERVICE_VERSION = "service.version";
+  const ATTR_DEPLOYMENT_ENVIRONMENT_NAME = "deployment.environment.name";
   const ATTR_HOST_NAME = "host.name";
   const { getNodeAutoInstrumentations } = autoinstMod;
 
@@ -181,7 +176,7 @@ export async function initTelemetry(options: TelemetryInitOptions): Promise<Tele
   });
 
   const sdk = new NodeSDK({
-    resource: new Resource(resourceAttrs),
+    resource: resourceFromAttributes(resourceAttrs),
     traceExporter,
     // Cast: NodeSDK and PeriodicExportingMetricReader can be
     // resolved from two different copies of @opentelemetry/sdk-metrics
