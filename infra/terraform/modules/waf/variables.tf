@@ -13,12 +13,6 @@ variable "rate_limit_per_5min" {
   type        = number
 }
 
-variable "metric_namespace" {
-  description = "CloudWatch metric namespace for WAF metrics."
-  type        = string
-  default     = "AWS/WAFV2"
-}
-
 variable "tags" {
   description = "Tags applied to the Web ACL."
   type        = map(string)

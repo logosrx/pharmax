@@ -38,6 +38,9 @@ variable "secrets_key_arn" {
   type        = string
 }
 
+# Reserved — the root stack wires module.kms.logs_key_arn here so the IAM
+# module can adopt log-group key policy later without an interface change.
+# tflint-ignore: terraform_unused_declarations
 variable "logs_key_arn" {
   description = "ARN of the CMK used by CloudWatch Logs. Reserved — log-group encryption is a CloudWatch service-side concern, not application IAM."
   type        = string
