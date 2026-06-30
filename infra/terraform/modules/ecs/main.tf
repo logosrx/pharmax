@@ -202,6 +202,9 @@ resource "aws_ecs_task_definition" "web" {
       # don't inject an invalid empty value.
       environment = concat([
         { name = "NODE_ENV", value = "production" },
+        # Trust the Amazon RDS CA bundle baked into the image so Prisma 7's
+        # verify-full TLS to RDS (force_ssl=1) succeeds (see Dockerfile).
+        { name = "NODE_EXTRA_CA_CERTS", value = "/etc/pki/rds/global-bundle.pem" },
         { name = "PORT", value = tostring(var.web_container_port) },
         { name = "PHARMAX_REGION", value = var.aws_region },
         { name = "AWS_REGION", value = var.aws_region },
@@ -339,6 +342,9 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "AWS_KMS_APP_KEY_ID", value = var.data_kms_key_alias },
         { name = "AWS_KMS_DATA_KEY_ID", value = var.data_kms_key_alias },
         { name = "AWS_KMS_SEARCH_KEY_ID", value = var.search_kms_key_alias },
+        # Trust the Amazon RDS CA bundle baked into the image so Prisma 7's
+        # verify-full TLS to RDS (force_ssl=1) succeeds (see Dockerfile).
+        { name = "NODE_EXTRA_CA_CERTS", value = "/etc/pki/rds/global-bundle.pem" },
         # Env-var names MUST match apps/worker/src/env.ts. The worker hard-
         # fails to boot in production if the nightly Merkle-root loop cannot
         # resolve its signer (MERKLE_SIGNER_KMS_KEY_ID) and Object-Lock
@@ -443,6 +449,9 @@ resource "aws_ecs_task_definition" "print_agent" {
         { name = "AWS_REGION", value = var.aws_region },
         { name = "AWS_KMS_APP_KEY_ID", value = var.data_kms_key_alias },
         { name = "AWS_KMS_DATA_KEY_ID", value = var.data_kms_key_alias },
+        # Trust the Amazon RDS CA bundle baked into the image so Prisma 7's
+        # verify-full TLS to RDS (force_ssl=1) succeeds (see Dockerfile).
+        { name = "NODE_EXTRA_CA_CERTS", value = "/etc/pki/rds/global-bundle.pem" },
       ]
 
       secrets = [for s in local.print_agent_secret_env : {

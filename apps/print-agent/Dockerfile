@@ -26,10 +26,22 @@ ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable
 WORKDIR /app
-# OpenSSL is a runtime dependency of Prisma's query engine.
+# OpenSSL is a runtime dependency of Prisma's query engine; wget fetches the
+# RDS CA bundle below.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && apt-get install -y --no-install-recommends openssl ca-certificates wget \
   && rm -rf /var/lib/apt/lists/*
+
+# Amazon RDS global CA bundle. Prisma 7's `pg` driver does verify-full TLS
+# (sslmode=require is treated as verify-full by pg-connection-string >= 2.x),
+# so node must trust the RDS chain. The ECS task sets
+# NODE_EXTRA_CA_CERTS=/etc/pki/rds/global-bundle.pem; without this the
+# print-agent fails to reach RDS (force_ssl=1) with a P1010 cert error.
+# Installed in the shared base stage so the runner inherits it. World-readable
+# so the unprivileged `node` user can read it.
+RUN mkdir -p /etc/pki/rds \
+  && wget -qO /etc/pki/rds/global-bundle.pem \
+    https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 
 # ---- Deps: install workspace deps + generate Prisma client -----------------
 FROM base AS deps
