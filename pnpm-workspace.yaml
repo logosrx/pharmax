@@ -2,6 +2,14 @@ packages:
   - "apps/*"
   - "packages/*"
 
+# Dependency version overrides. pnpm 10+/11 reads these from the workspace
+# file (not package.json `pnpm.overrides`).
+overrides:
+  # GHSA-mw96-cpmx-2vgc: force the build-time rollup 3.x pulled transitively
+  # by @sentry/nextjs to the patched >=3.30.0. Selected by resolved version so
+  # the unrelated rollup 4.x (vite/vitest) is left untouched.
+  "rollup@<3.30.0": "^3.30.0"
+
 allowBuilds:
   esbuild: true
   "@prisma/engines": true
