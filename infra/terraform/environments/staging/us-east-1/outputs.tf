@@ -45,3 +45,4 @@ output "ecs_task_role_print_agent_arn" { value = module.stack.ecs_task_role_prin
 
 # ---- Terraform-apply role ----------------------------------------------------
 output "terraform_apply_role_arn" { value = module.stack.terraform_apply_role_arn }
+output "terraform_plan_role_arn" { value = module.stack.terraform_plan_role_arn }

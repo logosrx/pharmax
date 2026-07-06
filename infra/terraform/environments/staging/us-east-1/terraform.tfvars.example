@@ -71,8 +71,9 @@ audit_archive_glacier_transition_days = 90
 # Role assumed by the approval-gated terraform-apply workflow for the
 # staging-ue1 env-region. The staging account has no cicd-deploy module, so
 # this module owns the account-level OIDC provider (create = true). After
-# apply, read `terraform output terraform_apply_role_arn` and set it as the
-# AWS_APPLY_ROLE_ARN_STAGING repository variable in GitHub.
+# apply, set TWO GitHub repository variables from the outputs:
+#   AWS_APPLY_ROLE_ARN_STAGING = terraform output terraform_apply_role_arn (gated apply job)
+#   AWS_PLAN_ROLE_ARN_STAGING  = terraform output terraform_plan_role_arn  (ungated read-only plan job)
 enable_terraform_apply_role  = true
 tfapply_github_repository    = "REPLACE_owner/repo"
 tfapply_github_environments  = ["terraform-apply-staging-ue1"]

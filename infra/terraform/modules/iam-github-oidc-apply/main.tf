@@ -220,3 +220,63 @@ resource "aws_iam_role_policy" "iam_supplement" {
   role   = aws_iam_role.terraform_apply.id
   policy = data.aws_iam_policy_document.iam_supplement.json
 }
+
+# ---- Read-only plan role ----------------------------------------------------
+#
+# The terraform-apply workflow's PLAN job is intentionally UNGATED — the
+# reviewer must see the plan BEFORE approving the apply, so the plan cannot sit
+# behind the approval gate. That means the plan job runs with no GitHub
+# Environment, and its OIDC subject is the branch ref
+# (`repo:<owner>/<repo>:ref:refs/heads/main`), NOT an `environment:` subject.
+# It therefore CANNOT assume the gated, PowerUser apply role above (whose trust
+# is StringEquals on environment subjects only).
+#
+# Give the plan job its own least-privilege role: trusted for the branch ref,
+# and limited to AWS read-only. It has enough to refresh state + compute a plan
+# and nothing that can mutate infrastructure. The powerful apply role stays
+# assumable ONLY from the reviewer-gated environment.
+
+data "aws_iam_policy_document" "assume_plan" {
+  statement {
+    sid     = "GitHubActionsOidcTerraformPlan"
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [local.oidc_provider_arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    # Exact ref subject — the ungated plan job runs on this branch only.
+    # StringEquals (no wildcard): a forked or feature-branch dispatch gets a
+    # different subject and is denied.
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_repository}:ref:${var.github_plan_ref}"]
+    }
+  }
+}
+
+resource "aws_iam_role" "terraform_plan" {
+  name                 = "${var.name_prefix}-gha-terraform-plan"
+  description          = "GitHub Actions OIDC role for the terraform-apply workflow's ungated PLAN job. Read-only; assumable only from the branch ref, never from the gated environment."
+  assume_role_policy   = data.aws_iam_policy_document.assume_plan.json
+  max_session_duration = var.max_session_duration_seconds
+
+  tags = var.tags
+}
+
+# AWS-managed read-only across all services — enough for `terraform plan` to
+# refresh + diff, and structurally incapable of mutating anything. Strictly
+# less privilege than the apply role's PowerUserAccess.
+resource "aws_iam_role_policy_attachment" "plan_read_only" {
+  role       = aws_iam_role.terraform_plan.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}

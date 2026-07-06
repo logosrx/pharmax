@@ -63,6 +63,7 @@ output "cicd_github_oidc_provider_arn" { value = module.stack.cicd_github_oidc_p
 
 # ---- Terraform-apply role ----------------------------------------------------
 output "terraform_apply_role_arn" { value = module.stack.terraform_apply_role_arn }
+output "terraform_plan_role_arn" { value = module.stack.terraform_plan_role_arn }
 
 # ---- Aurora Global Database -------------------------------------------------
 output "rds_cluster_arn" { value = module.stack.rds_cluster_arn }

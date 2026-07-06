@@ -71,24 +71,29 @@
 #
 # AWS access (per `docs/operations/production-deployment.md` § 2):
 #
-#   Production applies use the `AWS_APPLY_ROLE_ARN_PROD` repository
-#   variable; staging uses `AWS_APPLY_ROLE_ARN_STAGING`. Both are
-#   GitHub Actions OIDC roles assumed via federation, NOT long-lived
-#   access keys. The apply role is a SEPARATE role from the
-#   read-only `AWS_DRIFT_ROLE_ARN` used by `terraform-drift.yml` —
-#   the drift role has zero write actions; the apply role has the
-#   create/update/delete actions the modules need. Splitting the
-#   roles keeps the daily-running drift workflow within the
-#   "principle of least privilege" boundary.
+#   TWO OIDC roles, split by privilege (both federated, no long-lived
+#   keys):
+#     - The GATED apply job uses `AWS_APPLY_ROLE_ARN_PROD` (staging:
+#       `AWS_APPLY_ROLE_ARN_STAGING`) — the PowerUser role with the
+#       create/update/delete actions the modules need.
+#     - The UNGATED plan job uses `AWS_PLAN_ROLE_ARN_PROD` (staging:
+#       `AWS_PLAN_ROLE_ARN_STAGING`) — a read-only role (see the
+#       `iam-github-oidc-apply` module). The plan job runs before the
+#       approval gate, so it cannot present an environment subject and
+#       must not hold write access.
+#   Both are separate from the read-only `AWS_DRIFT_ROLE_ARN` used by
+#   `terraform-drift.yml`. Splitting the roles keeps each workflow
+#   within the "principle of least privilege" boundary.
 #
-#   The role's trust policy MUST restrict
+#   The APPLY role's trust policy MUST restrict
 #   `token.actions.githubusercontent.com:sub` to claims of the form
 #   `repo:<org>/<repo>:environment:terraform-apply-<env-region>` so
-#   the role can ONLY be assumed by a job running inside the gated
-#   GitHub Environment. A workflow that omits the `environment:`
-#   key (and therefore bypasses the approval) will fail OIDC
-#   federation at the STS step. This is defense-in-depth on top of
-#   the workflow-level gate.
+#   the powerful role can ONLY be assumed by a job running inside the
+#   gated GitHub Environment. A workflow that omits the `environment:`
+#   key (and therefore bypasses the approval) fails OIDC federation at
+#   the STS step. The PLAN role instead trusts the branch ref subject
+#   (`repo:<org>/<repo>:ref:refs/heads/main`) — read-only, so it needs
+#   no gate. This is defense-in-depth on top of the workflow-level gate.
 #
 # Pre-merge invariants:
 #
@@ -299,21 +304,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve apply-role ARN from variable
+      - name: Resolve read-only plan-role ARN from variable
         id: role
         env:
           ROLE_VAR_NAME: ${{ needs.preflight.outputs.role_var_name }}
-          STAGING_ROLE: ${{ vars.AWS_APPLY_ROLE_ARN_STAGING }}
-          PROD_ROLE: ${{ vars.AWS_APPLY_ROLE_ARN_PROD }}
+          STAGING_PLAN_ROLE: ${{ vars.AWS_PLAN_ROLE_ARN_STAGING }}
+          PROD_PLAN_ROLE: ${{ vars.AWS_PLAN_ROLE_ARN_PROD }}
         run: |
+          # The plan job is intentionally UNGATED (the reviewer must see the
+          # plan before approving), so it runs with no GitHub Environment and
+          # authenticates with the READ-ONLY plan role. It cannot assume the
+          # gated PowerUser apply role, whose trust is StringEquals on the
+          # environment subject only — a subject this job does not present.
+          # The gated apply job (below) uses AWS_APPLY_ROLE_ARN_* instead.
           case "$ROLE_VAR_NAME" in
-            AWS_APPLY_ROLE_ARN_STAGING) role_arn="$STAGING_ROLE" ;;
-            AWS_APPLY_ROLE_ARN_PROD)    role_arn="$PROD_ROLE" ;;
+            AWS_APPLY_ROLE_ARN_STAGING) role_arn="$STAGING_PLAN_ROLE"; plan_var="AWS_PLAN_ROLE_ARN_STAGING" ;;
+            AWS_APPLY_ROLE_ARN_PROD)    role_arn="$PROD_PLAN_ROLE";    plan_var="AWS_PLAN_ROLE_ARN_PROD" ;;
             *) echo "::error::Unknown role var: $ROLE_VAR_NAME"; exit 1 ;;
           esac
 
           if [ -z "$role_arn" ]; then
-            echo "::error::Repository variable $ROLE_VAR_NAME is not set."
+            echo "::error::Repository variable $plan_var is not set."
             echo "::error::See docs/operations/production-deployment.md § 2 for the OIDC role bootstrap procedure."
             exit 1
           fi
@@ -350,13 +361,16 @@ jobs:
         working-directory: ${{ env.WORK_DIR }}
         run: |
           # -detailed-exitcode: 0=no diff, 1=error, 2=diff present.
-          # -lock-timeout=2m: brief wait if a transient lock is
-          # held (e.g. drift workflow finishing); fail loudly past
-          # that rather than queue indefinitely.
+          # -lock=false: the read-only plan role cannot write the DynamoDB
+          # state lock, and a plan mutates nothing. Skipping the lock is safe
+          # here because the gated apply job (below) DOES lock and applies the
+          # exact saved plan binary — Terraform rejects it if the state serial
+          # advanced since this plan, so a lock-free (possibly slightly stale)
+          # plan can never be applied against drifted state.
           set +e
           terraform plan \
             -input=false \
-            -lock-timeout=2m \
+            -lock=false \
             -detailed-exitcode \
             -no-color \
             -var-file=terraform.tfvars \

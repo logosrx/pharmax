@@ -119,10 +119,11 @@ cicd_github_environment = "production"
 # ---- Terraform-apply role (GitHub Actions OIDC) ------------------------------
 # Enable here (primary region) to provision the role assumed by the
 # approval-gated terraform-apply workflow. One role per account — list every
-# gated GitHub Environment for this account's env-regions. After apply, read
-# `terraform output terraform_apply_role_arn` and set it as the
-# AWS_APPLY_ROLE_ARN_PROD repository variable in GitHub. The OIDC provider
-# is re-used from the cicd-deploy module above automatically.
+# gated GitHub Environment for this account's env-regions. After apply, set
+# TWO GitHub repository variables from the outputs:
+#   AWS_APPLY_ROLE_ARN_PROD = terraform output terraform_apply_role_arn  (gated apply job)
+#   AWS_PLAN_ROLE_ARN_PROD  = terraform output terraform_plan_role_arn   (ungated read-only plan job)
+# The OIDC provider is re-used from the cicd-deploy module above automatically.
 enable_terraform_apply_role = true
 tfapply_github_repository   = "REPLACE_owner/repo"
 tfapply_github_environments = [

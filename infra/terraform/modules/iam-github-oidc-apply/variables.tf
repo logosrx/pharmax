@@ -33,6 +33,12 @@ variable "github_environments" {
   }
 }
 
+variable "github_plan_ref" {
+  description = "Git ref OIDC subject the read-only plan role trusts, e.g. 'refs/heads/main'. The terraform-apply workflow's plan job is intentionally ungated (the reviewer must see the plan BEFORE approving), so it runs with no GitHub Environment and its subject is this branch ref — not an environment. It therefore authenticates with the read-only plan role, not the gated apply role."
+  type        = string
+  default     = "refs/heads/main"
+}
+
 variable "create_oidc_provider" {
   description = "Create the account-level GitHub OIDC provider here. Usually false — the cicd-deploy module owns the provider in accounts where it is enabled; pass its ARN via oidc_provider_arn instead."
   type        = bool

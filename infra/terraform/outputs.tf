@@ -312,6 +312,11 @@ output "cicd_github_oidc_provider_arn" {
 
 # ---- Terraform-apply role ---------------------------------------------------
 
+output "terraform_plan_role_arn" {
+  description = "ARN of the GitHub Actions read-only terraform-plan role (null unless enable_terraform_apply_role = true). Set as the AWS_PLAN_ROLE_ARN_PROD (or _STAGING) repository variable."
+  value       = try(module.terraform_apply_role[0].plan_role_arn, null)
+}
+
 output "terraform_apply_role_arn" {
   description = "ARN of the GitHub Actions terraform-apply role (null unless enable_terraform_apply_role = true). Set as the AWS_APPLY_ROLE_ARN_PROD (or _STAGING) repository variable."
   value       = try(module.terraform_apply_role[0].apply_role_arn, null)
