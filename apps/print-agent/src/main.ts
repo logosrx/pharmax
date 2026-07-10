@@ -36,7 +36,7 @@ async function main(): Promise<void> {
     },
   });
 
-  bootstrap();
+  await bootstrap();
 
   const runtime = await resolvePrintAgentRuntimeContext(prisma, {
     organizationSlug: env.PRINT_AGENT_ORG_SLUG,

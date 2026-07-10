@@ -21,7 +21,15 @@ const schema = z.object({
   PRINT_AGENT_PRINTER_PORT: z.coerce.number().int().positive().default(9100),
   PRINT_AGENT_PRINTER_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 
-  PHARMAX_LOCAL_KMS_SEED: z.string().min(32),
+  // KMS adapter selection (mirrors apps/worker + apps/web). In
+  // production the print-agent MUST run AwsKmsAdapter: AWS_REGION +
+  // AWS_KMS_DATA_KEY_ID + AWS_KMS_SEARCH_KEY_ID are all required (see
+  // bootstrap.ts). The local seed is dev/test only.
+  AWS_REGION: z.string().min(1).optional(),
+  AWS_KMS_DATA_KEY_ID: z.string().min(1).optional(),
+  AWS_KMS_SEARCH_KEY_ID: z.string().min(1).optional(),
+  AWS_KMS_KEY_LABEL: z.string().min(1).optional(),
+  PHARMAX_LOCAL_KMS_SEED: z.string().min(32).optional(),
 
   // Error tracking. Optional in local dev; required in prod.
   SENTRY_DSN: z.string().url().optional(),
