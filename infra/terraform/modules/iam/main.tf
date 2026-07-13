@@ -37,6 +37,10 @@
 #                                (it reads envelope-encrypted patient names
 #                                for ZPL templates) — NO GenerateDataKey
 #                                because it never writes PHI
+#                              * kms:GenerateMac / VerifyMac / DescribeKey on
+#                                the search CMK — the shared AwsKmsAdapter's
+#                                boot validate() probes both keys; the search
+#                                key is HMAC-only and cannot decrypt PHI
 #
 # `secretsmanager:GetSecretValue` is scoped to the EXACT secret ARNs the
 # secrets module created; no wildcard. The execution role separately gets
@@ -508,6 +512,18 @@ resource "aws_iam_role_policy" "task_print_agent_kms_data" {
   name   = "kms-data"
   role   = aws_iam_role.task_print_agent.id
   policy = data.aws_iam_policy_document.kms_data_decrypt_only.json
+}
+
+# The print-agent runs the shared AwsKmsAdapter, whose boot-time
+# validate() calls kms:DescribeKey on BOTH the data and search keys
+# (ADR 0023). Grant the same HMAC search-key policy web/worker hold.
+# The search key is GENERATE_VERIFY_MAC only — it cannot decrypt PHI —
+# so this stays least-privilege at the resource level even though the
+# print-agent's own code path only decrypts label data via the data key.
+resource "aws_iam_role_policy" "task_print_agent_kms_search" {
+  name   = "kms-search"
+  role   = aws_iam_role.task_print_agent.id
+  policy = data.aws_iam_policy_document.kms_search.json
 }
 
 resource "aws_iam_role_policy" "task_print_agent_secrets" {

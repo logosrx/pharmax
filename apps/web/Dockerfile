@@ -79,6 +79,16 @@ USER node
 COPY --chown=node:node --from=builder /app/apps/web/.next/standalone ./
 COPY --chown=node:node --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 
+# The @pharmax/database client verifies RDS TLS against a committed CA bundle,
+# read at runtime via a dynamic `readFileSync(dirname(import.meta.url)/certs/…)`
+# path that Next's file tracer cannot follow — so it is absent from the
+# standalone output and the server crashes at boot with ENOENT. Copy it
+# explicitly to the path client.ts resolves (packages/database/src/certs,
+# relative to the monorepo-rooted standalone at WORKDIR /app).
+COPY --chown=node:node --from=builder \
+  /app/packages/database/src/certs/rds-global-bundle.pem \
+  ./packages/database/src/certs/rds-global-bundle.pem
+
 # Bind to all interfaces; PORT is overridden by the ECS task definition.
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
