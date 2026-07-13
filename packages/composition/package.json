@@ -17,7 +17,7 @@
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",
     "@pharmax/shipping": "workspace:*",
-    "ioredis": "^5.4.2"
+    "ioredis": "^5.11.1"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

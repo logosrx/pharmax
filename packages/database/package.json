@@ -14,7 +14,7 @@
     "@pharmax/tenancy": "workspace:*",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
-    "pg": "^8.13.1"
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@types/pg": "^8.11.10",
