@@ -34,7 +34,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
     <html lang="en">
       <body className="min-h-screen bg-canvas text-fg antialiased">
         <main className="mx-auto flex max-w-lg flex-col items-center gap-4 px-6 py-20 text-center">
-          <span className="flex h-12 w-12 items-center justify-center rounded-full border border-red-500/30 bg-red-500/10 text-red-400">
+          <span className="flex h-12 w-12 items-center justify-center rounded-full border border-red-500/30 bg-red-500/10 text-tone-danger-accent">
             <svg
               viewBox="0 0 24 24"
               width={22}

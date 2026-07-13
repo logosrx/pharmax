@@ -114,6 +114,17 @@ export const CompleteFill = defineCommand<CompleteFillInput, CompleteFillOutput>
         id: true,
         lotId: true,
         vialLabelId: true,
+        // The ACTIVE print job for the line's vial label. Fill
+        // completion must verify THIS job completed — not any
+        // historical completed job — otherwise a requested reprint
+        // (damaged label) that is still pending/failed would pass on
+        // the stale earlier print and the vial could move on without
+        // a usable physical label.
+        vialLabel: {
+          select: {
+            activePrintJob: { select: { id: true, status: true } },
+          },
+        },
         lot: {
           select: {
             lotNumber: true,
@@ -157,7 +168,7 @@ export const CompleteFill = defineCommand<CompleteFillInput, CompleteFillOutput>
           metadata: { orderId: target.id, orderLineId: line.id },
         });
       }
-      if (line.vialLabelId === null) {
+      if (line.vialLabelId === null || line.vialLabel === null) {
         throw new errors.ConflictError({
           code: FILL_LABEL_PRINT_NOT_COMPLETE,
           message: "Every order line must have a printed vial label before completing fill.",
@@ -165,26 +176,30 @@ export const CompleteFill = defineCommand<CompleteFillInput, CompleteFillOutput>
         });
       }
 
-      const completedPrint = await tx.printJob.findFirst({
-        where: {
-          organizationId: ctx.organizationId,
-          orderLineId: line.id,
-          status: PrintJobStatus.COMPLETED,
-        },
-        select: { id: true },
-      });
-      if (completedPrint === null) {
+      // The label's ACTIVE print job (the most recent print or
+      // reprint) must itself be COMPLETED. Accepting any historical
+      // completed job let a pending/failed reprint slip through on
+      // stale evidence.
+      const activePrintJob = line.vialLabel.activePrintJob;
+      if (activePrintJob.status !== PrintJobStatus.COMPLETED) {
         throw new errors.ConflictError({
           code: FILL_LABEL_PRINT_NOT_COMPLETE,
           message:
-            "Every order line must have a completed thermal print job before completing fill.",
-          metadata: { orderId: target.id, orderLineId: line.id },
+            "The active vial label print for this line has not completed (a reprint may still be pending or failed). Complete the print before completing fill.",
+          metadata: {
+            orderId: target.id,
+            orderLineId: line.id,
+            activePrintJobId: activePrintJob.id,
+            activePrintJobStatus: activePrintJob.status,
+          },
         });
       }
     }
 
     const transition = applyTransition({
-      policy: ORDER_STANDARD_V1,
+      // Merged per-tenant overlay snapshot when resolved (ADR-0019);
+      // static base otherwise. See ApprovePV1 for rationale.
+      policy: policy.merged?.merged ?? ORDER_STANDARD_V1,
       currentState,
       command: "COMPLETE_FILL",
     });

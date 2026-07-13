@@ -233,19 +233,28 @@ export function createNotifyOnReportRunCompletedHandler(
       }
     }
 
-    if (succeeded === 0 && failures.length > 0) {
-      // Total failure: rethrow so the drainer marks the row
-      // RETRYING with backoff. Resend bouncing every send for
-      // one outbox row is almost always a vendor outage and we
-      // want the retry loop, not a "permanently dispatched"
-      // mark.
+    if (failures.length > 0) {
+      // ANY failed recipient → throw so the drainer retries the row
+      // with backoff. This is safe for the recipients that already
+      // succeeded: each send carries a stable per-recipient
+      // idempotency key (`report-run-notify:{run}:{recipient}`), so
+      // the retry replays those as `deduplicated` and only the
+      // failed recipients actually re-send. The previous "throw only
+      // when EVERYONE failed" rule permanently dropped a transiently
+      // bounced recipient while the other nine succeeded — that
+      // recipient simply never got their report.
       throw new errors.InternalError({
-        code: "NOTIFICATION_FANOUT_TOTAL_FAILURE",
-        message: `All ${failures.length} recipient send(s) failed for schedule ${schedule.id}.`,
+        code:
+          succeeded === 0
+            ? "NOTIFICATION_FANOUT_TOTAL_FAILURE"
+            : "NOTIFICATION_FANOUT_PARTIAL_FAILURE",
+        message: `${failures.length} of ${failures.length + succeeded} recipient send(s) failed for schedule ${schedule.id}; retrying (successes dedupe).`,
         metadata: {
           outboxId: row.id,
           scheduleId: schedule.id,
           reportRunId,
+          succeeded,
+          failed: failures.length,
           firstFailureCode: failures[0]?.code,
         },
       });

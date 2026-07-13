@@ -254,7 +254,9 @@ export const CancelOrder = defineCommand<CancelOrderInput, CancelOrderOutput>({
     // question; we just map its result codes to the command's
     // public vocabulary.
     const transition = applyTransition({
-      policy: ORDER_STANDARD_V1,
+      // Merged per-tenant overlay snapshot when resolved (ADR-0019);
+      // static base otherwise. See ApprovePV1 for rationale.
+      policy: policy.merged?.merged ?? ORDER_STANDARD_V1,
       currentState: fromState,
       command: "CANCEL",
     });

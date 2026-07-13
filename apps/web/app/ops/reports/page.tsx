@@ -66,7 +66,7 @@ export default async function ReportsCatalogPage() {
             >
               <h3 className="text-sm font-semibold text-fg">{def.title}</h3>
               <p className="mt-0.5 text-sm text-muted">{def.description}</p>
-              <code className="text-[11px] text-subtle">{def.id}</code>
+              <code className="text-2xs text-subtle">{def.id}</code>
             </LinkCard>
           ))}
         </div>

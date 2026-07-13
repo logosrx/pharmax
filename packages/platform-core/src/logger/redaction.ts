@@ -22,52 +22,63 @@
 //     add it to this list. Do not "just be careful at the call site"
 //     — that is exactly the failure mode this list defends against.
 
-export const DEFAULT_REDACT_PATHS: ReadonlyArray<string> = Object.freeze([
+// Sensitive field names, redacted BOTH at the top level of the log
+// context AND one level deep (`*.field`). Pino's `*.field` pattern
+// only matches NESTED occurrences — `logger.error("x", { firstName })`
+// with a top-level key sailed straight through the old nested-only
+// list, so the redactor is registered with each name twice.
+const SENSITIVE_FIELDS: ReadonlyArray<string> = Object.freeze([
   // Auth / secrets.
-  "*.password",
-  "*.pwd",
-  "*.secret",
-  "*.token",
-  "*.apiKey",
-  "*.accessToken",
-  "*.refreshToken",
-  "*.sessionToken",
-  "*.authorization",
-  "*.cookie",
-  "*.setCookie",
-  "*.stripeSignature",
+  "password",
+  "pwd",
+  "secret",
+  "token",
+  "apiKey",
+  "accessToken",
+  "refreshToken",
+  "sessionToken",
+  "authorization",
+  "cookie",
+  "setCookie",
+  "stripeSignature",
+
+  // PHI-adjacent fields. Caller MUST NOT log these directly; the
+  // redactor swaps them to `[Redacted]` if they slip through.
+  "firstName",
+  "lastName",
+  "fullName",
+  "dateOfBirth",
+  "dob",
+  "ssn",
+  "mrn",
+  "phoneNumber",
+  "phone",
+  "emailAddress",
+  "email",
+  "address",
+  "addressLine1",
+  "addressLine2",
+  "streetAddress",
+  "zip",
+  "zipCode",
+  "postalCode",
+
+  // Raw external payloads.
+  "rawBody",
+  "payload",
+  "body",
+]);
+
+export const DEFAULT_REDACT_PATHS: ReadonlyArray<string> = Object.freeze([
+  // Every sensitive field, top-level AND nested one level.
+  ...SENSITIVE_FIELDS,
+  ...SENSITIVE_FIELDS.map((f) => `*.${f}`),
 
   // Headers map (Pino redact uses bracket syntax for hyphen keys).
   'headers["authorization"]',
   'headers["cookie"]',
   'headers["set-cookie"]',
   'headers["stripe-signature"]',
-
-  // PHI-adjacent fields. Caller MUST NOT log these directly; the
-  // redactor swaps them to `[Redacted]` if they slip through.
-  "*.firstName",
-  "*.lastName",
-  "*.fullName",
-  "*.dateOfBirth",
-  "*.dob",
-  "*.ssn",
-  "*.mrn",
-  "*.phoneNumber",
-  "*.phone",
-  "*.emailAddress",
-  "*.email",
-  "*.address",
-  "*.addressLine1",
-  "*.addressLine2",
-  "*.streetAddress",
-  "*.zip",
-  "*.zipCode",
-  "*.postalCode",
-
-  // Raw external payloads.
-  "*.rawBody",
-  "*.payload",
-  "*.body",
 ]);
 
 export const DEFAULT_REDACT_CENSOR = "[Redacted]";

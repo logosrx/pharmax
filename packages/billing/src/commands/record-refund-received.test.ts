@@ -54,6 +54,11 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         calls.push({ table: "invoiceLine", op: "findUnique", args });
         return overrides.existingLine ?? null;
       }),
+      // Prior-refund total for the over-refund reconciliation flag.
+      findMany: vi.fn(async (args: unknown) => {
+        calls.push({ table: "invoiceLine", op: "findMany", args });
+        return [];
+      }),
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "invoiceLine", op: "create", args });
         return { id: "line-new" };
@@ -69,7 +74,20 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return { id: INVOICE_ID };
       }),
     },
-    commandLog: { create: vi.fn(async () => ({ id: "cl" })) },
+    commandLog: {
+      create: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "create", args });
+        return { id: "cl" };
+      }),
+      update: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "update", args });
+        return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "findUnique", args });
+        return null;
+      }),
+    },
     auditLog: { create: vi.fn(async () => ({ id: "al" })) },
     auditChainState: {
       findUnique: vi.fn(async () => null),

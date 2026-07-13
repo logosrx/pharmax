@@ -187,7 +187,9 @@ export const StartTyping = defineCommand<StartTypingInput, StartTypingOutput>({
     // each to the Pharmax error class with a stable command-level
     // code so the API surface is consistent.
     const transition = applyTransition({
-      policy: ORDER_STANDARD_V1,
+      // Merged per-tenant overlay snapshot when resolved (ADR-0019);
+      // static base otherwise. See ApprovePV1 for rationale.
+      policy: policy.merged?.merged ?? ORDER_STANDARD_V1,
       currentState,
       command: "START_TYPING",
     });

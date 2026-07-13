@@ -16,7 +16,7 @@
 
 import "server-only";
 
-import { executeCommand } from "@pharmax/command-bus";
+import { executeCommand, fingerprintRequest } from "@pharmax/command-bus";
 import { errors, ids } from "@pharmax/platform-core";
 import type { Command } from "@pharmax/command-bus";
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
@@ -72,8 +72,14 @@ export interface DispatchOpsCommandInput<TIn, TOut> {
   readonly idempotencyKeyPrefix: string;
   /** Redirect target on success. Receives the command's output for templating. */
   readonly successRedirect: (output: TOut) => string;
-  /** Redirect target on failure (typed error code + message appended as `?error=`). */
-  readonly failureRedirect: string;
+  /**
+   * Redirect target on failure (typed error code + message appended
+   * as `?error=`). May be a thunk for routes whose failure target
+   * depends on request state resolved during `buildInput` (e.g. the
+   * reopen route redirects back to whichever queue was the source);
+   * the thunk is evaluated at redirect time, AFTER buildInput ran.
+   */
+  readonly failureRedirect: string | (() => string);
   /** Logger event name on success. */
   readonly successLogEvent: string;
   /** Logger event name on failure. */
@@ -151,10 +157,13 @@ export async function dispatchOpsCommand<TIn, TOut>(
     return { kind: "ok" as const, built: builtInner as TIn, tenancyExtras: extrasInner };
   });
 
+  const resolveFailureRedirect = (): string =>
+    typeof input.failureRedirect === "function" ? input.failureRedirect() : input.failureRedirect;
+
   if (prepared.kind === "error") {
     return NextResponse.redirect(
       new URL(
-        `${input.failureRedirect}?error=${encodeURIComponent(prepared.error)}`,
+        `${resolveFailureRedirect()}?error=${encodeURIComponent(prepared.error)}`,
         "http://internal"
       ).toString(),
       { status: 303 }
@@ -163,8 +172,20 @@ export async function dispatchOpsCommand<TIn, TOut>(
   const built = prepared.built;
   const tenancyExtras = prepared.tenancyExtras;
 
+  // Key = prefix + payload fingerprint + minute bucket.
+  //
+  // The fingerprint is the load-bearing part: several routes use a
+  // prefix that only carries the RESOURCE id (`assign-lot:{orderId}`,
+  // `credit:{invoiceId}`), so with prefix+minute alone, two
+  // LEGITIMATE different actions on the same resource within 60s
+  // (assign lot to line 1 then line 2; two different credits) reused
+  // one key and the second failed with
+  // COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH. Including a keyed
+  // fingerprint of the built command input gives different payloads
+  // different keys (both execute) while a true double-submit of the
+  // same payload still replays.
   const minuteBucket = Math.floor(Date.now() / 60_000);
-  const idempotencyKey = `${input.idempotencyKeyPrefix}:${minuteBucket}`;
+  const idempotencyKey = `${input.idempotencyKeyPrefix}:${fingerprintRequest(built)}:${minuteBucket}`;
 
   const tenancy = buildTenancyContext({
     organizationId: session.tenancy.organizationId,
@@ -186,7 +207,6 @@ export async function dispatchOpsCommand<TIn, TOut>(
       operatorUserId: session.operator.userId,
       organizationId: session.tenancy.organizationId,
       operatorDisplayName: session.operator.displayName,
-      clerkUserId: session.operator.clerkUserId,
       commandName: input.command.name,
       route: input.idempotencyKeyPrefix,
     },
@@ -234,7 +254,7 @@ export async function dispatchOpsCommand<TIn, TOut>(
         });
         return NextResponse.redirect(
           new URL(
-            `${input.failureRedirect}?error=${encodeURIComponent(`${code}: ${message}`)}`,
+            `${resolveFailureRedirect()}?error=${encodeURIComponent(`${code}: ${message}`)}`,
             "http://internal"
           ).toString(),
           { status: 303 }

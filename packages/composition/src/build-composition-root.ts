@@ -171,6 +171,9 @@ function mergeAndSortConfigurators(input: BuildCompositionRootInput): ReadonlyAr
       prisma: input.prisma,
       clock: input.clock,
       logger: input.logger.child({ component: "command-bus" }),
+      // Derives the idempotency request-hash HMAC key at boot so the
+      // stored hash is keyed (non-reversible) — see the configurator.
+      kmsForRequestHashKey: input.kms,
     }),
     createShippingConfigurator({ factories: input.shippingFactories }),
     createBillingConfigurator({ stripeRefundPort: input.stripeRefundPort }),

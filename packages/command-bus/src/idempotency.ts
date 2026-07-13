@@ -2,7 +2,9 @@
 //
 // Contract:
 //
-//   `lookupIdempotency` runs BEFORE the transaction. It returns:
+//   `lookupIdempotency` runs in the bus's GUC'd pre-flight
+//   transaction (idempotency_key is RLS-protected; a raw-client
+//   read has no tenant GUC and sees nothing). It returns:
 //     - `{ kind: "miss" }` — no existing row, the bus should proceed.
 //     - `{ kind: "replay", responsePayload }` — existing row with a
 //       MATCHING request hash. The bus returns the cached payload
@@ -16,12 +18,14 @@
 //   handler succeeds. The unique constraint on
 //   (organizationId, commandName, key) means concurrent attempts
 //   serialize at commit time: the loser's tx rolls back with a
-//   unique-violation Prisma error, which the bus surfaces to the
-//   caller as a ConflictError on retry.
+//   unique-violation Prisma error, which the bus resolves into a
+//   replay of the winner's cached response (or a stable
+//   COMMAND_IN_FLIGHT 409 when the winner has not committed yet).
 //
-// PHI invariant: `requestHash` is a SHA-256 over the REDACTED
-// request payload; `responsePayload` is the redacted handler
-// output. Plain payload bytes never reach this table.
+// PHI invariant: `requestHash` is a KEYED HMAC-SHA256 over the full
+// request payload (see hash.ts — the key is KMS-derived, so the
+// stored hash is non-reversible); `responsePayload` is the redacted
+// handler output. Plain payload bytes never reach this table.
 
 import type { Prisma, PrismaClient } from "@pharmax/database";
 
@@ -51,7 +55,7 @@ export interface LookupIdempotencyInput {
  * row exists with a different request hash.
  */
 export async function lookupIdempotency(
-  client: PrismaClient,
+  client: PrismaClient | PrismaTxClient,
   input: LookupIdempotencyInput
 ): Promise<LookupResult> {
   const row = await client.idempotencyKey.findUnique({

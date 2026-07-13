@@ -59,7 +59,20 @@ function buildPrismaFake(
         return input.createResult ?? { id: "rs-1" };
       }),
     },
-    commandLog: { create: vi.fn(async () => ({ id: "cl-1" })) },
+    commandLog: {
+      create: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "create", args });
+        return { id: "cl-1" };
+      }),
+      update: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "update", args });
+        return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "findUnique", args });
+        return null;
+      }),
+    },
     auditLog: {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "auditLog", op: "create", args });
@@ -80,7 +93,13 @@ function buildPrismaFake(
         return { count: 1 };
       }),
     },
-    idempotencyKey: { create: vi.fn(async () => ({ ok: true })) },
+    idempotencyKey: {
+      create: vi.fn(async () => ({ ok: true })),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "idempotencyKey", op: "findUnique", args });
+        return null;
+      }),
+    },
     $executeRaw: vi.fn(async () => 0),
   };
   const client = {

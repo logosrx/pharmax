@@ -218,6 +218,19 @@ export const NOTIFICATION_TEMPLATES = {
     requiredContextKeys: ["orderExternalNumber", "escalationReason", "lastTrackingStatus"] as const,
     description: "Operations lead alert when an order escalates to the emergency bucket.",
   },
+  /** Order escalated to the emergency bucket because a stage SLA
+   *  breached. Triggers from `order.sla_breach_escalated.v1`.
+   *  Same audience + urgency rationale as SHIPMENT_ESCALATED_V1;
+   *  context is PHI-free by construction (an internal order number
+   *  and two ISO timestamps). */
+  ORDER_SLA_BREACH_ESCALATED_V1: {
+    id: "ORDER_SLA_BREACH_ESCALATED_V1",
+    channelKinds: ["in-app", "email", "sms"] as const,
+    phiAllowed: false,
+    requiredContextKeys: ["orderExternalNumber", "slaDeadlineAtIso", "breachedAtIso"] as const,
+    description:
+      "Operations lead alert when an order escalates to the emergency bucket for an SLA breach.",
+  },
   /** Escalation acknowledged by an operator. Triggers from
    *  `order.escalation_acknowledged.v1`. */
   SHIPMENT_ESCALATION_ACKNOWLEDGED_V1: {

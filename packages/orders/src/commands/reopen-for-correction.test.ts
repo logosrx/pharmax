@@ -126,7 +126,20 @@ function buildPrismaFake(overrides: FakeOverrides = {}) {
         return { id: "oe-8" };
       }),
     },
-    commandLog: { create: vi.fn(async () => ({ id: "cl-1" })) },
+    commandLog: {
+      create: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "create", args });
+        return { id: "cl-1" };
+      }),
+      update: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "update", args });
+        return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "findUnique", args });
+        return null;
+      }),
+    },
     auditLog: { create: vi.fn(async () => ({ id: "al-1" })) },
     auditChainState: {
       findUnique: vi.fn(async () => null),
@@ -137,7 +150,16 @@ function buildPrismaFake(overrides: FakeOverrides = {}) {
       })),
     },
     eventOutbox: { createMany: vi.fn(async () => ({ count: 1 })) },
-    idempotencyKey: { create: vi.fn(async () => ({ ok: true })) },
+    idempotencyKey: {
+      create: vi.fn(async (args: unknown) => {
+        calls.push({ table: "idempotencyKey", op: "create", args });
+        return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "idempotencyKey", op: "findUnique", args });
+        return null;
+      }),
+    },
     $queryRaw: vi.fn(async () =>
       lockedRow === null
         ? []

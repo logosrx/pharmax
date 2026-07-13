@@ -108,6 +108,20 @@ export interface CommandBusConfiguration {
    * Optional Tier-2 overlay resolution; see `OverlayResolutionConfig`.
    */
   readonly overlayResolution?: OverlayResolutionConfig;
+
+  /**
+   * HMAC key for the idempotency request hash. Production wiring
+   * (the composition root) derives this once at boot from the KMS
+   * adapter (`deriveSearchKey({ tenantId: "platform", purpose:
+   * "command-bus.request-hash" })`) so the stored
+   * `idempotency_key.requestHash` cannot be dictionary-attacked by
+   * a reader of the table.
+   *
+   * When absent (bare test configurations), the executor falls back
+   * to a static well-known key — deterministic for tests, and it
+   * logs a warning if that happens with NODE_ENV=production.
+   */
+  readonly requestHashKey?: string | Buffer;
 }
 
 // globalThis-backed so boot (Next instrumentation bundle) and use

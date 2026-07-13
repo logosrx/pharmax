@@ -107,6 +107,46 @@ enum RoleScope {
   TEAM
 }
 
+// ---------------------------------------------------------------------------
+// Authentication (in-house identity engine). See ADR-0030. These enums
+// back the `@pharmax/auth` engine that replaced Clerk. Authentication
+// state changes flow through the command bus, so every value here
+// surfaces in `audit_log` / `command_log`.
+// ---------------------------------------------------------------------------
+
+// Why a session stopped being valid. Stored on `auth_session.revokedReason`
+// for forensic/audit reconstruction (SOC 2 CC6.1, HIPAA §164.312(b)).
+enum AuthSessionRevokeReason {
+  USER_LOGOUT
+  ADMIN_REVOKED
+  PASSWORD_CHANGED
+  MFA_RESET
+  ROTATED
+  IDLE_TIMEOUT
+  ABSOLUTE_TIMEOUT
+  USER_TERMINATED
+  SECURITY_EVENT
+}
+
+// Multi-factor authenticator kind. v1 ships TOTP only; WebAuthn/passkey
+// is a later adapter behind the same enrollment table (ADR-0030).
+enum MfaType {
+  TOTP
+}
+
+// Outcome of a sign-in attempt, recorded on `login_attempt` for
+// distributed lockout and audit. No PHI: `emailAttempted` is an operator
+// identifier, not patient data.
+enum LoginOutcome {
+  SUCCESS
+  INVALID_CREDENTIALS
+  MFA_REQUIRED
+  MFA_FAILED
+  LOCKED_OUT
+  RATE_LIMITED
+  USER_INACTIVE
+}
+
 // Lifecycle of a workflow policy row. See ADR-0017 for the full
 // rationale and the create / in-flight selection contracts.
 //
@@ -732,6 +772,13 @@ model Organization {
   providerSyncChecks       ProviderSyncCheck[]
   providerSyncReviewItems  ProviderSyncReviewItem[]
 
+  // Authentication (ADR-0030, in-house identity engine).
+  authSessions        AuthSession[]
+  mfaEnrollments      MfaEnrollment[]
+  recoveryCodes       RecoveryCode[]
+  passwordHistory     PasswordHistory[]
+  passwordResetTokens PasswordResetToken[]
+
   @@map("organization")
 }
 
@@ -983,6 +1030,13 @@ model User {
   providerSyncRunsTriggered     ProviderSyncRun[]         @relation("ProviderSyncRunTriggeredBy")
   providerSyncReviewsResolved   ProviderSyncReviewItem[]  @relation("ProviderSyncReviewResolvedBy")
 
+  // Authentication (ADR-0030, in-house identity engine).
+  authSessions        AuthSession[]
+  mfaEnrollments      MfaEnrollment[]
+  recoveryCodes       RecoveryCode[]
+  passwordHistory     PasswordHistory[]
+  passwordResetTokens PasswordResetToken[]
+
   @@unique([organizationId, email])
   @@index([organizationId, status])
   @@map("user")
@@ -1072,6 +1126,176 @@ model UserRole {
   @@index([organizationId, userId])
   @@index([roleId])
   @@map("user_role")
+}
+
+// ===========================================================================
+// 4b. Authentication — in-house identity engine (ADR-0030)
+// ===========================================================================
+//
+// These tables replace Clerk. The engine owns authentication only;
+// `@pharmax/rbac` + `@pharmax/tenancy` still own authorization + scope.
+// All tenant-scoped auth tables carry `organizationId` and are RLS-
+// protected; sign-in resolution reads them in a system-context frame
+// (the token/email is tenant-less until resolved), the same pattern the
+// webhook drains use.
+//
+// PHI invariant: none of these tables hold patient data. Emails and
+// display names are operator identifiers. Secrets are never stored in
+// plaintext — session tokens as SHA-256 hashes, TOTP secrets as
+// `@pharmax/crypto` envelopes, passwords/recovery codes as Argon2id.
+
+// A server-side, opaque, revocable session. The raw 256-bit token is
+// handed to the client cookie exactly once; only its SHA-256 hash is
+// persisted, so a read of this table yields no usable tokens. Stateful
+// by design (ADR-0030) so revocation is immediate.
+model AuthSession {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  userId         String       @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // SHA-256 (hex) of the opaque session token. Unique so resolution is
+  // a single indexed lookup.
+  tokenHash String @unique
+
+  // Whether this session has cleared the MFA step-up required for
+  // privileged roles (the ADR-0025 floor, now enforced in-engine).
+  mfaSatisfied Boolean @default(false)
+
+  // Operator request metadata for audit. Not PHI.
+  ipAddress String?
+  userAgent String?
+
+  createdAt         DateTime                 @default(now())
+  lastActivityAt    DateTime                 @default(now())
+  idleExpiresAt     DateTime
+  absoluteExpiresAt DateTime
+  revokedAt         DateTime?
+  revokedReason     AuthSessionRevokeReason?
+
+  @@index([userId, revokedAt])
+  @@index([organizationId, createdAt])
+  @@index([absoluteExpiresAt])
+  @@map("auth_session")
+}
+
+// A user's enrolled MFA authenticator. TOTP secret is stored as a
+// serialized `@pharmax/crypto` ciphertext envelope, never in plaintext.
+// At most one active (non-disabled) enrollment per user is enforced by a
+// partial unique index in the migration.
+model MfaEnrollment {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  userId         String       @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type MfaType @default(TOTP)
+
+  // Serialized CiphertextEnvelope (KMS-wrapped) of the TOTP secret.
+  secretCiphertext String
+
+  verifiedAt DateTime?
+  disabledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  // Planner-friendly index for the RLS `organizationId = guc` filter
+  // (R3 in check-prisma-schema).
+  @@index([organizationId])
+  @@map("mfa_enrollment")
+}
+
+// Single-use MFA recovery codes. Stored only as Argon2id hashes;
+// `usedAt` is stamped on redemption so a code is never reusable.
+model RecoveryCode {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  userId         String       @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  codeHash String
+  usedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, usedAt])
+  // Planner-friendly index for the RLS `organizationId = guc` filter
+  // (R3 in check-prisma-schema).
+  @@index([organizationId])
+  @@map("recovery_code")
+}
+
+// Anti-reuse history of prior password hashes (Argon2id). The engine
+// rejects a new password that matches any row within the configured
+// window (SOC 2 / HIPAA password policy).
+model PasswordHistory {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  userId         String       @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  hashedPassword String
+  createdAt      DateTime @default(now())
+
+  @@index([userId, createdAt])
+  // Planner-friendly index for the RLS `organizationId = guc` filter
+  // (R3 in check-prisma-schema).
+  @@index([organizationId])
+  @@map("password_history")
+}
+
+// Short-lived, single-use password-reset token. Only the SHA-256 hash
+// is stored; the raw token lives only in the emailed link. Resolved in
+// system context (tenant-less until matched), then consumed atomically.
+model PasswordResetToken {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  userId         String       @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  // Planner-friendly index for the RLS `organizationId = guc` filter
+  // (R3 in check-prisma-schema).
+  @@index([organizationId])
+  @@map("password_reset_token")
+}
+
+// Sign-in attempt ledger. Platform-level (RLS-exempt) because a failed
+// attempt against a nonexistent email has no resolvable tenant — the
+// same pre-tenant rationale as the webhook ledgers. Powers distributed
+// lockout + brute-force detection without any in-memory state.
+// `emailAttempted` is an operator identifier, not patient PHI.
+model LoginAttempt {
+  id String @id @default(uuid()) @db.Uuid
+
+  // Resolved only when the email maps to a known user; NULL otherwise.
+  organizationId String? @db.Uuid
+
+  emailAttempted String
+  outcome        LoginOutcome
+  reasonCode     String?
+  ipAddress      String?
+  userAgent      String?
+
+  createdAt DateTime @default(now())
+
+  @@index([emailAttempted, createdAt])
+  @@index([ipAddress, createdAt])
+  @@index([createdAt])
+  @@map("login_attempt")
 }
 
 // ===========================================================================
@@ -3169,6 +3393,16 @@ model PrintJob {
   contentHash   Bytes
   failureReason String?
 
+  // Print-agent claim lease. Set when an agent claims a SENT job
+  // (now + lease window); other agents' claim queries skip rows
+  // whose lease is in the future. Without this, the claim's
+  // FOR UPDATE lock released at transaction end while the job
+  // stayed SENT — two agent processes polling the same workstation
+  // could both pick the job up and print duplicate vial labels.
+  // Cleared implicitly by the terminal status transition; an agent
+  // crash lets the lease expire so the job is reclaimable.
+  agentLeasedUntil DateTime?
+
   isReprint         Boolean @default(false)
   reprintReasonCode String?
 
@@ -3238,6 +3472,18 @@ model Shipment {
 
   externalShipmentId String?
   externalTrackerId  String?
+
+  // Purchased-label artifacts. `labelUrl` is the carrier-hosted
+  // rendered label (EasyPost/UPS); `labelPdfBase64` is the inline
+  // label payload (FedEx returns the bytes directly and offers no
+  // stable URL). At least one is set for adapter-purchased
+  // shipments; both are NULL for manual (BYO tracking number)
+  // shipments. Without persisting these, the label an org PAID for
+  // was discarded on commit and could never be printed again.
+  // Non-PHI: the URL/bytes are carrier artifacts addressed by
+  // tracking number; access is gated by the ops routes' RBAC.
+  labelUrl        String?
+  labelPdfBase64  String?
 
   createdByUserId String @db.Uuid
   createdByUser   User   @relation("ShipmentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)

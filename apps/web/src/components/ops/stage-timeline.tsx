@@ -29,7 +29,7 @@ export function StageTimeline({ status }: { readonly status: string }) {
                 <span
                   className={cx(
                     "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors",
-                    done && "border-emerald-500/40 bg-emerald-500/15 text-emerald-300",
+                    done && "border-emerald-500/40 bg-emerald-500/15 text-tone-success",
                     current && "border-brand bg-brand/15 text-brand shadow-glow",
                     !done && !current && "border-line bg-surface-2 text-subtle"
                   )}
@@ -38,7 +38,7 @@ export function StageTimeline({ status }: { readonly status: string }) {
                 </span>
                 <span
                   className={cx(
-                    "truncate text-[11px] font-medium",
+                    "truncate text-2xs font-medium",
                     current ? "text-fg" : done ? "text-muted" : "text-subtle"
                   )}
                 >

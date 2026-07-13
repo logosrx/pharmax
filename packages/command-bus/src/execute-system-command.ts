@@ -153,13 +153,20 @@ export async function executeSystemCommand<TInput, TOutput>(
     throw err;
   }
 
-  // Step 19 (success) — mark command_log SUCCEEDED.
+  // Step 19 (success) — mark command_log SUCCEEDED. command_log is
+  // RLS-protected (ENABLE + FORCE), so this update must run inside
+  // a transaction with the system-context GUC applied — a raw-client
+  // update lands on an arbitrary pool connection with no GUC and is
+  // denied under the restricted database roles.
   const responsePayload = redactPayload(txResult.result.output, command.redactFields);
-  await updateCommandLogStatus(config.prisma, {
-    id: commandLogId,
-    status: CommandStatus.SUCCEEDED,
-    responsePayload,
-    completedAt: config.clock.now(),
+  await config.prisma.$transaction(async (tx) => {
+    await applySystemSessionGuc(tx as unknown as SessionGucExecutor, systemReason);
+    await updateCommandLogStatus(tx, {
+      id: commandLogId,
+      status: CommandStatus.SUCCEEDED,
+      responsePayload,
+      completedAt: config.clock.now(),
+    });
   });
 
   return txResult.result.output;

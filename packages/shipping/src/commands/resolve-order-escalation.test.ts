@@ -121,7 +121,11 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return { id: "oe" };
       }),
     },
-    commandLog: { create: vi.fn(async () => ({ id: "cl" })) },
+    commandLog: {
+      create: vi.fn(async () => ({ id: "cl" })),
+      update: vi.fn(async () => ({ ok: true })),
+      findUnique: vi.fn(async () => null),
+    },
     auditLog: {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "auditLog", op: "create", args });
@@ -142,7 +146,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return { count: 1 };
       }),
     },
-    idempotencyKey: { create: vi.fn(async () => ({ ok: true })) },
+    idempotencyKey: {
+      create: vi.fn(async () => ({ ok: true })),
+      findUnique: vi.fn(async () => null),
+    },
     $queryRaw: vi.fn(async (template: TemplateStringsArray) => {
       const joined = template.join("?");
       if (/FROM\s+"?order"?/i.test(joined) && /FOR\s+UPDATE/i.test(joined)) {

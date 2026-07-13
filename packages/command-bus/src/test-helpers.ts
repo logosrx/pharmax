@@ -23,11 +23,26 @@ export interface FakePrisma {
   /** Set the row that `idempotencyKey.findUnique` returns. */
   setIdempotencyHit: (row: Record<string, unknown> | null) => void;
   /**
-   * If set, the next `$transaction` callback throws this error
-   * AFTER the handler runs and AFTER any in-tx writes. Use to
-   * simulate a commit failure.
+   * If set, the next MAIN `$transaction` (the one that ran the
+   * handler — detected by an in-tx `auditLog.create` /
+   * `idempotencyKey.create` / handler activity) throws this error
+   * after its callback completes. The bus's short GUC'd
+   * bookkeeping transactions (idempotency lookup, command_log
+   * create/update) are NOT affected. Use to simulate a commit
+   * failure of the domain transaction.
    */
   throwOnCommit: (err: Error | null) => void;
+  /**
+   * Set the row that `commandLog.findUnique` returns (used by the
+   * unique-violation recovery path). Default null.
+   */
+  setCommandLogRow: (row: { id: string; status: string } | null) => void;
+  /**
+   * If set, the NEXT `commandLog.create` throws this error (then
+   * resets). Use to simulate the (org, commandName, idempotencyKey)
+   * unique violation.
+   */
+  throwOnCommandLogCreate: (err: Error | null) => void;
   /**
    * Set the row that `auditChainState.findUnique` returns. NULL
    * (the default) exercises the genesis-insert path; a non-null
@@ -92,6 +107,8 @@ export function buildFakePrisma(): FakePrisma {
   const calls: FakeCall[] = [];
   let idempotencyHit: Record<string, unknown> | null = null;
   let commitError: Error | null = null;
+  let commandLogRow: { id: string; status: string } | null = null;
+  let commandLogCreateError: Error | null = null;
   // The variables below are mutated by the `setXxx` setters returned
   // at the bottom of this function and READ inside the per-table
   // fakes declared further down. They MUST stay `let` (not `const`)
@@ -224,15 +241,42 @@ export function buildFakePrisma(): FakePrisma {
 
   const orderUpdateMany = record("order", "updateMany");
 
+  // The bus runs its bookkeeping (idempotency lookup, command_log
+  // create/update) inside short GUC'd transactions, so the tx client
+  // carries those delegates too. `findUnique` honors the same
+  // setters as the raw client so tests configure one surface.
+  const txCommandLogCreate = vi.fn(async (args: unknown) => {
+    calls.push({ table: "commandLog", op: "create", args });
+    if (commandLogCreateError !== null) {
+      const err = commandLogCreateError;
+      commandLogCreateError = null;
+      throw err;
+    }
+    return { count: 1 };
+  });
+
   const txClient = {
-    commandLog: { create: record("commandLog", "create") },
+    commandLog: {
+      create: txCommandLogCreate,
+      update: record("commandLog", "update"),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "findUnique", args });
+        return commandLogRow;
+      }),
+    },
     auditLog: { create: record("auditLog", "create") },
     auditChainState: {
       findUnique: auditChainFindUnique,
       upsert: auditChainUpsert,
     },
     eventOutbox: { createMany: record("eventOutbox", "createMany") },
-    idempotencyKey: { create: record("idempotencyKey", "create") },
+    idempotencyKey: {
+      create: record("idempotencyKey", "create"),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "idempotencyKey", op: "findUnique", args });
+        return idempotencyHit;
+      }),
+    },
     workflowPolicy: { findUnique: workflowPolicyFindUnique },
     order: { updateMany: orderUpdateMany },
     orderEvent: {
@@ -243,17 +287,30 @@ export function buildFakePrisma(): FakePrisma {
     $queryRaw: recordQueryRaw,
   };
 
+  // Tables that only the MAIN (handler-carrying) transaction writes.
+  // `throwOnCommit` fires only when the finished tx callback touched
+  // one of these, so the bus's short bookkeeping transactions are
+  // unaffected.
+  const MAIN_TX_MARKERS = new Set(["auditLog", "eventOutbox", "orderEvent", "order", "orderHold"]);
+
   const client = {
     commandLog: {
       create: record("commandLog", "create"),
       update: record("commandLog", "update"),
     },
     idempotencyKey: {
-      findUnique: record("idempotencyKey", "findUnique"),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "idempotencyKey", op: "findUnique", args });
+        return idempotencyHit;
+      }),
     },
     $transaction: vi.fn(async (fn: (tx: typeof txClient) => Promise<unknown>) => {
+      const callCountBefore = calls.length;
       const out = await fn(txClient);
-      if (commitError !== null) {
+      const touchedMainTables = calls
+        .slice(callCountBefore)
+        .some((c) => MAIN_TX_MARKERS.has(c.table));
+      if (commitError !== null && touchedMainTables) {
         const err = commitError;
         commitError = null;
         throw err;
@@ -269,6 +326,12 @@ export function buildFakePrisma(): FakePrisma {
     },
     throwOnCommit: (err) => {
       commitError = err;
+    },
+    setCommandLogRow: (row) => {
+      commandLogRow = row === null ? null : { ...row };
+    },
+    throwOnCommandLogCreate: (err) => {
+      commandLogCreateError = err;
     },
     setAuditChainHead: (head) => {
       auditChainHead = head;
@@ -289,11 +352,19 @@ export function buildFakePrisma(): FakePrisma {
   };
 }
 
+/**
+ * The request-hash HMAC key used by `buildFakeConfig`. Tests that
+ * pre-compute an expected `requestHash` must key with this value
+ * (`hashRequestKeyed(input, TEST_REQUEST_HASH_KEY)`).
+ */
+export const TEST_REQUEST_HASH_KEY = "test-request-hash-key";
+
 export function buildFakeConfig(prisma: FakePrisma): CommandBusConfiguration {
   return {
     prisma: prisma.client as unknown as CommandBusConfiguration["prisma"],
     clock: clockNs.createFrozenClock(new Date("2026-05-21T00:00:00.000Z")),
     logger: loggerNs.noopLogger,
+    requestHashKey: TEST_REQUEST_HASH_KEY,
   };
 }
 

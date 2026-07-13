@@ -40,6 +40,7 @@ export function createEasyPostTargetResolver(
   return {
     async resolve(record: EasyPostWebhookEventRecord): Promise<ResolvedWebhookTarget | null> {
       const trackingCode = record.payload.result.tracking_code;
+      const externalTrackerId = record.payload.result.id;
       if (typeof trackingCode !== "string" || trackingCode.length === 0) {
         return null;
       }
@@ -49,11 +50,35 @@ export function createEasyPostTargetResolver(
       // bypass that lets the worker drain read across tenants for
       // this single resolution step.
       return withSystemContext("worker-drain:easypost-target-resolve", async () => {
-        const shipment = await client.shipment.findFirst({
-          where: { trackingNumber: trackingCode },
-          select: { id: true, organizationId: true },
-          orderBy: { createdAt: "desc" },
-        });
+        // Resolution order matters for tenant safety:
+        //
+        //   1. `externalTrackerId` — the EasyPost tracker object id
+        //      persisted at purchase time. Unique per EasyPost
+        //      object, so it can NEVER match another tenant's
+        //      shipment.
+        //   2. Tracking-number fallback — only for shipments with no
+        //      stored tracker id (manual BYO-tracking shipments).
+        //      Carrier tracking numbers get REUSED across time and
+        //      accounts; resolving by tracking number alone let a
+        //      webhook for one org's shipment update the NEWEST
+        //      shipment globally, including another tenant's. The
+        //      fallback therefore also requires the shipment to lack
+        //      a tracker id (a tracker-linked shipment must match on
+        //      its tracker id or not at all).
+        const byTrackerId =
+          typeof externalTrackerId === "string" && externalTrackerId.length > 0
+            ? await client.shipment.findFirst({
+                where: { externalTrackerId },
+                select: { id: true, organizationId: true },
+              })
+            : null;
+        const shipment =
+          byTrackerId ??
+          (await client.shipment.findFirst({
+            where: { trackingNumber: trackingCode, externalTrackerId: null },
+            select: { id: true, organizationId: true },
+            orderBy: { createdAt: "desc" },
+          }));
         if (shipment === null) {
           return null;
         }

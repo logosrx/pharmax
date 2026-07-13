@@ -143,7 +143,7 @@ export const PurchaseShipmentLabel = defineCommand<
   lockTarget: { table: "order", by: (input) => ({ id: input.orderId }) },
   redactFields: REDACT_FIELDS,
 
-  async exec({ tx, ctx, input, target, clock, commandLogId }) {
+  async exec({ tx, ctx, input, target, clock, commandLogId, saga, logger }) {
     if (target === undefined) {
       throw new errors.InternalError({
         code: "PURCHASE_SHIPMENT_LABEL_NO_TARGET",
@@ -191,9 +191,13 @@ export const PurchaseShipmentLabel = defineCommand<
       // carrier adapter; re-throw as a ConflictError so the HTTP
       // layer surfaces a 409 (the order is still in READY_TO_SHIP and
       // the operator can retry once the underlying issue is fixed).
+      //
+      // PHI note: carrier error messages can echo request fragments
+      // (including address lines). Keep the operator-facing message
+      // generic; the full cause is chained for server-side logs.
       throw new errors.ConflictError({
         code: PURCHASE_LABEL_ADAPTER_FAILED,
-        message: cause instanceof Error ? cause.message : "Adapter failed to purchase label.",
+        message: "Carrier declined the label purchase. Verify the address and parcel, then retry.",
         metadata: {
           orderId: target.id,
           provider: input.provider,
@@ -204,6 +208,30 @@ export const PurchaseShipmentLabel = defineCommand<
         cause,
       });
     }
+
+    // The buy above escaped the transaction — the carrier charged
+    // the org's account regardless of whether this tx commits. If
+    // ANY later step in this handler throws (shipment insert, CAS
+    // bump, order_event write), void the label before the rollback
+    // so a retry does not double-charge. Providers without
+    // cancelLabel keep the residual risk; the pre-flight command_log
+    // RUNNING row (committed before the handler) is the durable
+    // reconciliation breadcrumb for a crash mid-purchase.
+    const boughtTrackingNumber = purchased.trackingNumber;
+    saga.step({
+      name: "void-purchased-label",
+      undo: async () => {
+        if (adapter.cancelLabel === undefined) {
+          logger.warn("purchased label could not be auto-voided (provider lacks cancelLabel)", {
+            provider: input.provider,
+            trackingNumber: boughtTrackingNumber,
+            orderId: target.id,
+          });
+          return;
+        }
+        await adapter.cancelLabel({ trackingNumber: boughtTrackingNumber });
+      },
+    });
 
     const shipment = await tx.shipment.create({
       data: {
@@ -216,6 +244,10 @@ export const PurchaseShipmentLabel = defineCommand<
         trackingNumber: purchased.trackingNumber,
         externalShipmentId: purchased.externalShipmentId,
         externalTrackerId: purchased.externalTrackerId,
+        // Persist the artifact the org just paid for — without these
+        // the label was unrecoverable after this response.
+        labelUrl: purchased.labelUrl,
+        labelPdfBase64: purchased.labelPdfBase64,
         createdByUserId: ctx.actor.userId,
         createCommandLogId: commandLogId,
       },

@@ -72,6 +72,7 @@ interface FakeOverrides {
     lotId: string | null;
     vialLabelId: string | null;
     lot?: { lotNumber: string; product: { ndc: string } } | null;
+    vialLabel?: { activePrintJob: { id: string; status: string } } | null;
   }>;
   completedPrintForLine?: boolean;
   finalBucketFound?: boolean;
@@ -108,6 +109,25 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
       : overrides.lines;
   const completedPrintForLine = overrides.completedPrintForLine ?? true;
   const finalBucketFound = overrides.finalBucketFound ?? true;
+  // The handler reads the label's ACTIVE print job off the line
+  // (`vialLabel.activePrintJob`), so derive that relation for
+  // fixtures that don't specify it: labelled lines get an active
+  // job whose status follows `completedPrintForLine`; label-less
+  // lines get null (matches what Prisma returns).
+  const linesWithVialLabel = lines.map((line) => ({
+    ...line,
+    vialLabel:
+      line.vialLabel !== undefined
+        ? line.vialLabel
+        : line.vialLabelId === null
+          ? null
+          : {
+              activePrintJob: {
+                id: PRINT_JOB_ID,
+                status: completedPrintForLine ? "COMPLETED" : "PENDING",
+              },
+            },
+  }));
   const orderUpdateManyCount = overrides.orderUpdateManyCount ?? 1;
   const orderEventHead =
     "orderEventHead" in overrides ? (overrides.orderEventHead ?? null) : { sequenceNumber: 5 };
@@ -140,7 +160,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     orderLine: {
       findMany: vi.fn(async (args: unknown) => {
         calls.push({ table: "orderLine", op: "findMany", args });
-        return lines;
+        return linesWithVialLabel;
       }),
     },
     printJob: {
@@ -169,6 +189,14 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "commandLog", op: "create", args });
         return { id: "cl-1" };
+      }),
+      update: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "update", args });
+        return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "findUnique", args });
+        return null;
       }),
     },
     auditLog: {
@@ -201,6 +229,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "idempotencyKey", op: "create", args });
         return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "idempotencyKey", op: "findUnique", args });
+        return null;
       }),
     },
     $queryRaw: vi.fn(async (template: TemplateStringsArray, ...values: ReadonlyArray<unknown>) => {

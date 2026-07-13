@@ -165,7 +165,7 @@ export default async function EditReportSchedulePage({
 
       <Card accent="danger">
         <CardHeader>
-          <CardTitle className="text-red-300">Disable schedule</CardTitle>
+          <CardTitle className="text-tone-danger">Disable schedule</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center justify-between gap-3">
           <p className="max-w-md text-xs text-muted">

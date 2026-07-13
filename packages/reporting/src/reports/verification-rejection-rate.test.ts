@@ -13,7 +13,9 @@ interface FakeGroup {
 
 function fakeClient(groups: ReadonlyArray<FakeGroup>) {
   return {
-    verificationRecord: { groupBy: vi.fn(async () => groups) },
+    // Declare an args param so `groupBy.mock.calls[n][0]` is typed
+    // as the captured argument (not an out-of-range tuple index).
+    verificationRecord: { groupBy: vi.fn(async (_args: unknown) => groups) },
   };
 }
 
@@ -107,5 +109,36 @@ describe("verificationRejectionRateReport — schema", () => {
         to: new Date("2026-05-01"),
       }).success
     ).toBe(false);
+  });
+});
+
+describe("verificationRejectionRateReport — clinic scoping", () => {
+  const CLINIC = "00000000-0000-4000-8000-000000000010";
+
+  it("narrows to the context clinic via the order relation when ctx.clinicId is set", async () => {
+    const client = fakeClient([]);
+    await verificationRejectionRateReport.run(
+      { client: client as never, organizationId: ORG_ID, clinicId: CLINIC },
+      window
+    );
+    const call = client.verificationRecord.groupBy.mock.calls[0]?.[0] as unknown as {
+      where: Record<string, unknown>;
+    };
+    expect(call.where["organizationId"]).toBe(ORG_ID);
+    // Regression: without this filter, a clinic-scoped operator saw
+    // the whole org's rejection rates.
+    expect(call.where["order"]).toEqual({ clinicId: CLINIC });
+  });
+
+  it("omits the clinic filter for org-wide contexts", async () => {
+    const client = fakeClient([]);
+    await verificationRejectionRateReport.run(
+      { client: client as never, organizationId: ORG_ID },
+      window
+    );
+    const call = client.verificationRecord.groupBy.mock.calls[0]?.[0] as unknown as {
+      where: Record<string, unknown>;
+    };
+    expect(call.where["order"]).toBeUndefined();
   });
 });

@@ -78,6 +78,9 @@ const PRISMA_CLIENT_RESTRICTION = {
 //                                 command handler.
 //   - apps/web/src/server/auth/ — Clerk identity → Pharmax tenancy
 //                                 resolution (see Override 3c).
+//   - packages/auth/     — in-house identity engine; every entry
+//                          point is pre-tenant by definition
+//                          (see Override 3i).
 //   - scripts/           — operator CLIs (e.g. bootstrap-org)
 //   - **/*.test.ts       — test fixtures
 //
@@ -355,6 +358,30 @@ export default tseslint.config(
   // ban.
   {
     files: ["apps/web/app/api/webhooks/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
+  // Override 3i: packages/auth/** is the in-house identity engine
+  // (ADR-0030) — the successor to the Clerk bridge that Override 3c
+  // covers in apps/web/src/server/auth/**. Every entry point here is
+  // PRE-TENANT by definition:
+  //   - SignIn resolves an email to a user row BEFORE any tenancy
+  //     exists (the org is discovered FROM the user row).
+  //   - LoginAttempt rows must be writable for lockout / rate-limit
+  //     counting even when the email matches NO user (organizationId
+  //     is nullable by design).
+  //   - Session resolution turns an opaque token hash into the
+  //     (org, user) pair that BECOMES the tenancy frame.
+  //   - Password-reset / invite tokens are presented by callers with
+  //     no session at all; the token row is the only bridge.
+  // Same shape as 3b/3c: infrastructure bridge from a tenant-less
+  // identifier to a tenancy frame, not business logic — workflow
+  // state never moves here. Keep the Prisma ban; drop the
+  // system-context ban.
+  {
+    files: ["packages/auth/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
     },

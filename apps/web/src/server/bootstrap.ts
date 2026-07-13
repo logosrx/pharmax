@@ -28,6 +28,7 @@
 
 import "server-only";
 
+import { buildAuthConfiguration, configureAuth, createArgon2idHasher } from "@pharmax/auth";
 import { configureBilling } from "@pharmax/billing";
 import { configureCommandBus } from "@pharmax/command-bus";
 import { buildKmsAdapterFromEnv } from "@pharmax/composition";
@@ -62,6 +63,7 @@ import {
 
 import { env } from "./env.js";
 import { logger } from "./logger.js";
+import { notificationPasswordResetMailer } from "./auth/password-reset-mailer.js";
 import { initSentry } from "./observability/sentry-init.js";
 import { buildStripeRefundPortFromEnv } from "./billing/stripe-refund-port.js";
 
@@ -159,14 +161,16 @@ async function buildReportArchive(): Promise<ReportRunArchivePort> {
  * a redeploy drops every in-flight capture, so it is dev/staging
  * only.
  *
- * We mirror `buildReportArchive`'s posture: warn (not hard-fail) in
- * production when unset, so a deployment that hasn't provisioned the
- * photo bucket yet still boots and serves the rest of the app —
- * captures simply fall back to non-durable storage and a misconfig
- * is loud in the logs. The bucket + KMS key MUST match across
- * instances so an upload routed to instance A and a dispatch routed
- * to instance B resolve the same token row (the token row lives in
- * Postgres, but the bytes live in the shared S3 bucket).
+ * Production HARD-FAILS the boot when unset (unlike
+ * `buildReportArchive`, whose in-memory fallback only loses a
+ * re-runnable CSV): dock captures are one-shot physical evidence,
+ * and per-instance in-memory storage silently loses them whenever
+ * the upload and the dispatch land on different instances or a
+ * redeploy occurs. Dev/test keep the in-memory adapter. The bucket +
+ * KMS key MUST match across instances so an upload routed to
+ * instance A and a dispatch routed to instance B resolve the same
+ * token row (the token row lives in Postgres, but the bytes live in
+ * the shared S3 bucket).
  */
 async function buildPackagePhotoStorage(): Promise<{
   readonly storage: PackagePhotoStorage;
@@ -181,10 +185,17 @@ async function buildPackagePhotoStorage(): Promise<{
     kmsKeyId.length === 0
   ) {
     if (env.NODE_ENV === "production") {
-      logger.warn("apps/web booted without S3 package-photo storage", {
-        reason:
-          "S3_PACKAGE_PHOTOS_BUCKET or S3_PACKAGE_PHOTOS_KMS_KEY_ID unset; dock captures use non-durable in-memory storage and are lost on redeploy.",
-      });
+      // Hard fail, not a warn-and-degrade: production runs multiple
+      // instances behind a load balancer, so an upload accepted by
+      // instance A is UNRESOLVABLE when the dispatch lands on
+      // instance B — the rep's photo appears to save and then
+      // vanishes. A missing bucket must stop the boot, exactly like
+      // a missing DATABASE_URL would.
+      throw new Error(
+        "Refusing to boot in production without S3 package-photo storage: " +
+          "set S3_PACKAGE_PHOTOS_BUCKET and S3_PACKAGE_PHOTOS_KMS_KEY_ID. " +
+          "In-memory storage is per-instance and loses captures across instances/redeploys."
+      );
     }
     return {
       storage: new InMemoryPackagePhotoStorage(),
@@ -304,21 +315,14 @@ export function getWebTelemetryHandle(): TelemetryHandle | null {
 }
 
 async function doBootstrap(): Promise<void> {
-  // -1. Identity-layer config gate.
+  // -1. Identity-layer config gate (ADR-0030, in-house engine).
   //
-  // Clerk is the source of truth for "is this a real human?". A
-  // production deployment that boots without `CLERK_SECRET_KEY`,
-  // `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, or `CLERK_WEBHOOK_SECRET`
-  // is degraded by definition: sign-in is broken, off-boarding
-  // (user.deleted webhook) doesn't fire, and operators with stale
-  // sessions stay alive past their Clerk-side termination. We
-  // refuse to boot rather than serve in that state.
-  //
-  // SUPPORT_EMAIL is required so the production sign-up "closed"
-  // page renders a real mailto link instead of a placeholder.
-  //
-  // Same hard-fail shape as the AWS KMS gate (see `buildKmsAdapter`).
-  enforceClerkProductionConfig();
+  // SUPPORT_EMAIL is required in production so the invitation-only
+  // sign-up surface renders a real mailto link. The password pepper
+  // and session policy are wired in step 6 below (warns, not
+  // hard-fails, when the pepper is unset so a partial rollout still
+  // boots while the secret is provisioned).
+  enforceIdentityProductionConfig();
 
   // 0. OpenTelemetry FIRST.
   //
@@ -477,6 +481,34 @@ async function doBootstrap(): Promise<void> {
     logger: logger.child({ component: "command-bus" }),
   });
 
+  // 6. @pharmax/auth — the in-house identity engine (ADR-0030).
+  //
+  // The Argon2id hasher is wired with a KMS/Secrets-Manager-sourced
+  // pepper (AUTH_PASSWORD_PEPPER, base64). Unlike the per-hash salt,
+  // the pepper is never stored with the hash, so a DB-only breach
+  // cannot verify passwords. Dev/test may run without a pepper; we
+  // warn (not hard-fail) in production so a partial rollout still
+  // boots while the secret is provisioned.
+  const pepper =
+    typeof env.AUTH_PASSWORD_PEPPER === "string" && env.AUTH_PASSWORD_PEPPER.length > 0
+      ? new Uint8Array(Buffer.from(env.AUTH_PASSWORD_PEPPER, "base64"))
+      : null;
+  if (pepper === null && env.NODE_ENV === "production") {
+    logger.warn("apps/web booted without AUTH_PASSWORD_PEPPER", {
+      reason: "password hashing runs without a pepper; provision via Secrets Manager.",
+    });
+  }
+  configureAuth(
+    buildAuthConfiguration({
+      clock: clock.systemClock,
+      hasher: createArgon2idHasher({ pepper }),
+      // Credential-setup link delivery (invite + reset). Dev logs the
+      // link; production email send over the notifications channel is
+      // the remaining notifications-slice wiring.
+      passwordResetMailer: notificationPasswordResetMailer,
+    })
+  );
+
   logger.info("apps/web bootstrap complete", {
     nodeEnv: env.NODE_ENV,
     cryptoAdapter: adapterName,
@@ -489,42 +521,20 @@ async function doBootstrap(): Promise<void> {
 }
 
 /**
- * Hard-fail the boot when production is missing any Clerk identity
- * variable or `SUPPORT_EMAIL`.
+ * Hard-fail the boot when production is missing `SUPPORT_EMAIL`.
  *
- * Why hard-fail rather than warn:
- *
- *   - `CLERK_SECRET_KEY` / `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` —
- *     missing either makes sign-in non-functional. The app would
- *     boot but every operator request would 401.
- *   - `CLERK_WEBHOOK_SECRET` — missing means
- *     `/api/webhooks/clerk` returns 503 forever, so off-boarding
- *     (user.deleted) never fires, leaving terminated operators
- *     with live Pharmax rows.
- *   - `SUPPORT_EMAIL` — missing means the production sign-up
- *     "closed" page renders without a contact link. That's a UX
- *     bug, not a security bug, but it's the kind of bug we'd
- *     rather catch at boot than after a customer hits it.
- *
- * Dev / test boots without any of these and bypasses the gate
- * entirely (Clerk Keyless dev mode auto-generates keys; the
- * webhook route returns 503 explicitly).
+ * The in-house identity engine (ADR-0030) has no external identity
+ * provider to configure — password/session/MFA are owned in-process
+ * and wired in step 6. `SUPPORT_EMAIL` is required so the
+ * invitation-only sign-up surface renders a real mailto contact
+ * instead of a placeholder. Dev / test bypass the gate.
  */
-function enforceClerkProductionConfig(): void {
+function enforceIdentityProductionConfig(): void {
   if (env.NODE_ENV !== "production") return;
-
-  const missing: string[] = [];
-  if (!env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) missing.push("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY");
-  if (!env.CLERK_SECRET_KEY) missing.push("CLERK_SECRET_KEY");
-  if (!env.CLERK_WEBHOOK_SECRET) missing.push("CLERK_WEBHOOK_SECRET");
-  if (!env.SUPPORT_EMAIL) missing.push("SUPPORT_EMAIL");
-
-  if (missing.length === 0) return;
-
+  if (env.SUPPORT_EMAIL) return;
   throw new Error(
-    "Refusing to boot apps/web in production: required identity-layer env vars are unset: " +
-      missing.join(", ") +
-      ". Provision these via Secrets Manager (Clerk dashboard → Webhooks for the webhook secret). " +
-      "See docs/RUNBOOK.md → 'Rotating CLERK_WEBHOOK_SECRET'."
+    "Refusing to boot apps/web in production: SUPPORT_EMAIL is unset. " +
+      "Provision it via Secrets Manager so the invitation-only sign-up surface " +
+      "renders a support contact."
   );
 }

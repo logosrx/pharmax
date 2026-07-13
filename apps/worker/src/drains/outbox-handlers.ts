@@ -36,6 +36,7 @@ import {
 } from "./dispatch-vial-print-job.js";
 import { createEscalateOnShipmentExceptionHandler } from "./escalate-on-shipment-exception.js";
 import { createMaterializeBillingOnOrderShippedHandler } from "./materialize-billing-on-order-shipped.js";
+import { createNotifyOnOrderEscalatedHandler } from "./notify-on-order-escalated.js";
 import { createNotifyOnReportRunCompletedHandler } from "./notify-on-report-run-completed.js";
 import { createPushInvoiceToStripeHandler } from "./push-invoice-to-stripe.js";
 import type { ClaimedOutboxEventRow } from "./row-types.js";
@@ -53,6 +54,30 @@ export type OutboxEventHandler = (
 ) => Promise<void>;
 
 export type OutboxHandlerMap = Readonly<Partial<Record<string, OutboxEventHandler>>>;
+
+/**
+ * Event types whose side effect is LOAD-BEARING: a row of one of
+ * these types with no registered handler is a FAILURE (retry →
+ * DEAD, visible in the dead-letter dashboard), never a silent
+ * success. Every other event type without a handler is a benign
+ * no-op (many workflow events exist for future consumers).
+ *
+ * Keep this in lock-step with `createOutboxHandlers` — every key
+ * here MUST have a handler wired there. The registry-contract test
+ * asserts that invariant so a typo cannot silently re-open the
+ * "emergency alert marked DISPATCHED with no consumer" hole this
+ * set exists to close.
+ */
+export const REQUIRED_HANDLER_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "labels.vial_print.requested.v1",
+  "labels.vial_print.reprint_requested.v1",
+  "shipment.tracking.recorded.v1",
+  "order.shipped.v1",
+  "billing.invoice.finalized.v1",
+  "reporting.run.completed.v1",
+  "order.escalated_to_emergency.v1",
+  "order.sla_breach_escalated.v1",
+]);
 
 type OutboxHandlerDeps = {
   /**
@@ -161,6 +186,7 @@ export function createOutboxHandlers(deps: OutboxHandlerDeps): OutboxHandlerMap 
     client: deps.prisma,
     opsConsoleBaseUrl: deps.opsConsoleBaseUrl ?? "http://localhost:3000",
   });
+  const escalationNotifyHandler = createNotifyOnOrderEscalatedHandler({ client: deps.prisma });
   return {
     "organization.created.v1": handleOrganizationCreatedV1,
     "labels.vial_print.requested.v1": vialPrintHandler,
@@ -169,5 +195,9 @@ export function createOutboxHandlers(deps: OutboxHandlerDeps): OutboxHandlerMap 
     "order.shipped.v1": billingMaterializationHandler,
     "billing.invoice.finalized.v1": stripePushHandler,
     "reporting.run.completed.v1": reportRunNotifyHandler,
+    // Emergency-bucket alerts. Both events were previously produced
+    // with NO consumer, so escalations never notified anyone.
+    "order.escalated_to_emergency.v1": escalationNotifyHandler,
+    "order.sla_breach_escalated.v1": escalationNotifyHandler,
   };
 }

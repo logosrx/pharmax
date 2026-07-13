@@ -205,7 +205,9 @@ export const StartPV1 = defineCommand<StartPV1Input, StartPV1Output>({
     // Pure-engine guard. The engine's tagged-union result codes are
     // mapped to PharmaxError with the PV1-stage code vocabulary.
     const transition = applyTransition({
-      policy: ORDER_STANDARD_V1,
+      // Merged per-tenant overlay snapshot when resolved (ADR-0019);
+      // static base otherwise. See ApprovePV1 for rationale.
+      policy: policy.merged?.merged ?? ORDER_STANDARD_V1,
       currentState,
       command: "START_PV1",
     });

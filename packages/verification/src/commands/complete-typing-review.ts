@@ -198,7 +198,9 @@ export const CompleteTypingReview = defineCommand<
     // Pure-engine guard. Result codes map to PharmaxError with the
     // shared typing-stage code vocabulary.
     const transition = applyTransition({
-      policy: ORDER_STANDARD_V1,
+      // Merged per-tenant overlay snapshot when resolved (ADR-0019);
+      // static base otherwise. See ApprovePV1 for rationale.
+      policy: policy.merged?.merged ?? ORDER_STANDARD_V1,
       currentState,
       command: "COMPLETE_TYPING_REVIEW",
     });

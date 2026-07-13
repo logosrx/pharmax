@@ -201,7 +201,7 @@ export default async function FillWorkbenchPage({
               <Card key={line.orderLineId}>
                 <CardHeader>
                   <div>
-                    <div className="text-[11px] text-subtle">
+                    <div className="text-2xs text-subtle">
                       Line {idx + 1} · NDC <code className="font-mono">{line.drugNdc}</code> · Rx{" "}
                       <code className="font-mono">{line.rxNumber}</code>
                     </div>
@@ -233,7 +233,7 @@ export default async function FillWorkbenchPage({
                         </div>
                       ) : isMine && canAssign && inProgress ? (
                         line.candidateLots.length === 0 ? (
-                          <p className="text-sm text-amber-300">
+                          <p className="text-sm text-tone-warning">
                             No active, unexpired lots for NDC {line.drugNdc} at this site. Receive
                             inventory before continuing.
                           </p>
@@ -275,11 +275,11 @@ export default async function FillWorkbenchPage({
                         !hasLot ? (
                           <p className="text-sm text-subtle">Assign a lot first.</p>
                         ) : workbench.availablePrinters.length === 0 ? (
-                          <p className="text-sm text-amber-300">
+                          <p className="text-sm text-tone-warning">
                             No active label printers at this site.
                           </p>
                         ) : activeWorkstationId === null ? (
-                          <p className="text-sm text-amber-300">
+                          <p className="text-sm text-tone-warning">
                             Select a workstation above before printing.
                           </p>
                         ) : (

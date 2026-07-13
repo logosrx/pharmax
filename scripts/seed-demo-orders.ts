@@ -239,17 +239,23 @@ async function main(): Promise<void> {
   const patientIds: string[] = [];
   for (const p of DEMO_PATIENTS) {
     const result = await withTenancyContext(ctx, () =>
-      executeCommand(RegisterPatient, {
-        clinicId: tenant.clinicId,
-        firstName: p.firstName,
-        lastName: p.lastName,
-        dateOfBirth: p.dateOfBirth,
-        phone: p.phone,
-        addressLine1: p.addressLine1,
-        city: p.city,
-        state: p.state,
-        postalCode: p.postalCode,
-      })
+      executeCommand(
+        RegisterPatient,
+        {
+          clinicId: tenant.clinicId,
+          firstName: p.firstName,
+          lastName: p.lastName,
+          dateOfBirth: p.dateOfBirth,
+          phone: p.phone,
+          addressLine1: p.addressLine1,
+          city: p.city,
+          state: p.state,
+          postalCode: p.postalCode,
+        },
+        // Fresh key per run: re-running the seed intentionally
+        // registers a new synthetic patient rather than replaying.
+        { idempotencyKey: `seed-demo:register-patient:${randomUUID()}` }
+      )
     );
     patientIds.push(result.patientId);
   }
@@ -330,15 +336,19 @@ async function main(): Promise<void> {
   for (let i = 0; i < DEMO_ORDERS.length; i++) {
     const spec = DEMO_ORDERS[i]!;
     const created = await withTenancyContext(ctx, () =>
-      executeCommand(CreateOrder, {
-        clinicId: tenant.clinicId,
-        siteId: tenant.siteId,
-        patientId: patientIds[spec.patientIdx]!,
-        externalOrderNumber: `${DEMO_ORDER_PREFIX}${String(2026001 + i)}`,
-        intakeSourceKind: "API",
-        priority: spec.priority,
-        lines: [{ prescriptionId: prescriptionIds[i]!, quantityToFill: 1, daysSupplyToFill: 30 }],
-      })
+      executeCommand(
+        CreateOrder,
+        {
+          clinicId: tenant.clinicId,
+          siteId: tenant.siteId,
+          patientId: patientIds[spec.patientIdx]!,
+          externalOrderNumber: `${DEMO_ORDER_PREFIX}${String(2026001 + i)}`,
+          intakeSourceKind: "API",
+          priority: spec.priority,
+          lines: [{ prescriptionId: prescriptionIds[i]!, quantityToFill: 1, daysSupplyToFill: 30 }],
+        },
+        { idempotencyKey: `seed-demo:create-order:${randomUUID()}` }
+      )
     );
 
     // Each target stage replays the real command sequence from
@@ -355,14 +365,29 @@ async function main(): Promise<void> {
     // Typing steps run as the admin (typist hat); PV1 steps run as
     // the demo pharmacist — the SoD guard rejects a PV1 approval by
     // the same user who completed typing review.
+    // Deterministic per-order/per-step keys: a partially-failed seed
+    // run can be re-run and each already-applied step replays
+    // instead of double-executing.
+    const stepKey = (step: string): { idempotencyKey: string } => ({
+      idempotencyKey: `seed-demo:${orderId}:${step}`,
+    });
     const d = depth[spec.advance];
-    if (d >= 1) await withTenancyContext(ctx, () => executeCommand(StartTyping, { orderId }));
+    if (d >= 1)
+      await withTenancyContext(ctx, () =>
+        executeCommand(StartTyping, { orderId }, stepKey("start-typing"))
+      );
     if (d >= 2)
-      await withTenancyContext(ctx, () => executeCommand(CompleteTypingReview, { orderId }));
+      await withTenancyContext(ctx, () =>
+        executeCommand(CompleteTypingReview, { orderId }, stepKey("complete-typing-review"))
+      );
     if (d >= 3)
-      await withTenancyContext(pharmacistCtx, () => executeCommand(StartPV1, { orderId }));
+      await withTenancyContext(pharmacistCtx, () =>
+        executeCommand(StartPV1, { orderId }, stepKey("start-pv1"))
+      );
     if (d >= 4)
-      await withTenancyContext(pharmacistCtx, () => executeCommand(ApprovePV1, { orderId }));
+      await withTenancyContext(pharmacistCtx, () =>
+        executeCommand(ApprovePV1, { orderId }, stepKey("approve-pv1"))
+      );
     summary[spec.advance] = (summary[spec.advance] ?? 0) + 1;
   }
 

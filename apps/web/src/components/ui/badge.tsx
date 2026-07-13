@@ -22,24 +22,24 @@ export type Tone =
 
 const TONES: Record<Tone, string> = {
   neutral: "border-line-strong bg-surface-2 text-muted",
-  brand: "border-brand/40 bg-brand/15 text-iris-200",
-  success: "border-emerald-500/30 bg-emerald-500/12 text-emerald-300",
-  warning: "border-amber-500/30 bg-amber-500/12 text-amber-300",
-  danger: "border-red-500/30 bg-red-500/12 text-red-300",
-  info: "border-sky-500/30 bg-sky-500/12 text-sky-300",
-  violet: "border-violet-500/30 bg-violet-500/12 text-violet-300",
-  cyan: "border-cyan-500/30 bg-cyan-500/12 text-cyan-300",
+  brand: "border-brand/40 bg-brand/15 text-tone-brand",
+  success: "border-emerald-500/30 bg-emerald-500/12 text-tone-success",
+  warning: "border-amber-500/30 bg-amber-500/12 text-tone-warning",
+  danger: "border-red-500/30 bg-red-500/12 text-tone-danger",
+  info: "border-sky-500/30 bg-sky-500/12 text-tone-info",
+  violet: "border-violet-500/30 bg-violet-500/12 text-tone-violet",
+  cyan: "border-cyan-500/30 bg-cyan-500/12 text-tone-cyan",
 };
 
 const DOT_TONES: Record<Tone, string> = {
   neutral: "bg-subtle",
   brand: "bg-brand",
-  success: "bg-emerald-400",
-  warning: "bg-amber-400",
-  danger: "bg-red-400",
-  info: "bg-sky-400",
-  violet: "bg-violet-400",
-  cyan: "bg-cyan-400",
+  success: "bg-tone-success-accent",
+  warning: "bg-tone-warning-accent",
+  danger: "bg-tone-danger-accent",
+  info: "bg-tone-info-accent",
+  violet: "bg-tone-violet-accent",
+  cyan: "bg-tone-cyan-accent",
 };
 
 export interface BadgeProps {
@@ -81,10 +81,9 @@ export function Dot({
       {pulse ? (
         <span
           className={cx(
-            "absolute inline-flex h-full w-full rounded-full opacity-60",
+            "absolute inline-flex h-full w-full rounded-full opacity-60 animate-pulse-dot",
             DOT_TONES[tone]
           )}
-          style={{ animation: "pulse-dot 2s cubic-bezier(0.65,0,0.35,1) infinite" }}
         />
       ) : null}
       <span className={cx("relative inline-flex h-2 w-2 rounded-full", DOT_TONES[tone])} />
@@ -103,7 +102,7 @@ export function Kbd({
     <kbd
       className={cx(
         "inline-flex h-5 min-w-5 items-center justify-center rounded border border-line-strong " +
-          "bg-surface-2 px-1.5 text-[10px] font-medium text-muted shadow-xs",
+          "bg-surface-2 px-1.5 text-3xs font-medium text-muted shadow-xs",
         className
       )}
     >

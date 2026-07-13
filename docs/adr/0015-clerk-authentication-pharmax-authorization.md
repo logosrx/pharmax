@@ -1,9 +1,15 @@
 # 0015 — Clerk owns authentication; Pharmax owns authorization + tenancy
 
-- **Status:** Accepted
+- **Status:** Superseded by 0030
 - **Date:** pre-2026-05
 - **Deciders:** Platform team
 - **Tags:** auth, identity, tenancy
+
+> **Superseded (2026-07-10):** The authentication half of this ADR
+> (Clerk ownership) is replaced by ADR-0030, which moves
+> authentication in-house via `@pharmax/auth`. The authZ/tenancy
+> split described below — Pharmax owns RBAC + tenancy, bridged at
+> `resolve-tenancy.ts` — is **retained** by 0030 verbatim.
 
 ## Context
 

@@ -60,3 +60,14 @@ clerk_webhook_event
 # the (RLS-protected, org-scoped) projection in system context. The raw
 # event store (svixMessageId idempotency key) is platform-level.
 resend_webhook_event
+
+# Sign-in attempt ledger for the in-house identity engine (ADR-0030).
+# Pre-tenant by construction: a failed attempt against a nonexistent
+# email has no resolvable organization, so `organizationId` is nullable
+# and cannot back an RLS predicate. The engine uses this table for
+# distributed lockout and brute-force detection; reads are scoped by
+# `emailAttempted` / `ipAddress` in system context. Contains no PHI
+# (email is an operator identifier). All OTHER auth tables
+# (auth_session, mfa_enrollment, recovery_code, password_history,
+# password_reset_token) ARE org-scoped and RLS-protected.
+login_attempt

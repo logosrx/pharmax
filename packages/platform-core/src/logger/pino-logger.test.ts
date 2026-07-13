@@ -146,6 +146,29 @@ describe("createPinoLogger", () => {
     expect(patient?.["mrn"]).toBe("[Redacted]");
   });
 
+  it("redacts sensitive fields at the TOP level of the context, not just nested", () => {
+    // Regression: `*.field` patterns only match nested objects, so
+    // `logger.error("x", { firstName })` used to emit the raw value.
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    });
+
+    log.error("patient.decrypt_failed", {
+      firstName: "Alice",
+      dateOfBirth: "1990-01-01",
+      token: "secret-jwt",
+      phone: "555-0100",
+    });
+
+    const line = capture.lines()[0];
+    expect(line?.["firstName"]).toBe("[Redacted]");
+    expect(line?.["dateOfBirth"]).toBe("[Redacted]");
+    expect(line?.["token"]).toBe("[Redacted]");
+    expect(line?.["phone"]).toBe("[Redacted]");
+  });
+
   it("does not redact safe metadata fields", () => {
     const capture = makeCapture();
     const log = createPinoLogger({

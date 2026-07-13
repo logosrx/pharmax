@@ -48,8 +48,12 @@ interface FakeCall {
 interface FakeOverrides {
   /** Pre-existing invoice line (drives the idempotent short-circuit). */
   existingLine?: { id: string; invoiceId: string; amountCents: number } | null;
-  /** Pre-existing invoice for the period (drives the "append to existing" branch). */
-  existingInvoice?: { id: string } | null;
+  /**
+   * Pre-existing invoice for the period (drives the "append to
+   * existing" branch). Defaults to DRAFT — the only status the
+   * handler will append lines to.
+   */
+  existingInvoice?: { id: string; status?: string } | null;
   /** Clinic resolution: "ok" (same org), "missing", "other-org". */
   clinicResolution?: "ok" | "missing" | "other-org";
   /**
@@ -95,7 +99,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         if (typeof where.id === "string") {
           return { invoiceNumber: EXPECTED_INVOICE_NUMBER };
         }
-        return overrides.existingInvoice ?? null;
+        const existing = overrides.existingInvoice ?? null;
+        if (existing === null) return null;
+        // The handler now checks `status` and only appends to DRAFT.
+        return { status: "DRAFT", ...existing };
       }),
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "invoice", op: "create", args });
@@ -126,7 +133,20 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return [];
       }),
     },
-    commandLog: { create: vi.fn(async () => ({ id: "cl-1" })) },
+    commandLog: {
+      create: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "create", args });
+        return { id: "cl-1" };
+      }),
+      update: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "update", args });
+        return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "findUnique", args });
+        return null;
+      }),
+    },
     auditLog: {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "auditLog", op: "create", args });

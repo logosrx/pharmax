@@ -10,6 +10,7 @@ export const FILL_SCAN_UNKNOWN_LINE = "FILL_SCAN_UNKNOWN_LINE";
 export const FILL_SCAN_DUPLICATE_LINE = "FILL_SCAN_DUPLICATE_LINE";
 export const FILL_SCAN_PARSE_FAILED = "FILL_SCAN_PARSE_FAILED";
 export const FILL_SCAN_LOT_MISMATCH = "FILL_SCAN_LOT_MISMATCH";
+export const FILL_SCAN_LOT_NUMBER_REQUIRED = "FILL_SCAN_LOT_NUMBER_REQUIRED";
 export const FILL_SCAN_NDC_MISMATCH = "FILL_SCAN_NDC_MISMATCH";
 export const FILL_SCAN_VIAL_LABEL_MISMATCH = "FILL_SCAN_VIAL_LABEL_MISMATCH";
 
@@ -157,21 +158,39 @@ export function validateFillCompletionScans(input: {
       };
     }
 
-    if (lotExtract.lotNumber !== null) {
-      const scannedLot = normalizeLotNumber(lotExtract.lotNumber);
-      const expectedLot = normalizeLotNumber(expectation.expectedLotNumber);
-      if (scannedLot !== expectedLot) {
-        return {
-          result: "HARD_STOP",
-          code: FILL_SCAN_LOT_MISMATCH,
-          message: "Scanned lot number does not match the assigned lot.",
-          metadata: {
-            orderLineId: scan.orderLineId,
-            expectedLotNumber: expectation.expectedLotNumber,
-            scannedLotNumber: lotExtract.lotNumber,
-          },
-        };
-      }
+    // The lot scan exists to verify the PHYSICAL LOT, so a lot
+    // number is REQUIRED. An NDC-only barcode (the retail UPC on
+    // the stock bottle) proves the right PRODUCT but says nothing
+    // about the lot — accepting it let a wrong physical lot of the
+    // same drug pass fill completion, which breaks recall
+    // traceability. The tech must scan the GS1 DataMatrix (which
+    // carries AI(10) lot) or the lot barcode itself.
+    if (lotExtract.lotNumber === null) {
+      return {
+        result: "HARD_STOP",
+        code: FILL_SCAN_LOT_NUMBER_REQUIRED,
+        message:
+          "Lot scan did not include a lot number. Scan the GS1 DataMatrix or lot barcode — a product/NDC barcode alone cannot verify the physical lot.",
+        metadata: {
+          orderLineId: scan.orderLineId,
+          scannedNdc: lotExtract.ndc11,
+        },
+      };
+    }
+
+    const scannedLot = normalizeLotNumber(lotExtract.lotNumber);
+    const expectedLot = normalizeLotNumber(expectation.expectedLotNumber);
+    if (scannedLot !== expectedLot) {
+      return {
+        result: "HARD_STOP",
+        code: FILL_SCAN_LOT_MISMATCH,
+        message: "Scanned lot number does not match the assigned lot.",
+        metadata: {
+          orderLineId: scan.orderLineId,
+          expectedLotNumber: expectation.expectedLotNumber,
+          scannedLotNumber: lotExtract.lotNumber,
+        },
+      };
     }
 
     const expectedNdc = normalizeNdc(expectation.expectedNdc);
@@ -187,27 +206,17 @@ export function validateFillCompletionScans(input: {
       };
     }
 
-    if (lotExtract.ndc11 !== null) {
-      if (lotExtract.ndc11 !== expectedNdc) {
-        return {
-          result: "HARD_STOP",
-          code: FILL_SCAN_NDC_MISMATCH,
-          message: "Scanned product NDC does not match the assigned lot product.",
-          metadata: {
-            orderLineId: scan.orderLineId,
-            expectedNdc,
-            scannedNdc: lotExtract.ndc11,
-          },
-        };
-      }
-    } else if (lotExtract.lotNumber === null) {
+    // When the scan ALSO carries an NDC (GS1 DataMatrix), verify it
+    // against the assigned lot's product as an additional check.
+    if (lotExtract.ndc11 !== null && lotExtract.ndc11 !== expectedNdc) {
       return {
         result: "HARD_STOP",
-        code: FILL_SCAN_PARSE_FAILED,
-        message: "Lot scan must include a lot number or product NDC.",
+        code: FILL_SCAN_NDC_MISMATCH,
+        message: "Scanned product NDC does not match the assigned lot product.",
         metadata: {
           orderLineId: scan.orderLineId,
-          lotScan: scan.lotScan,
+          expectedNdc,
+          scannedNdc: lotExtract.ndc11,
         },
       };
     }

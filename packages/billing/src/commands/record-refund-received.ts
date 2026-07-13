@@ -70,6 +70,7 @@ async function loadInvoiceByCharge(
   clinicId: string;
   invoiceNumber: string;
   amountDueCents: number;
+  amountPaidCents: number;
 } | null> {
   return await tx.invoice.findFirst({
     where: { stripeChargeId },
@@ -79,6 +80,7 @@ async function loadInvoiceByCharge(
       clinicId: true,
       invoiceNumber: true,
       amountDueCents: true,
+      amountPaidCents: true,
     },
   });
 }
@@ -131,6 +133,43 @@ export const RecordRefundReceived: SystemCommand<
       };
     }
 
+    // ---- Gate on Stripe's actual refund outcome ----
+    // Stripe delivers refund webhooks for `failed` / `canceled`
+    // attempts too. Only `succeeded` refunds may write ledger
+    // credits — recording a failed attempt would show money as
+    // returned when nothing moved. (`pending` refunds are also
+    // skipped here: Stripe redelivers a follow-up event when the
+    // refund settles, and THAT event writes the ledger entry; the
+    // billingEventKey unique keeps the settle event idempotent.)
+    if (input.stripeStatus !== "succeeded") {
+      return {
+        output: {
+          recognized: true,
+          alreadyRecorded: false,
+          invoiceId: null,
+          invoiceLineId: null,
+        },
+        targetOrganizationId:
+          (await loadInvoiceByCharge(tx, input.stripeChargeId))?.organizationId ??
+          "00000000-0000-0000-0000-000000000000",
+        audit: {
+          action: "billing.invoice.refund_received.not_succeeded",
+          resourceType: "Invoice",
+          resourceId: input.stripeChargeId,
+          metadata: {
+            stripeChargeId: input.stripeChargeId,
+            stripeRefundId: input.stripeRefundId,
+            stripeEventId: input.stripeEventId,
+            stripeStatus: input.stripeStatus,
+            reason: "refund-not-succeeded",
+            commandLogId,
+            occurredAt: now.toISOString(),
+          },
+        },
+        outboxEvents: [],
+      };
+    }
+
     // ---- Resolve invoice by charge id ----
     const invoice = await loadInvoiceByCharge(tx, input.stripeChargeId);
     if (invoice === null) {
@@ -164,6 +203,29 @@ export const RecordRefundReceived: SystemCommand<
     }
 
     // ---- Write the negative line + decrement totals ----
+    //
+    // Stripe is the source of truth for out-of-band refunds — the
+    // money moved whether or not our ledger expected it — so the
+    // entry is always recorded. But a refund total exceeding what
+    // we tracked as PAID means either a dashboard mistake or a
+    // reconciliation gap, so compute prior refunds and flag the
+    // over-refund LOUDLY in the audit row + outbox payload for the
+    // billing team instead of letting the balance drift negative
+    // silently.
+    const priorRefunds = await tx.invoiceLine.findMany({
+      where: {
+        invoiceId: invoice.id,
+        kind: InvoiceLineKind.CREDIT,
+        billingEventKey: { startsWith: "stripe-refund:" },
+      },
+      select: { amountCents: true },
+    });
+    const priorRefundedCents = priorRefunds.reduce(
+      (sum, line) => sum + Math.abs(line.amountCents),
+      0
+    );
+    const overRefund = priorRefundedCents + input.amountCents > invoice.amountPaidCents;
+
     const invoiceLineId = ids.generateUlid();
     const negativeAmount = -input.amountCents;
 
@@ -226,6 +288,11 @@ export const RecordRefundReceived: SystemCommand<
           amountCents: input.amountCents,
           creditAmountCents: negativeAmount,
           amountDueCentsAfter,
+          priorRefundedCents,
+          amountPaidCents: invoice.amountPaidCents,
+          // True when this refund pushes total refunds past what we
+          // tracked as paid — a reconciliation flag for billing.
+          overRefund,
           refundedAt: input.refundedAt,
           source: "stripe-webhook",
           commandLogId,

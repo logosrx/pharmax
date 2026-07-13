@@ -54,6 +54,12 @@ export interface UpdateCommandLogStatusInput {
   readonly errorCode?: string;
   readonly errorMessage?: string;
   readonly completedAt: Date;
+  /**
+   * The order this command targeted, resolved by the handler. Set
+   * on the SUCCEEDED update so per-order command-history queries
+   * (`where: { targetOrderId }`) return this attempt.
+   */
+  readonly targetOrderId?: string;
 }
 
 export async function updateCommandLogStatus(
@@ -70,6 +76,7 @@ export async function updateCommandLogStatus(
         : { responsePayload: input.responsePayload as Prisma.InputJsonValue }),
       ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
       ...(input.errorMessage === undefined ? {} : { errorMessage: input.errorMessage }),
+      ...(input.targetOrderId === undefined ? {} : { targetOrderId: input.targetOrderId }),
     },
   });
 }

@@ -49,6 +49,7 @@ import { z } from "zod";
 import { getStripeRefundPort } from "../configure.js";
 
 export const ISSUE_REFUND_INVOICE_NOT_FOUND = "ISSUE_REFUND_INVOICE_NOT_FOUND";
+export const ISSUE_REFUND_STRIPE_REFUND_NOT_COMPLETED = "ISSUE_REFUND_STRIPE_REFUND_NOT_COMPLETED";
 export const ISSUE_REFUND_INVOICE_NOT_PAID = "ISSUE_REFUND_INVOICE_NOT_PAID";
 export const ISSUE_REFUND_CHARGE_NOT_LINKED = "ISSUE_REFUND_CHARGE_NOT_LINKED";
 export const ISSUE_REFUND_AMOUNT_EXCEEDS_PAID = "ISSUE_REFUND_AMOUNT_EXCEEDS_PAID";
@@ -178,6 +179,25 @@ export const IssueRefund: Command<IssueRefundInput, IssueRefundOutput> = {
       ...(input.operatorNote !== undefined ? { operatorNote: input.operatorNote } : {}),
       pharmaxRefundKey,
     });
+
+    // ---- Gate the ledger on Stripe's actual outcome ----
+    // Stripe reports `failed` / `canceled` refund attempts. Writing
+    // the negative line for those would show money as returned when
+    // no refund occurred — the ledger and the aging reports would
+    // both lie. Only `succeeded` and `pending` (the normal initial
+    // state; the refund webhook reconciles it) may credit.
+    if (stripeResult.stripeStatus === "failed" || stripeResult.stripeStatus === "canceled") {
+      throw new errors.ConflictError({
+        code: ISSUE_REFUND_STRIPE_REFUND_NOT_COMPLETED,
+        message: `Stripe reported the refund as "${stripeResult.stripeStatus}". No credit was recorded; verify the charge in Stripe and retry.`,
+        metadata: {
+          invoiceId: invoice.id,
+          stripeRefundId: stripeResult.stripeRefundId,
+          stripeStatus: stripeResult.stripeStatus,
+          amountCents: input.amountCents,
+        },
+      });
+    }
 
     // ---- Write the negative line ----
     const invoiceLineId = ids.generateUlid();

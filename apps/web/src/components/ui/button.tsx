@@ -36,10 +36,10 @@ const VARIANTS: Record<ButtonVariant, string> = {
     "bg-brand text-brand-fg shadow-sm hover:bg-brand-hover hover:shadow-md " +
     "border border-transparent",
   go:
-    "border border-emerald-500/30 bg-emerald-500/15 text-emerald-200 " +
+    "border border-emerald-500/30 bg-emerald-500/15 text-tone-success-strong " +
     "hover:bg-emerald-500/25 hover:border-emerald-500/45",
   danger:
-    "border border-red-500/30 bg-red-500/15 text-red-200 " +
+    "border border-red-500/30 bg-red-500/15 text-tone-danger-strong " +
     "hover:bg-red-500/25 hover:border-red-500/45",
   secondary:
     "border border-line-strong bg-surface-2 text-fg hover:bg-surface-3 hover:border-subtle/60",

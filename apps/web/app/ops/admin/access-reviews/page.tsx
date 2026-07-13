@@ -104,12 +104,16 @@ export default async function AccessReviewSnapshotsPage() {
                   <TD align="right">{row.totalPrincipals}</TD>
                   <TD align="right">{row.elevatedPrincipalCount}</TD>
                   <TD align="right">
-                    <span className={row.staleAssignmentCount > 0 ? "text-amber-300" : undefined}>
+                    <span
+                      className={row.staleAssignmentCount > 0 ? "text-tone-warning" : undefined}
+                    >
                       {row.staleAssignmentCount}
                     </span>
                   </TD>
                   <TD align="right">
-                    <span className={row.inactivePrincipalCount > 0 ? "text-amber-300" : undefined}>
+                    <span
+                      className={row.inactivePrincipalCount > 0 ? "text-tone-warning" : undefined}
+                    >
                       {row.inactivePrincipalCount}
                     </span>
                   </TD>

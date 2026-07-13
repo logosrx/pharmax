@@ -130,8 +130,19 @@ export function pickPricingRule(
 }
 
 /**
- * Load the candidate ACTIVE rules for a `(org, kind)` pair. Returns
- * a narrow projection — `pickPricingRule` handles the rest.
+ * Load the candidate rules for a `(org, kind)` pair whose time
+ * window covers `occurredAt`. Returns a narrow projection —
+ * `pickPricingRule` handles the rest.
+ *
+ * Status filter: ACTIVE and SUPERSEDED — NOT status=ACTIVE only.
+ * The time window is authoritative; the status column is lifecycle
+ * metadata. `UpsertPricingRule` supersedes the prior rule the
+ * moment a replacement is created, even when the replacement is
+ * FUTURE-dated (`effectiveTo` on the old rule = `effectiveFrom` of
+ * the new one). Until that date, the old rule's window still covers
+ * "now" and it MUST keep pricing orders — filtering to ACTIVE-only
+ * made every order in that gap fall through to the hardcoded $50
+ * fallback fee. ARCHIVED rules are excluded (explicit retirement).
  *
  * We DO NOT pre-filter on clinicId / productId at the SQL layer
  * because the ranking depends on org-default and product-only rules
@@ -146,7 +157,7 @@ export async function loadCandidatePricingRules(
     where: {
       organizationId: query.organizationId,
       kind: query.kind,
-      status: PricingRuleStatus.ACTIVE,
+      status: { in: [PricingRuleStatus.ACTIVE, PricingRuleStatus.SUPERSEDED] },
       effectiveFrom: { lte: query.occurredAt },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: query.occurredAt } }],
     },

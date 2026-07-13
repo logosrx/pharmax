@@ -1,9 +1,16 @@
 # 0025 — Clerk hardening: webhooks, sign-up gating, MFA floor
 
-- **Status:** Accepted
+- **Status:** Superseded by 0030
 - **Date:** 2026-05-25
 - **Deciders:** Platform team, Security officer
 - **Tags:** `security`, `compliance`, `authentication`, `clerk`
+
+> **Superseded (2026-07-10):** ADR-0030 moves authentication in-house
+> and removes Clerk. The hardening _principles_ here — lifecycle
+> sync, closed sign-up, and an application-layer MFA floor for
+> privileged roles — carry forward into the `@pharmax/auth`
+> implementation; the Clerk-specific mechanisms (Svix webhooks,
+> `CLERK_*` secrets) are retired.
 
 ## Context
 

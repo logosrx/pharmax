@@ -152,16 +152,25 @@ export async function executeEasyPostWebhookEventDispatch(
       });
     }
 
-    // The resolver is expected to do its own system-context read (the
+    // The resolver does its own system-context read (the tracker id /
     // tracking number is the only bridge from tenant-less webhook to
-    // a tenant-scoped shipment row). Returning null means "unknown
-    // shipment" — we ACK with SUCCEEDED so the carrier stops retrying.
+    // a tenant-scoped shipment row). Returning null means "no
+    // matching shipment YET" — which is often a race, not garbage:
+    // EasyPost can deliver the first tracker event while the
+    // purchase transaction is still committing, or before a manual
+    // shipment row is entered. Marking those SUCCEEDED permanently
+    // dropped the tracking event. Instead, treat unknown targets as
+    // a retryable failure: the retry/backoff window gives the
+    // shipment row time to land, and an event that never matches
+    // ends up FAILED-terminal with a clear error (visible for
+    // reconciliation) rather than silently acknowledged.
     const target = await deps.targetResolver.resolve(record);
     if (target === null) {
       log.warn("easypost.webhook.worker.unknown_target", { trackingCode });
-      const completedAt = clock();
-      const updated = await deps.eventStore.markSucceeded(record.externalEventId, completedAt);
-      return { status: "succeeded", record: updated };
+      throw new errors.NotFoundError({
+        code: "EASYPOST_WEBHOOK_UNKNOWN_TARGET",
+        message: `No shipment matches tracker event (tracking code ${trackingCode}); retrying in case the shipment row has not landed yet.`,
+      });
     }
 
     // Enter the org's tenancy and execute the command. The bus runs

@@ -139,10 +139,19 @@ export interface SystemHandlerResult<TOutput> {
 
 export interface ExecuteOptions {
   /**
-   * Client-supplied idempotency key. Required for tenant commands;
-   * if omitted, the bus generates a ULID (which makes the command
-   * effectively non-idempotent — fine for read-like commands, not
-   * fine for "ApprovePV1"). Documented per-command.
+   * Caller-supplied idempotency key. REQUIRED — the workflow-safety
+   * rules mandate an idempotency key on every critical mutation
+   * command, and a silently-generated key makes retries and
+   * double-submits execute twice instead of replaying. Callers that
+   * genuinely want fire-once semantics (seed scripts, one-shot
+   * system-adjacent actions) must construct an explicit unique key
+   * so the decision is visible at the call site.
+   *
+   * Retry semantics: same key + same payload replays the cached
+   * response; same key + different payload is a 409
+   * (COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH); same key while a prior
+   * attempt is still executing is a 409 (COMMAND_IN_FLIGHT); same
+   * key after a FAILED attempt re-executes the command.
    */
-  readonly idempotencyKey?: string;
+  readonly idempotencyKey: string;
 }

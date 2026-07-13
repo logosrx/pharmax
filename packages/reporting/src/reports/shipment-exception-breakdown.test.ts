@@ -132,3 +132,34 @@ describe("shipmentExceptionBreakdownReport — parameter schema", () => {
     expect(parsed.success).toBe(true);
   });
 });
+
+describe("shipmentExceptionBreakdownReport — clinic scoping", () => {
+  const CLINIC = "00000000-0000-4000-8000-000000000010";
+
+  it("narrows to the context clinic via the order relation when ctx.clinicId is set", async () => {
+    const client = fakeClient([]);
+    await shipmentExceptionBreakdownReport.run(
+      { client: client as never, organizationId: ORG_ID, clinicId: CLINIC },
+      window
+    );
+    const call = client.shipment.groupBy.mock.calls[0]?.[0] as unknown as {
+      where: Record<string, unknown>;
+    };
+    expect(call.where["organizationId"]).toBe(ORG_ID);
+    // Regression: without this filter, a clinic-scoped operator saw
+    // the whole org's shipment exceptions.
+    expect(call.where["order"]).toEqual({ clinicId: CLINIC });
+  });
+
+  it("omits the clinic filter for org-wide contexts", async () => {
+    const client = fakeClient([]);
+    await shipmentExceptionBreakdownReport.run(
+      { client: client as never, organizationId: ORG_ID },
+      window
+    );
+    const call = client.shipment.groupBy.mock.calls[0]?.[0] as unknown as {
+      where: Record<string, unknown>;
+    };
+    expect(call.where["order"]).toBeUndefined();
+  });
+});

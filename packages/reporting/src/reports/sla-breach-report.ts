@@ -153,19 +153,32 @@ export const slaBreachReport: ReportDefinition<typeof paramsSchema, SlaBreachRow
     const asOfMs = asOf.getTime();
 
     // The where clause filters to intervals that STARTED within
-    // the window OR are still open. We post-filter to "breaching"
-    // in TypeScript because the threshold math depends on
-    // overrides + asOf, neither of which translate cleanly to a
+    // the window OR are still OPEN having started before the
+    // window's end. The second disjunct is load-bearing: an order
+    // stuck in a stage since BEFORE the window (the oldest, most
+    // actively-breaching work) must appear on a "today" report —
+    // filtering on startedAt alone silently hid exactly the
+    // breaches operators most need to see. We post-filter to
+    // "breaching" in TypeScript because the threshold math depends
+    // on overrides + asOf, neither of which translate cleanly to a
     // SQL filter. The row count here is bounded by the org's
     // active interval volume (~thousands at worst); acceptable
     // for an OLTP dashboard call.
+    //
+    // Clinic scope: intervals carry no clinicId column; narrow
+    // through the order relation. Omitting this filter leaked
+    // org-wide operational data to clinic-scoped operators.
     const candidateRows = await ctx.client.orderStageInterval.findMany({
       where: {
         organizationId: ctx.organizationId,
-        startedAt: { gte: window.from, lte: window.to },
+        OR: [
+          { startedAt: { gte: window.from, lte: window.to } },
+          { endedAt: null, startedAt: { lte: window.to } },
+        ],
         ...(params.kinds !== undefined && params.kinds.length > 0
           ? { kind: { in: params.kinds } }
           : {}),
+        ...(ctx.clinicId !== undefined ? { order: { clinicId: ctx.clinicId } } : {}),
       },
       select: {
         id: true,

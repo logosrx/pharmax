@@ -115,6 +115,34 @@ describe("writeAuditLogInTx — genesis insert (no prior chain head)", () => {
     expect(data.prevHash).toBeNull();
   });
 
+  it("persists the SAME occurredAt that was hashed (verifier recomputes from the stored column)", async () => {
+    // Regression: the writer hashed `input.occurredAt` but did not
+    // persist it, so the DB default (`now()`, milliseconds later)
+    // was stored and later verification recomputed a DIFFERENT
+    // hash from the stored row — a false tamper alarm on every
+    // untampered row.
+    const occurredAt = new Date("2026-05-22T19:00:00.000Z");
+    await writeAuditLogInTx(tx, baseInput({ occurredAt }));
+    const create = tx.recorded.find((r) => r.kind === "auditLogCreate");
+    const data = create?.args as { occurredAt: Date; entryHash: Buffer };
+    expect(data.occurredAt).toEqual(occurredAt);
+
+    // The stored hash must be reproducible from the stored fields.
+    const recomputed = computeAuditEntryHash({
+      prevHash: null,
+      organizationId: ORG,
+      seq: 1n,
+      action: "pv1.approved",
+      resourceType: "Order",
+      resourceId: "33333333-3333-7333-a333-333333333333",
+      actorUserId: "22222222-2222-7222-a222-222222222222",
+      scope: { siteId: "site-1" },
+      metadata: { commandLogId: "log-1" },
+      occurredAt: data.occurredAt,
+    });
+    expect(Buffer.from(recomputed).equals(data.entryHash)).toBe(true);
+  });
+
   it("returns the computed entryHash and seq", async () => {
     const out = await writeAuditLogInTx(tx, baseInput());
     expect(out.seq).toBe(1n);

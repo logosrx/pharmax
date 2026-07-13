@@ -152,6 +152,14 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         calls.push({ table: "commandLog", op: "create", args });
         return { id: "cl-1" };
       }),
+      update: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "update", args });
+        return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "findUnique", args });
+        return null;
+      }),
     },
     auditLog: {
       create: vi.fn(async (args: unknown) => {
@@ -183,6 +191,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "idempotencyKey", op: "create", args });
         return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "idempotencyKey", op: "findUnique", args });
+        return null;
       }),
     },
     // Factory's SELECT … FOR UPDATE for the locked order row. The

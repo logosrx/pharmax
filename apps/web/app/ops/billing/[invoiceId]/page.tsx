@@ -187,7 +187,7 @@ export default async function InvoiceDetailPage({
                   <TD align="right">{l.quantity}</TD>
                   <TD align="right">
                     <span
-                      className={`font-mono ${l.amountCents < 0 ? "text-emerald-300" : "text-fg"}`}
+                      className={`font-mono ${l.amountCents < 0 ? "text-tone-success" : "text-fg"}`}
                     >
                       {formatMoney(l.amountCents, invoice.currency)}
                     </span>

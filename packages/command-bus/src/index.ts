@@ -53,7 +53,13 @@ export {
   type SoDRuleSpec,
 } from "./define-command.js";
 
-export { canonicalStringify, hashRequest } from "./hash.js";
+export {
+  canonicalStringify,
+  FALLBACK_REQUEST_HASH_KEY,
+  fingerprintRequest,
+  hashRequest,
+  hashRequestKeyed,
+} from "./hash.js";
 export { redactPayload, REDACT_CENSOR } from "./redact.js";
 
 export {
@@ -74,12 +80,16 @@ export {
 } from "./sod.js";
 
 export {
+  COMMAND_ALREADY_EXECUTED,
   COMMAND_BUS_NOT_CONFIGURED,
   COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH,
+  COMMAND_IN_FLIGHT,
   COMMAND_INPUT_INVALID,
   COMMAND_SYSTEM_CONTEXT_REQUIRED,
   COMMAND_WORKSTATION_REQUIRED,
+  commandAlreadyExecutedError,
   commandBusNotConfiguredError,
+  commandInFlightError,
   commandInputInvalidError,
   commandSystemContextRequiredError,
   commandWorkstationRequiredError,

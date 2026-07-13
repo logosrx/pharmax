@@ -253,7 +253,13 @@ describe("notify-on-report-run-completed — skip gates", () => {
 });
 
 describe("notify-on-report-run-completed — partial failure isolation", () => {
-  it("logs per-recipient failures and continues", async () => {
+  it("attempts EVERY recipient, then throws PARTIAL_FAILURE so failed recipients retry (successes dedupe)", async () => {
+    // Regression: a partial failure used to resolve cleanly, so the
+    // outbox row was marked DISPATCHED and the bounced recipient
+    // never received their report. The handler must still isolate
+    // failures (all recipients attempted), then throw so the retry
+    // re-sends only the failed ones (per-recipient idempotency keys
+    // dedupe the successes).
     let callCount = 0;
     channelSendMock.mockImplementation(async () => {
       callCount += 1;
@@ -281,7 +287,9 @@ describe("notify-on-report-run-completed — partial failure isolation", () => {
       client: fake as never,
       opsConsoleBaseUrl: "https://ops.pharmax.test",
     });
-    await expect(handler(buildRow(), HANDLER_CTX)).resolves.toBeUndefined();
+    await expect(handler(buildRow(), HANDLER_CTX)).rejects.toMatchObject({
+      code: "NOTIFICATION_FANOUT_PARTIAL_FAILURE",
+    });
     expect(channelSendMock).toHaveBeenCalledTimes(2);
   });
 

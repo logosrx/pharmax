@@ -112,7 +112,11 @@ describe("processEasyPostWebhookEvent — short-circuit branches", () => {
     expect(result.record.status).toBe("IGNORED");
   });
 
-  it("marks SUCCEEDED when the resolver returns null (unknown tracking code)", async () => {
+  it("marks FAILED (retryable) when the resolver returns null — early events must not be dropped", async () => {
+    // Regression: unknown targets used to be marked SUCCEEDED,
+    // permanently dropping tracker events that raced ahead of the
+    // shipment row commit. They now retry with backoff; a
+    // never-matching event dies visibly instead of silently.
     const event = trackerEvent({ id: "evt_unknown_ship_1" });
     const { record } = await eventStore.recordReceived({
       event,
@@ -128,9 +132,12 @@ describe("processEasyPostWebhookEvent — short-circuit branches", () => {
       clock: () => NOW,
     });
 
-    expect(result.status).toBe("succeeded");
-    expect(result.record.status).toBe("SUCCEEDED");
-    expect(result.record.lastError).toBeNull();
+    expect(result.status).toBe("failed");
+    expect(result.record.status).toBe("FAILED");
+    expect(result.record.lastError).toContain("No shipment matches tracker event");
+    if (result.status === "failed") {
+      expect(result.retryScheduledFor).toBeInstanceOf(Date);
+    }
   });
 });
 

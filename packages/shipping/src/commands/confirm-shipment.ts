@@ -79,7 +79,9 @@ export const ConfirmShipment = defineCommand<ConfirmShipmentInput, ConfirmShipme
     const currentState: OrderState = target.currentStatus;
 
     const transition = applyTransition({
-      policy: ORDER_STANDARD_V1,
+      // Merged per-tenant overlay snapshot when resolved (ADR-0019);
+      // static base otherwise. See ApprovePV1 for rationale.
+      policy: policy.merged?.merged ?? ORDER_STANDARD_V1,
       currentState,
       command: "CONFIRM_SHIPMENT",
     });
@@ -123,10 +125,16 @@ export const ConfirmShipment = defineCommand<ConfirmShipmentInput, ConfirmShipme
         metadata: { orderId: target.id },
       });
     }
-    if (shipment.status !== ShipmentStatus.CREATED) {
+    // Confirmable = anything EXCEPT already-CONFIRMED. Carrier
+    // webhooks can advance the shipment (IN_TRANSIT, DELIVERED, even
+    // EXCEPTION) BEFORE the clerk clicks confirm — a scan at the
+    // carrier depot is proof the handoff physically happened, so
+    // blocking the confirmation on those statuses left the order
+    // permanently stuck short of SHIPPED with no operator remedy.
+    if (shipment.status === ShipmentStatus.CONFIRMED) {
       throw new errors.ConflictError({
         code: SHIPMENT_NOT_READY,
-        message: "Shipment is not in a confirmable state.",
+        message: "Shipment has already been confirmed.",
         metadata: { orderId: target.id, shipmentId: shipment.id, status: shipment.status },
       });
     }
@@ -151,10 +159,15 @@ export const ConfirmShipment = defineCommand<ConfirmShipmentInput, ConfirmShipme
     const now = clock.now();
     const shippingClerkUserId = ctx.actor.userId;
 
+    // Stamp the confirmation. The status only moves to CONFIRMED
+    // from CREATED — when a carrier webhook already advanced the
+    // shipment (IN_TRANSIT / DELIVERED / ...), that status is MORE
+    // recent truth than the clerk's click and must not be rolled
+    // back; the confirmation fields still record the human handoff.
     await tx.shipment.update({
       where: { id: shipment.id },
       data: {
-        status: ShipmentStatus.CONFIRMED,
+        ...(shipment.status === ShipmentStatus.CREATED ? { status: ShipmentStatus.CONFIRMED } : {}),
         confirmedByUserId: shippingClerkUserId,
         confirmCommandLogId: commandLogId,
         confirmedAt: now,

@@ -141,7 +141,7 @@ function ShippingRow({
         siteAddressComplete &&
         availableProviders.length > 0 ? (
           <div className="space-y-2 rounded-md border border-brand/25 bg-brand/5 p-3">
-            <div className="text-xs text-iris-200">
+            <div className="text-xs text-tone-brand">
               Auto-purchase via carrier broker — from-address from this site, to-address from
               patient PHI, label posted via the chosen provider.
             </div>
@@ -250,7 +250,7 @@ function ShippingRow({
 
         {isShipped && hasShipment && row.shipment!.confirmedAt !== null ? (
           <div className="flex items-center gap-1.5 text-xs text-subtle">
-            <Icon name="check" size={12} className="text-emerald-400" />
+            <Icon name="check" size={12} className="text-tone-success-accent" />
             Shipped {formatAge(nowMs - row.shipment!.confirmedAt.getTime())} ago
           </div>
         ) : null}

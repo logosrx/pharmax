@@ -275,7 +275,9 @@ export const ReleaseHold = defineCommand<ReleaseHoldInput, ReleaseHoldOutput>({
 
     // ---- Pure-engine guard for the parameterized transition ----
     const transition = applyTransition({
-      policy: ORDER_STANDARD_V1,
+      // Merged per-tenant overlay snapshot when resolved (ADR-0019);
+      // static base otherwise. See ApprovePV1 for rationale.
+      policy: policy.merged?.merged ?? ORDER_STANDARD_V1,
       currentState: target.currentStatus as OrderState,
       command: "RELEASE_HOLD",
       releaseToState,

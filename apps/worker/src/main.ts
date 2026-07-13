@@ -406,13 +406,15 @@ async function main(): Promise<void> {
   );
 
   // Stripe SDK construction is lazy + optional: when
-  // STRIPE_SECRET_KEY is unset, we hand the outbox handler a null
-  // port so it logs-and-no-ops instead of producing per-event
-  // retries against an unconfigured Stripe. The SAME SDK instance
-  // powers both the invoice-push port (worker-side outbox handler)
-  // and the refund port (configureBilling, used by the
-  // RecordRefundReceived reconciliation path that may run inside
-  // a chained system command).
+  // STRIPE_SECRET_KEY is unset, the outbox handler receives a null
+  // port and FAILS finalized-invoice pushes loudly (retry/backoff →
+  // DEAD, visible in the dead-letter dashboard) — a finalized
+  // invoice that silently never reaches Stripe means a customer is
+  // never billed. The SAME SDK instance powers both the
+  // invoice-push port (worker-side outbox handler) and the refund
+  // port (configureBilling, used by the RecordRefundReceived
+  // reconciliation path that may run inside a chained system
+  // command).
   const stripeSdk =
     typeof env.STRIPE_SECRET_KEY === "string" && env.STRIPE_SECRET_KEY.length > 0
       ? new Stripe(env.STRIPE_SECRET_KEY, {

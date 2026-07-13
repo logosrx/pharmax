@@ -99,6 +99,10 @@ export const shipmentExceptionBreakdownReport: ReportDefinition<
         ...(params.carriers !== undefined && params.carriers.length > 0
           ? { carrier: { in: params.carriers } }
           : {}),
+        // Clinic scope via the order relation (shipments carry no
+        // clinicId column). Required so clinic-scoped operators
+        // don't see other clinics' shipment exceptions.
+        ...(ctx.clinicId !== undefined ? { order: { clinicId: ctx.clinicId } } : {}),
       },
       _count: { _all: true },
     });

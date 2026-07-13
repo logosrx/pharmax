@@ -10,10 +10,11 @@
 // mismatch (e.g. `from > to`).
 //
 // Coercion rules per field kind:
-//   date       → `new Date(value + "T00:00:00.000Z")` (UTC anchor,
-//                matching the schema's `z.date()` + window
-//                semantics). Blank required → error; blank optional
-//                → omitted.
+//   date       → `new Date(value + "T00:00:00.000Z")` (UTC anchor);
+//                fields flagged `endOfDay` anchor at 23:59:59.999Z
+//                so `lte`-filtered window ends include the whole
+//                selected day. Blank required → error; blank
+//                optional → omitted.
 //   enum       → passthrough string; blank optional → omitted.
 //   multi-enum → array of selected strings; empty → omitted (the
 //                schema's `.optional()` then means "all").
@@ -81,7 +82,12 @@ export function parseReportParameters(
           if (field.required) return { ok: false, error: `${field.label} is required.` };
           break;
         }
-        const d = new Date(`${raw}T00:00:00.000Z`);
+        // Window-end fields anchor at END of day: reports filter
+        // `lte: to`, so a midnight anchor silently excluded the
+        // entire selected end date (a same-day report returned
+        // near-zero rows).
+        const anchor = field.endOfDay === true ? "T23:59:59.999Z" : "T00:00:00.000Z";
+        const d = new Date(`${raw}${anchor}`);
         if (Number.isNaN(d.getTime())) {
           return {
             ok: false,

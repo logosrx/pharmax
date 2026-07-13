@@ -133,6 +133,27 @@ const PAYLOADS: Readonly<Record<string, Record<string, unknown>>> = Object.freez
     runByUserId: USER,
     runViaScheduleId: "00000000-0000-4000-8000-000000000077",
   },
+  "order.escalated_to_emergency.v1": {
+    orderId: ORDER,
+    organizationId: ORG,
+    shipmentId: SHIPMENT,
+    trackingEventId: TRACKING_EVENT,
+    externalEventId: "evt_abc123",
+    reason: "EXCEPTION",
+    carrierStatus: "delivery_exception",
+    previousBucketId: BUCKET,
+    newBucketId: BUCKET,
+    occurredAt: NOW,
+  },
+  "order.sla_breach_escalated.v1": {
+    orderId: ORDER,
+    organizationId: ORG,
+    slaDeadlineAt: NOW,
+    breachedAt: NOW,
+    previousBucketId: BUCKET,
+    newBucketId: BUCKET,
+    occurredAt: NOW,
+  },
 });
 
 describe("outbox handler ↔ event registry parity", () => {

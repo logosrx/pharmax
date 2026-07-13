@@ -77,7 +77,7 @@ function UserCard({
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-subtle">
+          <div className="text-2xs font-semibold uppercase tracking-wide text-subtle">
             Role grants
           </div>
           {user.grants.length === 0 ? (

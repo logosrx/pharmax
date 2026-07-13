@@ -14,23 +14,23 @@ export type BannerTone = "info" | "success" | "warning" | "danger" | "neutral";
 
 const BANNER_TONES: Record<BannerTone, { box: string; icon: string; glyph: IconName }> = {
   info: {
-    box: "border-sky-500/25 bg-sky-500/10 text-sky-100",
-    icon: "text-sky-400",
+    box: "border-sky-500/25 bg-sky-500/10 text-tone-info-strong",
+    icon: "text-tone-info-accent",
     glyph: "info",
   },
   success: {
-    box: "border-emerald-500/25 bg-emerald-500/10 text-emerald-100",
-    icon: "text-emerald-400",
+    box: "border-emerald-500/25 bg-emerald-500/10 text-tone-success-strong",
+    icon: "text-tone-success-accent",
     glyph: "check",
   },
   warning: {
-    box: "border-amber-500/25 bg-amber-500/10 text-amber-100",
-    icon: "text-amber-400",
+    box: "border-amber-500/25 bg-amber-500/10 text-tone-warning-strong",
+    icon: "text-tone-warning-accent",
     glyph: "alert",
   },
   danger: {
-    box: "border-red-500/25 bg-red-500/10 text-red-100",
-    icon: "text-red-400",
+    box: "border-red-500/25 bg-red-500/10 text-tone-danger-strong",
+    icon: "text-tone-danger-accent",
     glyph: "alert",
   },
   neutral: {
@@ -121,7 +121,7 @@ export function PermissionDenied({
       description={
         <>
           Ask your organization admin to grant{" "}
-          <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[11px] text-fg">
+          <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-2xs text-fg">
             {grant}
           </code>
           {role ? ` (${role} role).` : "."}

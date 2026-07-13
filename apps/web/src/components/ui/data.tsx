@@ -13,13 +13,13 @@ import type { Tone } from "./badge.js";
 
 const STAT_ACCENT: Record<Tone, string> = {
   neutral: "text-muted",
-  brand: "text-iris-300",
-  success: "text-emerald-300",
-  warning: "text-amber-300",
-  danger: "text-red-300",
-  info: "text-sky-300",
-  violet: "text-violet-300",
-  cyan: "text-cyan-300",
+  brand: "text-tone-brand",
+  success: "text-tone-success",
+  warning: "text-tone-warning",
+  danger: "text-tone-danger",
+  info: "text-tone-info",
+  violet: "text-tone-violet",
+  cyan: "text-tone-cyan",
 };
 
 export function Stat({
@@ -157,29 +157,37 @@ export function DataList({
   readonly columns?: 2 | 3 | 4;
   readonly className?: string;
 }) {
+  // Column count responds to the list's OWN width (container query),
+  // not the viewport — a DataList inside a narrow detail column stays
+  // single-column even on a wide screen. @lg ≈ room for 2 columns,
+  // @3xl/@4xl ≈ room for 3/4.
   const cols =
     columns === 2
-      ? "sm:grid-cols-2"
+      ? "@lg:grid-cols-2"
       : columns === 4
-        ? "sm:grid-cols-2 lg:grid-cols-4"
-        : "sm:grid-cols-2 lg:grid-cols-3";
+        ? "@lg:grid-cols-2 @3xl:grid-cols-4"
+        : "@lg:grid-cols-2 @3xl:grid-cols-3";
   return (
-    <dl className={cx("grid grid-cols-1 gap-x-6 gap-y-4", cols, className)}>
-      {items.map((item, i) => (
-        <div
-          key={i}
-          className={
-            item.span === 2
-              ? "sm:col-span-2"
-              : item.span === 3
-                ? "sm:col-span-2 lg:col-span-3"
-                : undefined
-          }
-        >
-          <dt className="text-xs font-medium uppercase tracking-wide text-subtle">{item.label}</dt>
-          <dd className="mt-1 text-sm text-fg">{item.value}</dd>
-        </div>
-      ))}
-    </dl>
+    <div className={cx("@container", className)}>
+      <dl className={cx("grid grid-cols-1 gap-x-6 gap-y-4", cols)}>
+        {items.map((item, i) => (
+          <div
+            key={i}
+            className={
+              item.span === 2
+                ? "@lg:col-span-2"
+                : item.span === 3
+                  ? "@lg:col-span-2 @3xl:col-span-3"
+                  : undefined
+            }
+          >
+            <dt className="text-xs font-medium uppercase tracking-wide text-subtle">
+              {item.label}
+            </dt>
+            <dd className="mt-1 text-sm text-fg">{item.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }

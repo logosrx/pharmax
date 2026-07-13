@@ -155,6 +155,26 @@ async function findExistingBillingLine(input: {
   });
 }
 
+/**
+ * Cap on supplemental-invoice suffix probing. 50 supplemental
+ * invoices for one (clinic, period) means something is structurally
+ * wrong; fail loud instead of looping.
+ */
+const MAX_SUPPLEMENTAL_SUFFIX = 50;
+
+/**
+ * Resolve the invoice a new billing line may be appended to.
+ *
+ * CRITICAL invariant: lines are ONLY appended to DRAFT invoices.
+ * Once finance finalizes an invoice (status leaves DRAFT and the
+ * invoice may already be pushed to Stripe / sent to the clinic),
+ * appending a late line would silently diverge the local ledger
+ * from the customer-visible document — the charge would exist in
+ * Pharmax totals but never be collected. Late shipped-order events
+ * for an already-finalized period therefore roll into a
+ * SUPPLEMENTAL draft invoice (`{base}-S2`, `-S3`, …) that goes
+ * through the normal finalize flow.
+ */
 async function resolveOrCreateOpenInvoice(input: {
   tx: PrismaTxClient;
   organizationId: string;
@@ -162,63 +182,81 @@ async function resolveOrCreateOpenInvoice(input: {
   period: BillingPeriod;
   currency: string;
 }): Promise<{ invoiceId: string; invoiceNumber: string; created: boolean }> {
-  const invoiceNumber = deriveInvoiceNumber({
+  const baseNumber = deriveInvoiceNumber({
     period: input.period,
     clinicId: input.clinicId,
   });
 
-  const existing = await input.tx.invoice.findUnique({
-    where: {
-      organizationId_invoiceNumber: {
-        organizationId: input.organizationId,
-        invoiceNumber,
-      },
-    },
-    select: { id: true },
-  });
-  if (existing !== null) {
-    return { invoiceId: existing.id, invoiceNumber, created: false };
-  }
+  for (let suffix = 1; suffix <= MAX_SUPPLEMENTAL_SUFFIX; suffix += 1) {
+    const invoiceNumber = suffix === 1 ? baseNumber : `${baseNumber}-S${suffix}`;
 
-  try {
-    const created = await input.tx.invoice.create({
-      data: {
-        organizationId: input.organizationId,
-        clinicId: input.clinicId,
-        invoiceNumber,
-        status: InvoiceStatus.DRAFT,
-        currency: input.currency,
-        billingPeriodStart: input.period.start,
-        billingPeriodEnd: input.period.end,
+    const existing = await input.tx.invoice.findUnique({
+      where: {
+        organizationId_invoiceNumber: {
+          organizationId: input.organizationId,
+          invoiceNumber,
+        },
       },
-      select: { id: true },
+      select: { id: true, status: true },
     });
-    return { invoiceId: created.id, invoiceNumber, created: true };
-  } catch (cause) {
-    if (cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2002") {
-      // Two concurrent ship events for the same clinic in the
-      // same period raced and both tried to create the invoice.
-      // Re-read; the loser of the race sees the winner's row.
-      const winner = await input.tx.invoice.findUnique({
-        where: {
-          organizationId_invoiceNumber: {
-            organizationId: input.organizationId,
-            invoiceNumber,
-          },
+    if (existing !== null) {
+      if (existing.status === InvoiceStatus.DRAFT) {
+        return { invoiceId: existing.id, invoiceNumber, created: false };
+      }
+      // Finalized (or otherwise non-appendable) — probe the next
+      // supplemental slot.
+      continue;
+    }
+
+    try {
+      const created = await input.tx.invoice.create({
+        data: {
+          organizationId: input.organizationId,
+          clinicId: input.clinicId,
+          invoiceNumber,
+          status: InvoiceStatus.DRAFT,
+          currency: input.currency,
+          billingPeriodStart: input.period.start,
+          billingPeriodEnd: input.period.end,
         },
         select: { id: true },
       });
-      if (winner !== null) {
-        return { invoiceId: winner.id, invoiceNumber, created: false };
+      return { invoiceId: created.id, invoiceNumber, created: true };
+    } catch (cause) {
+      if (cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2002") {
+        // Two concurrent ship events raced on creating this slot.
+        // Re-read; if the winner's row is DRAFT use it, otherwise
+        // fall through to the next suffix.
+        const winner = await input.tx.invoice.findUnique({
+          where: {
+            organizationId_invoiceNumber: {
+              organizationId: input.organizationId,
+              invoiceNumber,
+            },
+          },
+          select: { id: true, status: true },
+        });
+        if (winner !== null && winner.status === InvoiceStatus.DRAFT) {
+          return { invoiceId: winner.id, invoiceNumber, created: false };
+        }
+        if (winner !== null) {
+          continue;
+        }
+        throw new errors.InternalError({
+          code: MATERIALIZE_BILLING_INVOICE_NUMBER_COLLISION,
+          message: `Invoice number "${invoiceNumber}" collided but no row was readable.`,
+          metadata: { organizationId: input.organizationId, invoiceNumber },
+        });
       }
-      throw new errors.InternalError({
-        code: MATERIALIZE_BILLING_INVOICE_NUMBER_COLLISION,
-        message: `Invoice number "${invoiceNumber}" collided but no row was readable.`,
-        metadata: { organizationId: input.organizationId, invoiceNumber },
-      });
+      throw cause;
     }
-    throw cause;
   }
+
+  throw new errors.InternalError({
+    code: MATERIALIZE_BILLING_INVOICE_NUMBER_COLLISION,
+    message: `Exceeded ${MAX_SUPPLEMENTAL_SUFFIX} supplemental invoices for "${baseNumber}"; refusing to append.`,
+    metadata: { organizationId: input.organizationId, baseNumber },
+  });
 }
 
 export const MaterializeShippedOrderBilling: SystemCommand<

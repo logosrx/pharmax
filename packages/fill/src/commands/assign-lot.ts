@@ -8,9 +8,11 @@ import { assertFillAssignee, assertFillInProgressWithAssignee } from "../fill-gu
 
 export const LOT_NOT_FOUND = "LOT_NOT_FOUND";
 export const LOT_HELD = "LOT_HELD";
+export const LOT_DEPLETED = "LOT_DEPLETED";
 export const LOT_EXPIRED = "LOT_EXPIRED";
 export const LOT_PRODUCT_MISMATCH = "LOT_PRODUCT_MISMATCH";
 export const LOT_SITE_MISMATCH = "LOT_SITE_MISMATCH";
+export const LOT_ALREADY_ASSIGNED_TO_LINE = "LOT_ALREADY_ASSIGNED_TO_LINE";
 export const ORDER_LINE_NOT_FOUND = "ORDER_LINE_NOT_FOUND";
 
 const inputSchema = z
@@ -57,6 +59,7 @@ export const AssignLot = defineCommand<AssignLotInput, AssignLotOutput>({
       },
       select: {
         id: true,
+        lotId: true,
         quantityToFill: true,
         prescription: { select: { drugNdc: true } },
       },
@@ -96,12 +99,31 @@ export const AssignLot = defineCommand<AssignLotInput, AssignLotOutput>({
       });
     }
 
-    if (lot.status === LotStatus.ON_HOLD) {
-      throw new errors.ConflictError({
-        code: LOT_HELD,
-        message: "Held lots cannot be assigned.",
-        metadata: { lotId: lot.id, status: lot.status },
-      });
+    // Only ACTIVE lots are assignable. Exhaustive over LotStatus so
+    // a newly added status fails compilation until it is classified
+    // here rather than silently passing validation.
+    switch (lot.status) {
+      case LotStatus.ACTIVE:
+        break;
+      case LotStatus.ON_HOLD:
+        throw new errors.ConflictError({
+          code: LOT_HELD,
+          message: "Held lots cannot be assigned.",
+          metadata: { lotId: lot.id, status: lot.status },
+        });
+      case LotStatus.DEPLETED:
+        throw new errors.ConflictError({
+          code: LOT_DEPLETED,
+          message: "Depleted lots cannot be assigned.",
+          metadata: { lotId: lot.id, status: lot.status },
+        });
+      default: {
+        const exhaustive: never = lot.status;
+        throw new errors.InternalError({
+          code: "LOT_STATUS_UNHANDLED",
+          message: `Unhandled lot status: ${String(exhaustive)}`,
+        });
+      }
     }
 
     const todayUtc = clock.now();
@@ -127,6 +149,41 @@ export const AssignLot = defineCommand<AssignLotInput, AssignLotOutput>({
           lotId: lot.id,
           lotNdc: lot.product.ndc,
           prescriptionNdc: orderLine.prescription.drugNdc,
+        },
+      });
+    }
+
+    // Re-assignment handling. The order row is locked FOR UPDATE by
+    // the factory, so concurrent AssignLot calls on this order
+    // serialize and this read-check is race-free.
+    //
+    //   - Same lot already on the line → conflict. A retry of the
+    //     same request replays via the idempotency key before ever
+    //     reaching here, so hitting this branch means a genuinely
+    //     duplicate action (double-pick in the UI).
+    //   - DIFFERENT lot on the line → the tech is correcting a wrong
+    //     pick. Reverse the previous deduction (LOT_RELEASED, +qty
+    //     against the old lot) before deducting from the new lot, so
+    //     the inventory ledger nets to exactly one open deduction
+    //     per line. Without this, every re-pick double-deducted
+    //     inventory and the ledger drifted from physical stock.
+    const previousLotId = orderLine.lotId;
+    if (previousLotId !== null) {
+      if (previousLotId === lot.id) {
+        throw new errors.ConflictError({
+          code: LOT_ALREADY_ASSIGNED_TO_LINE,
+          message: "This lot is already assigned to this order line.",
+          metadata: { orderId: target.id, orderLineId: orderLine.id, lotId: lot.id },
+        });
+      }
+      await tx.inventoryTransaction.create({
+        data: {
+          organizationId: ctx.organizationId,
+          lotId: previousLotId,
+          orderLineId: orderLine.id,
+          quantityDelta: orderLine.quantityToFill,
+          reason: InventoryTransactionReason.LOT_RELEASED,
+          commandLogId,
         },
       });
     }
@@ -183,6 +240,9 @@ export const AssignLot = defineCommand<AssignLotInput, AssignLotOutput>({
           lotAssignmentId: lotAssignment.id,
           lotNumber: lot.lotNumber,
           commandLogId,
+          // Non-null when this assignment CORRECTED a prior pick;
+          // the released lot's deduction was reversed in this tx.
+          releasedLotId: previousLotId,
         },
       },
       emits: [

@@ -20,6 +20,17 @@ const schema = z.object({
   PRINT_AGENT_PRINTER_HOST: z.string().min(1).default("127.0.0.1"),
   PRINT_AGENT_PRINTER_PORT: z.coerce.number().int().positive().default(9100),
   PRINT_AGENT_PRINTER_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+  /**
+   * Post-send `~HS` printer status verification (tcp mode only).
+   * Default on — a fault flag (paper out / paused / head up /
+   * ribbon out) fails the job instead of recording a label that
+   * never printed. Set false ONLY for print servers that don't
+   * relay bidirectional traffic.
+   */
+  PRINT_AGENT_VERIFY_STATUS: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 
   // KMS adapter selection (mirrors apps/worker + apps/web). In
   // production the print-agent MUST run AwsKmsAdapter: AWS_REGION +

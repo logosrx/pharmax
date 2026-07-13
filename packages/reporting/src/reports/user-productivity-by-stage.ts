@@ -106,6 +106,10 @@ export const userProductivityByStageReport: ReportDefinition<
         kind: { in: [...kindsFilter] },
         endedAt: { gte: window.from, lte: window.to },
         actorUserId: { not: null },
+        // Clinic scope via the order relation (intervals carry no
+        // clinicId column). Required so clinic-scoped operators
+        // don't see other clinics' productivity numbers.
+        ...(ctx.clinicId !== undefined ? { order: { clinicId: ctx.clinicId } } : {}),
       },
       select: {
         actorUserId: true,

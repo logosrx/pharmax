@@ -21,7 +21,9 @@ interface IntervalRow {
 
 function fakeClient(rows: ReadonlyArray<IntervalRow>) {
   return {
-    orderStageInterval: { findMany: vi.fn(async () => rows) },
+    // Declare an args param so `findMany.mock.calls[n][0]` is typed
+    // as the captured argument (not an out-of-range tuple index).
+    orderStageInterval: { findMany: vi.fn(async (_args: unknown) => rows) },
   };
 }
 
@@ -164,5 +166,54 @@ describe("slaBreachReport — params validation", () => {
       to: new Date("2026-05-31T00:00:00.000Z"),
     });
     expect(parsed.success).toBe(false);
+  });
+});
+
+describe("slaBreachReport — query scoping", () => {
+  it("narrows to the context clinic (via the order relation) when ctx.clinicId is set", async () => {
+    const client = fakeClient([]);
+    const CLINIC = "00000000-0000-4000-8000-000000000010";
+    await slaBreachReport.run(
+      { client: client as never, organizationId: ORG_ID, clinicId: CLINIC, asOf: ASOF },
+      window
+    );
+    const call = client.orderStageInterval.findMany.mock.calls[0]?.[0] as unknown as {
+      where: Record<string, unknown>;
+    };
+    expect(call.where["organizationId"]).toBe(ORG_ID);
+    // Regression: a clinic-scoped operator must NOT see other
+    // clinics' intervals — the filter goes through the order
+    // relation because intervals carry no clinicId column.
+    expect(call.where["order"]).toEqual({ clinicId: CLINIC });
+  });
+
+  it("omits the clinic filter for org-wide contexts", async () => {
+    const client = fakeClient([]);
+    await slaBreachReport.run(
+      { client: client as never, organizationId: ORG_ID, asOf: ASOF },
+      window
+    );
+    const call = client.orderStageInterval.findMany.mock.calls[0]?.[0] as unknown as {
+      where: Record<string, unknown>;
+    };
+    expect(call.where["order"]).toBeUndefined();
+  });
+
+  it("includes open intervals that started BEFORE the window (active breaches must not vanish)", async () => {
+    const client = fakeClient([]);
+    await slaBreachReport.run(
+      { client: client as never, organizationId: ORG_ID, asOf: ASOF },
+      window
+    );
+    const call = client.orderStageInterval.findMany.mock.calls[0]?.[0] as unknown as {
+      where: { OR: ReadonlyArray<Record<string, unknown>> };
+    };
+    // Regression: filtering on startedAt alone hid an order stuck
+    // in a stage since before the window — the oldest active
+    // breach was invisible on a "today" report.
+    expect(call.where.OR).toEqual([
+      { startedAt: { gte: window.from, lte: window.to } },
+      { endedAt: null, startedAt: { lte: window.to } },
+    ]);
   });
 });

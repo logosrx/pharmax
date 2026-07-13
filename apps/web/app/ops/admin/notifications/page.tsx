@@ -115,7 +115,7 @@ export default async function NotificationsHealthPage({
                 <TD>
                   <Badge tone={statusTone(row.status)}>{row.status}</Badge>
                   {row.failureReason !== null ? (
-                    <div className="mt-1 text-xs text-red-300">{row.failureReason}</div>
+                    <div className="mt-1 text-xs text-tone-danger">{row.failureReason}</div>
                   ) : null}
                 </TD>
                 <TD>

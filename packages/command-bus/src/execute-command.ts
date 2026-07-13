@@ -12,7 +12,10 @@
 //   2. The idempotency cache prevents accidental double-execution;
 //      same key + same payload returns the cached response WITHOUT
 //      re-running the handler. Same key + different payload throws
-//      ConflictError.
+//      ConflictError. Same key while a prior attempt is RUNNING
+//      throws ConflictError(COMMAND_IN_FLIGHT). Same key after a
+//      FAILED attempt re-executes (standard idempotency-key retry
+//      semantics — the client may safely resend after an error).
 //   3. Validation, RBAC, and workstation checks happen BEFORE any
 //      database write. A request that fails these gates has zero
 //      database footprint.
@@ -21,10 +24,19 @@
 //      status=FAILED with the error code. SOC 2 reviewers can
 //      audit attempted-but-failed actions in command_log.
 //
+// RLS invariant (every statement, not just the handler tx):
+//   command_log and idempotency_key are RLS-protected tables
+//   (ENABLE + FORCE, policies keyed on the `pharmax.organization_id`
+//   session GUC). The GUC is transaction-local, so ANY query the
+//   bus issues against those tables must run inside a transaction
+//   that applied the GUC first. That is why the pre-flight
+//   (idempotency lookup + command_log create) and the post-run
+//   status updates each run inside their own short GUC'd
+//   transaction rather than on the raw pooled client — a raw-client
+//   query lands on an arbitrary pool connection with NO tenant GUC
+//   and is denied (or sees nothing) under the pharmax_app role.
+//
 // What this DOES NOT do:
-//   - Retry the handler. Retries are caller responsibility. A
-//     handler failure marks command_log FAILED and the caller
-//     must generate a NEW idempotency key to retry.
 //   - Time-bound the handler. Long-running commands hold the tx
 //     open; that's the handler's responsibility to keep short.
 //   - Auto-write order_event rows. Order-targeted commands write
@@ -32,7 +44,6 @@
 
 import { randomUUID } from "node:crypto";
 
-import { ulid } from "ulid";
 import type { ZodError } from "zod";
 
 import { errors } from "@pharmax/platform-core";
@@ -44,14 +55,19 @@ import {
   type TenancyContext,
 } from "@pharmax/tenancy";
 import { requirePermission } from "@pharmax/rbac";
-import { CommandStatus, OutboxStatus } from "@pharmax/database";
+import { CommandStatus, OutboxStatus, Prisma } from "@pharmax/database";
 
-import { getCommandBusConfiguration } from "./configure.js";
-import { commandInputInvalidError, commandWorkstationRequiredError } from "./errors.js";
-import { hashRequest } from "./hash.js";
-import { lookupIdempotency, storeIdempotencyInTx } from "./idempotency.js";
+import { getCommandBusConfiguration, type CommandBusConfiguration } from "./configure.js";
+import {
+  commandAlreadyExecutedError,
+  commandInFlightError,
+  commandInputInvalidError,
+  commandWorkstationRequiredError,
+} from "./errors.js";
+import { FALLBACK_REQUEST_HASH_KEY, hashRequestKeyed } from "./hash.js";
+import { lookupIdempotency, storeIdempotencyInTx, type LookupResult } from "./idempotency.js";
 import { redactPayload } from "./redact.js";
-import type { Command, ExecuteOptions } from "./types.js";
+import type { Command, ExecuteOptions, PrismaTxClient } from "./types.js";
 import {
   createAuditLogInTx,
   createCommandLog,
@@ -97,10 +113,17 @@ const commandSodRejectionCounter = meter.createCounter("pharmax_command_sod_reje
 
 const SOD_VIOLATION_CODE = "SOD_VIOLATION";
 
+// See FALLBACK_REQUEST_HASH_KEY in hash.ts: publicly-known fallback
+// for bare configurations (tests). Production boots through the
+// composition root, which always supplies a KMS-derived
+// `requestHashKey`; if a production process somehow reaches here
+// without one we log a warning (once) rather than crash mid-request.
+let warnedFallbackHashKey = false;
+
 export async function executeCommand<TInput, TOutput>(
   command: Command<TInput, TOutput>,
   rawInput: unknown,
-  options: ExecuteOptions = {}
+  options: ExecuteOptions
 ): Promise<TOutput> {
   const config = getCommandBusConfiguration();
   const log = config.logger.child({ component: "command-bus", command: command.name });
@@ -130,16 +153,13 @@ export async function executeCommand<TInput, TOutput>(
     throw commandWorkstationRequiredError({ commandName: command.name });
   }
 
-  // Step 6 — Check idempotency.
-  const idempotencyKey = options.idempotencyKey ?? ulid();
-  const requestHash = hashRequest(redactedRequest);
-  const idempotency = await lookupIdempotency(config.prisma, {
-    organizationId: ctx.organizationId,
-    commandName: command.name,
-    key: idempotencyKey,
-    currentRequestHash: requestHash,
-  });
-  if (idempotency.kind === "replay") {
+  // The request hash covers the FULL parsed input (keyed HMAC), not
+  // the redacted projection — see hash.ts for why. command_log and
+  // idempotency_key still store only the REDACTED payload.
+  const idempotencyKey = options.idempotencyKey;
+  const requestHash = hashRequestKeyed(input, resolveRequestHashKey(config, log));
+
+  const replayOutcome = (payload: unknown): TOutput => {
     log.info("command replay (idempotency hit)", {
       idempotencyKey,
       organizationId: ctx.organizationId,
@@ -152,23 +172,56 @@ export async function executeCommand<TInput, TOutput>(
     });
     // The cached response is a plain JSON value; the call site
     // typed it as TOutput when it was written. We trust the cache.
-    return (idempotency.responsePayload ?? undefined) as unknown as TOutput;
-  }
+    return (payload ?? undefined) as TOutput;
+  };
 
-  // Step 7 — Create command_log (PRE-TX so a crash leaves a record).
-  // UUID, not ULID: `command_log.id` is `@db.Uuid`. The idempotency
-  // key above stays a ULID (String column; sortable is a feature).
-  const commandLogId = randomUUID();
-  await createCommandLog(config.prisma, {
-    id: commandLogId,
-    organizationId: ctx.organizationId,
-    commandName: command.name,
-    idempotencyKey,
-    actorUserId: ctx.actor.userId,
-    workstationId: ctx.workstationId ?? null,
-    requestPayload: redactedRequest,
-    status: CommandStatus.RUNNING,
-  });
+  // Steps 6 + 7 — Check idempotency, create command_log (PRE-TX so
+  // a crash mid-handler leaves a RUNNING record). Both statements
+  // run in ONE short GUC'd transaction (see the RLS invariant in
+  // the header). A unique violation on command_log means another
+  // attempt with this key exists; `recoverFromCommandLogConflict`
+  // resolves it in a FRESH transaction because Postgres aborts the
+  // current one on any statement error.
+  let preflight: PreflightResult;
+  try {
+    preflight = await runInTenantTx(config, ctx, async (tx) => {
+      const lookup = await lookupIdempotency(tx, {
+        organizationId: ctx.organizationId,
+        commandName: command.name,
+        key: idempotencyKey,
+        currentRequestHash: requestHash,
+      });
+      if (lookup.kind === "replay") {
+        return { kind: "replay", responsePayload: lookup.responsePayload };
+      }
+      const commandLogId = randomUUID();
+      await createCommandLog(tx, {
+        id: commandLogId,
+        organizationId: ctx.organizationId,
+        commandName: command.name,
+        idempotencyKey,
+        actorUserId: ctx.actor.userId,
+        workstationId: ctx.workstationId ?? null,
+        requestPayload: redactedRequest,
+        status: CommandStatus.RUNNING,
+      });
+      return { kind: "proceed", commandLogId };
+    });
+  } catch (err) {
+    if (!isUniqueViolation(err, "CommandLog")) throw err;
+    preflight = await recoverFromCommandLogConflict({
+      config,
+      ctx,
+      commandName: command.name,
+      idempotencyKey,
+      requestHash,
+      redactedRequest,
+    });
+  }
+  if (preflight.kind === "replay") {
+    return replayOutcome(preflight.responsePayload);
+  }
+  const commandLogId = preflight.commandLogId;
 
   // Step 8 — Start tx, run handler, write audit + outbox, commit.
   let handlerResult;
@@ -225,15 +278,49 @@ export async function executeCommand<TInput, TOutput>(
       return result;
     });
   } catch (err) {
+    // Concurrent same-key race: two attempts both missed the
+    // pre-flight lookup (e.g. two retries of a FAILED attempt);
+    // the loser hits the idempotency_key unique constraint at
+    // commit time. Resolve it as a replay instead of surfacing a
+    // raw Prisma error. The winner owns the shared command_log
+    // row's final status, so the loser does NOT mark it FAILED.
+    if (isUniqueViolation(err, "IdempotencyKey")) {
+      const lookup = await runInTenantTx(config, ctx, (tx) =>
+        lookupIdempotency(tx, {
+          organizationId: ctx.organizationId,
+          commandName: command.name,
+          key: idempotencyKey,
+          currentRequestHash: requestHash,
+        })
+      );
+      if (lookup.kind === "replay") {
+        return replayOutcome(lookup.responsePayload);
+      }
+      // Winner's tx not committed/visible yet — surface a stable 409.
+      throw commandInFlightError({ commandName: command.name });
+    }
+
     // Step 19 (failure path) — mark command_log FAILED and rethrow.
+    // The status update is best-effort: if IT fails (e.g. the DB
+    // just went away), we log and rethrow the ORIGINAL error so the
+    // caller sees why the command failed, not why bookkeeping did.
     const { code, message } = describeError(err);
-    await updateCommandLogStatus(config.prisma, {
-      id: commandLogId,
-      status: CommandStatus.FAILED,
-      errorCode: code,
-      errorMessage: message,
-      completedAt: config.clock.now(),
-    });
+    try {
+      await runInTenantTx(config, ctx, (tx) =>
+        updateCommandLogStatus(tx, {
+          id: commandLogId,
+          status: CommandStatus.FAILED,
+          errorCode: code,
+          errorMessage: message,
+          completedAt: config.clock.now(),
+        })
+      );
+    } catch (updateErr) {
+      log.error("failed to mark command_log FAILED", {
+        commandLogId,
+        err: describeError(updateErr),
+      });
+    }
     const outcome = code === SOD_VIOLATION_CODE ? "sod_rejected" : "fail";
     if (outcome === "sod_rejected") {
       commandSodRejectionCounter.add(1, labels);
@@ -243,14 +330,21 @@ export async function executeCommand<TInput, TOutput>(
     throw err;
   }
 
-  // Step 19 (success path) — mark command_log SUCCEEDED.
+  // Step 19 (success path) — mark command_log SUCCEEDED (GUC'd tx;
+  // see RLS invariant). Also stamp targetOrderId so per-order
+  // command history queries return this attempt.
   const responsePayload = redactPayload(handlerResult.output, command.redactFields);
-  await updateCommandLogStatus(config.prisma, {
-    id: commandLogId,
-    status: CommandStatus.SUCCEEDED,
-    responsePayload,
-    completedAt: config.clock.now(),
-  });
+  await runInTenantTx(config, ctx, (tx) =>
+    updateCommandLogStatus(tx, {
+      id: commandLogId,
+      status: CommandStatus.SUCCEEDED,
+      responsePayload,
+      completedAt: config.clock.now(),
+      ...(handlerResult.targetOrderId === undefined
+        ? {}
+        : { targetOrderId: handlerResult.targetOrderId }),
+    })
+  );
 
   commandDispatchedCounter.add(1, { ...labels, outcome: "success" });
   commandDurationHistogram.record(elapsedSeconds(startHrTimeNs), { ...labels, outcome: "success" });
@@ -258,6 +352,143 @@ export async function executeCommand<TInput, TOutput>(
   // Step 20 — Side effects fire from the drainer asynchronously.
   // Nothing to do here; the outbox row is already PENDING.
   return handlerResult.output;
+}
+
+// ---- Pre-flight helpers ---------------------------------------------------
+
+type PreflightResult =
+  | { readonly kind: "replay"; readonly responsePayload: unknown }
+  | { readonly kind: "proceed"; readonly commandLogId: string };
+
+/**
+ * Run `fn` inside a short transaction with the tenant RLS GUC
+ * applied as the first statement. Every bus-side query against the
+ * RLS-protected bookkeeping tables goes through here.
+ */
+async function runInTenantTx<T>(
+  config: CommandBusConfiguration,
+  ctx: TenancyContext,
+  fn: (tx: PrismaTxClient) => Promise<T>
+): Promise<T> {
+  return config.prisma.$transaction(async (tx) => {
+    await applyTenancySessionGuc(tx as unknown as SessionGucExecutor, ctx);
+    return fn(tx);
+  });
+}
+
+/**
+ * A command_log unique violation means another attempt with the
+ * same (organizationId, commandName, idempotencyKey) exists.
+ * Resolve by prior-attempt status:
+ *
+ *   FAILED             → reuse the row: flip it back to RUNNING and
+ *                        re-execute (idempotency-key retry).
+ *   SUCCEEDED          → replay from the idempotency row (which
+ *                        also enforces the payload-mismatch check);
+ *                        if the idempotency row is gone (expired /
+ *                        purged) surface COMMAND_ALREADY_EXECUTED.
+ *   RUNNING / PENDING  → COMMAND_IN_FLIGHT (stable 409; the client
+ *                        should retry shortly, not resubmit).
+ *
+ * Runs in a FRESH transaction — the one that hit the violation is
+ * aborted (Postgres refuses further statements after an error).
+ */
+async function recoverFromCommandLogConflict(input: {
+  readonly config: CommandBusConfiguration;
+  readonly ctx: TenancyContext;
+  readonly commandName: string;
+  readonly idempotencyKey: string;
+  readonly requestHash: string;
+  readonly redactedRequest: Record<string, unknown>;
+}): Promise<PreflightResult> {
+  return runInTenantTx(input.config, input.ctx, async (tx) => {
+    const existing = await tx.commandLog.findUnique({
+      where: {
+        organizationId_commandName_idempotencyKey: {
+          organizationId: input.ctx.organizationId,
+          commandName: input.commandName,
+          idempotencyKey: input.idempotencyKey,
+        },
+      },
+      select: { id: true, status: true },
+    });
+    if (existing === null) {
+      // The conflicting row vanished between the violation and this
+      // read (e.g. the concurrent attempt rolled back). Surface the
+      // in-flight conflict; an immediate client retry will succeed.
+      throw commandInFlightError({ commandName: input.commandName });
+    }
+
+    if (existing.status === CommandStatus.FAILED) {
+      await tx.commandLog.update({
+        where: { id: existing.id },
+        data: {
+          status: CommandStatus.RUNNING,
+          errorCode: null,
+          errorMessage: null,
+          completedAt: null,
+          requestPayload: input.redactedRequest as Prisma.InputJsonValue,
+          startedAt: input.config.clock.now(),
+        },
+      });
+      return { kind: "proceed", commandLogId: existing.id };
+    }
+
+    if (existing.status === CommandStatus.SUCCEEDED) {
+      // Throws COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH if the hash
+      // differs — exactly the contract the pre-flight lookup applies.
+      const lookup: LookupResult = await lookupIdempotency(tx, {
+        organizationId: input.ctx.organizationId,
+        commandName: input.commandName,
+        key: input.idempotencyKey,
+        currentRequestHash: input.requestHash,
+      });
+      if (lookup.kind === "replay") {
+        return { kind: "replay", responsePayload: lookup.responsePayload };
+      }
+      throw commandAlreadyExecutedError({ commandName: input.commandName });
+    }
+
+    // RUNNING or PENDING — a concurrent attempt is executing.
+    throw commandInFlightError({ commandName: input.commandName });
+  });
+}
+
+function resolveRequestHashKey(
+  config: CommandBusConfiguration,
+  log: { warn: (msg: string, meta?: Record<string, unknown>) => void }
+): string | Buffer {
+  if (config.requestHashKey !== undefined) return config.requestHashKey;
+  if (!warnedFallbackHashKey && process.env["NODE_ENV"] === "production") {
+    warnedFallbackHashKey = true;
+    log.warn(
+      "command bus is using the fallback (publicly known) request-hash key in production; " +
+        "wire requestHashKey via the composition root"
+    );
+  }
+  return FALLBACK_REQUEST_HASH_KEY;
+}
+
+/**
+ * Detect a Prisma P2002 unique-constraint violation on a specific
+ * model. Prisma 7 sets `meta.modelName`; older/adapter paths set
+ * only `meta.target` (the constrained columns), so we match either.
+ */
+function isUniqueViolation(err: unknown, model: "CommandLog" | "IdempotencyKey"): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== "P2002") {
+    return false;
+  }
+  const meta = (err.meta ?? {}) as { modelName?: unknown; target?: unknown };
+  if (typeof meta.modelName === "string") {
+    return meta.modelName === model;
+  }
+  if (Array.isArray(meta.target)) {
+    const target = meta.target.map(String);
+    // command_log:     (organizationId, commandName, idempotencyKey)
+    // idempotency_key: (organizationId, commandName, key)
+    return model === "CommandLog" ? target.includes("idempotencyKey") : target.includes("key");
+  }
+  return false;
 }
 
 /**

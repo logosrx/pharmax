@@ -111,6 +111,14 @@ function buildPrismaFake(opts: {
         calls.push({ table: "commandLog", op: "create", args });
         return { id: "cmd-log-1" };
       }),
+      update: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "update", args });
+        return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "findUnique", args });
+        return null;
+      }),
     },
     auditLog: {
       create: vi.fn(async (args: unknown) => {

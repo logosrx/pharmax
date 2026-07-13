@@ -71,7 +71,6 @@ export async function GET(
       operatorUserId: session.operator.userId,
       organizationId: session.tenancy.organizationId,
       operatorDisplayName: session.operator.displayName,
-      clerkUserId: session.operator.clerkUserId,
       commandName: "DownloadReportRunCsv",
       route: "ops:reports:runs:download",
     },

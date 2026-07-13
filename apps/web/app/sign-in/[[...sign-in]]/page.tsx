@@ -1,24 +1,16 @@
-// Clerk hosted sign-in surface. The `[[...sign-in]]` catch-all route
-// lets Clerk render its multi-step flow (email → password → MFA →
-// success) at any nested path under `/sign-in`.
+// Sign-in surface (ADR-0030, in-house identity engine).
 //
-// Public route (allowlisted in `proxy.ts`). An authenticated visitor
-// landing here is redirected by Clerk to `forceRedirectUrl`.
+// The org is resolved from the request subdomain by the sign-in API
+// route; this page just renders the email/password (+ MFA) form. Public
+// route (allowlisted in proxy.ts).
 
-import { SignIn } from "@clerk/nextjs";
-
-import { AuthShell, clerkAppearance } from "../../../src/components/shell/auth-shell.js";
+import { SignInForm } from "../../../src/components/auth/sign-in-form.js";
+import { AuthShell } from "../../../src/components/shell/auth-shell.js";
 
 export default function Page() {
   return (
     <AuthShell title="Welcome back" subtitle="Sign in to the Pharmax operations console.">
-      <SignIn
-        routing="path"
-        path="/sign-in"
-        signUpUrl="/sign-up"
-        forceRedirectUrl="/ops"
-        appearance={clerkAppearance}
-      />
+      <SignInForm />
     </AuthShell>
   );
 }

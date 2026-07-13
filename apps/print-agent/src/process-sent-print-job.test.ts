@@ -55,6 +55,8 @@ function buildClient(status: PrintJobStatus) {
     },
     commandLog: {
       create: vi.fn(async () => ({ id: "cl-1" })),
+      update: vi.fn(async () => ({ ok: true })),
+      findUnique: vi.fn(async () => null),
     },
     auditLog: { create: vi.fn(async () => ({ id: "al-1" })) },
     auditChainState: {
@@ -70,6 +72,7 @@ function buildClient(status: PrintJobStatus) {
     },
     idempotencyKey: {
       create: vi.fn(async () => ({ ok: true })),
+      findUnique: vi.fn(async () => null),
     },
     $executeRaw: vi.fn(async () => 0),
   };

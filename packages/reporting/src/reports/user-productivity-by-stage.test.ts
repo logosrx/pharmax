@@ -17,7 +17,9 @@ interface FakeInterval {
 
 function fakeClient(intervals: ReadonlyArray<FakeInterval>) {
   return {
-    orderStageInterval: { findMany: vi.fn(async () => intervals) },
+    // Declare an args param so `findMany.mock.calls[n][0]` is typed
+    // as the captured argument (not an out-of-range tuple index).
+    orderStageInterval: { findMany: vi.fn(async (_args: unknown) => intervals) },
   };
 }
 
@@ -202,5 +204,36 @@ describe("userProductivityByStageReport — schema", () => {
         kinds: [OrderStageIntervalKind.WAIT_BEFORE_TYPING],
       }).success
     ).toBe(false);
+  });
+});
+
+describe("userProductivityByStageReport — clinic scoping", () => {
+  const CLINIC = "00000000-0000-4000-8000-000000000010";
+
+  it("narrows to the context clinic via the order relation when ctx.clinicId is set", async () => {
+    const client = fakeClient([]);
+    await userProductivityByStageReport.run(
+      { client: client as never, organizationId: ORG_ID, clinicId: CLINIC },
+      window
+    );
+    const call = client.orderStageInterval.findMany.mock.calls[0]?.[0] as unknown as {
+      where: Record<string, unknown>;
+    };
+    expect(call.where["organizationId"]).toBe(ORG_ID);
+    // Regression: without this filter, a clinic-scoped operator saw
+    // the whole org's productivity numbers.
+    expect(call.where["order"]).toEqual({ clinicId: CLINIC });
+  });
+
+  it("omits the clinic filter for org-wide contexts", async () => {
+    const client = fakeClient([]);
+    await userProductivityByStageReport.run(
+      { client: client as never, organizationId: ORG_ID },
+      window
+    );
+    const call = client.orderStageInterval.findMany.mock.calls[0]?.[0] as unknown as {
+      where: Record<string, unknown>;
+    };
+    expect(call.where["order"]).toBeUndefined();
   });
 });

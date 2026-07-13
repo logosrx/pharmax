@@ -241,7 +241,7 @@ export default async function PatientAdminSearchPage({
                         </>
                       ) : null}
                       {row.phiDecryptErrors ? (
-                        <span className="text-red-400"> · decrypt errors</span>
+                        <span className="text-tone-danger-accent"> · decrypt errors</span>
                       ) : null}
                     </div>
                   </LinkCard>

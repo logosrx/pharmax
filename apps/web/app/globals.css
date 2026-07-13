@@ -41,6 +41,18 @@
   --color-iris-900: #383280;
   --color-iris-950: #221d4c;
 
+  /* Micro type — for dense chrome (kbd hints, sidebar section labels,
+     badge counts). Font-size only (no --line-height pair) so callers
+     keep their inherited leading, exactly like the old text-[10px] /
+     text-[11px] arbitrary values these tokens replace. */
+  --text-2xs: 0.6875rem; /* 11px */
+  --text-3xs: 0.625rem; /* 10px */
+
+  /* Letterspacing for uppercase micro-labels (eyebrows, section
+     headers, sidebar groups). One token so all caps-labels track the
+     same instead of per-file 0.14/0.16/0.18em drift. */
+  --tracking-caps: 0.16em;
+
   /* Radii — soft, consistent. */
   --radius-xs: 0.25rem;
   --radius-sm: 0.375rem;
@@ -83,6 +95,32 @@
   --color-brand-fg: var(--brand-fg);
   --color-brand-subtle: var(--brand-subtle);
   --color-ring: var(--ring);
+
+  /* Tone text colors — status/workflow signalling (badges, banners,
+     go/danger buttons, stat accents). The 500-based background TINTS
+     (e.g. `bg-emerald-500/12`) read fine on both themes, but tone TEXT
+     must flip: light-on-dark shades (-200/-300/-400) in dark mode,
+     dark-on-light shades (-600/-700/-800) in light mode. Three roles:
+       tone-X         → default tone text (badges, stats, inline notes)
+       tone-X-strong  → higher-contrast text (button labels, banner body)
+       tone-X-accent  → icons, dots, asterisks */
+  --color-tone-brand: var(--tone-brand);
+  --color-tone-success: var(--tone-success);
+  --color-tone-success-strong: var(--tone-success-strong);
+  --color-tone-success-accent: var(--tone-success-accent);
+  --color-tone-warning: var(--tone-warning);
+  --color-tone-warning-strong: var(--tone-warning-strong);
+  --color-tone-warning-accent: var(--tone-warning-accent);
+  --color-tone-danger: var(--tone-danger);
+  --color-tone-danger-strong: var(--tone-danger-strong);
+  --color-tone-danger-accent: var(--tone-danger-accent);
+  --color-tone-info: var(--tone-info);
+  --color-tone-info-strong: var(--tone-info-strong);
+  --color-tone-info-accent: var(--tone-info-accent);
+  --color-tone-violet: var(--tone-violet);
+  --color-tone-violet-accent: var(--tone-violet-accent);
+  --color-tone-cyan: var(--tone-cyan);
+  --color-tone-cyan-accent: var(--tone-cyan-accent);
 }
 
 /* ---- Dark theme (default) ---- */
@@ -105,6 +143,27 @@
   --brand-subtle: #1a1838;
 
   --ring: #8483f8;
+
+  /* Tone text — light shades for dark surfaces. Values are the
+     Tailwind palette (-200/-300/-400 shades), inlined because unused
+     default-theme variables are tree-shaken and can't be referenced. */
+  --tone-brand: #c7cbfe; /* iris-200 */
+  --tone-success: oklch(84.5% 0.143 164.978); /* emerald-300 */
+  --tone-success-strong: oklch(90.5% 0.093 164.15); /* emerald-200 */
+  --tone-success-accent: oklch(76.5% 0.177 163.223); /* emerald-400 */
+  --tone-warning: oklch(87.9% 0.169 91.605); /* amber-300 */
+  --tone-warning-strong: oklch(92.4% 0.12 95.746); /* amber-200 */
+  --tone-warning-accent: oklch(82.8% 0.189 84.429); /* amber-400 */
+  --tone-danger: oklch(80.8% 0.114 19.571); /* red-300 */
+  --tone-danger-strong: oklch(88.5% 0.062 18.334); /* red-200 */
+  --tone-danger-accent: oklch(70.4% 0.191 22.216); /* red-400 */
+  --tone-info: oklch(82.8% 0.111 230.318); /* sky-300 */
+  --tone-info-strong: oklch(90.1% 0.058 230.902); /* sky-200 */
+  --tone-info-accent: oklch(74.6% 0.16 232.661); /* sky-400 */
+  --tone-violet: oklch(81.1% 0.111 293.571); /* violet-300 */
+  --tone-violet-accent: oklch(70.2% 0.183 293.541); /* violet-400 */
+  --tone-cyan: oklch(86.5% 0.127 207.078); /* cyan-300 */
+  --tone-cyan-accent: oklch(78.9% 0.154 211.53); /* cyan-400 */
 }
 
 /* ---- Light theme ---- */
@@ -127,6 +186,26 @@
   --brand-subtle: #eef0ff;
 
   --ring: #6b66f1;
+
+  /* Tone text — dark shades for light surfaces (-600/-700/-800), so
+     status text stays readable on the pale 500-based tints. */
+  --tone-brand: #4d3fc9; /* iris-700 */
+  --tone-success: oklch(50.8% 0.118 165.612); /* emerald-700 */
+  --tone-success-strong: oklch(43.2% 0.095 166.913); /* emerald-800 */
+  --tone-success-accent: oklch(59.6% 0.145 163.225); /* emerald-600 */
+  --tone-warning: oklch(55.5% 0.163 48.998); /* amber-700 */
+  --tone-warning-strong: oklch(47.3% 0.137 46.201); /* amber-800 */
+  --tone-warning-accent: oklch(66.6% 0.179 58.318); /* amber-600 */
+  --tone-danger: oklch(50.5% 0.213 27.518); /* red-700 */
+  --tone-danger-strong: oklch(44.4% 0.177 26.899); /* red-800 */
+  --tone-danger-accent: oklch(57.7% 0.245 27.325); /* red-600 */
+  --tone-info: oklch(50% 0.134 242.749); /* sky-700 */
+  --tone-info-strong: oklch(44.3% 0.11 240.79); /* sky-800 */
+  --tone-info-accent: oklch(58.8% 0.158 241.966); /* sky-600 */
+  --tone-violet: oklch(49.1% 0.27 292.581); /* violet-700 */
+  --tone-violet-accent: oklch(54.1% 0.281 293.009); /* violet-600 */
+  --tone-cyan: oklch(52% 0.105 223.128); /* cyan-700 */
+  --tone-cyan-accent: oklch(60.9% 0.126 221.723); /* cyan-600 */
 }
 
 @layer base {

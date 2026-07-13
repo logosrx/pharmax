@@ -132,6 +132,24 @@ function buildPrismaFake(): { client: unknown; calls: FakeCall[] } {
         calls.push({ table: "idempotencyKey", op: "create", args });
         return { id: "idem-1" };
       }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "idempotencyKey", op: "findUnique", args });
+        return null;
+      }),
+    },
+    commandLog: {
+      create: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "create", args });
+        return { id: (args as { data: { id: string } }).data.id };
+      }),
+      update: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "update", args });
+        return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "findUnique", args });
+        return null;
+      }),
     },
     auditLog: {
       create: vi.fn(async (args: unknown) => {

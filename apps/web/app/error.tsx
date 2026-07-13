@@ -44,7 +44,7 @@ export default function SegmentError({ error, reset }: ErrorBoundaryProps) {
 
   return (
     <main className="mx-auto flex max-w-lg flex-col items-center gap-4 px-6 py-20 text-center">
-      <span className="flex h-12 w-12 items-center justify-center rounded-full border border-red-500/30 bg-red-500/10 text-red-400">
+      <span className="flex h-12 w-12 items-center justify-center rounded-full border border-red-500/30 bg-red-500/10 text-tone-danger-accent">
         <Icon name="alert" size={22} />
       </span>
       <div className="space-y-1.5">

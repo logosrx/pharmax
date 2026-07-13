@@ -137,11 +137,21 @@ export function createPushInvoiceToStripeHandler(
 
   return async (row, ctx): Promise<void> => {
     if (stripePort === null) {
-      billingStripePushCounter.add(1, { outcome: "skipped" });
-      ctx.logger.info("outbox.billing.invoice.finalized.v1 skipped (stripe not configured)", {
-        outboxId: row.id,
+      // Stripe is NOT configured but a finalized invoice needs to be
+      // pushed. This must FAIL (retry/backoff → DEAD, visible in the
+      // dead-letter dashboard), not silently succeed: marking the
+      // row DISPATCHED permanently discarded the push — invoices sat
+      // OPEN with stripeInvoiceId=null forever, customers were never
+      // billed, and re-finalizing emitted no new event to recover.
+      // The retry window also means a worker booted briefly without
+      // STRIPE_SECRET_KEY self-heals once the env var is fixed.
+      billingStripePushCounter.add(1, { outcome: "not_configured" });
+      throw new errors.InternalError({
+        code: "STRIPE_PUSH_NOT_CONFIGURED",
+        message:
+          "billing.invoice.finalized.v1 received but STRIPE_SECRET_KEY is not configured; the invoice cannot reach Stripe. Configure Stripe (row retries with backoff) or resolve the row manually.",
+        metadata: { outboxId: row.id },
       });
-      return;
     }
 
     const payload = (row.payload ?? {}) as Record<string, unknown>;

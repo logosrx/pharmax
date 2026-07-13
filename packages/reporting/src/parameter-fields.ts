@@ -43,6 +43,14 @@ export interface ReportDateField extends BaseField {
   readonly kind: "date";
   /** Pre-fill value for the `<input type=date>`. */
   readonly defaultValue?: ReportDateFieldDefault;
+  /**
+   * Anchor the parsed Date at the END of the selected day
+   * (23:59:59.999Z) instead of midnight. REQUIRED for window-end
+   * fields: reports filter `lte: to`, so a midnight-anchored end
+   * date excluded the entire selected day — "July 1 to July 1"
+   * returned rows only from the exact first millisecond of the day.
+   */
+  readonly endOfDay?: boolean;
 }
 
 export interface ReportEnumOption {
@@ -109,6 +117,8 @@ export function dateRangeFields(
       required: true,
       help: "End of the report window (inclusive).",
       defaultValue: options.toDefault ?? "today",
+      // Include the FULL selected end day (see ReportDateField.endOfDay).
+      endOfDay: true,
     },
   ];
 }

@@ -20,8 +20,21 @@
   [+] Added foreign key on columns (recordedByUserId)
   [+] Added foreign key on columns (commandLogId)
 
+[*] Changed the `auth_session` table
+  [-] Removed foreign key on columns (organizationId)
+  [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
+  [+] Added foreign key on columns (organizationId)
+
 [*] Changed the `invoice` table
   [*] Renamed index `invoice_stripeChargeId_unique` to `invoice_stripeChargeId_key`
+
+[*] Changed the `login_attempt` table
+  [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
+
+[*] Changed the `mfa_enrollment` table
+  [-] Removed foreign key on columns (organizationId)
+  [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
+  [+] Added foreign key on columns (organizationId)
 
 [*] Changed the `notification_delivery` table
   [-] Removed foreign key on columns (organizationId)
@@ -44,6 +57,16 @@
   [*] Renamed index `package_photo_upload_token_org_createdAt_idx` to `package_photo_upload_token_organizationId_createdAt_idx`
   [*] Renamed index `package_photo_upload_token_org_uploadedByUserId_idx` to `package_photo_upload_token_organizationId_uploadedByUserId_idx`
 
+[*] Changed the `password_history` table
+  [-] Removed foreign key on columns (organizationId)
+  [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
+  [+] Added foreign key on columns (organizationId)
+
+[*] Changed the `password_reset_token` table
+  [-] Removed foreign key on columns (organizationId)
+  [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
+  [+] Added foreign key on columns (organizationId)
+
 [*] Changed the `pricing_rule` table
   [*] Renamed index `pricing_rule_clinic_idx` to `pricing_rule_organizationId_clinicId_idx`
   [*] Renamed index `pricing_rule_resolver_idx` to `pricing_rule_organizationId_kind_status_effectiveFrom_idx`
@@ -61,6 +84,11 @@
   [*] Renamed index `provider_sync_review_item_organizationId_kind_status_disc_idx` to `provider_sync_review_item_organizationId_kind_status_discov_idx`
   [*] Renamed index `provider_sync_review_item_organizationId_resolver_idx` to `provider_sync_review_item_organizationId_resolvedByUserId_r_idx`
   [*] Renamed index `provider_sync_review_item_organizationId_status_disc_idx` to `provider_sync_review_item_organizationId_status_discoveredA_idx`
+
+[*] Changed the `recovery_code` table
+  [-] Removed foreign key on columns (organizationId)
+  [*] Altered column `id` (default changed from `Some(DbGenerated(Some("gen_random_uuid()")))` to `None`)
+  [+] Added foreign key on columns (organizationId)
 
 [*] Changed the `report_run` table
   [-] Removed foreign key on columns (commandLogId)

@@ -110,6 +110,29 @@ const schema = z.object({
   // can be omitted (bootstrap.ts ignores it under NODE_ENV=production).
   PHARMAX_LOCAL_KMS_SEED: z.string().min(32).optional(),
 
+  // Password pepper for the in-house identity engine (ADR-0030),
+  // base64-encoded, mixed into Argon2id as the `secret` input. Unlike
+  // the per-hash salt, it is NOT stored with the hash — a database-only
+  // breach cannot verify passwords without it. Server-only secret,
+  // sourced from Secrets Manager in production. Optional in dev/test
+  // (the hasher runs without a pepper); bootstrap warns in production
+  // when unset.
+  AUTH_PASSWORD_PEPPER: z.string().min(32).optional(),
+
+  // Canonical base URL for credential-setup links (invite / password
+  // reset). e.g. "https://app.pharmax.example". Optional; dev defaults
+  // to http://localhost:3000. The accept-invite / reset routes resolve
+  // the user from the token (not the host), so a single canonical host
+  // is fine.
+  APP_BASE_URL: z.string().url().optional(),
+
+  // Transactional email transport for auth credential-setup messages
+  // (invite / password reset). Matches the worker's var names so a
+  // single deployment shares one Resend key + from-address. Optional:
+  // dev logs the link instead of sending; production warns if unset.
+  RESEND_API_KEY: z.string().min(1).optional(),
+  NOTIFICATION_FROM_EMAIL: z.string().email().optional(),
+
   // ---- AWS KMS (production envelope encryption) -------------------
   //
   // In NODE_ENV=production, bootstrap.ts wires an AwsKmsAdapter. The

@@ -159,7 +159,7 @@ export default async function DashboardPage() {
         </Banner>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 @3xl:grid-cols-4">
         <Stat
           label="In-flight orders"
           value={inFlight}
@@ -192,7 +192,7 @@ export default async function DashboardPage() {
 
       <Section title="Workflow pipeline" aside="Live queue depth, in flow order">
         <Card>
-          <div className="flex flex-col gap-2 p-3 sm:flex-row sm:items-stretch sm:gap-0">
+          <div className="flex flex-col gap-2 p-3 @2xl:flex-row @2xl:items-stretch @2xl:gap-0">
             {STAGES.map((stage, i) => {
               const count = stageCount(stage.codes);
               const permitted = hasOperatorPermission(permissions, stage.requires);
@@ -234,7 +234,7 @@ export default async function DashboardPage() {
                     <Icon
                       name="chevronRight"
                       size={16}
-                      className="hidden shrink-0 text-subtle sm:block"
+                      className="hidden shrink-0 text-subtle @2xl:block"
                     />
                   ) : null}
                 </div>
@@ -244,8 +244,8 @@ export default async function DashboardPage() {
         </Card>
       </Section>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
-        <Section title="Emergency bucket" className="lg:col-span-3">
+      <div className="grid grid-cols-1 gap-6 @4xl:grid-cols-5">
+        <Section title="Emergency bucket" className="@4xl:col-span-3">
           {!canSeeEmergency ? (
             <EmptyState
               icon="shield"
@@ -298,7 +298,7 @@ export default async function DashboardPage() {
           )}
         </Section>
 
-        <Section title="Jump back in" className="lg:col-span-2">
+        <Section title="Jump back in" className="@4xl:col-span-2">
           {quickActions.length === 0 ? (
             <EmptyState
               icon="check"

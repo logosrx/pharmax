@@ -50,6 +50,7 @@ async function main(): Promise<void> {
     host: env.PRINT_AGENT_PRINTER_HOST,
     port: env.PRINT_AGENT_PRINTER_PORT,
     timeoutMs: env.PRINT_AGENT_PRINTER_TIMEOUT_MS,
+    verifyStatus: env.PRINT_AGENT_VERIFY_STATUS,
   });
 
   logger.info("print-agent.boot", {

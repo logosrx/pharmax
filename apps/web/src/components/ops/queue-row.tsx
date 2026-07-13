@@ -80,7 +80,7 @@ export function QueueRow({
                 </span>
               ) : null}
             </div>
-            {note ? <div className="text-xs text-amber-300/90">{note}</div> : null}
+            {note ? <div className="text-xs text-tone-warning/90">{note}</div> : null}
           </div>
           {headerExtra ? <div className="flex items-center gap-2">{headerExtra}</div> : null}
         </div>

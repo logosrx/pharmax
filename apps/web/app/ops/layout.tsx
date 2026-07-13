@@ -11,10 +11,11 @@
 //     `proxy.ts`); the not-provisioned / inactive states render a
 //     calm, branded message instead of throwing.
 
-import { UserButton } from "@clerk/nextjs";
 import type { ReactNode } from "react";
 
 import { PERMISSIONS, type PermissionCode } from "@pharmax/rbac";
+
+import { SignOutButton } from "../../src/components/auth/sign-out-button.js";
 
 import {
   hasOperatorPermission,
@@ -187,12 +188,7 @@ const COUNT_BUCKET_CODES = ["INBOX", "TYPING", "PV1", "FILL", "FINAL"] as const;
 function ShellMessage({ title, body }: { readonly title: string; readonly body: string }) {
   return (
     <main className="mx-auto flex min-h-screen max-w-lg flex-col items-center justify-center px-6">
-      <EmptyState
-        icon="shield"
-        title={title}
-        description={body}
-        action={<UserButton afterSignOutUrl="/sign-in" />}
-      />
+      <EmptyState icon="shield" title={title} description={body} action={<SignOutButton />} />
     </main>
   );
 }
@@ -266,13 +262,16 @@ export default async function OpsLayout({ children }: Readonly<{ children: React
           <div className="ml-auto flex items-center gap-3">
             <div className="hidden text-right leading-tight sm:block">
               <div className="text-sm font-medium text-fg">{result.operator.displayName}</div>
-              <div className="text-[11px] text-subtle">{result.operator.email}</div>
+              <div className="text-2xs text-subtle">{result.operator.email}</div>
             </div>
             <ThemeToggle />
-            <UserButton afterSignOutUrl="/sign-in" />
+            <SignOutButton />
           </div>
         </header>
-        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
+        {/* The content pane is a container-query root: page grids size
+            against the pane (which the sidebar eats into), not the
+            viewport, via @sm/@3xl/… variants. */}
+        <main className="@container mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
           {children}
         </main>
       </div>

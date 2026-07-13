@@ -86,7 +86,20 @@ function buildPrismaFake(input: {
         return input.reportRunCreateResult ?? { id: "rr-1" };
       }),
     },
-    commandLog: { create: vi.fn(async () => ({ id: "cl-1" })) },
+    commandLog: {
+      create: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "create", args });
+        return { id: "cl-1" };
+      }),
+      update: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "update", args });
+        return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "findUnique", args });
+        return null;
+      }),
+    },
     auditLog: {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "auditLog", op: "create", args });
@@ -107,7 +120,13 @@ function buildPrismaFake(input: {
         return { count: 1 };
       }),
     },
-    idempotencyKey: { create: vi.fn(async () => ({ ok: true })) },
+    idempotencyKey: {
+      create: vi.fn(async () => ({ ok: true })),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "idempotencyKey", op: "findUnique", args });
+        return null;
+      }),
+    },
     $executeRaw: vi.fn(async () => 0),
   };
 
@@ -369,7 +388,11 @@ describe("RunReport — read-replica scope routing", () => {
           }),
         },
         reportRun: { create: vi.fn(async () => ({ id: "rr-scope" })) },
-        commandLog: { create: vi.fn(async () => ({ id: "cl" })) },
+        commandLog: {
+          create: vi.fn(async () => ({ id: "cl" })),
+          update: vi.fn(async () => ({ ok: true })),
+          findUnique: vi.fn(async () => null),
+        },
         auditLog: { create: vi.fn(async () => ({ id: "al" })) },
         auditChainState: {
           findUnique: vi.fn(async () => null),
@@ -380,7 +403,10 @@ describe("RunReport — read-replica scope routing", () => {
           })),
         },
         eventOutbox: { createMany: vi.fn(async () => ({ count: 1 })) },
-        idempotencyKey: { create: vi.fn(async () => ({ ok: true })) },
+        idempotencyKey: {
+          create: vi.fn(async () => ({ ok: true })),
+          findUnique: vi.fn(async () => null),
+        },
         $executeRaw: vi.fn(async () => 0),
       });
     configureBus(fake.client);

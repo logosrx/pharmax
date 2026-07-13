@@ -151,7 +151,7 @@ export default async function ReportSchedulesAdminPage({
                     {row.lastRunStatus ?? "never"}
                   </Badge>
                   {row.lastRunErrorCode !== null ? (
-                    <div className="mt-1 text-xs text-red-300">
+                    <div className="mt-1 text-xs text-tone-danger">
                       <code>{row.lastRunErrorCode}</code>
                     </div>
                   ) : null}

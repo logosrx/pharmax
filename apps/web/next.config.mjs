@@ -39,6 +39,11 @@ const nextConfig = {
     "@prisma/client",
     "@prisma/adapter-pg",
     "pg",
+    // @pharmax/auth's Argon2id hasher uses @node-rs/argon2, which loads
+    // a platform-specific native .node binary that webpack cannot
+    // bundle. Keep it external so it's required from node_modules at
+    // runtime (and traced into the standalone output).
+    "@node-rs/argon2",
   ],
   // Workspace packages publish TypeScript source via `main`/`types`
   // pointing at `src/index.ts`. Next must transpile them.
@@ -60,7 +65,7 @@ const nextConfig = {
   // `--webpack` flag in package.json scripts. The webpack config below
   // is what makes `./foo.js` resolve to `./foo.ts` at the bundler
   // boundary.
-  webpack(config) {
+  webpack(config, { isServer }) {
     config.resolve = config.resolve ?? {};
     config.resolve.extensionAlias = {
       ...(config.resolve.extensionAlias ?? {}),
@@ -68,6 +73,15 @@ const nextConfig = {
       ".jsx": [".tsx", ".jsx"],
       ".mjs": [".mts", ".mjs"],
     };
+    // `serverExternalPackages` does not externalize imports coming from
+    // transpiled workspace source (externalDir), so @pharmax/auth's
+    // import of @node-rs/argon2 still gets bundled — and webpack cannot
+    // parse its native .node binary. Externalize it explicitly for the
+    // server compilation; file tracing still copies it into standalone.
+    if (isServer) {
+      config.externals = config.externals ?? [];
+      config.externals.push({ "@node-rs/argon2": "commonjs @node-rs/argon2" });
+    }
     return config;
   },
 };

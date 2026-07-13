@@ -30,4 +30,47 @@ describe("renderVialLabelZpl", () => {
     expect(zpl).toContain(sampleInput.barcodeValue);
     expect(zpl).not.toContain("{{");
   });
+
+  it("neutralizes ZPL control characters in field data (^ and ~ cannot inject commands)", () => {
+    // Regression: a SIG containing a literal "^FS" terminated the
+    // field early and the remaining text executed as ZPL commands.
+    const zpl = renderVialLabelZpl(DEFAULT_VIAL_ZPL_TEMPLATE, {
+      ...sampleInput,
+      sigText: "Take 1 daily ^FS^XZ evil",
+      drugName: "Weird~Drug^Name",
+    });
+    // The injected sequence must not survive as ZPL-active bytes...
+    expect(zpl).not.toContain("^FS^XZ evil");
+    expect(zpl).not.toContain("Weird~Drug^Name");
+    // ...but the template's own structure is intact.
+    expect(zpl.startsWith("^XA")).toBe(true);
+    expect(zpl.endsWith("^XZ")).toBe(true);
+  });
+
+  it("collapses newlines in field data", () => {
+    const zpl = renderVialLabelZpl(DEFAULT_VIAL_ZPL_TEMPLATE, {
+      ...sampleInput,
+      sigText: "Line one\nLine two\r\nLine three",
+    });
+    expect(zpl).toContain("Line one Line two Line three");
+  });
+
+  it("truncates over-length fields so they cannot overflow into the barcode area", () => {
+    const longSig = "Inject one full syringe subcutaneously into the ".repeat(5);
+    const zpl = renderVialLabelZpl(DEFAULT_VIAL_ZPL_TEMPLATE, {
+      ...sampleInput,
+      sigText: longSig,
+    });
+    expect(zpl).not.toContain(longSig);
+    expect(zpl).toContain("…");
+  });
+
+  it("rejects barcode values carrying ZPL-active characters instead of altering them", () => {
+    expect(() =>
+      renderVialLabelZpl(DEFAULT_VIAL_ZPL_TEMPLATE, {
+        ...sampleInput,
+        barcodeValue: "PX:^XZ-corrupted",
+      })
+    ).toThrowError(/ZPL control characters/);
+  });
 });

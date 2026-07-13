@@ -89,6 +89,7 @@ interface AuditLogCreateData {
   readonly prevHash: Buffer | null;
   readonly entryHash: Buffer;
   readonly seq: bigint;
+  readonly occurredAt: Date;
 }
 
 interface AuditChainStateUpsertData {
@@ -160,7 +161,12 @@ export async function writeAuditLogInTx(
   });
   const entryHash = Buffer.from(entryHashBytes);
 
-  // 4. Insert the audit_log row.
+  // 4. Insert the audit_log row. `occurredAt` MUST be persisted
+  //    explicitly: it is part of the hashed preimage (step 3), and
+  //    leaving it to the column's `@default(now())` stores a
+  //    timestamp a few milliseconds after the one that was hashed —
+  //    the verifier then recomputes from the stored value and
+  //    reports a false tamper mismatch on untampered rows.
   await tx.auditLog.create({
     data: {
       organizationId: input.organizationId,
@@ -173,6 +179,7 @@ export async function writeAuditLogInTx(
       prevHash,
       entryHash,
       seq,
+      occurredAt: input.occurredAt,
     },
   });
 

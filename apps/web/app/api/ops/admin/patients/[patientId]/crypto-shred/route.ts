@@ -9,11 +9,17 @@
 // RBAC enforced by the command (`patients.crypto_shred` — granted
 // to OrgAdmin only by default). Double-shred is rejected by the
 // command with PATIENT_ALREADY_SHREDDED.
+//
+// MFA: dispatched through `dispatchOpsCommandWithMfa` — this is the
+// single most destructive PHI action in the product, so it carries
+// the same MFA floor as the privileged billing/admin writes. An
+// OrgAdmin session without an enrolled second factor is redirected
+// with MFA_REQUIRED instead of shredding.
 
 import { CRYPTO_SHRED_REASONS, type CryptoShredReason } from "@pharmax/crypto";
 import { CryptoShredPatient } from "@pharmax/patients";
 
-import { dispatchOpsCommand } from "../../../../../../../src/server/ops/dispatch-from-route.js";
+import { dispatchOpsCommandWithMfa } from "../../../../../../../src/server/auth/dispatch-ops-with-mfa.js";
 
 interface RouteParams {
   readonly params: Promise<{ readonly patientId: string }>;
@@ -28,7 +34,7 @@ function readString(body: FormData | Record<string, unknown>, key: string): stri
 
 export async function POST(request: Request, context: RouteParams): Promise<Response> {
   const { patientId } = await context.params;
-  return await dispatchOpsCommand({
+  return await dispatchOpsCommandWithMfa({
     request,
     command: CryptoShredPatient,
     idempotencyKeyPrefix: `route:crypto-shred:${patientId}`,

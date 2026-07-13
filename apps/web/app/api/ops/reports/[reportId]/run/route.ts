@@ -11,7 +11,7 @@
 // tenancy build + Sentry scope manually so the wiring stays
 // consistent with the rest of the operator surface.
 
-import { executeCommand } from "@pharmax/command-bus";
+import { executeCommand, fingerprintRequest } from "@pharmax/command-bus";
 import { errors, ids } from "@pharmax/platform-core";
 import {
   dateRangeFields,
@@ -80,18 +80,22 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
     actor: { userId: session.tenancy.actor.userId, correlationId: ids.generateUlid() },
   });
 
-  // Minute-bucketed idempotency. Two refreshes of the same form
-  // within a minute return the same audit row + CSV; a fresh
-  // run on the same params at minute 2 writes a new report_run.
+  // Minute-bucketed idempotency, keyed by the PARSED PARAMETERS as
+  // well as the report id. Two refreshes of the same form within a
+  // minute return the same audit row + CSV; running the SAME report
+  // with a DIFFERENT date range (or any other parameter change)
+  // inside the same minute is a new key and executes normally —
+  // without the fingerprint the second run collided with the first
+  // and redirected with a payload-mismatch error instead of
+  // downloading the CSV.
   const minuteBucket = Math.floor(Date.now() / 60_000);
-  const idempotencyKey = `route:run-report:${reportId}:${minuteBucket}`;
+  const idempotencyKey = `route:run-report:${reportId}:${fingerprintRequest(parameters)}:${minuteBucket}`;
 
   return await withSentryOpsScope(
     {
       operatorUserId: session.operator.userId,
       organizationId: session.tenancy.organizationId,
       operatorDisplayName: session.operator.displayName,
-      clerkUserId: session.operator.clerkUserId,
       commandName: "RunReport",
       route: `route:run-report:${reportId}`,
     },

@@ -2,26 +2,28 @@
 //
 // Each tick:
 //   1. Atomically claims and leases up to `batchSize` eligible rows.
-//   2. For each row: routes to a handler from the registry, or treats
-//      the row as a no-op success when no handler is registered.
+//   2. For each row: routes to a handler from the registry. A row
+//      with NO registered handler is a FAILURE (retry/backoff →
+//      DEAD), never a silent success — marking it DISPATCHED would
+//      permanently discard the event with no replay path.
 //   3. On success: marks DISPATCHED and clears nextAttemptAt/lastError.
 //      On handler error: marks FAILED with exponential backoff up to
 //      `maxAttempts`, after which the row is marked DEAD (terminal).
 //
-// "No handler registered" is logged at WARN to surface mis-wired
-// commands during dev, but is treated as success so the outbox doesn't
-// accumulate. When a handler is registered later, future events of
-// that type will be routed correctly. Past DISPATCHED rows are not
-// re-dispatched; that is the responsibility of an admin-driven
-// re-publish flow which is out of scope for Phase 1.
+// Completion writes are fenced on the claim's `attempts` token so a
+// handler that outlives its lease cannot overwrite the status of a
+// row another worker has since re-claimed (see markDispatched).
 
-import type { PrismaClient, EventOutbox, OutboxStatus } from "@pharmax/database";
+import type { PrismaClient, OutboxStatus } from "@pharmax/database";
 import type { logger as loggerContract } from "@pharmax/platform-core";
 import { getMeter } from "@pharmax/telemetry";
 
 import { claimOutboxEvents } from "./claim-outbox-events.js";
 import type { ClaimOutboxEventsOptions, OutboxClaimClient } from "./claim-outbox-events.js";
-import { outboxHandlers as defaultHandlers } from "./outbox-handlers.js";
+import {
+  outboxHandlers as defaultHandlers,
+  REQUIRED_HANDLER_EVENT_TYPES,
+} from "./outbox-handlers.js";
 import type { OutboxHandlerMap } from "./outbox-handlers.js";
 import type { ClaimedOutboxEventRow } from "./row-types.js";
 
@@ -53,6 +55,13 @@ export interface OutboxDrainerDeps {
   readonly maxAttempts?: number;
   readonly clock?: () => Date;
   readonly computeNextAttemptAt?: (attempt: number, now: Date) => Date | null;
+  /**
+   * Event types that MUST have a handler; a row of one of these
+   * types with no registered handler fails (retry → DEAD) instead
+   * of being silently marked DISPATCHED. Defaults to
+   * `REQUIRED_HANDLER_EVENT_TYPES`.
+   */
+  readonly requiredHandlerEventTypes?: ReadonlySet<string>;
 }
 
 export type OutboxDrainerOptions = ClaimOutboxEventsOptions;
@@ -62,6 +71,13 @@ export interface OutboxDrainerTickResult {
   readonly dispatched: number;
   readonly failed: number;
   readonly dead: number;
+  /**
+   * Rows whose completion update matched nothing because another
+   * worker re-claimed the row after this worker's lease expired
+   * (fenced write — see markDispatched/markFailed). The re-claimer
+   * owns the row's final status; this worker's outcome is discarded.
+   */
+  readonly leaseLost: number;
 }
 
 const DEFAULT_MAX_ATTEMPTS = 8;
@@ -93,6 +109,7 @@ export function createOutboxDrainer(
   const handlers = deps.handlers ?? defaultHandlers;
   const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const computeNextAttemptAt = deps.computeNextAttemptAt ?? defaultBackoff;
+  const requiredHandlerEventTypes = deps.requiredHandlerEventTypes ?? REQUIRED_HANDLER_EVENT_TYPES;
 
   return {
     async tick(): Promise<OutboxDrainerTickResult> {
@@ -100,7 +117,7 @@ export function createOutboxDrainer(
 
       if (claimedRows.length === 0) {
         log.debug("drain.idle");
-        return { claimed: 0, dispatched: 0, failed: 0, dead: 0 };
+        return { claimed: 0, dispatched: 0, failed: 0, dead: 0, leaseLost: 0 };
       }
 
       log.info("drain.claimed", { count: claimedRows.length });
@@ -108,6 +125,7 @@ export function createOutboxDrainer(
       let dispatched = 0;
       let failed = 0;
       let dead = 0;
+      let leaseLost = 0;
 
       for (const row of claimedRows) {
         const handler = handlers[row.eventType];
@@ -129,12 +147,41 @@ export function createOutboxDrainer(
 
         try {
           if (handler === undefined) {
+            if (requiredHandlerEventTypes.has(row.eventType)) {
+              // This event's side effect is load-bearing. Treating a
+              // missing handler as success would permanently discard
+              // it: rows marked DISPATCHED are never replayed, so
+              // wiring the handler later cannot recover the missed
+              // side effects (this is exactly how emergency-
+              // escalation alerts silently vanished). Route through
+              // the retry/backoff path — the row stays visible
+              // (FAILED, then DEAD with a clear lastError) and an
+              // admin re-publish can replay it once the handler
+              // ships.
+              throw new Error(
+                `No outbox handler registered for REQUIRED event type "${row.eventType}"`
+              );
+            }
+            // Benign no-op: an event with no consumer yet.
             rowLog.warn("drain.row.no_handler_registered");
           } else {
             await handler(row, { logger: rowLog, receivedAt: row.createdAt });
           }
 
-          await markDispatched(deps.client, row.id, clock());
+          const fenced = await markDispatched(deps.client, {
+            id: row.id,
+            attempts: row.attempts,
+            dispatchedAt: clock(),
+          });
+          if (!fenced) {
+            leaseLost += 1;
+            outboxDispatchedCounter.add(1, { ...eventTypeLabel, outcome: "lease_lost" });
+            rowLog.warn("drain.row.lease_lost", {
+              detail:
+                "handler outlived the claim lease; another worker re-claimed the row and owns its final status",
+            });
+            continue;
+          }
           dispatched += 1;
           outboxDispatchedCounter.add(1, { ...eventTypeLabel, outcome: "success" });
           rowLog.info("drain.row.dispatched");
@@ -144,12 +191,22 @@ export function createOutboxDrainer(
             row.attempts >= maxAttempts ? null : computeNextAttemptAt(row.attempts, failedAt);
           const terminal = nextAttemptAt === null;
 
-          await markFailed(deps.client, {
+          const fenced = await markFailed(deps.client, {
             id: row.id,
+            attempts: row.attempts,
             status: terminal ? "DEAD" : "FAILED",
             lastError: describeError(cause),
             nextAttemptAt,
           });
+          if (!fenced) {
+            leaseLost += 1;
+            outboxDispatchedCounter.add(1, { ...eventTypeLabel, outcome: "lease_lost" });
+            rowLog.warn("drain.row.lease_lost", {
+              detail:
+                "handler outlived the claim lease; another worker re-claimed the row and owns its final status",
+            });
+            continue;
+          }
 
           if (terminal) {
             dead += 1;
@@ -174,48 +231,72 @@ export function createOutboxDrainer(
         dispatched,
         failed,
         dead,
+        leaseLost,
       });
 
-      return { claimed: claimedRows.length, dispatched, failed, dead };
+      return { claimed: claimedRows.length, dispatched, failed, dead, leaseLost };
     },
   };
 }
 
+// Completion writes are FENCED on the claim's `attempts` value.
+//
+// The claim bumps `attempts` atomically, so `attempts` acts as a
+// lease token: if this worker's handler outlives the lease and a
+// second worker re-claims the row, the second claim bumps
+// `attempts` again and THIS worker's completion update matches zero
+// rows. Without the fence, whichever worker finished LAST silently
+// overwrote the other's status — a slow handler could flip a row
+// another worker had already retried (or vice versa), and both
+// workers' side effects raced with no record of the duplication.
+
+interface MarkDispatchedInput {
+  readonly id: string;
+  /** Claim-time attempts value — the fence token. */
+  readonly attempts: number;
+  readonly dispatchedAt: Date;
+}
+
+/** Returns false when the fence missed (row re-claimed by another worker). */
 async function markDispatched(
   client: Pick<PrismaClient, "eventOutbox">,
-  id: string,
-  dispatchedAt: Date
-): Promise<EventOutbox> {
-  return client.eventOutbox.update({
-    where: { id },
+  input: MarkDispatchedInput
+): Promise<boolean> {
+  const result = await client.eventOutbox.updateMany({
+    where: { id: input.id, attempts: input.attempts },
     data: {
       status: "DISPATCHED",
-      dispatchedAt,
+      dispatchedAt: input.dispatchedAt,
       lastError: null,
       nextAttemptAt: null,
     },
   });
+  return result.count === 1;
 }
 
 interface MarkFailedInput {
   readonly id: string;
+  /** Claim-time attempts value — the fence token. */
+  readonly attempts: number;
   readonly status: Extract<OutboxStatus, "FAILED" | "DEAD">;
   readonly lastError: string;
   readonly nextAttemptAt: Date | null;
 }
 
+/** Returns false when the fence missed (row re-claimed by another worker). */
 async function markFailed(
   client: Pick<PrismaClient, "eventOutbox">,
   input: MarkFailedInput
-): Promise<EventOutbox> {
-  return client.eventOutbox.update({
-    where: { id: input.id },
+): Promise<boolean> {
+  const result = await client.eventOutbox.updateMany({
+    where: { id: input.id, attempts: input.attempts },
     data: {
       status: input.status,
       lastError: input.lastError,
       nextAttemptAt: input.nextAttemptAt,
     },
   });
+  return result.count === 1;
 }
 
 // Re-exported for tests so they can provide a typed claimed-row fixture.

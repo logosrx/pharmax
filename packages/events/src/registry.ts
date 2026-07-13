@@ -116,6 +116,18 @@ import { ShippingPackagePhotoArchivedV1 } from "./events/shipping/package-photo-
 import { ShippingPackagePhotoCapturedV1 } from "./events/shipping/package-photo-captured-v1.js";
 import { ShippingPackagePhotoMatchResolvedV1 } from "./events/shipping/package-photo-match-resolved-v1.js";
 
+// ---- user (phase-6 in-house auth engine) ---------------------------------
+import { UserDeactivatedV1 } from "./events/user/deactivated-v1.js";
+import { UserInviteAcceptedV1 } from "./events/user/invite-accepted-v1.js";
+import { UserInviteIssuedV1 } from "./events/user/invite-issued-v1.js";
+import { UserMfaEnrolledV1 } from "./events/user/mfa-enrolled-v1.js";
+import { UserMfaEnrollmentStartedV1 } from "./events/user/mfa-enrollment-started-v1.js";
+import { UserPasswordChangedV1 } from "./events/user/password-changed-v1.js";
+import { UserPasswordResetRequestedV1 } from "./events/user/password-reset-requested-v1.js";
+import { UserPasswordResetV1 } from "./events/user/password-reset-v1.js";
+import { UserSessionsRevokedV1 } from "./events/user/sessions-revoked-v1.js";
+import { UserSignedInV1 } from "./events/user/signed-in-v1.js";
+
 // ---- workflow (per-tenant policy administration) ------------------------
 import { WorkflowOverlayUpsertedV1 } from "./events/workflow/overlay-upserted-v1.js";
 
@@ -203,6 +215,17 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   ShippingPackagePhotoArchivedV1,
   ShippingPackagePhotoCapturedV1,
   ShippingPackagePhotoMatchResolvedV1,
+  // user (auth engine)
+  UserDeactivatedV1,
+  UserInviteAcceptedV1,
+  UserInviteIssuedV1,
+  UserMfaEnrolledV1,
+  UserMfaEnrollmentStartedV1,
+  UserPasswordChangedV1,
+  UserPasswordResetRequestedV1,
+  UserPasswordResetV1,
+  UserSessionsRevokedV1,
+  UserSignedInV1,
   // workflow
   WorkflowOverlayUpsertedV1,
 ]) as ReadonlyArray<EventDefinition<Record<string, unknown>>>;

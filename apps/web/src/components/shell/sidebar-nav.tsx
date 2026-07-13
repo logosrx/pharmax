@@ -86,7 +86,7 @@ export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup
         {!collapsed ? (
           <div className="leading-tight">
             <div className="text-sm font-semibold tracking-tight text-fg">Pharmax</div>
-            <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-subtle">
+            <div className="text-3xs font-medium uppercase tracking-caps text-subtle">
               Operations
             </div>
           </div>
@@ -97,7 +97,7 @@ export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup
         {groups.map((group) => (
           <div key={group.label} className="space-y-1">
             {!collapsed ? (
-              <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-subtle">
+              <p className="px-2 pb-1 text-3xs font-semibold uppercase tracking-caps text-subtle">
                 {group.label}
               </p>
             ) : (
@@ -134,7 +134,7 @@ export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup
                         "tabular-nums",
                         collapsed
                           ? "absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-brand"
-                          : "inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-line bg-surface-2 px-1.5 text-[11px] font-semibold text-muted"
+                          : "inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-line bg-surface-2 px-1.5 text-2xs font-semibold text-muted"
                       )}
                     >
                       {!collapsed ? (item.count > 99 ? "99+" : item.count) : null}

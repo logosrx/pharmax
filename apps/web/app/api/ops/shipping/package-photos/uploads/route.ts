@@ -142,13 +142,34 @@ export async function POST(request: Request): Promise<Response> {
       return jsonError(400, parsed.code, parsed.message);
     }
 
-    // 5. Hand the bytes to the configured storage adapter.
+    // 5. Hand the bytes to the configured storage adapter. Storage
+    // failures (S3 outage, KMS denial) return the documented typed
+    // JSON error shape so the capture UI can show a retry message —
+    // an uncaught throw here surfaced as a raw 500 with a non-JSON
+    // body the client couldn't render.
     const storage = getPackagePhotoStorage();
-    const upload = await storage.beginUpload({
-      organizationId: tenancy.organizationId,
-      contentType: parsed.contentType,
-      bytes: parsed.bytes,
-    });
+    let upload;
+    try {
+      upload = await storage.beginUpload({
+        organizationId: tenancy.organizationId,
+        contentType: parsed.contentType,
+        bytes: parsed.bytes,
+      });
+    } catch (cause) {
+      const code =
+        cause instanceof errors.PharmaxError ? cause.code : "PACKAGE_PHOTO_STORAGE_UNAVAILABLE";
+      logger.error("ops.shipping.package_photo.upload.storage_failed", {
+        operatorUserId: session.operator.userId,
+        organizationId: tenancy.organizationId,
+        code,
+        error: cause,
+      });
+      return jsonError(
+        503,
+        code,
+        "Photo storage is temporarily unavailable. Keep the package at the dock and retry in a moment."
+      );
+    }
 
     logger.info("ops.shipping.package_photo.upload.accepted", {
       operatorUserId: session.operator.userId,

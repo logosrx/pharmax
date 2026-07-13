@@ -37,6 +37,8 @@ export const ASSIGN_ROLE_SCOPE_REQUIRES_CLINIC = "ASSIGN_ROLE_SCOPE_REQUIRES_CLI
 export const ASSIGN_ROLE_SCOPE_REQUIRES_TEAM = "ASSIGN_ROLE_SCOPE_REQUIRES_TEAM";
 export const ASSIGN_ROLE_SCOPE_NOT_ALLOWED = "ASSIGN_ROLE_SCOPE_NOT_ALLOWED";
 export const ASSIGN_ROLE_SITE_NOT_IN_ORG = "ASSIGN_ROLE_SITE_NOT_IN_ORG";
+export const ASSIGN_ROLE_CLINIC_NOT_IN_ORG = "ASSIGN_ROLE_CLINIC_NOT_IN_ORG";
+export const ASSIGN_ROLE_TEAM_NOT_IN_ORG = "ASSIGN_ROLE_TEAM_NOT_IN_ORG";
 export const USER_ROLE_ALREADY_GRANTED = "USER_ROLE_ALREADY_GRANTED";
 
 const inputSchema = z
@@ -170,6 +172,37 @@ export const AssignRole: Command<AssignRoleInput, AssignRoleOutput> = {
           code: ASSIGN_ROLE_SITE_NOT_IN_ORG,
           message: "Site not found in this organization.",
           metadata: { siteId: input.siteId },
+        });
+      }
+    }
+    // clinicId / teamId get the same org-membership validation as
+    // siteId. Without it, an admin pasting a UUID from another org
+    // stored a grant whose scope pointed cross-org — polluting RBAC
+    // scope data and making later authorization decisions depend on
+    // an impossible tenancy shape.
+    if (hasClinic) {
+      const clinic = await tx.clinic.findFirst({
+        where: { id: input.clinicId!, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      if (clinic === null) {
+        throw new errors.NotFoundError({
+          code: ASSIGN_ROLE_CLINIC_NOT_IN_ORG,
+          message: "Clinic not found in this organization.",
+          metadata: { clinicId: input.clinicId },
+        });
+      }
+    }
+    if (hasTeam) {
+      const team = await tx.team.findFirst({
+        where: { id: input.teamId!, organizationId: ctx.organizationId },
+        select: { id: true },
+      });
+      if (team === null) {
+        throw new errors.NotFoundError({
+          code: ASSIGN_ROLE_TEAM_NOT_IN_ORG,
+          message: "Team not found in this organization.",
+          metadata: { teamId: input.teamId },
         });
       }
     }

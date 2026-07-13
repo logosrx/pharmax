@@ -329,7 +329,7 @@ export default async function PatientDetailPage({
         <Section title="Danger zone">
           <Card accent="danger">
             <CardHeader>
-              <CardTitle className="text-red-300">Crypto-shred</CardTitle>
+              <CardTitle className="text-tone-danger">Crypto-shred</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm text-muted">

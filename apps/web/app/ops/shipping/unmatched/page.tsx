@@ -198,7 +198,7 @@ function CandidateRow({
           <div className="text-xs text-subtle">
             Received {formatDuration(nowMs - candidate.receivedAt.getTime())} ago
             {candidate.hasShipment ? (
-              <span className="text-emerald-400"> · has shipment</span>
+              <span className="text-tone-success-accent"> · has shipment</span>
             ) : (
               <span> · no shipment yet</span>
             )}
@@ -309,7 +309,7 @@ export default async function UnmatchedTriagePage({
         <Card accent="brand">
           <CardContent className="space-y-4">
             <div>
-              <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-brand">
+              <h2 className="text-xs font-semibold uppercase tracking-caps text-brand">
                 Resolve capture
               </h2>
               <p className="mt-1 text-xs text-muted">
@@ -356,7 +356,7 @@ export default async function UnmatchedTriagePage({
               ) : (
                 <div className="space-y-2">
                   {candidates.truncated ? (
-                    <p className="text-xs text-amber-300">
+                    <p className="text-xs text-tone-warning">
                       Showing the first 25 matches — refine to narrow.
                     </p>
                   ) : null}

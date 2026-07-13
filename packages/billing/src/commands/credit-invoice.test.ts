@@ -57,6 +57,7 @@ interface FakeInvoice {
   totalCents: number;
   amountDueCents: number;
   invoiceNumber: string;
+  version: number;
 }
 
 interface FakeOverrides {
@@ -78,6 +79,7 @@ const defaultInvoice = (): FakeInvoice => ({
   totalCents: 15000,
   amountDueCents: 15000,
   invoiceNumber: "INV-2026-05-0c0c0c0c",
+  version: 7,
 });
 
 function buildPrismaFake(overrides: FakeOverrides = {}): {
@@ -97,6 +99,12 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         calls.push({ table: "invoice", op: "update", args });
         return { id: INVOICE_ID };
       }),
+      // The credit's total decrement is a version-CAS updateMany;
+      // count=1 is the uncontended path.
+      updateMany: vi.fn(async (args: unknown) => {
+        calls.push({ table: "invoice", op: "updateMany", args });
+        return { count: 1 };
+      }),
     },
     invoiceLine: {
       create: vi.fn(async (args: unknown) => {
@@ -104,7 +112,20 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return { id: "line-credit-1" };
       }),
     },
-    commandLog: { create: vi.fn(async () => ({ id: "cl" })) },
+    commandLog: {
+      create: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "create", args });
+        return { id: "cl" };
+      }),
+      update: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "update", args });
+        return { ok: true };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "commandLog", op: "findUnique", args });
+        return null;
+      }),
+    },
     auditLog: {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "auditLog", op: "create", args });
@@ -131,7 +152,13 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return { count: 1 };
       }),
     },
-    idempotencyKey: { create: vi.fn(async () => ({ ok: true })) },
+    idempotencyKey: {
+      create: vi.fn(async () => ({ ok: true })),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "idempotencyKey", op: "findUnique", args });
+        return null;
+      }),
+    },
     $executeRaw: vi.fn(async () => 0),
   };
 
@@ -203,12 +230,20 @@ describe("CreditInvoice — happy path", () => {
     expect(lineData["kind"]).toBe("CREDIT");
     expect(String(lineData["billingEventKey"])).toMatch(/^manual-credit:/);
 
-    // Invoice totals atomically decremented via `{ decrement }`.
-    const update = fake.calls.find((c) => c.table === "invoice" && c.op === "update");
-    const updateData = (update!.args as { data: Record<string, unknown> }).data;
-    expect(updateData["subtotalCents"]).toEqual({ decrement: 2500 });
-    expect(updateData["totalCents"]).toEqual({ decrement: 2500 });
-    expect(updateData["amountDueCents"]).toEqual({ decrement: 2500 });
+    // Invoice totals atomically decremented via `{ decrement }`,
+    // guarded by a version CAS (updateMany with version +
+    // totalCents-floor predicates) so concurrent credits cannot
+    // jointly over-credit past the total.
+    const update = fake.calls.find((c) => c.table === "invoice" && c.op === "updateMany");
+    const updateArgs = update!.args as {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+    };
+    expect(updateArgs.where["version"]).toBe(7);
+    expect(updateArgs.where["totalCents"]).toEqual({ gte: 2500 });
+    expect(updateArgs.data["subtotalCents"]).toEqual({ decrement: 2500 });
+    expect(updateArgs.data["totalCents"]).toEqual({ decrement: 2500 });
+    expect(updateArgs.data["amountDueCents"]).toEqual({ decrement: 2500 });
 
     // Outbox v1 event.
     const outboxCalls = fake.calls.filter(

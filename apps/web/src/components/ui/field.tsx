@@ -20,6 +20,10 @@ const CONTROL_BASE =
   "block w-full rounded-md border border-line-strong bg-surface-2 px-3 text-sm text-fg " +
   "placeholder:text-subtle shadow-xs transition-colors " +
   "focus:border-brand focus:outline-none focus:ring-2 focus:ring-ring/40 " +
+  // Server-side validation errors mark controls with aria-invalid;
+  // the red treatment comes for free, no error-prop threading.
+  "aria-invalid:border-red-500/60 aria-invalid:focus:border-red-500 " +
+  "aria-invalid:focus:ring-red-500/30 " +
   "disabled:cursor-not-allowed disabled:opacity-60";
 
 export const inputClass = (className?: string): string => cx(CONTROL_BASE, "h-9", className);
@@ -51,7 +55,7 @@ export function Field({
           className="block text-xs font-medium uppercase tracking-wide text-muted"
         >
           {label}
-          {required ? <span className="text-red-400"> *</span> : null}
+          {required ? <span className="text-tone-danger-accent"> *</span> : null}
         </label>
       ) : null}
       {children}

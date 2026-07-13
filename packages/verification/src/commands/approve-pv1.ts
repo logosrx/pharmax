@@ -242,7 +242,11 @@ export const ApprovePV1 = defineCommand<ApprovePV1Input, ApprovePV1Output>({
     const currentState: OrderState = target.currentStatus;
 
     const transition = applyTransition({
-      policy: ORDER_STANDARD_V1,
+      // Merged per-tenant overlay snapshot when resolved (ADR-0019);
+      // static base otherwise. Overlays can FORBID or tighten this
+      // transition — evaluating the base here would silently bypass
+      // tenant compliance policy.
+      policy: policy.merged?.merged ?? ORDER_STANDARD_V1,
       currentState,
       command: "APPROVE_PV1",
     });

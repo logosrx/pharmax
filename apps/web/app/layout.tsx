@@ -1,16 +1,10 @@
 // Root layout.
 //
-// `<ClerkProvider>` MUST be inside `<body>` per the Clerk
-// Next.js Core 3 contract (Core 2 allowed wrapping `<html>`;
-// the @clerk/nextjs version pinned in package.json is Core 3+).
-//
-// When `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is unset (dev clones
-// without Clerk credentials), Clerk's Keyless mode auto-generates
-// dev keys on first SDK init; we render the provider unconditionally
-// so the operator console pages don't need to fork their auth
-// strategy based on env shape.
+// Authentication is the in-house engine (ADR-0030) — no client-side
+// identity provider wraps the tree. Session state is server-resolved
+// per request via `resolveOperatorTenancyContext`; the sign-in surface
+// posts to `/api/auth/sign-in`.
 
-import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
@@ -31,9 +25,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>
-      <body className="antialiased">
-        <ClerkProvider dynamic>{children}</ClerkProvider>
-      </body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }

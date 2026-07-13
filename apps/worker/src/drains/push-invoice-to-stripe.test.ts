@@ -39,7 +39,11 @@ function buildPrismaFake(input: BuildClientInput) {
       findFirst: vi.fn(async () => ({ id: INVOICE_ID, stripeInvoiceId: null })),
       update: invoiceUpdate,
     },
-    commandLog: { create: vi.fn(async () => ({ id: "cl-1" })) },
+    commandLog: {
+      create: vi.fn(async () => ({ id: "cl-1" })),
+      update: vi.fn(async () => ({ ok: true })),
+      findUnique: vi.fn(async () => null),
+    },
     auditLog: { create: vi.fn(async () => ({ id: "al-1" })) },
     auditChainState: {
       findUnique: vi.fn(async () => null),
@@ -206,7 +210,10 @@ describe("createPushInvoiceToStripeHandler — happy path", () => {
 });
 
 describe("createPushInvoiceToStripeHandler — disabled / null port", () => {
-  it("no-ops cleanly when stripePort is null (STRIPE_SECRET_KEY unset)", async () => {
+  it("FAILS loudly when stripePort is null (STRIPE_SECRET_KEY unset) — the push must not be discarded", async () => {
+    // Regression: a null port used to be a silent no-op success —
+    // the outbox row was marked DISPATCHED and the finalized invoice
+    // never reached Stripe (never billed), with no retry path.
     const fake = buildPrismaFake({
       stripeCustomer: { stripeCustomerId: "cus_Acme", organizationId: ORG_ID },
       invoiceLines: [
@@ -226,9 +233,10 @@ describe("createPushInvoiceToStripeHandler — disabled / null port", () => {
       stripePort: null,
     });
 
-    await handler(buildRow(FINALIZED_PAYLOAD), HANDLER_CTX);
-
-    // No invoice mutation, no port call, no error.
+    await expect(handler(buildRow(FINALIZED_PAYLOAD), HANDLER_CTX)).rejects.toMatchObject({
+      code: "STRIPE_PUSH_NOT_CONFIGURED",
+    });
+    // No invoice mutation happened before the failure.
     expect(fake.invoiceUpdate).not.toHaveBeenCalled();
   });
 });

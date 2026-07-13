@@ -59,6 +59,7 @@ export const CREDIT_INVOICE_NOT_FOUND = "CREDIT_INVOICE_NOT_FOUND";
 export const CREDIT_INVOICE_VOIDED = "CREDIT_INVOICE_VOIDED";
 export const CREDIT_INVOICE_EXCEEDS_TOTAL = "CREDIT_INVOICE_EXCEEDS_TOTAL";
 export const CREDIT_INVOICE_AMOUNT_INVALID = "CREDIT_INVOICE_AMOUNT_INVALID";
+export const CREDIT_INVOICE_CONCURRENT_MODIFICATION = "CREDIT_INVOICE_CONCURRENT_MODIFICATION";
 
 export const CREDIT_INVOICE_KINDS = [
   InvoiceLineKind.CREDIT,
@@ -135,6 +136,7 @@ export const CreditInvoice: Command<CreditInvoiceInput, CreditInvoiceOutput> = {
         totalCents: true,
         amountDueCents: true,
         invoiceNumber: true,
+        version: true,
       },
     });
     if (invoice === null) {
@@ -197,11 +199,21 @@ export const CreditInvoice: Command<CreditInvoiceInput, CreditInvoiceOutput> = {
       },
     });
 
-    // Roll the invoice totals atomically. `{ decrement }` compiles
-    // to `column = column - N` — safe under concurrent appends and
-    // does not require a CAS bump on `version`.
-    await tx.invoice.update({
-      where: { id: invoice.id },
+    // Roll the invoice totals with a version CAS. The EXCEEDS_TOTAL
+    // validation above ran against a snapshot read WITHOUT a lock —
+    // two concurrent credits could both pass it against the same
+    // stale total and jointly drive the invoice negative. Guarding
+    // the decrement on the snapshot's `version` (plus a defensive
+    // floor on totalCents) makes the loser fail with a clear 409
+    // instead of over-crediting; the operator refreshes and retries
+    // against the post-credit total.
+    const updated = await tx.invoice.updateMany({
+      where: {
+        id: invoice.id,
+        organizationId: ctx.organizationId,
+        version: invoice.version,
+        totalCents: { gte: input.amountCents },
+      },
       data: {
         subtotalCents: { decrement: input.amountCents },
         totalCents: { decrement: input.amountCents },
@@ -209,6 +221,18 @@ export const CreditInvoice: Command<CreditInvoiceInput, CreditInvoiceOutput> = {
         version: { increment: 1 },
       },
     });
+    if (updated.count !== 1) {
+      throw new errors.ConflictError({
+        code: CREDIT_INVOICE_CONCURRENT_MODIFICATION,
+        message:
+          "The invoice was modified by another action while this credit was validating. Refresh the invoice and retry.",
+        metadata: {
+          invoiceId: invoice.id,
+          expectedVersion: invoice.version,
+          amountCents: input.amountCents,
+        },
+      });
+    }
 
     const subtotalCentsAfter = invoice.subtotalCents - input.amountCents;
     const totalCentsAfter = invoice.totalCents - input.amountCents;

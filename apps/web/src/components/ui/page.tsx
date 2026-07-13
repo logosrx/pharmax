@@ -28,7 +28,7 @@ export function PageHeader({
     <header className={cx("flex flex-wrap items-end justify-between gap-4", className)}>
       <div className="min-w-0 space-y-1.5">
         {eyebrow ? (
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-subtle">{eyebrow}</p>
+          <p className="text-xs font-semibold uppercase tracking-caps text-subtle">{eyebrow}</p>
         ) : null}
         <h1 className="text-2xl font-semibold tracking-tight text-fg">{title}</h1>
         {description ? <p className="max-w-2xl text-sm text-muted">{description}</p> : null}
@@ -59,13 +59,13 @@ export function Section({
         <header className="flex items-baseline justify-between gap-3">
           <h2
             className={cx(
-              "flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em]",
-              tone === "warning" ? "text-amber-400" : "text-muted"
+              "flex items-center gap-2 text-xs font-semibold uppercase tracking-caps",
+              tone === "warning" ? "text-tone-warning-accent" : "text-muted"
             )}
           >
             {title}
             {count !== undefined ? (
-              <span className="rounded-full border border-line bg-surface-2 px-1.5 py-px text-[10px] font-semibold text-subtle tabular-nums">
+              <span className="rounded-full border border-line bg-surface-2 px-1.5 py-px text-3xs font-semibold text-subtle tabular-nums">
                 {count}
               </span>
             ) : null}

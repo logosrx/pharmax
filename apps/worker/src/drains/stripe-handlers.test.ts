@@ -44,7 +44,11 @@ function buildPrismaFake(input: BuildClientInput) {
 
   const tx = {
     invoice: { findFirst: invoiceFindFirst, updateMany: invoiceUpdateMany },
-    commandLog: { create: vi.fn(async () => ({ id: "cl" })) },
+    commandLog: {
+      create: vi.fn(async () => ({ id: "cl" })),
+      update: vi.fn(async () => ({ ok: true })),
+      findUnique: vi.fn(async () => null),
+    },
     auditLog: { create: vi.fn(async () => ({ id: "al" })) },
     auditChainState: {
       findUnique: vi.fn(async () => null),
@@ -284,6 +288,7 @@ describe("createStripeEventHandlers — charge.refunded", () => {
       const subTx = {
         invoiceLine: {
           findUnique: vi.fn(async () => null),
+          findMany: vi.fn(async () => []),
           create: vi.fn(async () => ({ id: "line-refund" })),
         },
         invoice: {
@@ -296,7 +301,11 @@ describe("createStripeEventHandlers — charge.refunded", () => {
           })),
           update: vi.fn(async () => ({ id: INVOICE_ID })),
         },
-        commandLog: { create: vi.fn(async () => ({ id: "cl" })) },
+        commandLog: {
+          create: vi.fn(async () => ({ id: "cl" })),
+          update: vi.fn(async () => ({ ok: true })),
+          findUnique: vi.fn(async () => null),
+        },
         auditLog: { create: vi.fn(async () => ({ id: "al" })) },
         auditChainState: {
           findUnique: vi.fn(async () => null),

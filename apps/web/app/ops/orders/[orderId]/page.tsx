@@ -12,6 +12,7 @@
 // "—" for null fields.
 
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { PERMISSIONS } from "@pharmax/rbac";
 
@@ -22,6 +23,7 @@ import {
 import { resolveOperatorTenancyContext } from "../../../../src/server/auth/resolve-tenancy.js";
 import { auditPatientView } from "../../../../src/server/ops/audit-patient-view.js";
 import { getOrderDetail } from "../../../../src/server/ops/get-order-detail.js";
+import { resolveOrderSearchToken } from "../../../../src/server/ops/resolve-order-search-token.js";
 import { PageHeader, Section } from "../../../../src/components/ui/page.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../../src/components/ui/card.js";
 import { Badge } from "../../../../src/components/ui/badge.js";
@@ -110,7 +112,7 @@ function GuardPage({ grant }: { readonly grant: string }) {
         description={
           <>
             This is a PHI-decrypting surface. Ask your admin for the{" "}
-            <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[11px] text-fg">
+            <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-2xs text-fg">
               {grant}
             </code>{" "}
             grant.
@@ -140,10 +142,26 @@ export default async function OrderDetailPage({
     return <GuardPage grant="patients.read" />;
   }
 
-  const detail = await getOrderDetail({
+  // The route param may be an internal UUID, an external order
+  // number (typed by the operator), or a scanned vial barcode
+  // (`PX:<orderLineId>`) — the topbar search routes all three here.
+  // Resolve to the canonical order id and redirect so the URL in
+  // the address bar is always the internal id.
+  const resolved = await resolveOrderSearchToken({
     organizationId: session.tenancy.organizationId,
-    orderId,
+    token: orderId,
   });
+  if (resolved.kind === "order-id" && resolved.orderId !== orderId) {
+    redirect(`/ops/orders/${resolved.orderId}`);
+  }
+
+  const detail =
+    resolved.kind === "not-found"
+      ? null
+      : await getOrderDetail({
+          organizationId: session.tenancy.organizationId,
+          orderId: resolved.orderId,
+        });
 
   if (detail === null) {
     return (
@@ -276,7 +294,7 @@ export default async function OrderDetailPage({
               <Card key={line.orderLineId}>
                 <CardHeader>
                   <div>
-                    <div className="text-[11px] font-medium uppercase tracking-wide text-subtle">
+                    <div className="text-2xs font-medium uppercase tracking-wide text-subtle">
                       Line {idx + 1}
                     </div>
                     <CardTitle className="text-base">

@@ -88,6 +88,10 @@ export const verificationRejectionRateReport: ReportDefinition<
         ...(params.stages !== undefined && params.stages.length > 0
           ? { stage: { in: params.stages } }
           : {}),
+        // Clinic scope via the order relation (verification records
+        // carry no clinicId column). Required so clinic-scoped
+        // operators don't see other clinics' rejection rates.
+        ...(ctx.clinicId !== undefined ? { order: { clinicId: ctx.clinicId } } : {}),
       },
       _count: { _all: true },
     });

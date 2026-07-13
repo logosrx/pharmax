@@ -89,7 +89,7 @@ export default function PreviewPage() {
           <div className="ml-auto flex items-center gap-3">
             <div className="hidden text-right leading-tight sm:block">
               <div className="text-sm font-medium text-fg">Jordan Pharmacist</div>
-              <div className="text-[11px] text-subtle">jordan@northgate.rx</div>
+              <div className="text-2xs text-subtle">jordan@northgate.rx</div>
             </div>
             <ThemeToggle />
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand text-xs font-semibold text-brand-fg">
@@ -265,7 +265,7 @@ export default function PreviewPage() {
                   <p className="mt-0.5 text-sm text-muted">
                     Daily counts segmented by clinic + stage.
                   </p>
-                  <code className="text-[11px] text-subtle">orders.volume_by_clinic</code>
+                  <code className="text-2xs text-subtle">orders.volume_by_clinic</code>
                 </LinkCard>
                 <LinkCard href="/preview" icon="fill">
                   <div className="text-sm font-medium text-fg">Fill queue</div>

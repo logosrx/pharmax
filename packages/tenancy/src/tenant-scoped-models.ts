@@ -176,6 +176,17 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["ProviderSyncRun", { kind: "organizationId" }] as const,
   ["ProviderSyncCheck", { kind: "organizationId" }] as const,
   ["ProviderSyncReviewItem", { kind: "organizationId" }] as const,
+
+  // Phase 6 — first-party auth engine. All five carry a
+  // NON-NULLABLE `organizationId` (rule 1). Sessions, MFA
+  // enrollments, recovery codes, password history, and reset tokens
+  // are all per-user rows inside one org; cross-tenant reads of any
+  // of them would leak authentication material between orgs.
+  ["AuthSession", { kind: "organizationId" }] as const,
+  ["MfaEnrollment", { kind: "organizationId" }] as const,
+  ["RecoveryCode", { kind: "organizationId" }] as const,
+  ["PasswordHistory", { kind: "organizationId" }] as const,
+  ["PasswordResetToken", { kind: "organizationId" }] as const,
 ]);
 
 /**
@@ -220,6 +231,14 @@ export const TENANT_EXCLUDED_MODELS: ReadonlySet<string> = new Set([
   // `notification_delivery` row up by `providerMessageId` in system
   // context. The svix-id-keyed idempotency ledger is platform-level.
   "ResendWebhookEvent",
+  // Login attempts (phase 6 auth engine) have a NULLABLE
+  // `organizationId` (rule 3): a failed attempt against an unknown
+  // email resolves to no org at all, and the row must still be
+  // writable for lockout/rate-limit counting BEFORE any tenant is
+  // known. The auth engine writes these in system context; reads
+  // (security feed, lockout checks) filter explicitly at the
+  // repository layer.
+  "LoginAttempt",
 ]);
 
 /**

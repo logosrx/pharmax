@@ -31,9 +31,12 @@ describe("parseReportParameters — happy path", () => {
     const r = parseReportParameters(FIELDS, src);
     expect(r.ok).toBe(true);
     if (r.ok) {
+      // `to` is an endOfDay field: it anchors at 23:59:59.999Z so the
+      // `lte`-filtered window INCLUDES the entire selected end date
+      // (a midnight anchor made same-day reports return ~nothing).
       expect(r.parameters["from"]).toBeInstanceOf(Date);
       expect((r.parameters["from"] as Date).toISOString()).toBe("2026-05-01T00:00:00.000Z");
-      expect((r.parameters["to"] as Date).toISOString()).toBe("2026-05-28T00:00:00.000Z");
+      expect((r.parameters["to"] as Date).toISOString()).toBe("2026-05-28T23:59:59.999Z");
       expect(r.parameters["statuses"]).toEqual(["SHIPPED", "ON_HOLD"]);
     }
   });

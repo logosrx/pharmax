@@ -40,19 +40,6 @@ export function slaTone(status: SlaStatus): Tone | undefined {
   }
 }
 
-/** Legacy border-accent helper — retained for callers not yet on the
- *  Card `accent` prop. */
-export function slaRowBorderClass(status: SlaStatus): string {
-  switch (status) {
-    case "BREACHED":
-      return "border-red-500/40";
-    case "WARNING":
-      return "border-amber-500/40";
-    default:
-      return "border-line";
-  }
-}
-
 export function SlaBadge({
   slaDeadlineAt,
   now,

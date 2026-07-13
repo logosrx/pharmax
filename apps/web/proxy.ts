@@ -1,82 +1,67 @@
-// Next.js 16 routing middleware (`proxy.ts`, the Next 15 `middleware.ts`
-// successor). Runs on every request the matcher accepts.
+// Next.js routing middleware (`proxy.ts`). Runs on every request the
+// matcher accepts. In-house identity engine (ADR-0030).
 //
 // Strategy:
 //
 //   - PUBLIC routes (no auth required):
-//       /api/health                 — liveness probe (deployment health-checks)
-//       /api/webhooks/(.*)          — signature-verified inbound webhooks
-//                                     (Stripe / EasyPost / Clerk).
-//                                     Adding auth here would break the
-//                                     webhook contract — signatures are
-//                                     the auth.
-//       /sign-in/*, /sign-up/*      — Clerk's hosted auth UI surfaces.
-//                                     Sign-up gating happens INSIDE the
-//                                     route component (production
-//                                     renders a static "closed" page
-//                                     unless a Clerk invitation ticket
-//                                     is present). The middleware
-//                                     ALSO returns 404 on a closed
-//                                     `/sign-up` request as defence
-//                                     in depth (see `isSignUpClosed`).
+//       /api/health          — liveness probe.
+//       /api/webhooks/(.*)   — signature-verified inbound webhooks.
+//       /api/auth/(.*)       — sign-in / sign-out (how a session is
+//                              obtained; gating these would deadlock).
+//       /sign-in, /sign-up   — the auth UI surfaces.
+//       /preview             — design-system showcase (mock data).
 //
-//   - EVERYTHING ELSE: requires a Clerk session. `auth.protect()` does
-//     the redirect to `/sign-in` if no session is present. We log the
-//     denial first so unauthenticated probes against operator routes
-//     (billing, admin) surface in the security feed without PHI.
+//   - EVERYTHING ELSE: requires a session COOKIE to be present. This is
+//     a cheap presence check only — the authoritative validation
+//     (revoked? idle? absolute-expired?) happens server-side in
+//     `resolveOperatorTenancyContext` → `resolveSession` inside the
+//     page / route handler (it needs the DB, which the edge middleware
+//     must not touch). A missing cookie redirects pages to /sign-in and
+//     returns 401 for /api routes.
 //
-// We never require auth on `/_next/*` or `/favicon.ico` — the matcher
-// at the bottom of the file excludes static asset paths.
+// The MFA floor for privileged writes is enforced at the call site
+// (`dispatch-ops-with-mfa.ts`) against the session's `mfaSatisfied`,
+// not here.
 //
-// Operator → tenancy resolution happens INSIDE individual route /
-// page handlers via `resolveOperatorTenancyContext` (see
-// `src/server/auth/resolve-tenancy.ts`). The proxy is purely the
-// "is there a Clerk session at all?" gate. The MFA floor for
-// privileged writes is enforced at the call site (see
-// `src/server/auth/require-mfa.ts`) — putting it here would burn a
-// Clerk Backend API call on every request, including innocuous reads.
+// Edge-runtime constraint: this file must NOT import the node-only
+// `@pharmax/auth` (argon2 / prisma). The session cookie name is a local
+// constant that MUST match `DEFAULT_SESSION_POLICY.cookieName`.
 //
-// PHI invariant: this file logs request shape (method, path, user
-// agent prefix) only — NEVER request bodies, query strings (which
-// could carry external order ids), or cookies.
+// PHI invariant: logs request shape (method, path, ua prefix) only.
 
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse, type NextRequest } from "next/server";
 
-const isPublicRoute = createRouteMatcher([
-  "/api/health",
-  "/api/webhooks/(.*)",
-  "/sign-in(.*)",
-  "/sign-up(.*)",
-  // Design-system showcase — no auth, no DB, mock data only. Safe to
-  // expose; renders presentation components for visual review.
-  "/preview(.*)",
-]);
+// MUST match @pharmax/auth DEFAULT_SESSION_POLICY.cookieName.
+const SESSION_COOKIE_NAME = "pharmax_session";
 
-const isSignUpRoute = createRouteMatcher(["/sign-up(.*)"]);
+function pathIsPublic(pathname: string): boolean {
+  return (
+    pathname === "/api/health" ||
+    pathname.startsWith("/api/webhooks/") ||
+    pathname.startsWith("/api/auth/") ||
+    pathname === "/sign-in" ||
+    pathname.startsWith("/sign-in/") ||
+    pathname === "/sign-up" ||
+    pathname.startsWith("/sign-up/") ||
+    pathname === "/accept-invite" ||
+    pathname.startsWith("/accept-invite/") ||
+    pathname === "/reset-password" ||
+    pathname.startsWith("/reset-password/") ||
+    pathname === "/preview" ||
+    pathname.startsWith("/preview/")
+  );
+}
 
-const isOperatorRoute = createRouteMatcher(["/ops/(.*)", "/api/ops/(.*)"]);
+function pathIsSignUp(pathname: string): boolean {
+  return pathname === "/sign-up" || pathname.startsWith("/sign-up/");
+}
 
 /**
- * Pure decision: should the middleware deny `/sign-up` for the
- * given (nodeEnv, signupsEnabled, ticket) tuple?
+ * Pure decision: should the middleware deny `/sign-up`? Self-service
+ * sign-up is invitation-only; production denies the open form unless an
+ * invitation ticket is present or the flag is explicitly on.
  *
- * Mirror of `resolveSignUpSurface(..) === "closed"` at the
- * middleware layer. We re-implement the rule here (instead of
- * importing the page-tier helper) for two reasons:
- *
- *   1. The middleware runtime is more restricted than the React
- *      Server Component runtime; importing the `"server-only"`-
- *      tagged env loader from here would taint the bundle.
- *   2. Defence-in-depth is most useful when the second layer is
- *      independent of the first — a bug in the page helper that
- *      flips the surface back to "open" should not also flip the
- *      middleware open.
- *
- * Exported for unit-testing. The runtime call site
- * (`isSignUpClosedFromRequest`) reads `process.env` for `nodeEnv`
- * + `signupsEnabledRaw` and the URL for the ticket; tests pass
- * those values directly.
+ * Exported for unit tests (proxy.test.ts).
  */
 export function shouldDenySignUpInMiddleware(input: {
   readonly nodeEnv: string | undefined;
@@ -94,7 +79,7 @@ export function shouldDenySignUpInMiddleware(input: {
 }
 
 function isSignUpClosedFromRequest(request: NextRequest): boolean {
-  if (!isSignUpRoute(request)) return false;
+  if (!pathIsSignUp(request.nextUrl.pathname)) return false;
   return shouldDenySignUpInMiddleware({
     nodeEnv: process.env["NODE_ENV"],
     signupsEnabledRaw: process.env["CLERK_SIGNUPS_ENABLED"],
@@ -102,70 +87,52 @@ function isSignUpClosedFromRequest(request: NextRequest): boolean {
   });
 }
 
-export default clerkMiddleware(async (auth, request) => {
-  // Defence-in-depth gate for `/sign-up`. The page handler already
-  // renders a closed-surface for the same conditions; this returns
-  // a hard 404 BEFORE the page handler runs so a probe against the
-  // route surfaces as "no such resource" rather than "rendered an
-  // error page" in access logs. We also strip `Allow` so the route
-  // does not advertise that it accepts any method.
+export default function proxy(request: NextRequest): NextResponse {
+  const { pathname } = request.nextUrl;
+
+  // Defence-in-depth 404 for a closed `/sign-up` (mirrors the page).
   if (isSignUpClosedFromRequest(request)) {
     console.warn(
       JSON.stringify({
         event: "auth.proxy.signup_closed",
         method: request.method,
-        path: request.nextUrl.pathname,
-        // Whether a ticket was present at all — never the value.
+        path: pathname,
         hasTicket: request.nextUrl.searchParams.has("__clerk_ticket"),
       })
     );
     return new NextResponse(null, { status: 404 });
   }
 
-  if (isPublicRoute(request)) return;
+  if (pathIsPublic(pathname)) return NextResponse.next();
 
-  const session = await auth();
-  if (session.userId === null) {
-    // Surface unauthenticated hits on operator routes for the
-    // security feed. This is structurally observable, not a PHI
-    // leak: the path is a route name, not an order id, and we
-    // do not include cookies / bodies / decrypted query params.
-    if (isOperatorRoute(request)) {
-      // We use console.warn here intentionally — middleware runs in
-      // the Next runtime, where the structured app logger is not
-      // available without pulling in the full server module graph
-      // (`server-only` would error at middleware build time). The
-      // platform's stdout collector picks this up; format keeps
-      // the same `event:` discriminator the rest of the auth lane
-      // uses so log-pipeline filters match.
-      const ua = request.headers.get("user-agent") ?? "";
-      console.warn(
-        JSON.stringify({
-          event: "auth.proxy.unauthenticated_operator_route",
-          method: request.method,
-          path: request.nextUrl.pathname,
-          // First 64 chars only — enough to distinguish a real
-          // browser from a probe, not enough to fingerprint.
-          uaPrefix: ua.slice(0, 64),
-        })
-      );
-    }
-    await auth.protect();
-    return;
+  const hasSession = (request.cookies.get(SESSION_COOKIE_NAME)?.value ?? "").length > 0;
+  if (hasSession) return NextResponse.next();
+
+  // No session cookie. Surface unauthenticated operator-route hits for
+  // the security feed (route name only — no PHI).
+  const isOperatorRoute =
+    pathname.startsWith("/ops/") || pathname.startsWith("/api/ops/") || pathname === "/ops";
+  if (isOperatorRoute) {
+    const ua = request.headers.get("user-agent") ?? "";
+    console.warn(
+      JSON.stringify({
+        event: "auth.proxy.unauthenticated_operator_route",
+        method: request.method,
+        path: pathname,
+        uaPrefix: ua.slice(0, 64),
+      })
+    );
   }
 
-  // Authenticated session present. `auth.protect()` is still called
-  // to honour Clerk's session-revocation semantics (the SDK may
-  // re-validate the session token here; without the call, a token
-  // revoked mid-flight wouldn't redirect until the next page load).
-  await auth.protect();
-  return;
-});
+  // API routes get a 401; page routes get a redirect to sign-in.
+  if (pathname.startsWith("/api/")) {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
+  const signInUrl = new URL("/sign-in", request.url);
+  return NextResponse.redirect(signInUrl);
+}
 
 export const config = {
-  // Run on everything EXCEPT static files + Next internals. The
-  // Clerk-recommended matcher; we keep it verbatim so future Clerk
-  // upgrades don't break matcher expectations.
   matcher: [
     "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
     "/(api|trpc)(.*)",

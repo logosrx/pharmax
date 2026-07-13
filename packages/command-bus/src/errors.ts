@@ -17,6 +17,8 @@ import { errors as coreErrors } from "@pharmax/platform-core";
 export const COMMAND_BUS_NOT_CONFIGURED = "COMMAND_BUS_NOT_CONFIGURED";
 export const COMMAND_INPUT_INVALID = "COMMAND_INPUT_INVALID";
 export const COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH = "COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH";
+export const COMMAND_IN_FLIGHT = "COMMAND_IN_FLIGHT";
+export const COMMAND_ALREADY_EXECUTED = "COMMAND_ALREADY_EXECUTED";
 export const COMMAND_WORKSTATION_REQUIRED = "COMMAND_WORKSTATION_REQUIRED";
 export const COMMAND_SYSTEM_CONTEXT_REQUIRED = "COMMAND_SYSTEM_CONTEXT_REQUIRED";
 
@@ -44,6 +46,38 @@ export function commandInputInvalidError(input: {
       path: [...issue.path],
       message: issue.message,
     })),
+    metadata: { commandName: input.commandName },
+  });
+}
+
+/**
+ * A concurrent request with the same idempotency key is still
+ * executing. Stable 409 — the client should wait and retry the SAME
+ * key (which will replay the winner's response once it commits),
+ * not resubmit with a new key.
+ */
+export function commandInFlightError(input: {
+  readonly commandName: string;
+}): coreErrors.ConflictError {
+  return new coreErrors.ConflictError({
+    code: COMMAND_IN_FLIGHT,
+    message: `A request with this idempotency key for command ${input.commandName} is already executing. Retry with the same key shortly.`,
+    metadata: { commandName: input.commandName },
+  });
+}
+
+/**
+ * A prior attempt with this key SUCCEEDED but the cached response
+ * is no longer available (idempotency row expired or was purged).
+ * The command must NOT re-execute; the caller needs a new key if
+ * this is genuinely a new request.
+ */
+export function commandAlreadyExecutedError(input: {
+  readonly commandName: string;
+}): coreErrors.ConflictError {
+  return new coreErrors.ConflictError({
+    code: COMMAND_ALREADY_EXECUTED,
+    message: `A request with this idempotency key for command ${input.commandName} already executed, but its cached response has expired. Use a new idempotency key for a new request.`,
     metadata: { commandName: input.commandName },
   });
 }
