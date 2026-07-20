@@ -67,6 +67,7 @@ import { createFedExTrackingPoller } from "./drains/fedex-tracking-poller.js";
 import { createNpiSyncScheduler } from "./drains/npi-sync-scheduler.js";
 import { createOutboxHandlers } from "./drains/outbox-handlers.js";
 import { createExpiredPackagePhotoUploadTokenReaper } from "./drains/reap-expired-package-photo-upload-tokens.js";
+import { createStaleLabelPurchaseReconciler } from "./drains/reconcile-stale-label-purchases.js";
 import {
   createOrphanPackagePhotoObjectSweeper,
   type PackagePhotoObjectStore,
@@ -339,6 +340,11 @@ async function main(): Promise<void> {
       intervalMs: env.PACKAGE_PHOTO_TOKEN_REAPER_INTERVAL_MS,
       batchSize: env.PACKAGE_PHOTO_TOKEN_REAPER_BATCH_SIZE,
     },
+    labelPurchaseReconciler: {
+      intervalMs: env.LABEL_PURCHASE_RECONCILER_INTERVAL_MS,
+      staleAfterMs: env.LABEL_PURCHASE_RECONCILER_STALE_AFTER_MS,
+      batchSize: env.LABEL_PURCHASE_RECONCILER_BATCH_SIZE,
+    },
     packagePhotoOrphanSweep: {
       enabled:
         typeof env.S3_PACKAGE_PHOTOS_BUCKET === "string" && env.S3_PACKAGE_PHOTOS_BUCKET.length > 0,
@@ -542,6 +548,19 @@ async function main(): Promise<void> {
   const packagePhotoTokenReaper = createExpiredPackagePhotoUploadTokenReaper(
     { client: prisma, logger, clock: clock.systemClock },
     { batchSize: env.PACKAGE_PHOTO_TOKEN_REAPER_BATCH_SIZE }
+  );
+
+  // Stale label-purchase reconciler. Dispositions crashed
+  // PurchaseShipmentLabel attempts: committed-but-unmarked purchases
+  // flip to SUCCEEDED; never-committed ones flip to FAILED with the
+  // carrier-reconciliation error code so the retry path re-opens and
+  // billing gets a worklist of possible orphaned carrier charges.
+  const labelPurchaseReconciler = createStaleLabelPurchaseReconciler(
+    { client: prisma, logger, clock: clock.systemClock },
+    {
+      batchSize: env.LABEL_PURCHASE_RECONCILER_BATCH_SIZE,
+      staleAfterMs: env.LABEL_PURCHASE_RECONCILER_STALE_AFTER_MS,
+    }
   );
 
   // Package-photo orphan S3 object sweeper (janitor part 2). Only
@@ -804,6 +823,15 @@ async function main(): Promise<void> {
     logger,
   });
 
+  const labelPurchaseReconcilerLoop = createPollLoop({
+    name: "label-purchase-reconciler",
+    intervalMs: env.LABEL_PURCHASE_RECONCILER_INTERVAL_MS,
+    tick: async () => {
+      await labelPurchaseReconciler.tick();
+    },
+    logger,
+  });
+
   const packagePhotoObjectSweeperLoop =
     packagePhotoObjectSweeper !== null
       ? createPollLoop({
@@ -845,6 +873,7 @@ async function main(): Promise<void> {
   npiSyncSchedulerLoop.start();
   npiSyncReaperLoop.start();
   packagePhotoTokenReaperLoop.start();
+  labelPurchaseReconcilerLoop.start();
   if (packagePhotoObjectSweeperLoop !== null) {
     packagePhotoObjectSweeperLoop.start();
   }
@@ -893,6 +922,7 @@ async function main(): Promise<void> {
     npiSyncSchedulerLoop.stop(),
     npiSyncReaperLoop.stop(),
     packagePhotoTokenReaperLoop.stop(),
+    labelPurchaseReconcilerLoop.stop(),
     ...(packagePhotoObjectSweeperLoop !== null ? [packagePhotoObjectSweeperLoop.stop()] : []),
     workflowBucketScraperLoop.stop(),
     ...(auditChainVerifierLoop !== null ? [auditChainVerifierLoop.stop()] : []),

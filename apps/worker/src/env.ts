@@ -148,6 +148,24 @@ const schema = z.object({
     .default(15 * 60_000), // 15 minutes
   PACKAGE_PHOTO_TOKEN_REAPER_BATCH_SIZE: z.coerce.number().int().positive().default(500),
 
+  // ---- Stale label-purchase reconciler -----------------------------
+  // Dispositions PurchaseShipmentLabel command_log rows stuck in
+  // RUNNING past any legitimate transaction lifetime (a crash
+  // mid-purchase). Shipment committed → SUCCEEDED; no shipment →
+  // FAILED + PURCHASE_LABEL_RECONCILIATION_REQUIRED (possible
+  // orphaned carrier charge; billing checks the carrier dashboard).
+  LABEL_PURCHASE_RECONCILER_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5 * 60_000), // 5 minutes
+  LABEL_PURCHASE_RECONCILER_STALE_AFTER_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(15 * 60_000), // 15 minutes — >> any real purchase tx
+  LABEL_PURCHASE_RECONCILER_BATCH_SIZE: z.coerce.number().int().positive().default(100),
+
   // ---- Package-photo orphan S3 object sweep -----------------------
   // The dedicated S3 bucket holding package-photo bytes. When set
   // (alongside AWS_REGION), the worker runs the orphan-object sweeper

@@ -74,3 +74,6 @@ infra/terraform/**/backend.tf
 !infra/terraform/**/backend.tf.example
 !infra/terraform/**/terraform.tfvars.example
 !infra/terraform/backend.tf.example
+
+# DR-drill evidence is operator-local, never committed (see docs/soc2/evidence-inventory.md)
+evidence/

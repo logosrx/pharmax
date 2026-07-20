@@ -51,6 +51,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "bootstrap:org": "tsx scripts/bootstrap-org.ts",
     "resolve:emergency": "tsx scripts/resolve-emergency-bucket.ts",
+    "outbox:republish": "tsx scripts/operations/republish-dead-outbox.ts",
     "verify:kms": "tsx scripts/security/verify-kms-keys.ts",
     "security:sign-merkle": "tsx scripts/security/sign-daily-merkle-root.ts",
     "security:verify-merkle": "tsx scripts/security/verify-merkle-manifest.ts",
