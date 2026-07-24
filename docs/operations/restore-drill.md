@@ -339,12 +339,17 @@ pnpm drill:provision-commands \
 bash evidence/dr-drills/2026-Q2/20260615/provision.sh
 
 # ---- Resolve restored cluster credentials + DATABASE_URL --------
-# (the provision.sh tail prints the export line; copy it)
+# (the provision.sh tail prints the writer endpoint + master user and
+# the secret to fetch the password from — compose DATABASE_URL in
+# your shell; the password is never echoed. MASTER user, not the app
+# role — see §5.1 learning #1.)
 
 # ---- Verify -----------------------------------------------------
-DATABASE_URL='postgres://...restored-endpoint...' \
+# Pin --out-dir to the PROVISION-day folder (see §5.1 learning #5).
+DATABASE_URL='postgres://pharmax_admin:...@...restored-endpoint...:5432/pharmax?sslmode=require' \
   PHARMAX_LOCAL_KMS_SEED='...' \
-  pnpm drill:verify
+  pnpm tsx scripts/operations/run-restore-drill.ts --phase=verify \
+    --out-dir=evidence/dr-drills/2026-Q2/20260615
 
 # ---- RLS sanity (HUMAN — see §2.4) ------------------------------
 psql "$DATABASE_URL" -c 'RESET ALL; SELECT count(*) FROM "patient";'
@@ -383,6 +388,54 @@ now evidence per [§ Failure mode](#failure-mode-the-drill-fails)
 below. The `finalize` phase will render `Destroy confirmed: NO` and
 embed the failure-mode banner in `evidence.md` so the auditor sees
 the right disposition.
+
+### 5.1 First-execution learnings (2026-Q3, 2026-07-23/24)
+
+The first live run of the helper against the production account
+surfaced five operational facts. The script + this runbook have been
+updated for each, but they're recorded here because the WHY matters
+on the next drill day:
+
+1. **Verify must connect as the master user** (`pharmax_admin`).
+   The stack's app role is RLS-subject: without a tenancy GUC it
+   reads ZERO rows on every tenant-scoped table, which makes the
+   audit-chain walk vacuous — it "passes" having checked nothing.
+   The master user owns the tables and bypasses RLS. (Incidentally,
+   the zero-rows-as-app-role observation IS the §2.4 RLS-sanity
+   signal — fail-closed confirmed live.)
+2. **`MasterUserSecret` is null on this stack's clusters.** The
+   master password is Terraform-managed in
+   `<name-prefix>/database-password`, NOT an RDS-managed secret.
+   PITR restores inherit the SOURCE cluster's password. The
+   generated `provision.sh` now handles both custody modes and
+   never echoes the password.
+3. **Access path when no bastion exists**: create an ephemeral
+   drill-tagged SSM jumpbox (t4g.micro, private subnet, SSM-core
+   instance profile, no inbound SG rules) + a drill-only DB SG
+   allowing 5432 from the jumpbox SG only, then
+   `aws ssm start-session --document-name AWS-StartPortForwardingSessionToRemoteHost`.
+   Tear ALL of it down with the drill (instance, both SGs, IAM
+   role + instance profile). Note: SSM port-forward sessions idle
+   out (~20 min); restart before the verify phase, not before
+   provisioning.
+4. **TLS through the tunnel**: the host is rewritten to
+   `127.0.0.1`, so `verify-full` hostname validation cannot pass.
+   Use `?uselibpqcompat=true&sslmode=require` for the drill
+   connection ONLY (the pg driver otherwise upgrades `require` to
+   `verify-full`). Production keeps `verify-full`.
+5. **Pin `--out-dir` on every phase after day one.** The default
+   drill folder is keyed on TODAY'S date; a verify that runs the
+   morning after provisioning writes its sidecar into a NEW folder
+   and `finalize` then can't find the earlier phases. Pass
+   `--out-dir=evidence/dr-drills/<Q>/<provision-date>/` explicitly.
+
+The drill also caught a real product bug — `withSystemContext` /
+`withTenancyContext` lost the ALS frame for lazy PrismaPromise
+thenables returned without an inner await, so the verify phase's
+org enumeration failed `TENANCY_NO_CONTEXT` on a correctly-wrapped
+call. Fixed in `packages/tenancy/src/als.ts` (+3 regression tests)
+the same day. That is the drill working as designed: the restored
+cluster exercised a code path production traffic hadn't hit yet.
 
 ---
 

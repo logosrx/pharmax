@@ -80,16 +80,38 @@ export function composeProvisionScript(args: ProvisionScriptArgs): string {
     'aws rds wait db-instance-available --db-instance-identifier "$NEW_INSTANCE_ID"',
     "",
     "# ---- Resolve credentials + writer endpoint --------------------------------",
+    "# The verify phase must connect as the MASTER user (table owner —",
+    "# bypasses RLS) so the cross-org audit-chain walk sees every",
+    "# tenant's rows. An RLS-subject app role would read ZERO rows",
+    "# without a tenancy GUC and make the chain walk vacuous.",
+    "# (Learned on the 2026-Q3 first execution.)",
     'WRITER=$(aws rds describe-db-clusters --db-cluster-identifier "$NEW_CLUSTER_ID" \\',
     "  --query 'DBClusters[0].Endpoint' --output text)",
+    'MASTER_USER=$(aws rds describe-db-clusters --db-cluster-identifier "$NEW_CLUSTER_ID" \\',
+    "  --query 'DBClusters[0].MasterUsername' --output text)",
     'MASTER_SECRET_ARN=$(aws rds describe-db-clusters --db-cluster-identifier "$NEW_CLUSTER_ID" \\',
     "  --query 'DBClusters[0].MasterUserSecret.SecretArn' --output text)",
-    'SECRET=$(aws secretsmanager get-secret-value --secret-id "$MASTER_SECRET_ARN" \\',
-    "  --query SecretString --output text)",
     "",
-    'echo "Restored writer endpoint: $WRITER"',
-    'echo "Set DATABASE_URL to: postgres://$(echo "$SECRET" | jq -r .username):$(echo "$SECRET" | jq -r .password)@$WRITER:5432/pharmax?sslmode=require"',
-    'echo "Then run: pnpm drill:verify"',
+    "# Two password custody modes — do NOT echo the password either way:",
+    'if [ "$MASTER_SECRET_ARN" = "None" ] || [ -z "$MASTER_SECRET_ARN" ]; then',
+    "  # Terraform-managed master password (this stack's configuration).",
+    "  # PITR restores inherit the SOURCE cluster's password, so read the",
+    "  # stack's database-password secret:",
+    `  MASTER_PW=$(aws secretsmanager get-secret-value --secret-id ${shellQuote(`${deriveNamePrefix(args.sourceClusterId)}/database-password`)} \\`,
+    "    --query SecretString --output text)",
+    "else",
+    "  # RDS-managed master secret (ManageMasterUserPassword clusters).",
+    '  MASTER_PW=$(aws secretsmanager get-secret-value --secret-id "$MASTER_SECRET_ARN" \\',
+    "    --query SecretString --output text | jq -r .password)",
+    "fi",
+    "",
+    'echo "Restored writer endpoint: $WRITER (master user: $MASTER_USER)"',
+    'echo "Compose DATABASE_URL in your shell WITHOUT printing the password:"',
+    "echo '  DATABASE_URL=\"postgres://'\"$MASTER_USER\"':<MASTER_PW>@'\"$WRITER\"':5432/pharmax?sslmode=require\"'",
+    'echo "If connecting through an SSM port-forward tunnel (host rewritten to"',
+    'echo "127.0.0.1), use ?uselibpqcompat=true&sslmode=require — the pg driver"',
+    'echo "otherwise upgrades require to verify-full and fails on the hostname."',
+    'echo "Then run: pnpm drill:verify -- --out-dir=<this drill folder>"',
     "",
   ].join("\n");
 }
@@ -325,4 +347,19 @@ function formatPassFail(ok: boolean): string {
  */
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Derives the stack name-prefix from an Aurora cluster id following
+ * the `<name-prefix>-aurora` convention (e.g.
+ * `pharmax-prod-ue1-aurora` → `pharmax-prod-ue1`). Used to compose
+ * the Terraform-managed `<name-prefix>/database-password` secret id
+ * in the provision script's credentials tail. Falls back to the full
+ * cluster id when the suffix is absent — the emitted secret id is a
+ * human-facing hint inside a generated script, not a load-bearing
+ * runtime lookup, so a wrong guess surfaces as an obvious
+ * ResourceNotFound at drill time.
+ */
+export function deriveNamePrefix(clusterId: string): string {
+  return clusterId.endsWith("-aurora") ? clusterId.slice(0, -"-aurora".length) : clusterId;
 }

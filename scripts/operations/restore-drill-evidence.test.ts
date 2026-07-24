@@ -103,6 +103,41 @@ describe("composeProvisionScript", () => {
     });
     expect(script).toContain("SRC_CLUSTER_ID='alice'\\''s-cluster'");
   });
+
+  // Credentials tail — behavior pinned after the 2026-Q3 first
+  // execution (the production cluster's master password is
+  // Terraform-managed, so MasterUserSecret is null and the original
+  // RDS-managed-only lookup failed).
+
+  it("handles both password custody modes: RDS-managed secret AND Terraform-managed fallback", () => {
+    expect(SCRIPT).toContain("MasterUserSecret.SecretArn");
+    expect(SCRIPT).toContain('if [ "$MASTER_SECRET_ARN" = "None" ]');
+    // Terraform-managed fallback derives <name-prefix>/database-password
+    // from the source cluster id (strips the -aurora suffix).
+    expect(SCRIPT).toContain("--secret-id 'pharmax-prod-use1/database-password'");
+  });
+
+  it("resolves the master username from the restored cluster (verify must bypass RLS)", () => {
+    expect(SCRIPT).toContain("MasterUsername");
+    expect(SCRIPT).toContain("MASTER_USER=");
+  });
+
+  it("never echoes the password value into the terminal", () => {
+    // The tail instructs the operator to compose DATABASE_URL with a
+    // <MASTER_PW> placeholder; no echo line interpolates $MASTER_PW
+    // or pipes the secret through jq into an echo.
+    for (const line of SCRIPT.split("\n")) {
+      if (line.trimStart().startsWith("echo")) {
+        expect(line).not.toContain("$MASTER_PW");
+        expect(line).not.toContain("jq -r .password");
+      }
+    }
+  });
+
+  it("documents the SSM-tunnel TLS mode + out-dir pinning in the operator instructions", () => {
+    expect(SCRIPT).toContain("uselibpqcompat=true&sslmode=require");
+    expect(SCRIPT).toContain("--out-dir=");
+  });
 });
 
 describe("composeTeardownScript", () => {
