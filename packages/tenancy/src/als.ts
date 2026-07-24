@@ -56,9 +56,24 @@ const storage = runtime.globalSingleton(
  * Run `fn` inside a user-tenancy context. All queries on tenant-
  * scoped models within `fn` (and its async continuations) will be
  * auto-scoped to `ctx.organizationId`.
+ *
+ * The callback's return value is awaited INSIDE the ALS frame (the
+ * async wrapper below), not merely returned through it. This matters
+ * for LAZY thenables — Prisma's PrismaPromise defers query execution
+ * until `.then()` is called, so a callback like
+ * `() => prisma.order.findMany(...)` that returns the bare
+ * PrismaPromise without awaiting would otherwise execute the query
+ * AFTER the frame exits, and the tenancy extension would see no
+ * context (fail-closed TENANCY_NO_CONTEXT on a correctly-wrapped
+ * call site). First surfaced by the 2026-Q3 restore drill's verify
+ * phase after Prisma 7 + the tenancy-registry classification of
+ * `Organization`.
  */
-export function withTenancyContext<T>(ctx: TenancyContext, fn: () => Promise<T> | T): Promise<T> {
-  return Promise.resolve(storage.run({ kind: "user", ctx }, fn));
+export function withTenancyContext<T>(
+  ctx: TenancyContext,
+  fn: () => PromiseLike<T> | T
+): Promise<T> {
+  return storage.run({ kind: "user", ctx }, async () => await fn());
 }
 
 /**
@@ -72,8 +87,10 @@ export function withTenancyContext<T>(ctx: TenancyContext, fn: () => Promise<T> 
  * check resolved from the calling process identity, and auto-write
  * the audit entry from within this wrapper.
  */
-export function withSystemContext<T>(reason: string, fn: () => Promise<T> | T): Promise<T> {
-  return Promise.resolve(storage.run({ kind: "system", reason }, fn));
+export function withSystemContext<T>(reason: string, fn: () => PromiseLike<T> | T): Promise<T> {
+  // Await inside the frame — see withTenancyContext for why (lazy
+  // thenables like PrismaPromise must begin execution in-frame).
+  return storage.run({ kind: "system", reason }, async () => await fn());
 }
 
 /**

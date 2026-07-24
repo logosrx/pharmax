@@ -129,6 +129,57 @@ describe("AsyncLocalStorage tenancy context", () => {
       expect(describeCurrentContext()).toBe("system");
     });
   });
+
+  // ---------------------------------------------------------------
+  // Lazy-thenable regression (found by the 2026-Q3 restore drill).
+  //
+  // Prisma's PrismaPromise defers query execution until `.then()` is
+  // called. A callback like `() => prisma.organization.findMany(...)`
+  // returns the bare thenable WITHOUT awaiting it inside the frame,
+  // so the actual work begins when the wrapper's caller awaits — which
+  // was OUTSIDE the ALS frame before the fix. These tests model that
+  // with a hand-rolled lazy thenable whose `then()` records what the
+  // ALS frame looked like at execution time.
+  // ---------------------------------------------------------------
+
+  function lazyThenable<T>(produce: () => T): PromiseLike<T> {
+    return {
+      then<R1 = T, R2 = never>(
+        onFulfilled?: ((value: T) => R1 | PromiseLike<R1>) | null,
+        onRejected?: ((reason: unknown) => R2 | PromiseLike<R2>) | null
+      ): PromiseLike<R1 | R2> {
+        // Work begins HERE — at .then() time, like PrismaPromise.
+        return Promise.resolve()
+          .then(() => produce())
+          .then(onFulfilled ?? undefined, onRejected ?? undefined);
+      },
+    };
+  }
+
+  it("withSystemContext keeps the frame active for lazy thenables returned without await", async () => {
+    const seen = await withSystemContext("drill:list-orgs", () =>
+      lazyThenable(() => ({
+        system: isSystemContext(),
+        reason: getSystemContextReason(),
+      }))
+    );
+    expect(seen).toEqual({ system: true, reason: "drill:list-orgs" });
+  });
+
+  it("withTenancyContext keeps the frame active for lazy thenables returned without await", async () => {
+    const ctx = fixtureCtx({ organizationId: "org-lazy" });
+    const seen = await withTenancyContext(ctx, () =>
+      lazyThenable(() => getCurrentContext()?.organizationId ?? "<none>")
+    );
+    expect(seen).toBe("org-lazy");
+  });
+
+  it("frame does NOT leak to work scheduled after the wrapper resolves", async () => {
+    await withSystemContext("drill:scoped", async () => undefined);
+    // After the wrapper resolves, subsequent microtasks are frame-free.
+    const after = await Promise.resolve().then(() => isSystemContext());
+    expect(after).toBe(false);
+  });
 });
 
 describe("buildTenancyContext", () => {
