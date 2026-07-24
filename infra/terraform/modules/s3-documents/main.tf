@@ -18,7 +18,7 @@ resource "random_id" "suffix" {
 }
 
 locals {
-  bucket_name = "${var.name_prefix}-documents-${random_id.suffix.hex}"
+  bucket_name = "${var.name_prefix}-${var.purpose}-${random_id.suffix.hex}"
 }
 
 resource "aws_s3_bucket" "this" {
@@ -26,7 +26,7 @@ resource "aws_s3_bucket" "this" {
 
   tags = merge(var.tags, {
     Name               = local.bucket_name
-    Purpose            = "documents"
+    Purpose            = var.purpose
     DataClassification = "phi"
   })
 }

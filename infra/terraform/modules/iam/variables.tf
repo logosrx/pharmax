@@ -47,6 +47,16 @@ variable "logs_key_arn" {
   default     = null
 }
 
+variable "documents_key_arn" {
+  description = "Documents CMK ARN — SSE-KMS key for the documents + package-photos buckets. Task roles that put/get objects in those buckets need GenerateDataKey/Decrypt on it (S3 calls KMS on the caller's behalf)."
+  type        = string
+}
+
+variable "package_photos_bucket_arn" {
+  description = "Package-photos bucket ARN (web: rw for capture/dispatch; worker: list+delete for the orphan sweeper)."
+  type        = string
+}
+
 variable "documents_bucket_arn" {
   description = "ARN of the documents S3 bucket."
   type        = string

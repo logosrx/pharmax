@@ -31,6 +31,7 @@ output "kms_secrets_key_arn" { value = module.stack.kms_secrets_key_arn }
 output "kms_logs_key_arn" { value = module.stack.kms_logs_key_arn }
 
 output "s3_documents_bucket_name" { value = module.stack.s3_documents_bucket_name }
+output "s3_package_photos_bucket_name" { value = module.stack.s3_package_photos_bucket_name }
 output "s3_audit_archive_bucket_name" { value = module.stack.s3_audit_archive_bucket_name }
 
 output "secret_arns" { value = module.stack.secret_arns }

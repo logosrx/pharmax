@@ -167,6 +167,23 @@ module "s3_documents" {
   tags                       = local.phi_tags
 }
 
+# Package-photo bytes (dock-capture proof-of-condition shots). Same
+# deletable-PHI bucket profile as documents (SSE-KMS, versioned,
+# TLS-only, NO Object Lock — tenant-shred must be able to delete), same
+# documents CMK (same PHI-image data class; avoids minting a CMK that
+# the kms-inventory gate would require documenting separately). The
+# app's production boot guard refuses to start without this bucket —
+# in-memory photo storage loses captures across instances/redeploys.
+module "s3_package_photos" {
+  source = "./modules/s3-documents"
+
+  name_prefix                = local.name_prefix
+  purpose                    = "package-photos"
+  kms_key_arn                = module.kms.documents_key_arn
+  noncurrent_expiration_days = var.environment == "prod" ? 365 : 90
+  tags                       = local.phi_tags
+}
+
 # -----------------------------------------------------------------------------
 # IAM — least-privilege task roles per service, scoped to per-key ARNs.
 # -----------------------------------------------------------------------------
@@ -174,19 +191,21 @@ module "s3_documents" {
 module "iam" {
   source = "./modules/iam"
 
-  name_prefix              = local.name_prefix
-  aws_account_id           = data.aws_caller_identity.current.account_id
-  region                   = var.region
-  data_key_arn             = module.kms.data_key_arn
-  search_key_arn           = module.kms.search_key_arn
-  asymm_sign_key_arn       = module.kms.asymm_sign_key_arn
-  audit_archive_key_arn    = module.kms.audit_archive_key_arn
-  secrets_key_arn          = module.kms.secrets_key_arn
-  logs_key_arn             = module.kms.logs_key_arn
-  documents_bucket_arn     = module.s3_documents.bucket_arn
-  audit_archive_bucket_arn = module.s3_audit_archive.bucket_arn
-  secret_arns              = module.secrets.secret_arns
-  tags                     = local.common_tags
+  name_prefix               = local.name_prefix
+  aws_account_id            = data.aws_caller_identity.current.account_id
+  region                    = var.region
+  data_key_arn              = module.kms.data_key_arn
+  search_key_arn            = module.kms.search_key_arn
+  asymm_sign_key_arn        = module.kms.asymm_sign_key_arn
+  audit_archive_key_arn     = module.kms.audit_archive_key_arn
+  secrets_key_arn           = module.kms.secrets_key_arn
+  logs_key_arn              = module.kms.logs_key_arn
+  documents_key_arn         = module.kms.documents_key_arn
+  documents_bucket_arn      = module.s3_documents.bucket_arn
+  package_photos_bucket_arn = module.s3_package_photos.bucket_arn
+  audit_archive_bucket_arn  = module.s3_audit_archive.bucket_arn
+  secret_arns               = module.secrets.secret_arns
+  tags                      = local.common_tags
 }
 
 # -----------------------------------------------------------------------------
@@ -253,6 +272,11 @@ module "ecs" {
   asymm_sign_kms_key_alias    = module.kms.asymm_sign_key_alias
   audit_archive_kms_key_alias = module.kms.audit_archive_key_alias
   audit_archive_bucket_name   = module.s3_audit_archive.bucket_name
+
+  # Package-photo storage (apps/web boot guard requires both in prod;
+  # the worker uses the bucket name for the orphan-object sweeper).
+  package_photos_bucket_name   = module.s3_package_photos.bucket_name
+  package_photos_kms_key_alias = module.kms.documents_key_alias
 
   # Inject REPORTING_DATABASE_URL (Aurora reader endpoint) only when a reader
   # instance exists; otherwise reports read the primary writer.

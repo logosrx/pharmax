@@ -300,7 +300,12 @@ resource "aws_iam_role_policy" "task_web_secrets" {
   policy = data.aws_iam_policy_document.secrets_read_all.json
 }
 
-# Documents bucket — full ObjectGet + Put, scoped to bucket ARN only.
+# Documents + package-photos buckets — ObjectGet + Put, scoped to the
+# two bucket ARNs, plus the SSE-KMS grants S3 exercises on the caller's
+# behalf for every encrypted put/get. (The KMS statement was previously
+# missing entirely — puts to either bucket would have failed
+# AccessDenied at kms:GenerateDataKey; surfaced while wiring the
+# package-photos boot requirement, 2026-07-24.)
 data "aws_iam_policy_document" "task_web_documents" {
   statement {
     sid    = "DocumentsList"
@@ -309,7 +314,10 @@ data "aws_iam_policy_document" "task_web_documents" {
       "s3:ListBucket",
       "s3:GetBucketLocation",
     ]
-    resources = [var.documents_bucket_arn]
+    resources = [
+      var.documents_bucket_arn,
+      var.package_photos_bucket_arn,
+    ]
   }
 
   statement {
@@ -321,7 +329,30 @@ data "aws_iam_policy_document" "task_web_documents" {
       "s3:DeleteObject",
       "s3:GetObjectVersion",
     ]
-    resources = ["${var.documents_bucket_arn}/*"]
+    resources = [
+      "${var.documents_bucket_arn}/*",
+      "${var.package_photos_bucket_arn}/*",
+    ]
+  }
+
+  # SSE-KMS on the documents CMK (shared by both buckets). Scoped to
+  # use via S3 only — the web tier's application-layer crypto uses the
+  # separate data/search CMKs granted elsewhere.
+  statement {
+    sid    = "DocumentsKmsViaS3"
+    effect = "Allow"
+    actions = [
+      "kms:GenerateDataKey",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+    ]
+    resources = [var.documents_key_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["s3.${var.region}.amazonaws.com"]
+    }
   }
 }
 
@@ -465,6 +496,23 @@ data "aws_iam_policy_document" "task_worker_buckets" {
       "s3:GetBucketLocation",
     ]
     resources = [var.audit_archive_bucket_arn]
+  }
+
+  # Package-photos orphan sweeper: list `org/*/photo/upload/*` and
+  # delete objects with no backing package_photo row. No Get / no Put —
+  # the worker never reads or writes photo bytes.
+  statement {
+    sid       = "PackagePhotosSweepList"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [var.package_photos_bucket_arn]
+  }
+
+  statement {
+    sid       = "PackagePhotosSweepDelete"
+    effect    = "Allow"
+    actions   = ["s3:DeleteObject"]
+    resources = ["${var.package_photos_bucket_arn}/*"]
   }
 }
 

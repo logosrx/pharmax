@@ -180,6 +180,11 @@ output "s3_documents_bucket_name" {
   value       = module.s3_documents.bucket_name
 }
 
+output "s3_package_photos_bucket_name" {
+  description = "Bucket name for package-photo bytes (S3_PACKAGE_PHOTOS_BUCKET)."
+  value       = module.s3_package_photos.bucket_name
+}
+
 output "s3_documents_bucket_arn" {
   description = "Bucket ARN for prescription documents / labels."
   value       = module.s3_documents.bucket_arn

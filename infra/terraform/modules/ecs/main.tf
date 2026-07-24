@@ -213,6 +213,12 @@ resource "aws_ecs_task_definition" "web" {
         { name = "AWS_KMS_APP_KEY_ID", value = var.data_kms_key_alias },
         { name = "AWS_KMS_DATA_KEY_ID", value = var.data_kms_key_alias },
         { name = "AWS_KMS_SEARCH_KEY_ID", value = var.search_kms_key_alias },
+        # Package-photo S3 storage. The app's production boot guard
+        # refuses to start without BOTH (in-memory storage loses
+        # captures across instances/redeploys) — see
+        # apps/web/src/server/bootstrap.ts buildPackagePhotoStorage.
+        { name = "S3_PACKAGE_PHOTOS_BUCKET", value = var.package_photos_bucket_name },
+        { name = "S3_PACKAGE_PHOTOS_KMS_KEY_ID", value = var.package_photos_kms_key_alias },
         ],
         var.web_support_email != "" ? [{ name = "SUPPORT_EMAIL", value = var.web_support_email }] : [],
         var.web_app_url != "" ? [{ name = "APP_URL", value = var.web_app_url }] : [],
@@ -356,6 +362,10 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "MERKLE_SIGNER_KMS_KEY_ID", value = var.asymm_sign_kms_key_alias },
         { name = "AUDIT_ARCHIVE_S3_BUCKET", value = var.audit_archive_bucket_name },
         { name = "AUDIT_ARCHIVE_S3_KMS_KEY_ID", value = var.audit_archive_kms_key_alias },
+        # Enables the package-photo orphan-object sweeper (lists
+        # org/*/photo/upload/* and deletes objects with no backing
+        # package_photo row). MUST match the web tier's bucket.
+        { name = "S3_PACKAGE_PHOTOS_BUCKET", value = var.package_photos_bucket_name },
       ]
 
       secrets = [for s in local.worker_secret_env : {

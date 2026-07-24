@@ -132,6 +132,16 @@ variable "audit_archive_kms_key_alias" {
   type        = string
 }
 
+variable "package_photos_bucket_name" {
+  description = "S3 bucket holding package-photo bytes (S3_PACKAGE_PHOTOS_BUCKET for web + worker). The web app's production boot guard requires it."
+  type        = string
+}
+
+variable "package_photos_kms_key_alias" {
+  description = "KMS CMK alias for SSE-KMS on package-photo objects (S3_PACKAGE_PHOTOS_KMS_KEY_ID; the documents CMK)."
+  type        = string
+}
+
 variable "audit_archive_bucket_name" {
   description = "Bucket name for the Object-Lock audit archive. Injected as AUDIT_ARCHIVE_BUCKET into the worker container."
   type        = string
