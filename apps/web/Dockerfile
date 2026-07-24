@@ -50,6 +50,21 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 ENV DATABASE_URL="postgresql://build:build@127.0.0.1:5432/build"
 RUN pnpm --filter pharmacy-os build
 
+# @node-rs/argon2 (the @pharmax/auth Argon2id hasher) is a NATIVE module
+# declared in packages/auth — NOT in apps/web — so under pnpm's strict
+# node_modules layout it is not resolvable from the app at trace time and
+# Next's file tracer silently omits it from the standalone output. (The
+# webpack `externals` entry in next.config.mjs keeps it out of the bundle,
+# which is correct — but that makes runtime resolution from node_modules
+# mandatory.) First surfaced in prod on 2026-07-24: tasks served /health
+# but every SSR request failed MODULE_NOT_FOUND. Materialize the package +
+# its platform-specific binary as REAL files (pnpm deploy dereferences the
+# store symlinks) so the runner can copy them into the standalone tree.
+RUN pnpm --filter @pharmax/auth --prod deploy /tmp/authdeps --legacy \
+  && mkdir -p /tmp/argon2-runtime/@node-rs \
+  && cp -rL /tmp/authdeps/node_modules/.pnpm/@node-rs+argon2@*/node_modules/@node-rs/. /tmp/argon2-runtime/@node-rs/ \
+  && ls /tmp/argon2-runtime/@node-rs/
+
 # ---- Runner: minimal standalone runtime ------------------------------------
 FROM base AS runner
 ENV NODE_ENV=production
@@ -88,6 +103,12 @@ COPY --chown=node:node --from=builder /app/apps/web/.next/static ./apps/web/.nex
 COPY --chown=node:node --from=builder \
   /app/packages/database/src/certs/rds-global-bundle.pem \
   ./packages/database/src/certs/rds-global-bundle.pem
+
+# @node-rs/argon2 + its platform binary, materialized by the builder (see
+# the pnpm-deploy step there for why the tracer misses it). Placed under
+# the standalone node_modules so `require("@node-rs/argon2")` from the
+# bundled server resolves via the normal up-walk to /app/node_modules.
+COPY --chown=node:node --from=builder /tmp/argon2-runtime/@node-rs ./node_modules/@node-rs
 
 # Bind to all interfaces; PORT is overridden by the ECS task definition.
 ENV PORT=3000
