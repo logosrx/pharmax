@@ -201,6 +201,45 @@ export const NOTIFICATION_TEMPLATES = {
       "Operator-facing nightly security digest. Aggregates audit-chain status, break-glass sessions, outbox health, Sentry volume, and upcoming access reviews across every tenant org into a single per-day email. Wired via apps/worker/src/security/notification-channel-digest-publisher.ts.",
   },
 
+  // ---- Compliance (operator-facing, not tenant-facing) ------------------
+  /** Generic compliance notice — the transport for the
+   *  `ComplianceNotifier` port in the worker (quarterly access-review
+   *  "walk this report" nudges today; future compliance jobs reuse
+   *  the same template with a different `noticeKind`).
+   *
+   *  Audience: the operator's compliance distribution list
+   *  (`COMPLIANCE_NOTIFY_RECIPIENT_EMAIL`), NOT tenant inboxes — the
+   *  notice references one tenant org by id/slug but the reviewer is
+   *  the operator's compliance function.
+   *
+   *  PHI invariant: the `ComplianceNotifier` port contract already
+   *  forbids PHI in the notice body (operator emails, aggregate
+   *  counts, and evidence-artifact URIs only). `phiAllowed: false`
+   *  keeps the channel's structural sentinel gate active on top of
+   *  that as defense-in-depth.
+   *
+   *  Required context fields:
+   *
+   *  - `noticeKind` — stable machine-readable kind
+   *    (e.g. "access-review.ready") for inbox rules + dashboards.
+   *  - `organizationId` — the tenant org the notice concerns.
+   *  - `subject` — human-readable subject (the renderer prefixes it).
+   *  - `body` — pre-composed plain-text body, embedded verbatim.
+   *  - `severity` — "info" | "warning" | "critical"; drives the
+   *    subject badge so the reviewer can triage from the preview pane.
+   *
+   *  Optional: `evidenceUri` — link to the evidence artifact in the
+   *  audit-archive bucket, rendered as a clickable link.
+   */
+  COMPLIANCE_NOTICE_V1: {
+    id: "COMPLIANCE_NOTICE_V1",
+    channelKinds: ["email"] as const,
+    phiAllowed: false,
+    requiredContextKeys: ["noticeKind", "organizationId", "subject", "body", "severity"] as const,
+    description:
+      "Operator-facing compliance notice (ComplianceNotifier port transport). Carries a machine-readable notice kind, the tenant org it concerns, a severity badge, a pre-composed PHI-free body, and an optional evidence-artifact link. Wired via apps/worker/src/compliance/notification-channel-compliance-notifier.ts.",
+  },
+
   // ---- Shipping --------------------------------------------------------
   /** Order moved into the emergency bucket. Triggers from
    *  `order.escalated_to_emergency.v1`. */

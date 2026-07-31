@@ -12,6 +12,9 @@
 //   - Mismatched stripeInvoiceId: throws MARK_PAID_STRIPE_INVOICE_MISMATCH.
 //   - CAS miss: MARK_PAID_VERSION_MISMATCH.
 //   - Partial payment: amountDueCents > 0 residual.
+//   - Payment ledger: PAYMENT row appended on transition (keyed
+//     "stripe-paid:{eventId}") + `billing.payment.recorded.v1`
+//     emitted; NO row for zero-amount settles or short-circuits.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -45,6 +48,7 @@ interface FakeInvoice {
   stripeInvoiceId: string | null;
   invoiceNumber: string;
   clinicId: string;
+  currency: string;
 }
 
 interface FakeOverrides {
@@ -68,6 +72,7 @@ const defaultInvoice = (): FakeInvoice => ({
   stripeInvoiceId: STRIPE_INVOICE_ID,
   invoiceNumber: "INV-2026-05-0c0c0c0c",
   clinicId: CLINIC_ID,
+  currency: "usd",
 });
 
 function buildPrismaFake(overrides: FakeOverrides = {}): {
@@ -87,6 +92,16 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
       updateMany: vi.fn(async (args: unknown) => {
         calls.push({ table: "invoice", op: "updateMany", args });
         return { count: casCount };
+      }),
+    },
+    payment: {
+      create: vi.fn(async (args: unknown) => {
+        calls.push({ table: "payment", op: "create", args });
+        return { id: (args as { data: { id: string } }).data.id };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "payment", op: "findUnique", args });
+        return null;
       }),
     },
     commandLog: {
@@ -204,6 +219,47 @@ describe("MarkInvoicePaid — happy path", () => {
       }
     ).data;
     expect(outboxData[0]?.eventType).toBe("billing.invoice.paid.v1");
+    expect(outboxData[1]?.eventType).toBe("billing.payment.recorded.v1");
+    expect(outboxData[1]?.payload["kind"]).toBe("PAYMENT");
+    expect(outboxData[1]?.payload["amountCents"]).toBe(15000);
+  });
+
+  it("appends a PAYMENT ledger row keyed on the Stripe event id, in the same tx", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withSystemContext("billing-test", () =>
+      executeSystemCommand(MarkInvoicePaid, validInput)
+    );
+
+    const paymentCreates = fake.calls.filter((c) => c.table === "payment" && c.op === "create");
+    expect(paymentCreates).toHaveLength(1);
+    const data = (paymentCreates[0]!.args as { data: Record<string, unknown> }).data;
+    expect(data["kind"]).toBe("PAYMENT");
+    expect(data["method"]).toBe("STRIPE");
+    expect(data["amountCents"]).toBe(15000);
+    expect(data["currency"]).toBe("usd");
+    expect(data["paymentEventKey"]).toBe("stripe-paid:evt_TestPaid1");
+    expect(data["organizationId"]).toBe(ORG_ID);
+    expect(data["clinicId"]).toBe(CLINIC_ID);
+    expect(data["invoiceId"]).toBe(INVOICE_ID);
+    expect((data["occurredAt"] as Date).toISOString()).toBe("2026-05-31T23:00:00.000Z");
+  });
+
+  it("does NOT write a ledger row for a zero-amount settle (no money moved)", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withSystemContext("billing-test", () =>
+      executeSystemCommand(MarkInvoicePaid, { ...validInput, amountPaidCents: 0 })
+    );
+
+    expect(fake.calls.filter((c) => c.table === "payment" && c.op === "create")).toHaveLength(0);
+    const outboxCalls = fake.calls.filter(
+      (c) => c.table === "eventOutbox" && c.op === "createMany"
+    );
+    const outboxData = (outboxCalls[0]!.args as { data: Array<{ eventType: string }> }).data;
+    expect(outboxData.map((e) => e.eventType)).toEqual(["billing.invoice.paid.v1"]);
   });
 
   it("computes residualDueCents when Stripe collected less than totalCents", async () => {
@@ -242,6 +298,8 @@ describe("MarkInvoicePaid — idempotency", () => {
     expect(
       fake.calls.filter((c) => c.table === "eventOutbox" && c.op === "createMany")
     ).toHaveLength(0);
+    // No duplicate ledger row on redelivery.
+    expect(fake.calls.filter((c) => c.table === "payment" && c.op === "create")).toHaveLength(0);
   });
 
   it("returns recognized=false (no throw) when the Pharmax invoice does not exist", async () => {

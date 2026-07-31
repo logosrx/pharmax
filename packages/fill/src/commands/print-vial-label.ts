@@ -3,6 +3,7 @@ import { LabelStockKind, LabelPrinterStatus, PrintJobStatus } from "@pharmax/dat
 import { DEFAULT_VIAL_TEMPLATE_CODE, hashZplContent, renderVialLabelZpl } from "@pharmax/labels";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
+import { currentTraceparent } from "@pharmax/telemetry";
 import { z } from "zod";
 
 import { assertFillAssignee, assertFillInProgressWithAssignee } from "../fill-guards.js";
@@ -151,6 +152,10 @@ export const PrintVialLabel = defineCommand<PrintVialLabelInput, PrintVialLabelO
         contentHash: new Uint8Array(contentHash),
         isReprint: false,
         reprintReasonCode: null,
+        // Persist the requesting command's trace context so the
+        // print-agent (separate process, DB-polling — no HTTP hop)
+        // resumes this trace when it claims and prints the job.
+        traceparent: currentTraceparent(),
         requestedByUserId: ctx.actor.userId,
         commandLogId,
       },

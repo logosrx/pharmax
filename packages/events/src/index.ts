@@ -150,6 +150,7 @@ export type { BillingInvoiceRefundedV1Payload } from "./events/billing/invoice-r
 export type { BillingInvoiceCreditedV1Payload } from "./events/billing/invoice-credited-v1.js";
 export type { BillingInvoiceUncollectibleV1Payload } from "./events/billing/invoice-uncollectible-v1.js";
 export type { BillingInvoiceVoidedV1Payload } from "./events/billing/invoice-voided-v1.js";
+export type { BillingPaymentRecordedV1Payload } from "./events/billing/payment-recorded-v1.js";
 export type { BillingPricingRuleUpsertedV1Payload } from "./events/billing/pricing-rule-upserted-v1.js";
 
 export type { WorkflowOverlayUpsertedV1Payload } from "./events/workflow/overlay-upserted-v1.js";

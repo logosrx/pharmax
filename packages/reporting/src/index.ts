@@ -27,6 +27,18 @@ export {
 } from "./reports/shipment-exception-breakdown.js";
 
 export {
+  shipmentTransitTimeReport,
+  type ShipmentTransitTimeParams,
+  type ShipmentTransitTimeRow,
+} from "./reports/shipment-transit-time.js";
+
+export {
+  shipmentsInFlightReport,
+  type ShipmentsInFlightParams,
+  type ShipmentInFlightRow,
+} from "./reports/shipments-in-flight.js";
+
+export {
   lotExpiryWarningsReport,
   type LotExpiryWarningsParams,
   type LotExpiryWarningRow,
@@ -37,6 +49,12 @@ export {
   type BillingSummaryByClinicParams,
   type BillingSummaryByClinicRow,
 } from "./reports/billing-summary-by-clinic.js";
+
+export {
+  invoiceAgingReport,
+  type InvoiceAgingParams,
+  type InvoiceAgingRow,
+} from "./reports/invoice-aging.js";
 
 export {
   userProductivityByStageReport,

@@ -16,6 +16,7 @@
     "@pharmax/rbac": "workspace:*",
     "@pharmax/scan": "workspace:*",
     "@pharmax/sla": "workspace:*",
+    "@pharmax/telemetry": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
     "@pharmax/workflow": "workspace:*",
     "zod": "^4.4.3"

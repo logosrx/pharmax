@@ -20,6 +20,7 @@ export {
 export type {
   AuditEntryDraft,
   Command,
+  ExecuteCommandResult,
   ExecuteOptions,
   HandlerDeps,
   HandlerResult,
@@ -29,7 +30,7 @@ export type {
   SystemHandlerResult,
 } from "./types.js";
 
-export { executeCommand } from "./execute-command.js";
+export { executeCommand, executeCommandDetailed } from "./execute-command.js";
 export { executeSystemCommand, type ExecuteSystemOptions } from "./execute-system-command.js";
 
 export {

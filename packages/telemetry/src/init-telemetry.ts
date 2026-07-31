@@ -138,6 +138,9 @@ export async function initTelemetry(options: TelemetryInitOptions): Promise<Tele
   }
 
   const { NodeSDK } = sdkMod;
+  // Samplers come from @opentelemetry/sdk-trace-base, re-exported by
+  // sdk-node under the `tracing` namespace — no extra dependency.
+  const { ParentBasedSampler, TraceIdRatioBasedSampler } = sdkMod.tracing;
   const { OTLPTraceExporter } = traceExporterMod;
   const { OTLPMetricExporter } = metricsExporterMod;
   const { PeriodicExportingMetricReader } = sdkMetricsMod;
@@ -178,6 +181,15 @@ export async function initTelemetry(options: TelemetryInitOptions): Promise<Tele
   const sdk = new NodeSDK({
     resource: resourceFromAttributes(resourceAttrs),
     traceExporter,
+    // ParentBased: honor the caller's sampling decision on child
+    // spans (so a trace sampled at the web tier stays sampled in the
+    // worker + print-agent after traceparent propagation), and apply
+    // the ratio only at trace ROOTS. Without an explicit sampler the
+    // SDK default was AlwaysOn — `tracesSamplerRatio` was resolved
+    // from OTEL_TRACES_SAMPLER_ARG and logged but silently ignored.
+    sampler: new ParentBasedSampler({
+      root: new TraceIdRatioBasedSampler(cfg.tracesSamplerRatio),
+    }),
     // Cast: NodeSDK and PeriodicExportingMetricReader can be
     // resolved from two different copies of @opentelemetry/sdk-metrics
     // depending on which transitive bumped first. The runtime

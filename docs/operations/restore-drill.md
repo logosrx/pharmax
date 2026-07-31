@@ -151,13 +151,14 @@ and reports the first break (if any).
 ```bash
 # From a workstation with the restored DB's connection string in DATABASE_URL:
 DATABASE_URL="postgres://pharmax_admin:...@<restored-endpoint>:5432/pharmax?sslmode=require" \
-  pnpm --filter @pharmax/audit verify:all
+  PHARMAX_LOCAL_KMS_SEED='...' \
+  pnpm drill:verify --out-dir=<drill-folder>
 ```
 
-Where `verify:all` is the wrapper script around
-[`verifyAuditChain`](../../packages/audit/src/chain/verifier.ts) that
-iterates over every organization, captures the result, and exits
-non-zero on the first break.
+The `drill:verify` phase wraps
+[`verifyChain`](../../packages/audit/src/chain/verifier.ts): it
+iterates over every organization, captures the per-org result into
+`verify.json`, and exits non-zero on the first break (see §5).
 
 Spot-check the `audit_chain_state` table directly:
 
@@ -222,8 +223,8 @@ into the quarterly drill folder in document storage:
 --db-instance-identifier "$NEW_INSTANCE_ID"` (proves not publicly
    accessible).
 3. The `psql` version string from §2.1.
-4. The `verify:all` exit code, full stdout, and a SHA-256 of the
-   output file.
+4. The `drill:verify` exit code, full stdout, and a SHA-256 of the
+   output file (`verify.json`).
 5. The row-count snapshot from §2.3 with the matching production
    counts for comparison.
 6. A screenshot of the RDS console "Configuration" tab on the restored
@@ -293,7 +294,7 @@ What each phase does (and what it doesn't):
 | `preflight`          | Read-only `kms:DescribeKey` on the cluster CMK (Enabled + ENCRYPT_DECRYPT + SYMMETRIC_DEFAULT), `rds:DescribeDBClusters` on the source (asserts `BackupRetentionPeriod ≥ 35` and `LatestRestorableTime ≥ --restore-time`), writes `preflight.json` to the drill folder. Exits non-zero on any failure.                                                               | Any write to AWS.                                                                   |
 | `provision-commands` | Computes the deterministic drill cluster + instance ids (`<src>-drill-YYYYMMDD` + `-0` suffix), emits `provision.sh` populated with the operator's variables — the operator copy-pastes a generated script rather than hand-substituting variables in the runbook (eliminates the "I typo'd the security group on a drill day" failure mode).                        | Run `provision.sh` for you — it's printed + saved, never executed.                  |
 | `verify`             | Connects to the RESTORED cluster (operator points `DATABASE_URL` at the restored endpoint), runs `SELECT version()` (engine version drift = finding), walks `verifyChain` across every org, captures critical-table row counts, writes `verify.json`. Exits non-zero on any chain break or smoke-connect failure.                                                    | The RLS sanity check from §2.4 — that one stays manual (psql under `pharmax_app`).  |
-| `teardown-commands`  | Emits `teardown.sh` with the same deterministic ids used at provision (so the destroy targets the same cluster even if days have passed and the operator forgot the suffix).                                                                                                                                                                                         | Run `teardown.sh` for you — same reason as `provision-commands`.                    |
+| `teardown-commands`  | Emits `teardown.sh` with the same deterministic ids used at provision (so the destroy targets the same cluster even if days have passed and the operator forgot the suffix). When the operator runs it, the script verifies the cluster is gone and then writes `teardown.json` (the destroy confirmation `finalize` reads).                                         | Run `teardown.sh` for you — same reason as `provision-commands`.                    |
 | `finalize`           | Reads every sidecar JSON the prior phases wrote, recovers the cluster ids by parsing `provision.sh`, composes `evidence.{json,md}` matching the [Evidence-capture template](#evidence-capture-template) below. Captain + observer + sign-off + findings are passed via `--captain`, `--observer`, `--sign-off`, `--findings`. Writes both files to the drill folder. | Take a screenshot of the RDS console — operator captures that for the audit folder. |
 
 Default drill folder: `evidence/dr-drills/<YYYY-Q#>/<YYYYMMDD>/`,
@@ -305,6 +306,7 @@ evidence/dr-drills/2026-Q2/20260615/
 ├── provision.sh
 ├── verify.json
 ├── teardown.sh
+├── teardown.json     # written by teardown.sh after the destroy is verified
 ├── evidence.json
 └── evidence.md
 ```
@@ -323,16 +325,16 @@ End-to-end drill sequence with the helper:
 ```bash
 # ---- Pre-flight (drill day, morning) -----------------------------
 pnpm drill:preflight \
-  --source-cluster-id=pharmax-prod-use1-aurora \
+  --source-cluster-id=pharmax-prod-ue1-aurora \
   --restore-time=2026-06-15T12:00:00Z \
   --region=us-east-1 \
-  --kms-alias=alias/pharmax-prod-use1-rds
+  --kms-alias=alias/pharmax-prod-ue1-rds
 
 # ---- Generate the provision script -------------------------------
 pnpm drill:provision-commands \
-  --source-cluster-id=pharmax-prod-use1-aurora \
+  --source-cluster-id=pharmax-prod-ue1-aurora \
   --restore-time=2026-06-15T12:00:00Z \
-  --subnet-group=pharmax-prod-use1-db \
+  --subnet-group=pharmax-prod-ue1-db \
   --drill-sg=sg-XXXXXXXXXXXXXXXXX
 
 # ---- Run the provision script (HUMAN — destructive AWS call) ----
@@ -357,9 +359,12 @@ psql "$DATABASE_URL" -c 'RESET ALL; SELECT count(*) FROM "patient";'
 
 # ---- Generate the teardown script -------------------------------
 pnpm drill:teardown-commands \
-  --source-cluster-id=pharmax-prod-use1-aurora
+  --source-cluster-id=pharmax-prod-ue1-aurora
 
 # ---- Run the teardown script (HUMAN — destructive AWS call) ----
+# On success it verifies the cluster is gone and writes teardown.json
+# into the drill folder — finalize reads that sidecar to render
+# "Destroy confirmed: YES".
 bash evidence/dr-drills/2026-Q2/20260615/teardown.sh
 
 # ---- Compose the final evidence artifact ------------------------
@@ -462,7 +467,7 @@ Restore time:   <ISO timestamp within retention window>
 
 §2. Verify
 - psql smoke connect:     PASS | FAIL
-- verify:all exit code:   0 | non-zero
+- drill:verify exit code: 0 | non-zero
 - Audit chain breaks:     none | list
 - Row counts vs primary:  attached
 - RLS sanity:             PASS | FAIL

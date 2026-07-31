@@ -45,6 +45,10 @@ import {
 import { Resend } from "resend";
 
 import {
+  renderComplianceNoticeEmail,
+  type ComplianceNoticeRenderInput,
+} from "./render-compliance-notice-email.js";
+import {
   renderReportCompletedEmail,
   type ReportCompletedRenderInput,
 } from "./render-report-completed-email.js";
@@ -214,6 +218,10 @@ function renderTemplate(
       const narrowed = coerceSecurityDigestContext(context);
       return renderSecurityDigestEmail(narrowed);
     }
+    case "COMPLIANCE_NOTICE_V1": {
+      const narrowed = coerceComplianceNoticeContext(context);
+      return renderComplianceNoticeEmail(narrowed);
+    }
     default:
       // Defensive: the channel guards have already validated that
       // the recipient kind matches the template's channelKinds,
@@ -277,6 +285,36 @@ function coerceSecurityDigestContext(
     brokenChainCount: requireFiniteNumber(ctx["brokenChainCount"], "brokenChainCount"),
     breakGlassCount: requireFiniteNumber(ctx["breakGlassCount"], "breakGlassCount"),
     outboxDeadCount: requireFiniteNumber(ctx["outboxDeadCount"], "outboxDeadCount"),
+  };
+}
+
+/**
+ * Narrow the raw notification context into the typed renderer
+ * input for COMPLIANCE_NOTICE_V1. Required keys are already
+ * confirmed present; we validate the severity enum here so a
+ * mistyped severity in a future compliance job surfaces as a
+ * loud NOTIFICATION_CONTEXT_INVALID rather than an unstyled badge.
+ */
+function coerceComplianceNoticeContext(
+  ctx: Readonly<Record<string, unknown>>
+): ComplianceNoticeRenderInput {
+  const severity = ctx["severity"];
+  if (severity !== "info" && severity !== "warning" && severity !== "critical") {
+    throw new errors.ValidationError({
+      code: "NOTIFICATION_CONTEXT_INVALID",
+      message: "COMPLIANCE_NOTICE_V1 context: severity must be info/warning/critical",
+      metadata: {
+        receivedSeverity: typeof severity === "string" ? severity : typeof severity,
+      },
+    });
+  }
+  return {
+    noticeKind: String(ctx["noticeKind"]),
+    organizationId: String(ctx["organizationId"]),
+    subject: String(ctx["subject"]),
+    body: String(ctx["body"]),
+    severity,
+    ...(typeof ctx["evidenceUri"] === "string" ? { evidenceUri: ctx["evidenceUri"] } : {}),
   };
 }
 

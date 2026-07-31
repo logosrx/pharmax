@@ -19,6 +19,7 @@
     "@pharmax/events": "workspace:*",
     "@pharmax/notifications": "workspace:*",
     "@pharmax/orders": "workspace:*",
+    "@pharmax/partner-api": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/reporting": "workspace:*",
     "resend": "^4.0.0",

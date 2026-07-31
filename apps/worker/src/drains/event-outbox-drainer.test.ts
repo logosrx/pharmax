@@ -35,6 +35,7 @@ function fakeRow(overrides: RowOverrides = {}): ClaimedOutboxEventRow {
     lastError: null,
     nextAttemptAt: null,
     dispatchedAt: null,
+    traceparent: null,
     createdAt: fixedNow,
   });
 }
@@ -117,6 +118,71 @@ describe("createOutboxDrainer.tick", () => {
     expect(client.eventOutbox.updateMany).toHaveBeenCalledWith({
       where: { id: "outbox_unhandled", attempts: 1 },
       data: expect.objectContaining({ status: "DISPATCHED" }),
+    });
+  });
+
+  it("runs the postHandlerHook after the domain handler AND for no-handler rows", async () => {
+    const handled = fakeRow({ id: "outbox_h", eventType: "order.created" });
+    const unhandled = fakeRow({ id: "outbox_u", eventType: "no.such.event" });
+    const client = makeClient([handled, unhandled]);
+
+    const calls: string[] = [];
+    const handler = vi.fn(async () => {
+      calls.push("handler");
+    });
+    const hook = vi.fn(async (row: ClaimedOutboxEventRow) => {
+      calls.push(`hook:${row.id}`);
+    });
+
+    const drainer = createOutboxDrainer(
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        client: client as any,
+        logger: noopLogger,
+        clock,
+        handlers: { "order.created": handler },
+        postHandlerHook: hook,
+      },
+      { batchSize: 25, leaseMs: 60_000 }
+    );
+
+    const result = await drainer.tick();
+    expect(result).toEqual({ claimed: 2, dispatched: 2, failed: 0, dead: 0, leaseLost: 0 });
+    // Hook runs for EVERY row (webhook fan-out must cover events
+    // with no domain consumer), always after the domain handler.
+    expect(calls).toEqual(["handler", "hook:outbox_h", "hook:outbox_u"]);
+  });
+
+  it("routes a postHandlerHook throw through the FAILED/backoff path", async () => {
+    const row = fakeRow({ id: "outbox_hookfail", eventType: "order.created", attempts: 1 });
+    const client = makeClient([row]);
+
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const hook = vi.fn().mockRejectedValue(new Error("fan-out transient failure"));
+
+    const drainer = createOutboxDrainer(
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        client: client as any,
+        logger: noopLogger,
+        clock,
+        handlers: { "order.created": handler },
+        postHandlerHook: hook,
+      },
+      { batchSize: 25, leaseMs: 60_000 }
+    );
+
+    const result = await drainer.tick();
+    // The domain handler succeeded but the hook threw: the ROW is
+    // FAILED and will retry (both sides are idempotent by contract,
+    // so the re-run is safe).
+    expect(result).toEqual({ claimed: 1, dispatched: 0, failed: 1, dead: 0, leaseLost: 0 });
+    expect(client.eventOutbox.updateMany).toHaveBeenCalledWith({
+      where: { id: "outbox_hookfail", attempts: 1 },
+      data: expect.objectContaining({
+        status: "FAILED",
+        lastError: "Error: fan-out transient failure",
+      }),
     });
   });
 

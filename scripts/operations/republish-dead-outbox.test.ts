@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildRepublishWhere, parseCli } from "./republish-dead-outbox.js";
+import { buildRepublishWhere, parseCli, summarizeDeadRows } from "./republish-dead-outbox.js";
 
 describe("buildRepublishWhere", () => {
   it("always pins status DEAD for id selections", () => {
@@ -24,6 +24,29 @@ describe("buildRepublishWhere", () => {
       eventType: "x.y.v1",
       organizationId: "org-1",
     });
+  });
+});
+
+describe("summarizeDeadRows", () => {
+  it("groups by (eventType, org) with count and oldest/newest timestamps", () => {
+    const t1 = new Date("2026-07-01T00:00:00.000Z");
+    const t2 = new Date("2026-07-02T00:00:00.000Z");
+    const t3 = new Date("2026-07-03T00:00:00.000Z");
+    const groups = summarizeDeadRows([
+      { eventType: "a.v1", organizationId: "org-1", createdAt: t2 },
+      { eventType: "a.v1", organizationId: "org-1", createdAt: t1 },
+      { eventType: "a.v1", organizationId: "org-2", createdAt: t3 },
+      { eventType: "b.v1", organizationId: "org-1", createdAt: t3 },
+    ]);
+    expect(groups).toEqual([
+      { eventType: "a.v1", organizationId: "org-1", count: 2, oldest: t1, newest: t2 },
+      { eventType: "a.v1", organizationId: "org-2", count: 1, oldest: t3, newest: t3 },
+      { eventType: "b.v1", organizationId: "org-1", count: 1, oldest: t3, newest: t3 },
+    ]);
+  });
+
+  it("returns empty for no rows", () => {
+    expect(summarizeDeadRows([])).toEqual([]);
   });
 });
 

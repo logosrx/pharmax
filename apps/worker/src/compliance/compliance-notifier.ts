@@ -6,12 +6,15 @@
 // PagerDuty for SEV-tier anomalies) is environment-specific and
 // orthogonal to the access-review logic.
 //
-// This port defines the contract. Implementations live elsewhere
-// (Resend adapter, Slack adapter, etc.) and are wired at boot. The
-// default implementation here is a logger-only stub so the job is
-// safe to run before the real transport lands — auditors can read
-// the structured log line to verify the notification was issued
-// at the right time, even without a downstream delivery.
+// This port defines the contract. The production implementation is
+// `NotificationChannelComplianceNotifier` (sibling module), which
+// delivers via the worker's Resend-backed notification channel and
+// the COMPLIANCE_NOTICE_V1 template; main.ts wires it when
+// COMPLIANCE_NOTIFY_RECIPIENT_EMAIL + the Resend channel are both
+// configured. The logger-only stub below remains the fallback so
+// the job is safe to run in dev/unconfigured environments —
+// auditors can still read the structured log line to verify the
+// notification was issued at the right time.
 //
 // PHI invariant: the notification body MUST NOT contain PHI. It is
 // allowed to contain operator emails (which are PII-not-PHI per
@@ -57,11 +60,10 @@ export interface ComplianceNotifier {
 }
 
 /**
- * Default stub: emits a structured log line. Production should
- * replace with a Resend/Slack adapter that implements the same
- * port. The stub is safe to keep in production as a fallback so
- * the access-review job never silently fails because the transport
- * is unconfigured.
+ * Fallback stub: emits a structured log line. Production wires
+ * `NotificationChannelComplianceNotifier` instead (see main.ts);
+ * this stub remains the default so the access-review job never
+ * silently fails when the email transport is unconfigured.
  */
 export class LoggingComplianceNotifier implements ComplianceNotifier {
   constructor(private readonly logger: Logger) {}

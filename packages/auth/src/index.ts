@@ -19,13 +19,22 @@ export {
   DEFAULT_SESSION_POLICY,
   DEFAULT_MFA_POLICY,
   DEFAULT_LOCKOUT_POLICY,
+  DEFAULT_SIGN_IN_RATE_LIMIT,
   DEFAULT_RESET_TOKEN_TTL_MS,
   MFA_REQUIRED_ROLE_CODES,
   type AuthConfiguration,
   type SessionPolicy,
   type MfaPolicy,
   type LockoutPolicy,
+  type SignInRateLimitPolicy,
 } from "./configure.js";
+export {
+  InMemoryRateLimiter,
+  NOOP_RATE_LIMITER,
+  type RateLimiter,
+  type RateLimitRule,
+  type RateLimitResult,
+} from "./rate-limit.js";
 
 export type { PasswordHasher } from "./password/hasher.js";
 export {
@@ -172,6 +181,7 @@ import * as acceptInviteModule from "./commands/accept-invite.js";
 import * as deactivateUserModule from "./commands/deactivate-user.js";
 import * as inviteModule from "./invite.js";
 import * as resetMailerModule from "./reset-mailer.js";
+import * as rateLimitModule from "./rate-limit.js";
 import * as errorsModule from "./errors.js";
 
 export const auth = {
@@ -199,5 +209,6 @@ export const auth = {
   ...deactivateUserModule,
   ...inviteModule,
   ...resetMailerModule,
+  ...rateLimitModule,
   ...errorsModule,
 } as const;

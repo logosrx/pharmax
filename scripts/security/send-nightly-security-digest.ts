@@ -10,10 +10,10 @@
 // Probes used today:
 //   - Audit chain: per-org `verifyChain` over the configured
 //     ChainSource.
-//   - Break-glass sessions: stubbed (returns empty) until the
-//     `break_glass_session` migration lands.
-//   - Failed logins: stubbed (returns empty) until the Clerk
-//     `clerk.session.failed.v1` outbox handler is wired.
+//   - Break-glass sessions: sessions opened in the window, from the
+//     `break_glass_session` table (phase5_break_glass_session).
+//   - Failed logins: per-org spike detection over the in-house
+//     identity engine's `login_attempt` ledger (ADR-0030).
 //   - Outbox: counts of `OutboxStatus = "DEAD"` rows in the window.
 //   - Sentry: stubbed (returns 0) until the Sentry API adapter lands.
 //   - Access reviews: stubbed (returns empty) — production reads
@@ -38,7 +38,11 @@ import {
   renderDigestAsText,
 } from "@pharmax/security";
 
-import { verifyChainProbeFromPrisma } from "./security-digest-probes.js";
+import {
+  breakGlassProbeFromPrisma,
+  failedLoginProbeFromPrisma,
+  verifyChainProbeFromPrisma,
+} from "./security-digest-probes.js";
 
 const USAGE = `
 Usage: pnpm tsx scripts/security/send-nightly-security-digest.ts \\
@@ -105,16 +109,8 @@ async function main(): Promise<void> {
     windowHours: args.windowHours,
     probes: {
       auditChain: verifyChainProbeFromPrisma(prisma),
-      breakGlass: {
-        async listOpenedInWindow() {
-          return [];
-        },
-      },
-      failedLogins: {
-        async listSpikes() {
-          return [];
-        },
-      },
+      breakGlass: breakGlassProbeFromPrisma(prisma),
+      failedLogins: failedLoginProbeFromPrisma(prisma),
       outbox: outboxStatusProbeFromPrisma(),
       sentry: {
         async fetchErrorVolume() {

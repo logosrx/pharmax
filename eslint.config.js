@@ -125,6 +125,9 @@ export default tseslint.config(
       "**/.turbo/**",
       "**/generated/**",
       "pnpm-lock.yaml",
+      // Drill/audit evidence artifacts (gitignored): one-off scripts
+      // captured for the evidence record, not maintained source code.
+      "evidence/**",
     ],
   },
   js.configs.recommended,
@@ -382,6 +385,68 @@ export default tseslint.config(
   // system-context ban.
   {
     files: ["packages/auth/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
+  // Override 3j: two NAMED partner-api bridge modules (ADR-0032) —
+  // the same pre-tenant shape as 3i, deliberately scoped to the two
+  // files rather than the package:
+  //   - api-key/resolve-api-key.ts turns an opaque bearer-token hash
+  //     into the (org, key) pair that BECOMES the tenancy frame —
+  //     the partner-path twin of packages/auth session resolution.
+  //   - webhooks/fan-out.ts is called from the worker's outbox drain
+  //     (itself an allowed bridge zone) and must read subscriptions
+  //     across the org the CLAIMED row belongs to before any frame
+  //     exists; the WHERE is explicitly org-scoped.
+  // Everything else in the package (commands/, signing, transport)
+  // stays under the full ban — commands go through the bus like any
+  // domain package. Keep the Prisma ban; drop the system-context ban.
+  {
+    files: [
+      "packages/partner-api/src/api-key/resolve-api-key.ts",
+      "packages/partner-api/src/webhooks/fan-out.ts",
+    ],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
+  // Override 3k: the print-agent's ONE boot-time bridge module —
+  // the same pre-tenant shape as 3b/3c/3i, deliberately scoped to
+  // the single file rather than the app:
+  //   - resolve-runtime-context.ts turns the agent's tenant-less
+  //     configuration (org slug + workstation code + actor email
+  //     env vars) into the (org, workstation, actor) tuple that
+  //     BECOMES the tenancy frame every subsequent poll-loop tick
+  //     runs in via withTenancyContext. No frame can exist before
+  //     this resolution by definition (chicken-and-egg).
+  // Everything else in the app stays under the full ban — print-job
+  // processing dispatches through the command bus inside the
+  // resolved tenancy. Keep the Prisma ban; drop the system-context
+  // ban.
+  {
+    files: ["apps/print-agent/src/resolve-runtime-context.ts"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
+  // Override 3l: the break-glass Prisma adapter — ONE named module,
+  // same deliberately-narrow scoping as 3j/3k. The break_glass_session
+  // and break_glass_action tables are platform-level and RLS-exempt
+  // by definition (see the module's SCHEMA.md): a break-glass session
+  // is opened precisely because normal tenancy/RBAC paths are
+  // unavailable, so there is no tenant frame to enter. The adapter
+  // wraps every write in withSystemContext so the tenancy layer
+  // records WHY a cross-tenant touch happened, and the session
+  // wrapper in break-glass-session.ts is itself the audit mechanism
+  // (per-operation action ledger). Everything else in
+  // packages/security stays under the full ban. Keep the Prisma ban;
+  // drop the system-context ban.
+  {
+    files: ["packages/security/src/break-glass/prisma-break-glass-client.ts"],
     rules: {
       "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
     },

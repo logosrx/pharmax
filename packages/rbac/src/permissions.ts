@@ -1,7 +1,7 @@
 // Typed permission registry.
 //
 // This file is the SINGLE source of truth for the action vocabulary
-// of the platform. It mirrors the 51 codes seeded by `prisma/seed.ts`
+// of the platform. It mirrors the codes seeded by `prisma/seed.ts`
 // — that mirror is verified by a test in `permissions.test.ts`.
 //
 // Why a typed constant object instead of a loose string enum:
@@ -42,6 +42,12 @@ export const PERMISSIONS = Object.freeze({
   PROVIDERS_UPDATE: "providers.update",
   PROVIDERS_DEACTIVATE: "providers.deactivate",
   PROVIDERS_REACTIVATE: "providers.reactivate",
+
+  // Clinic (practice) directory.
+  CLINICS_READ: "clinics.read",
+
+  // Inventory catalog: drug products + lots/batches.
+  INVENTORY_READ: "inventory.read",
 
   // Order lifecycle.
   ORDERS_CREATE: "orders.create",
@@ -143,6 +149,20 @@ export const PERMISSIONS = Object.freeze({
   // forge a snapshot. Restricted to OrgAdmin + SecurityOfficer in
   // the default role templates.
   COMPLIANCE_ACCESS_REVIEW_RECORD: "compliance.access_review.record",
+
+  // Platform surface (ADR-0032): partner API keys + outbound webhooks.
+  // Mint / revoke partner API keys for the public v1 API. The raw
+  // token is shown once at mint time; only its SHA-256 hash is
+  // stored. Restricted to OrgAdmin by default — a minted key can
+  // exercise any scope granted to it (bounded by the minter's RBAC
+  // for mutations), so key minting is itself a privileged action.
+  API_KEYS_MANAGE: "api.keys.manage",
+
+  // Create / revoke outbound webhook subscriptions (partner endpoint
+  // URL + event-type filter + HMAC signing secret). Exposed on the
+  // public v1 API so partners can self-serve; every subscription is
+  // limited to phi-safe registry events by construction.
+  WEBHOOKS_MANAGE: "webhooks.manage",
 } as const);
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -221,6 +241,16 @@ export const PERMISSION_METADATA: Readonly<
     description:
       "Reactivate a provider (status: INACTIVE \u2192 ACTIVE) with a reason code (license restored, sanction lifted, erroneous deactivation, etc.). Re-enables new orders against the prescriber. Distinct from PROVIDERS_DEACTIVATE so the audit and approval surfaces stay separable.",
     category: "Providers",
+  },
+  [PERMISSIONS.CLINICS_READ]: {
+    description:
+      "View the clinic (practice) directory: codes, names, statuses, and pharmacy-site links. Directory metadata only — no PHI.",
+    category: "Clinics",
+  },
+  [PERMISSIONS.INVENTORY_READ]: {
+    description:
+      "View the drug product catalog and inventory lots/batches (NDC, name, lot number, expiration, status). Read-only; lot assignment stays behind fill.assign_lot.",
+    category: "Inventory",
   },
   [PERMISSIONS.ORDERS_CREATE]: { description: "Create new orders.", category: "Orders" },
   [PERMISSIONS.ORDERS_READ]: {
@@ -402,6 +432,16 @@ export const PERMISSION_METADATA: Readonly<
     description:
       "Dispatch the RecordAccessReviewSnapshot command to freeze an immutable, digest-sealed (user → role → permission) snapshot for SOC 2 CC6.2 evidence. Separate from .view so the snapshot author is a deliberate, audited identity.",
     category: "Compliance",
+  },
+  [PERMISSIONS.API_KEYS_MANAGE]: {
+    description:
+      "Mint and revoke partner API keys for the public v1 API (ADR-0032). Raw tokens are shown once and stored only as SHA-256 hashes; a key's mutation authority is bounded by its scopes and its minter's live RBAC.",
+    category: "Platform",
+  },
+  [PERMISSIONS.WEBHOOKS_MANAGE]: {
+    description:
+      "Create and revoke outbound webhook subscriptions (partner endpoint URL, event-type filter, HMAC signing secret). Subscriptions are restricted to phi-safe registry events by construction (ADR-0032).",
+    category: "Platform",
   },
 });
 

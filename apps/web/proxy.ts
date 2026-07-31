@@ -6,6 +6,10 @@
 //   - PUBLIC routes (no auth required):
 //       /api/health          — liveness probe.
 //       /api/webhooks/(.*)   — signature-verified inbound webhooks.
+//       /api/v1/(.*)         — partner API; bearer API keys, not
+//                              session cookies. Every handler
+//                              authenticates via resolvePartnerContext
+//                              (401 without a valid key).
 //       /api/auth/(.*)       — sign-in / sign-out (how a session is
 //                              obtained; gating these would deadlock).
 //       /sign-in, /sign-up   — the auth UI surfaces.
@@ -38,6 +42,7 @@ function pathIsPublic(pathname: string): boolean {
   return (
     pathname === "/api/health" ||
     pathname.startsWith("/api/webhooks/") ||
+    pathname.startsWith("/api/v1/") ||
     pathname.startsWith("/api/auth/") ||
     pathname === "/sign-in" ||
     pathname.startsWith("/sign-in/") ||
@@ -82,7 +87,7 @@ function isSignUpClosedFromRequest(request: NextRequest): boolean {
   if (!pathIsSignUp(request.nextUrl.pathname)) return false;
   return shouldDenySignUpInMiddleware({
     nodeEnv: process.env["NODE_ENV"],
-    signupsEnabledRaw: process.env["CLERK_SIGNUPS_ENABLED"],
+    signupsEnabledRaw: process.env["SIGNUPS_ENABLED"],
     invitationTicket: request.nextUrl.searchParams.get("__clerk_ticket"),
   });
 }

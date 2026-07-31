@@ -66,6 +66,7 @@ function toClaimedRow(row: EventOutbox): ClaimedOutboxEventRow {
     lastError: row.lastError,
     nextAttemptAt: row.nextAttemptAt,
     dispatchedAt: row.dispatchedAt,
+    traceparent: row.traceparent,
     createdAt: row.createdAt,
   });
 }

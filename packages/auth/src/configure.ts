@@ -15,6 +15,7 @@ import type { clock } from "@pharmax/platform-core";
 import { authNotConfiguredError } from "./errors.js";
 import type { PasswordHasher } from "./password/hasher.js";
 import { DEFAULT_PASSWORD_POLICY, type PasswordPolicy } from "./password/policy.js";
+import { InMemoryRateLimiter, type RateLimiter, type RateLimitRule } from "./rate-limit.js";
 import { NOOP_PASSWORD_RESET_MAILER, type PasswordResetMailer } from "./reset-mailer.js";
 
 export interface SessionPolicy {
@@ -79,6 +80,22 @@ export const DEFAULT_LOCKOUT_POLICY: LockoutPolicy = Object.freeze({
   windowMs: 15 * 60 * 1000,
 });
 
+export interface SignInRateLimitPolicy {
+  /** Burst cap per client IP. */
+  readonly perIp: RateLimitRule;
+  /** Burst cap per target email. */
+  readonly perEmail: RateLimitRule;
+}
+
+/**
+ * Default sign-in burst limits (short window, in front of the durable
+ * DB lockout): 20 attempts/min per IP, 10 attempts/min per email.
+ */
+export const DEFAULT_SIGN_IN_RATE_LIMIT: SignInRateLimitPolicy = Object.freeze({
+  perIp: Object.freeze({ limit: 20, windowMs: 60 * 1000 }),
+  perEmail: Object.freeze({ limit: 10, windowMs: 60 * 1000 }),
+});
+
 export interface AuthConfiguration {
   readonly clock: clock.Clock;
   readonly hasher: PasswordHasher;
@@ -86,6 +103,10 @@ export interface AuthConfiguration {
   readonly session: SessionPolicy;
   readonly mfa: MfaPolicy;
   readonly lockout: LockoutPolicy;
+  /** Sign-in burst limits (in front of the durable DB lockout). */
+  readonly signInRateLimit: SignInRateLimitPolicy;
+  /** Distributed rate limiter. Defaults to an in-process limiter. */
+  readonly rateLimiter: RateLimiter;
   /** How long a password-reset token is valid. */
   readonly resetTokenTtlMs: number;
   /** Delivery port for reset links. Defaults to a safe no-op. */
@@ -127,6 +148,8 @@ export function buildAuthConfiguration(input: {
   readonly lockout?: Partial<LockoutPolicy>;
   readonly resetTokenTtlMs?: number;
   readonly passwordResetMailer?: PasswordResetMailer;
+  readonly signInRateLimit?: Partial<SignInRateLimitPolicy>;
+  readonly rateLimiter?: RateLimiter;
 }): AuthConfiguration {
   return Object.freeze({
     clock: input.clock,
@@ -135,6 +158,8 @@ export function buildAuthConfiguration(input: {
     session: Object.freeze({ ...DEFAULT_SESSION_POLICY, ...input.session }),
     mfa: Object.freeze({ ...DEFAULT_MFA_POLICY, ...input.mfa }),
     lockout: Object.freeze({ ...DEFAULT_LOCKOUT_POLICY, ...input.lockout }),
+    signInRateLimit: Object.freeze({ ...DEFAULT_SIGN_IN_RATE_LIMIT, ...input.signInRateLimit }),
+    rateLimiter: input.rateLimiter ?? new InMemoryRateLimiter(),
     resetTokenTtlMs: input.resetTokenTtlMs ?? DEFAULT_RESET_TOKEN_TTL_MS,
     passwordResetMailer: input.passwordResetMailer ?? NOOP_PASSWORD_RESET_MAILER,
   });

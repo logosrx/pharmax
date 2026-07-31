@@ -1,0 +1,492 @@
+openapi: 3.1.0
+info:
+  title: Pharmax Partner API
+  version: 1.0.0
+  description: |
+    Public v1 REST API for Pharmax partners (ADR-0032).
+
+    ## Authentication
+    Every request carries a partner API key as a bearer token:
+
+        Authorization: Bearer pxk_<43 base64url chars>
+
+    Keys are minted by an organization administrator in the Pharmax
+    ops console, carry an explicit scope list, and can be revoked at
+    any time. Unknown, malformed, and revoked keys all yield the same
+    401 — the API never confirms whether a revoked key was once valid.
+
+    ## Rate limiting
+    120 requests per rolling 60 seconds per API key across the whole
+    v1 surface. 429 responses include a `Retry-After` header
+    (seconds).
+
+    ## Idempotency
+    Every mutation (POST/DELETE) requires an `Idempotency-Key` header
+    (8-200 characters, unique per logical request, namespaced to your
+    key server-side). Replaying the same key with the same payload
+    returns the original result with a 200 status and
+    `meta.idempotentReplay: true`; replaying it with a different
+    payload is rejected. One-time secret material (webhook signing
+    secrets) is only present on the FIRST response — a replay returns
+    the created resource with the secret field `null`.
+
+    ## PHI
+    v1 order resources are PHI-free by construction: workflow, state,
+    and timing fields plus opaque UUID references only. Patient
+    demographics are not exposed on this surface.
+
+    ## Webhooks
+    Subscriptions deliver registered PHI-safe platform events to your
+    HTTPS endpoint. Each delivery is signed with your subscription
+    secret (shown exactly once at creation):
+
+        Pharmax-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256>
+
+    The signed message is `<t>.<raw request body>`. Reject deliveries
+    older than 5 minutes and verify with a constant-time comparison.
+    Deliveries are at-least-once; use the event `id` for dedup.
+
+servers:
+  - url: https://{host}/api/v1
+    variables:
+      host:
+        default: app.pharmax.example
+
+security:
+  - apiKey: []
+
+tags:
+  - name: Orders
+    description: Read-only order state and workflow progress.
+  - name: Webhook Subscriptions
+    description: Manage outbound event delivery endpoints.
+  - name: Webhook Deliveries
+    description: Delivery ledger, including the dead-letter view.
+
+paths:
+  /orders:
+    get:
+      operationId: listOrders
+      tags: [Orders]
+      summary: List orders
+      description: |
+        Newest-first, cursor-paginated. Requires the `orders.read`
+        scope.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          description: Opaque cursor from `pagination.nextCursor`.
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          description: Filter by workflow status.
+          schema: { $ref: "#/components/schemas/OrderStatus" }
+      responses:
+        "200":
+          description: A page of orders.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/OrderSummary" }
+                  pagination: { $ref: "#/components/schemas/Pagination" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ScopeDenied" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      tags: [Orders]
+      summary: Get one order
+      description: |
+        Detail view with order lines (opaque prescription references
+        + fill quantities) and shipment tracking summaries. Requires
+        the `orders.read` scope.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The order.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ScopeDenied" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /webhook-subscriptions:
+    get:
+      operationId: listWebhookSubscriptions
+      tags: [Webhook Subscriptions]
+      summary: List webhook subscriptions
+      description: |
+        Also returns the current catalogue of subscribable event
+        types. Signing secrets are never included. Requires the
+        `webhooks.manage` scope.
+      responses:
+        "200":
+          description: Subscriptions + eligible event types.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/WebhookSubscription" }
+                  eligibleEventTypes:
+                    type: array
+                    items: { type: string }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ScopeDenied" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      operationId: createWebhookSubscription
+      tags: [Webhook Subscriptions]
+      summary: Create a webhook subscription
+      description: |
+        Registers an HTTPS endpoint for one or more PHI-safe event
+        types. The 201 response contains the signing `secret` exactly
+        once — store it immediately; it cannot be retrieved again.
+        Requires the `webhooks.manage` scope and an `Idempotency-Key`
+        header.
+
+        Retrying with the same `Idempotency-Key` returns the original
+        subscription as a 200 with `secret: null` and
+        `meta.idempotentReplay: true` — no duplicate subscription is
+        created. If the first response (and the secret with it) was
+        lost, revoke the subscription and create a new one.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, eventTypes]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  description: HTTPS endpoint. Non-HTTPS URLs are rejected.
+                eventTypes:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: string }
+                  description: Registered PHI-safe event names (see `eligibleEventTypes`).
+                description:
+                  type: string
+                  maxLength: 500
+      responses:
+        "201":
+          description: Subscription created. `secret` is shown once.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/WebhookSubscriptionCreated" }
+        "200":
+          description: |
+            Idempotent replay. The ORIGINAL subscription is returned;
+            `secret` is `null` (it was only available on the first
+            response).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/WebhookSubscriptionCreated" }
+                  meta:
+                    type: object
+                    properties:
+                      idempotentReplay: { type: boolean, enum: [true] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ScopeDenied" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /webhook-subscriptions/{subscriptionId}:
+    delete:
+      operationId: revokeWebhookSubscription
+      tags: [Webhook Subscriptions]
+      summary: Revoke a webhook subscription
+      description: |
+        Disables the endpoint immediately. Deliveries still in flight
+        are dead-lettered rather than drained (compromise-first: a
+        revoked endpoint receives nothing further). Requires the
+        `webhooks.manage` scope and an `Idempotency-Key` header. An
+        optional JSON body may carry a `reason`.
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "200":
+          description: Subscription disabled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      subscriptionId: { type: string, format: uuid }
+                      status: { type: string, enum: [DISABLED] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ScopeDenied" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /webhook-deliveries:
+    get:
+      operationId: listWebhookDeliveries
+      tags: [Webhook Deliveries]
+      summary: List webhook deliveries
+      description: |
+        Delivery ledger for self-diagnosis. Filter `status=DEAD` for
+        the dead-letter view. Payload snapshots are not included.
+        Requires the `webhooks.manage` scope.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/WebhookDeliveryStatus" }
+        - name: subscriptionId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: A page of deliveries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/WebhookDelivery" }
+                  pagination: { $ref: "#/components/schemas/Pagination" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ScopeDenied" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: "pxk_<token>"
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Unique per logical request; 8-200 characters.
+      schema: { type: string, minLength: 8, maxLength: 200 }
+
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthenticated:
+      description: Missing, malformed, unknown, or revoked API key.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ScopeDenied:
+      description: The API key does not carry the required scope.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found in this organization.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unprocessable:
+      description: Valid shape, rejected by domain rules (typed code).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: Per-key rate limit exceeded. See `Retry-After`.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Seconds until the window resets.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+
+    Pagination:
+      type: object
+      properties:
+        hasMore: { type: boolean }
+        nextCursor:
+          type: [string, "null"]
+          format: uuid
+
+    OrderStatus:
+      type: string
+      description: Primary workflow states plus exception states.
+      enum:
+        - RECEIVED
+        - TYPING_IN_PROGRESS
+        - TYPED_READY_FOR_PV1
+        - PV1_IN_PROGRESS
+        - PV1_APPROVED_READY_FOR_FILL
+        - FILL_IN_PROGRESS
+        - FILL_COMPLETED_READY_FOR_FINAL
+        - FINAL_VERIFICATION_IN_PROGRESS
+        - FINAL_VERIFICATION_APPROVED_READY_FOR_SHIP
+        - READY_TO_SHIP
+        - SHIPPED
+        - TYPING_PENDING_MISSING_INFO
+        - PV1_REJECTED
+        - FINAL_VERIFICATION_REJECTED
+        - ON_HOLD
+        - CANCELLED
+
+    WebhookDeliveryStatus:
+      type: string
+      enum: [PENDING, SENT, FAILED, DEAD]
+
+    OrderSummary:
+      type: object
+      description: PHI-free order projection. All references are opaque UUIDs.
+      properties:
+        id: { type: string, format: uuid }
+        externalOrderNumber: { type: [string, "null"] }
+        clinicId: { type: string, format: uuid }
+        siteId: { type: string, format: uuid }
+        patientId: { type: string, format: uuid }
+        currentStatus: { $ref: "#/components/schemas/OrderStatus" }
+        priority: { type: string }
+        version: { type: integer }
+        slaDeadlineAt: { type: [string, "null"], format: date-time }
+        receivedAt: { type: string, format: date-time }
+        shippedAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    OrderDetail:
+      allOf:
+        - $ref: "#/components/schemas/OrderSummary"
+        - type: object
+          properties:
+            orderLines:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  prescriptionId: { type: string, format: uuid }
+                  quantityToFill: { type: string, description: Decimal as string. }
+                  daysSupplyToFill: { type: integer }
+                  lineStatus: { type: string }
+            shipments:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  carrier: { type: string }
+                  serviceLevel: { type: string }
+                  trackingNumber: { type: string }
+                  status: { type: string }
+                  createdAt: { type: string, format: date-time }
+
+    WebhookSubscription:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        eventTypes:
+          type: array
+          items: { type: string }
+        description: { type: [string, "null"] }
+        status: { type: string, enum: [ACTIVE, DISABLED] }
+        disabledAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    WebhookSubscriptionCreated:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        eventTypes:
+          type: array
+          items: { type: string }
+        status: { type: string, enum: [ACTIVE] }
+        secret:
+          type: [string, "null"]
+          description: |
+            `pxw_`-prefixed HMAC signing secret. Shown exactly once,
+            on FIRST creation only; never retrievable again. `null`
+            on an idempotent replay.
+
+    WebhookDelivery:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        subscriptionId: { type: string, format: uuid }
+        eventType: { type: string }
+        status: { $ref: "#/components/schemas/WebhookDeliveryStatus" }
+        attempts: { type: integer }
+        lastError: { type: [string, "null"] }
+        responseStatus: { type: [integer, "null"] }
+        nextAttemptAt: { type: [string, "null"], format: date-time }
+        deliveredAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }

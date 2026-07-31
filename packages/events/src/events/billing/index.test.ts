@@ -18,6 +18,7 @@ import {
   BillingInvoiceStripePushedV1,
   BillingInvoiceUncollectibleV1,
   BillingInvoiceVoidedV1,
+  BillingPaymentRecordedV1,
   BillingPricingRuleUpsertedV1,
 } from "./index.js";
 
@@ -31,6 +32,7 @@ const ALL = [
   BillingInvoiceStripePushedV1,
   BillingInvoiceUncollectibleV1,
   BillingInvoiceVoidedV1,
+  BillingPaymentRecordedV1,
   BillingPricingRuleUpsertedV1,
 ];
 

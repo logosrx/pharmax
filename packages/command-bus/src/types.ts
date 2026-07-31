@@ -108,6 +108,21 @@ export interface Command<TInput, TOutput> {
    * `.brand("phi")` markers.
    */
   readonly redactFields?: ReadonlyArray<string>;
+  /**
+   * Top-level input fields EXCLUDED from the idempotency request
+   * hash. Reserved for TRANSPORT-GENERATED secret material (token
+   * hashes, signing secrets) that is regenerated fresh on every
+   * HTTP attempt: hashing such a field makes an honest client
+   * retry carry a different hash and get rejected with
+   * COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH instead of replaying.
+   *
+   * NEVER list a client-controlled field here — that would let two
+   * genuinely different requests share an idempotency key and the
+   * second would silently replay the first one's response (the
+   * exact failure mode the full-payload hash exists to prevent;
+   * see hash.ts).
+   */
+  readonly hashExcludeFields?: ReadonlyArray<string>;
 
   handle(deps: HandlerDeps<TInput>): Promise<HandlerResult<TOutput>>;
 }
@@ -135,6 +150,19 @@ export interface SystemHandlerResult<TOutput> {
   readonly targetOrganizationId: string;
   readonly audit: AuditEntryDraft;
   readonly outboxEvents: ReadonlyArray<OutboxEventDraft>;
+}
+
+/**
+ * Result of `executeCommandDetailed`. `replayed` is true when the
+ * response was served from the idempotency cache WITHOUT running
+ * the handler. Transport layers that generate one-time secret
+ * material (API-key tokens, webhook signing secrets) must check
+ * this flag: on a replay the freshly generated secret was NOT
+ * stored, so it must not be returned to the caller.
+ */
+export interface ExecuteCommandResult<TOutput> {
+  readonly output: TOutput;
+  readonly replayed: boolean;
 }
 
 export interface ExecuteOptions {

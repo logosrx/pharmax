@@ -97,9 +97,13 @@ function buildPrismaFake(input: BuildClientInput) {
     $executeRaw: vi.fn(async () => 0),
   };
 
+  // Dedupe pre-query surface (top-level client, system context).
+  const shipmentTrackingEventFindMany = vi.fn(async () => [] as Array<{ externalEventId: string }>);
+
   const client = {
     $queryRaw: vi.fn(async () => input.claimRows),
     $transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
+    shipmentTrackingEvent: { findMany: shipmentTrackingEventFindMany },
     carrierCredential: {
       findFirst: vi.fn(async () => input.credential),
     },
@@ -119,6 +123,8 @@ function buildPrismaFake(input: BuildClientInput) {
   return {
     client,
     shipmentTrackingEventCreate,
+    shipmentTrackingEventFindMany,
+    shipmentUpdate,
   };
 }
 
@@ -221,7 +227,7 @@ describe("createFedExTrackingPoller.tick — happy path", () => {
         actorEmailLocalPart: "shipping-webhook",
         fedexFetch,
       },
-      { batchSize: 50, staleThresholdMs: 7_200_000 }
+      { batchSize: 50, staleThresholdMs: 7_200_000, maxShipmentAgeDays: 45 }
     );
 
     const result = await poller.tick();
@@ -241,6 +247,212 @@ describe("createFedExTrackingPoller.tick — happy path", () => {
     expect(createArgs.data["kind"]).toBe("DELIVERED");
     expect(createArgs.data["carrierStatus"]).toBe("DL");
     expect(String(createArgs.data["externalEventId"])).toContain(`fedex:${TRACKING_NUMBER}:DL`);
+  });
+
+  it("ingests the full scan history oldest-first with location + delivery estimate", async () => {
+    const apiKeyEnc = await buildEncryptedApiKey();
+    const fake = buildPrismaFake({
+      claimRows: [
+        {
+          id: SHIPMENT_ID,
+          organizationId: ORG_ID,
+          siteId: SITE_ID,
+          trackingNumber: TRACKING_NUMBER,
+          lastTrackingEventAt: null,
+        },
+      ],
+      credential: {
+        id: CREDENTIAL_ID,
+        apiKeyEnc,
+        carrierAccountId: "123456789",
+        baseUrl: null,
+      },
+      organization: { slug: "acme" },
+      actor: { id: USER_ID },
+    });
+    configureBus(fake.client);
+
+    const fedexFetch = fedexFetchStub((url) => {
+      if (url.endsWith("/oauth/token")) {
+        return jsonResponse({ access_token: "tok", expires_in: 3600, token_type: "Bearer" });
+      }
+      if (url.endsWith("/track/v1/trackingnumbers")) {
+        return jsonResponse({
+          output: {
+            completeTrackResults: [
+              {
+                trackingNumber: TRACKING_NUMBER,
+                trackResults: [
+                  {
+                    latestStatusDetail: { code: "IT", statusByLocale: "In transit" },
+                    dateAndTimes: [
+                      { type: "ESTIMATED_DELIVERY", dateTime: "2026-05-27T20:00:00-04:00" },
+                    ],
+                    // FedEx returns scans newest-first.
+                    scanEvents: [
+                      {
+                        date: "2026-05-25T08:00:00-04:00",
+                        eventType: "AR",
+                        eventDescription: "Arrived at FedEx hub",
+                        derivedStatusCode: "IT",
+                        scanLocation: {
+                          city: "MEMPHIS",
+                          stateOrProvinceCode: "TN",
+                          countryCode: "US",
+                        },
+                      },
+                      {
+                        date: "2026-05-24T20:00:00-04:00",
+                        eventType: "PU",
+                        eventDescription: "Picked up",
+                        derivedStatusCode: "PU",
+                        scanLocation: {
+                          city: "AUSTIN",
+                          stateOrProvinceCode: "TX",
+                          countryCode: "US",
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        });
+      }
+      throw new Error(`unexpected: ${url}`);
+    });
+
+    const poller = createFedExTrackingPoller(
+      {
+        client: fake.client as never,
+        logger: loggerNs.noopLogger,
+        actorEmailLocalPart: "shipping-webhook",
+        fedexFetch,
+      },
+      { batchSize: 50, staleThresholdMs: 7_200_000, maxShipmentAgeDays: 45 }
+    );
+
+    const result = await poller.tick();
+
+    expect(result.polled).toBe(1);
+    expect(result.recorded).toBe(2);
+    expect(result.failed).toBe(0);
+
+    // Every scan lands as its own ledger row, dispatched oldest-first.
+    expect(fake.shipmentTrackingEventCreate).toHaveBeenCalledTimes(2);
+    const calls = fake.shipmentTrackingEventCreate.mock.calls as unknown as Array<
+      [{ data: Record<string, unknown> }]
+    >;
+    const first = calls[0]![0].data;
+    const second = calls[1]![0].data;
+
+    expect(first["carrierStatus"]).toBe("PU");
+    expect(String(first["externalEventId"])).toContain(`fedex:${TRACKING_NUMBER}:scan:PU:`);
+    expect(first["scanCity"]).toBe("AUSTIN");
+    expect(first["scanStateOrProvince"]).toBe("TX");
+    expect(first["scanCountry"]).toBe("US");
+    expect(first["carrierStatusDetail"]).toBe("Picked up");
+
+    expect(second["carrierStatus"]).toBe("IT");
+    expect(second["kind"]).toBe("IN_TRANSIT");
+    expect(second["scanCity"]).toBe("MEMPHIS");
+
+    // The carrier's delivery estimate refreshes the shipment cache
+    // via the NEWEST event's dispatch.
+    const updateCalls = fake.shipmentUpdate.mock.calls as unknown as Array<
+      [{ data: Record<string, unknown> }]
+    >;
+    const estimatedUpdates = updateCalls.filter(
+      (c) => c[0].data["estimatedDeliveryAt"] !== undefined
+    );
+    expect(estimatedUpdates).toHaveLength(1);
+    expect(estimatedUpdates[0]![0].data["estimatedDeliveryAt"]).toEqual(
+      new Date("2026-05-27T20:00:00-04:00")
+    );
+  });
+
+  it("skips scans already recorded (dedupe pre-query) without dispatching", async () => {
+    const apiKeyEnc = await buildEncryptedApiKey();
+    const fake = buildPrismaFake({
+      claimRows: [
+        {
+          id: SHIPMENT_ID,
+          organizationId: ORG_ID,
+          siteId: SITE_ID,
+          trackingNumber: TRACKING_NUMBER,
+          lastTrackingEventAt: null,
+        },
+      ],
+      credential: {
+        id: CREDENTIAL_ID,
+        apiKeyEnc,
+        carrierAccountId: "123456789",
+        baseUrl: null,
+      },
+      organization: { slug: "acme" },
+      actor: { id: USER_ID },
+    });
+    // Both scans below already recorded on a previous tick.
+    fake.shipmentTrackingEventFindMany.mockResolvedValue([
+      {
+        externalEventId: `fedex:${TRACKING_NUMBER}:scan:PU:${new Date(
+          "2026-05-24T20:00:00-04:00"
+        ).toISOString()}`,
+      },
+      {
+        externalEventId: `fedex:${TRACKING_NUMBER}:scan:AR:${new Date(
+          "2026-05-25T08:00:00-04:00"
+        ).toISOString()}`,
+      },
+    ]);
+    configureBus(fake.client);
+
+    const fedexFetch = fedexFetchStub((url) => {
+      if (url.endsWith("/oauth/token")) {
+        return jsonResponse({ access_token: "tok", expires_in: 3600, token_type: "Bearer" });
+      }
+      if (url.endsWith("/track/v1/trackingnumbers")) {
+        return jsonResponse({
+          output: {
+            completeTrackResults: [
+              {
+                trackingNumber: TRACKING_NUMBER,
+                trackResults: [
+                  {
+                    latestStatusDetail: { code: "IT", statusByLocale: "In transit" },
+                    scanEvents: [
+                      {
+                        date: "2026-05-25T08:00:00-04:00",
+                        eventType: "AR",
+                        derivedStatusCode: "IT",
+                      },
+                      {
+                        date: "2026-05-24T20:00:00-04:00",
+                        eventType: "PU",
+                        derivedStatusCode: "PU",
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        });
+      }
+      throw new Error(`unexpected: ${url}`);
+    });
+
+    const poller = createFedExTrackingPoller(
+      { client: fake.client as never, logger: loggerNs.noopLogger, fedexFetch },
+      { batchSize: 50, staleThresholdMs: 7_200_000, maxShipmentAgeDays: 45 }
+    );
+
+    const result = await poller.tick();
+    expect(result.polled).toBe(1);
+    expect(result.recorded).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(fake.shipmentTrackingEventCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -272,7 +484,7 @@ describe("createFedExTrackingPoller.tick — skip paths", () => {
         logger: loggerNs.noopLogger,
         fedexFetch,
       },
-      { batchSize: 50, staleThresholdMs: 7_200_000 }
+      { batchSize: 50, staleThresholdMs: 7_200_000, maxShipmentAgeDays: 45 }
     );
 
     const result = await poller.tick();
@@ -290,7 +502,7 @@ describe("createFedExTrackingPoller.tick — skip paths", () => {
     configureBus(fake.client);
     const poller = createFedExTrackingPoller(
       { client: fake.client as never, logger: loggerNs.noopLogger },
-      { batchSize: 50, staleThresholdMs: 7_200_000 }
+      { batchSize: 50, staleThresholdMs: 7_200_000, maxShipmentAgeDays: 45 }
     );
     const result = await poller.tick();
     expect(result).toEqual({
@@ -346,7 +558,7 @@ describe("createFedExTrackingPoller.tick — skip paths", () => {
 
     const poller = createFedExTrackingPoller(
       { client: fake.client as never, logger: loggerNs.noopLogger, fedexFetch },
-      { batchSize: 50, staleThresholdMs: 7_200_000 }
+      { batchSize: 50, staleThresholdMs: 7_200_000, maxShipmentAgeDays: 45 }
     );
 
     const result = await poller.tick();

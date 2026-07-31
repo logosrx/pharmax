@@ -12,6 +12,10 @@
 //   - Stripe port unconfigured → BILLING_REFUND_NOT_CONFIGURED.
 //   - PHI: operatorNote redacted from audit + outbox metadata
 //     (we surface only `hasOperatorNote: boolean`).
+//   - Payment ledger: REFUND row + `billing.payment.recorded.v1`
+//     on synchronous `succeeded`; NO row for `pending` (the settle
+//     webhook owns it); ledger REFUND rows count against the
+//     refund budget (max of line-scan + ledger-sum).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -76,6 +80,8 @@ interface FakeInvoice {
 interface FakeOverrides {
   invoice?: FakeInvoice | null;
   priorRefundLines?: ReadonlyArray<{ amountCents: number }>;
+  /** Prior REFUND rows on the payment ledger (positive cents). */
+  priorRefundPayments?: ReadonlyArray<{ amountCents: number }>;
 }
 
 interface FakeCall {
@@ -103,6 +109,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
   const calls: FakeCall[] = [];
   const invoice = overrides.invoice === undefined ? defaultInvoice() : overrides.invoice;
   const priorLines = overrides.priorRefundLines ?? [];
+  const priorPayments = overrides.priorRefundPayments ?? [];
 
   const tx = {
     invoice: {
@@ -123,6 +130,20 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "invoiceLine", op: "create", args });
         return { id: "line-refund-1" };
+      }),
+    },
+    payment: {
+      findMany: vi.fn(async (args: unknown) => {
+        calls.push({ table: "payment", op: "findMany", args });
+        return priorPayments.map((p) => ({ amountCents: p.amountCents }));
+      }),
+      create: vi.fn(async (args: unknown) => {
+        calls.push({ table: "payment", op: "create", args });
+        return { id: (args as { data: { id: string } }).data.id };
+      }),
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "payment", op: "findUnique", args });
+        return null;
       }),
     },
     commandLog: {
@@ -280,6 +301,65 @@ describe("IssueRefund — happy path", () => {
     );
     const outboxData = (outboxCalls[0]!.args as { data: Array<{ eventType: string }> }).data;
     expect(outboxData[0]?.eventType).toBe("billing.invoice.refunded.v1");
+    expect(outboxData[1]?.eventType).toBe("billing.payment.recorded.v1");
+  });
+
+  it("appends a REFUND ledger row when Stripe reports succeeded synchronously", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+    configureBilling({ stripeRefundPort: stubPort() });
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        IssueRefund,
+        { invoiceId: INVOICE_ID, amountCents: 5000 },
+        { idempotencyKey: "refund-ledger" }
+      )
+    );
+
+    const paymentCreates = fake.calls.filter((c) => c.table === "payment" && c.op === "create");
+    expect(paymentCreates).toHaveLength(1);
+    const data = (paymentCreates[0]!.args as { data: Record<string, unknown> }).data;
+    expect(data["kind"]).toBe("REFUND");
+    expect(data["method"]).toBe("STRIPE");
+    // Positive cents — direction lives in `kind`, not the sign.
+    expect(data["amountCents"]).toBe(5000);
+    expect(data["paymentEventKey"]).toBe("stripe-refund:re_TestRefund1");
+    expect(data["stripeRefundId"]).toBe("re_TestRefund1");
+    expect(data["stripeChargeId"]).toBe(STRIPE_CHARGE_ID);
+  });
+
+  it("does NOT write a ledger row for a pending refund (settle webhook owns it)", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+    configureBilling({
+      stripeRefundPort: stubPort({
+        stripeRefundId: "re_PendingRefund1",
+        stripeStatus: "pending",
+        amountCents: 5000,
+      }),
+    });
+
+    const out = await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        IssueRefund,
+        { invoiceId: INVOICE_ID, amountCents: 5000 },
+        { idempotencyKey: "refund-pending" }
+      )
+    );
+
+    expect(out.stripeStatus).toBe("pending");
+    // Invoice line IS written (operator intent) …
+    expect(fake.calls.filter((c) => c.table === "invoiceLine" && c.op === "create")).toHaveLength(
+      1
+    );
+    // … but the payment ledger only records settled money.
+    expect(fake.calls.filter((c) => c.table === "payment" && c.op === "create")).toHaveLength(0);
+    const outboxCalls = fake.calls.filter(
+      (c) => c.table === "eventOutbox" && c.op === "createMany"
+    );
+    const outboxData = (outboxCalls[0]!.args as { data: Array<{ eventType: string }> }).data;
+    expect(outboxData.map((e) => e.eventType)).toEqual(["billing.invoice.refunded.v1"]);
   });
 
   it("counts prior refunds against the remaining-refundable budget", async () => {
@@ -298,6 +378,28 @@ describe("IssueRefund — happy path", () => {
       )
     );
     expect(out.amountCents).toBe(5000);
+  });
+
+  it("counts payment-ledger REFUND rows against the budget (max of both sources)", async () => {
+    // Lines say 8000 refunded, the ledger says 13000 (e.g. legacy
+    // lines partially backfilled). The budget must honor the LARGER
+    // figure: remaining = 15000 - 13000 = 2000, so 5000 fails.
+    const fake = buildPrismaFake({
+      priorRefundLines: [{ amountCents: 8000 }],
+      priorRefundPayments: [{ amountCents: 13000 }],
+    });
+    configureBus(fake.client);
+    configureBilling({ stripeRefundPort: stubPort() });
+
+    await expect(
+      withTenancyContext(ctxFor(), () =>
+        executeCommand(
+          IssueRefund,
+          { invoiceId: INVOICE_ID, amountCents: 5000 },
+          { idempotencyKey: "refund-ledger-budget" }
+        )
+      )
+    ).rejects.toMatchObject({ code: ISSUE_REFUND_AMOUNT_EXCEEDS_PAID });
   });
 });
 

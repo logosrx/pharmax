@@ -12,4 +12,5 @@ export { BillingInvoiceRefundedV1 } from "./invoice-refunded-v1.js";
 export { BillingInvoiceStripePushedV1 } from "./invoice-stripe-pushed-v1.js";
 export { BillingInvoiceUncollectibleV1 } from "./invoice-uncollectible-v1.js";
 export { BillingInvoiceVoidedV1 } from "./invoice-voided-v1.js";
+export { BillingPaymentRecordedV1 } from "./payment-recorded-v1.js";
 export { BillingPricingRuleUpsertedV1 } from "./pricing-rule-upserted-v1.js";

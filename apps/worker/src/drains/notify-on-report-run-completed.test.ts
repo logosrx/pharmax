@@ -68,6 +68,7 @@ function buildRow(overrides: { payload?: Record<string, unknown> } = {}): Claime
     lastError: null,
     nextAttemptAt: null,
     dispatchedAt: null,
+    traceparent: null,
     createdAt: new Date("2026-05-28T13:00:00.000Z"),
   });
 }

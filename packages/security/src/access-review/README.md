@@ -17,8 +17,8 @@ For each organization:
     `BillingManager`, `SecurityOfficer`, `ComplianceOfficer`,
     `PharmacistInCharge`).
   - Principals with `lastLoginAt` older than 90 days, or no `lastLoginAt`
-    at all. (TODO: replace with Clerk session events once the Clerk
-    `session.created.v1` outbox handler lands.)
+    at all. (`lastLoginAt` is stamped transactionally by the first-party
+    `SignIn` command in `@pharmax/auth` on every successful sign-in.)
   - Role assignments older than 365 days that should be re-justified.
   - Role codes that grant `patients.crypto_shred` — the highest-blast-radius
     permission in the platform.
@@ -91,11 +91,6 @@ rationale behind the database-canonical evidence model.
 
 ## Future work
 
-- **Clerk-driven last-login:** the current `lastLoginAt` comes from
-  the Pharmax `user` row, which is only updated by a successful
-  sign-in callback. Wire the Clerk `session.created.v1` outbox handler
-  and source this field from there. The TODO comment in
-  `generate-access-review.ts` calls out the seam.
 - **Diff view:** the next iteration will produce a structured diff
   against the previous quarter's report, so the reviewer only has to
   look at deltas.

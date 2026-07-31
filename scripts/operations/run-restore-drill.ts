@@ -45,15 +45,15 @@
 // Usage examples:
 //
 //   pnpm drill:preflight \
-//     --source-cluster-id=pharmax-prod-use1-aurora \
+//     --source-cluster-id=pharmax-prod-ue1-aurora \
 //     --restore-time=2026-06-04T12:00:00Z \
 //     --region=us-east-1 \
-//     --kms-alias=alias/pharmax-prod-use1-rds
+//     --kms-alias=alias/pharmax-prod-ue1-rds
 //
 //   pnpm drill:provision-commands \
-//     --source-cluster-id=pharmax-prod-use1-aurora \
+//     --source-cluster-id=pharmax-prod-ue1-aurora \
 //     --restore-time=2026-06-04T12:00:00Z \
-//     --subnet-group=pharmax-prod-use1-db \
+//     --subnet-group=pharmax-prod-ue1-db \
 //     --drill-sg=sg-0123abcd
 //
 //   # After provision + DATABASE_URL set to restored cluster:
@@ -124,10 +124,10 @@ Usage: pnpm tsx scripts/operations/run-restore-drill.ts \\
 
 Phase flags:
   preflight:
-    --source-cluster-id=<id>    Source Aurora cluster (e.g. pharmax-prod-use1-aurora).
+    --source-cluster-id=<id>    Source Aurora cluster (e.g. pharmax-prod-ue1-aurora).
     --restore-time=<iso>        Restore point, full ISO 8601 UTC.
     --region=<aws-region>       AWS region (defaults to env AWS_REGION).
-    --kms-alias=<arn-or-alias>  Cluster KMS CMK (e.g. alias/pharmax-prod-use1-rds).
+    --kms-alias=<arn-or-alias>  Cluster KMS CMK (e.g. alias/pharmax-prod-ue1-rds).
     --retention-days=<n>        Expected backup retention (default 35).
 
   provision-commands:

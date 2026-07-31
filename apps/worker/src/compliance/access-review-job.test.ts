@@ -85,11 +85,16 @@ const activityClient: AccessActivityClient = {
   },
 };
 
-// Minimal Prisma fake: only `organization.findMany` is reached.
+// Minimal Prisma fake: `organization.findMany` for the org list and
+// `breakGlassSession.findMany` for the default break-glass evidence
+// source (no sessions in the period).
 function buildPrismaFake(orgs: ReadonlyArray<{ id: string; slug: string }>): PrismaClient {
   return {
     organization: {
       findMany: vi.fn(async () => orgs),
+    },
+    breakGlassSession: {
+      findMany: vi.fn(async () => []),
     },
   } as unknown as PrismaClient;
 }

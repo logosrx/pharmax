@@ -13,9 +13,10 @@
 // (organizationId + tracking number); the actor row is a service-user
 // email lookup keyed on `shipping-webhook@<org-slug>.test`.
 
-import type { PrismaClient } from "@pharmax/database";
+import { ShipmentCarrier, type PrismaClient } from "@pharmax/database";
 import {
   type EasyPostWebhookEventRecord,
+  type FedExWebhookTargetResolver,
   type ResolvedWebhookTarget,
   type WebhookTargetResolver,
 } from "@pharmax/shipping";
@@ -79,6 +80,79 @@ export function createEasyPostTargetResolver(
             select: { id: true, organizationId: true },
             orderBy: { createdAt: "desc" },
           }));
+        if (shipment === null) {
+          return null;
+        }
+        const org = await client.organization.findUnique({
+          where: { id: shipment.organizationId },
+          select: { slug: true },
+        });
+        if (org === null) {
+          return null;
+        }
+        const user = await client.user.findFirst({
+          where: {
+            organizationId: shipment.organizationId,
+            email: `${emailLocalPart}@${org.slug}.test`,
+          },
+          select: { id: true },
+        });
+        if (user === null) {
+          return null;
+        }
+        return Object.freeze({
+          organizationId: shipment.organizationId,
+          shipmentId: shipment.id,
+          actorUserId: user.id,
+        });
+      });
+    },
+  };
+}
+
+export interface CreateFedExTargetResolverOptions {
+  readonly client: PrismaClient;
+  /** Same service-user convention as the EasyPost resolver. */
+  readonly emailLocalPart?: string;
+}
+
+/**
+ * Resolver for the FedEx AIV webhook drainer. Resolution is by
+ * tracking number, narrowed to FedEx-carrier shipments WITHOUT an
+ * EasyPost tracker id:
+ *
+ *   - `carrier = FEDEX` — an AIV push can only describe a FedEx
+ *     shipment; the narrow keeps a reused tracking number from
+ *     matching another carrier's row.
+ *   - `externalTrackerId IS NULL` — shipments purchased through
+ *     EasyPost already receive tracking via the EasyPost webhook;
+ *     matching them here would double-ingest.
+ *   - newest-first, same reuse caveat as the EasyPost
+ *     tracking-number fallback (carrier tracking numbers recycle
+ *     over time; the newest match is the live one).
+ */
+export function createFedExTargetResolver(
+  options: CreateFedExTargetResolverOptions
+): FedExWebhookTargetResolver {
+  const { client } = options;
+  const emailLocalPart = options.emailLocalPart ?? "shipping-webhook";
+
+  return {
+    async resolve(trackingNumber: string): Promise<ResolvedWebhookTarget | null> {
+      if (trackingNumber.length === 0) {
+        return null;
+      }
+
+      return withSystemContext("worker-drain:fedex-webhook-target-resolve", async () => {
+        const shipment = await client.shipment.findFirst({
+          where: {
+            trackingNumber,
+            carrier: ShipmentCarrier.FEDEX,
+            externalTrackerId: null,
+          },
+          select: { id: true, organizationId: true },
+          orderBy: { createdAt: "desc" },
+        });
         if (shipment === null) {
           return null;
         }

@@ -17,6 +17,7 @@ describe("claimActiveFedExShipments", () => {
     const result = await claimActiveFedExShipments(client, {
       batchSize: 50,
       staleThresholdMs: 60_000,
+      maxShipmentAgeDays: 45,
     });
     expect(result).toEqual([]);
   });
@@ -43,6 +44,7 @@ describe("claimActiveFedExShipments", () => {
     const result = await claimActiveFedExShipments(client, {
       batchSize: 50,
       staleThresholdMs: 60_000,
+      maxShipmentAgeDays: 45,
     });
 
     expect(result).toHaveLength(2);
@@ -57,15 +59,25 @@ describe("claimActiveFedExShipments", () => {
     expect(result[1]!.lastTrackingEventAt).toBeNull();
   });
 
-  it("passes batchSize + staleThresholdMs to the query as bound parameters", async () => {
+  it("passes batchSize + staleThresholdMs + maxShipmentAgeDays as bound parameters", async () => {
     const client = makeClient([]);
-    await claimActiveFedExShipments(client, { batchSize: 25, staleThresholdMs: 7_200_000 });
+    await claimActiveFedExShipments(client, {
+      batchSize: 25,
+      staleThresholdMs: 7_200_000,
+      maxShipmentAgeDays: 45,
+    });
     // $queryRaw is a tagged-template function; vitest's fn captures
     // the tuple (template, ...values). We check the values payload.
     const calls = (client.$queryRaw as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls).toHaveLength(1);
-    const [, ...values] = calls[0]!;
+    const [template, ...values] = calls[0]!;
     expect(values).toContain(7_200_000);
     expect(values).toContain(25);
+    expect(values).toContain(45);
+    // DELIVERED is the only status-based poll terminator; exception /
+    // RTS / failed-delivery shipments must keep being polled.
+    const sql = (template as ReadonlyArray<string>).join("?");
+    expect(sql).toContain(`"status" <> 'DELIVERED'`);
+    expect(sql).not.toContain("'EXCEPTION'");
   });
 });

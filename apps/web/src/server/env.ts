@@ -37,6 +37,10 @@ const schema = z.object({
   STRIPE_SECRET_KEY: z.string().min(1).optional(),
   STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
   EASYPOST_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // FedEx Advanced Integrated Visibility webhook security token (set
+  // on the webhook project in the FedEx Developer Portal). When
+  // unset the `/api/webhooks/fedex` route returns 503.
+  FEDEX_WEBHOOK_SECRET: z.string().min(1).optional(),
   // Resend delivery webhook signing secret (Svix-signed, `whsec_`
   // prefix). When unset the `/api/webhooks/resend` route returns
   // 503 (dev clones without Resend). Production MUST set it so
@@ -44,25 +48,9 @@ const schema = z.object({
   // notification_delivery projection.
   RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
 
-  // Clerk authentication (identity layer). OPTIONAL at the schema
-  // level so dev clones boot without a Clerk account (the operator
-  // console pages render an "auth not configured" message in that
-  // case; webhook routes still work without auth). REQUIRED in
-  // production — `bootstrap.ts` enforces presence with a hard-fail
-  // boot message so a missed env var cannot silently downgrade
-  // identity to a no-op.
-  // - Publishable key: client-safe (NEXT_PUBLIC_*); embedded in
-  //   browser bundles for the <ClerkProvider> initialization.
-  // - Secret key: server-only; never expose to client.
-  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1).optional(),
-  CLERK_SECRET_KEY: z.string().min(1).optional(),
-  // Clerk webhook secret (Svix-signed). Consumed by
-  // `app/api/webhooks/clerk/route.ts` to verify `user.created` /
-  // `user.updated` / `user.deleted` / `session.created` events.
-  // OPTIONAL in dev (the route returns 503 if unset); REQUIRED in
-  // production — `bootstrap.ts` hard-fails boot when missing so
-  // the auto-link / sync / off-boarding pipeline activates.
-  CLERK_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // (Clerk identity env vars removed — authentication is in-house per
+  // ADR-0030. Password pepper is AUTH_PASSWORD_PEPPER above; sessions
+  // are server-side. No external identity provider is configured.)
 
   // Sign-up surface flag.
   //
@@ -70,15 +58,11 @@ const schema = z.object({
   // explicitly opts in. The `/sign-up` route layers three rules:
   //
   //   1. Always-open in `development` / `test` so contributors can
-  //      spin tenants up end-to-end without provisioning invitations.
-  //   2. Always-open when the inbound URL carries a Clerk invitation
-  //      ticket (`?__clerk_ticket=...`) regardless of the flag —
-  //      pre-staged operators MUST be able to complete enrollment.
-  //   3. Otherwise (production with no ticket): open ONLY if this
-  //      flag is `true`. The middleware also returns 404 on direct
-  //      hits to `/sign-up` when the flag is false and no ticket is
-  //      present (defence-in-depth — the page handler is the
-  //      primary gate, the middleware is the second line).
+  //      spin tenants up end-to-end.
+  //   2. Otherwise (production): sign-up is invitation-only; the
+  //      middleware returns 404 on direct hits to `/sign-up` unless
+  //      this flag is `true`. Operators enroll via the invitation
+  //      link (`/accept-invite?token=...`), not this surface.
   //
   // We accept the canonical truthy strings (`"true"` / `"1"`) and
   // reject everything else — `z.coerce.boolean()` would treat any
@@ -86,7 +70,7 @@ const schema = z.object({
   // classic boot-time footgun. The preprocess below normalizes
   // case + whitespace so `TRUE`, `True`, `" true "` all resolve
   // consistently.
-  CLERK_SIGNUPS_ENABLED: z
+  SIGNUPS_ENABLED: z
     .preprocess((value) => {
       if (typeof value !== "string") return value;
       const normalized = value.trim().toLowerCase();

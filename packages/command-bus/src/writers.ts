@@ -8,6 +8,7 @@
 
 import type { Prisma, PrismaClient, CommandStatus, OutboxStatus } from "@pharmax/database";
 import { writeAuditLogInTx, type AuditChainTxClient } from "@pharmax/audit";
+import { currentTraceparent } from "@pharmax/telemetry";
 
 import type { AuditEntryDraft, OutboxEventDraft, PrismaTxClient } from "./types.js";
 
@@ -140,6 +141,11 @@ export async function createOutboxEventsInTx(
   input: CreateOutboxEventsInput
 ): Promise<void> {
   if (input.events.length === 0) return;
+  // Persist the producing command's W3C trace context so the worker's
+  // outbox drainer resumes the distributed trace across the DB-backed
+  // async hop. Null (no active span / OTel disabled) is fine — the
+  // consumer starts a fresh root in that case.
+  const traceparent = currentTraceparent();
   await tx.eventOutbox.createMany({
     data: input.events.map((e) => ({
       organizationId: input.organizationId,
@@ -148,6 +154,7 @@ export async function createOutboxEventsInTx(
       aggregateId: e.aggregateId,
       payload: e.payload as Prisma.InputJsonValue,
       status: input.initialStatus,
+      traceparent,
     })),
   });
 }

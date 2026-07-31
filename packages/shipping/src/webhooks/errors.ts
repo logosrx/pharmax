@@ -11,3 +11,11 @@ export class EasyPostWebhookEventNotFoundError extends Error {
     this.name = "EasyPostWebhookEventNotFoundError";
   }
 }
+
+export class FedExWebhookEventNotFoundError extends Error {
+  public readonly code = "FEDEX_WEBHOOK_EVENT_NOT_FOUND";
+  constructor(externalEventId: string) {
+    super(`FedEx webhook event not found: ${externalEventId}`);
+    this.name = "FedExWebhookEventNotFoundError";
+  }
+}

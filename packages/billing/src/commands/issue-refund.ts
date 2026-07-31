@@ -11,7 +11,12 @@
 //   4. Writes a NEGATIVE-amount InvoiceLine on the Pharmax ledger
 //      (`kind: CREDIT`, `billingEventKey: "stripe-refund:{stripeRefundId}"`).
 //   5. Decrements invoice totals atomically (`{ decrement }`).
-//   6. Emits `billing.invoice.refunded.v1`.
+//   6. When Stripe reports `succeeded` synchronously, appends the
+//      REFUND row to the payment ledger (a `pending` refund gets its
+//      ledger row from `RecordRefundReceived` when the settle
+//      webhook arrives — the ledger only records money that MOVED).
+//   7. Emits `billing.invoice.refunded.v1` (+
+//      `billing.payment.recorded.v1` when the ledger row was written).
 //
 // Why synchronous (vs. queue → worker):
 //
@@ -40,13 +45,25 @@
 // is free-text (NOT PHI by convention but redacted from
 // command_log per defense in depth).
 
-import type { Command, HandlerResult } from "@pharmax/command-bus";
-import { InvoiceLineKind, InvoiceStatus, type Prisma } from "@pharmax/database";
+import type { Command, HandlerResult, OutboxEventDraft } from "@pharmax/command-bus";
+import {
+  InvoiceLineKind,
+  InvoiceStatus,
+  PaymentKind,
+  PaymentMethod,
+  type Prisma,
+} from "@pharmax/database";
 import { errors, ids } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
 
 import { getStripeRefundPort } from "../configure.js";
+import {
+  computePriorRefundedCents,
+  insertPaymentLedgerRow,
+  type PaymentLedgerRowInput,
+  paymentRecordedOutboxEvent,
+} from "../payments/payment-ledger.js";
 
 export const ISSUE_REFUND_INVOICE_NOT_FOUND = "ISSUE_REFUND_INVOICE_NOT_FOUND";
 export const ISSUE_REFUND_STRIPE_REFUND_NOT_COMPLETED = "ISSUE_REFUND_STRIPE_REFUND_NOT_COMPLETED";
@@ -136,19 +153,12 @@ export const IssueRefund: Command<IssueRefundInput, IssueRefundOutput> = {
     // ---- Compute prior refund total ----
     // Stripe enforces partial-refund limits on its side, but
     // we verify locally so the operator gets a clear error
-    // before hitting Stripe.
-    const priorRefunds = await tx.invoiceLine.findMany({
-      where: {
-        invoiceId: invoice.id,
-        kind: InvoiceLineKind.CREDIT,
-        billingEventKey: { startsWith: "stripe-refund:" },
-      },
-      select: { amountCents: true },
-    });
-    const priorRefundedCents = priorRefunds.reduce(
-      (sum, line) => sum + Math.abs(line.amountCents),
-      0
-    );
+    // before hitting Stripe. Sourced from BOTH the legacy CREDIT
+    // line scan and the payment ledger (max of the two — see
+    // computePriorRefundedCents for why neither alone is complete
+    // until the ledger backfill lands).
+    const priorRefundTotals = await computePriorRefundedCents(tx, invoice.id);
+    const priorRefundedCents = priorRefundTotals.priorRefundedCents;
     const remainingRefundable = invoice.amountPaidCents - priorRefundedCents;
     if (input.amountCents > remainingRefundable) {
       throw new errors.ConflictError({
@@ -246,6 +256,43 @@ export const IssueRefund: Command<IssueRefundInput, IssueRefundOutput> = {
     const amountDueCentsAfter = invoice.amountDueCents - input.amountCents;
     const now = clock.now();
 
+    // ---- Append the REFUND ledger row (settled refunds only) ----
+    // `succeeded` means the money moved — record it now. `pending`
+    // means Stripe is still processing: the invoice line above
+    // tracks the operator's intent, and RecordRefundReceived writes
+    // the ledger row when the settle webhook arrives. The shared
+    // `stripe-refund:{id}` key makes the two paths converge on one
+    // row no matter which fires first.
+    let paymentId: string | null = null;
+    const paymentOutboxEvents: OutboxEventDraft[] = [];
+    if (stripeResult.stripeStatus === "succeeded") {
+      const ledgerRow: PaymentLedgerRowInput = {
+        organizationId: ctx.organizationId,
+        clinicId: invoice.clinicId,
+        invoiceId: invoice.id,
+        kind: PaymentKind.REFUND,
+        method: PaymentMethod.STRIPE,
+        amountCents: input.amountCents,
+        currency: invoice.currency,
+        paymentEventKey: billingEventKey,
+        stripeChargeId: invoice.stripeChargeId,
+        stripeRefundId: stripeResult.stripeRefundId,
+        occurredAt: now,
+        metadata: {
+          sourceEvent: "operator-refund",
+          reason: input.reason,
+          issuedByUserId: ctx.actor.userId,
+        },
+      };
+      const ledgerResult = await insertPaymentLedgerRow(tx, ledgerRow);
+      paymentId = ledgerResult.paymentId;
+      if (ledgerResult.created) {
+        paymentOutboxEvents.push(
+          paymentRecordedOutboxEvent({ paymentId: ledgerResult.paymentId, row: ledgerRow })
+        );
+      }
+    }
+
     return {
       output: {
         invoiceId: invoice.id,
@@ -273,10 +320,15 @@ export const IssueRefund: Command<IssueRefundInput, IssueRefundOutput> = {
           amountCents: input.amountCents,
           creditAmountCents: negativeAmount,
           priorRefundedCents,
+          priorRefundedFromLinesCents: priorRefundTotals.fromInvoiceLinesCents,
+          priorRefundedFromLedgerCents: priorRefundTotals.fromPaymentLedgerCents,
           amountDueCentsAfter,
           hasOperatorNote,
           issuedByUserId: ctx.actor.userId,
           pharmaxRefundKey,
+          // Null when Stripe reported `pending` (ledger row written
+          // at settle time by RecordRefundReceived).
+          paymentId,
           recordedAt: now.toISOString(),
           commandLogId,
         },
@@ -300,6 +352,7 @@ export const IssueRefund: Command<IssueRefundInput, IssueRefundOutput> = {
             occurredAt: now.toISOString(),
           },
         },
+        ...paymentOutboxEvents,
       ],
     };
   },

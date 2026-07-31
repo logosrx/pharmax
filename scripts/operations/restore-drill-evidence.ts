@@ -157,6 +157,14 @@ export function composeTeardownScript(args: TeardownScriptArgs): string {
     '  && { echo "FAIL: cluster $NEW_CLUSTER_ID still exists"; exit 1; } \\',
     '  || echo "OK: cluster $NEW_CLUSTER_ID destroyed"',
     "",
+    "# ---- Record the destroy confirmation --------------------------------------",
+    "# The finalize phase reads teardown.json from the drill folder to render",
+    '# "Destroy confirmed: YES" in the evidence artifact. This line only runs',
+    "# after the describe-db-clusters check above proved the cluster is gone.",
+    `printf '{\\n  "confirmed": true,\\n  "confirmedAtIso": "%s"\\n}\\n' \\`,
+    '  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$(dirname "$0")/teardown.json"',
+    'echo "Recorded destroy confirmation in $(dirname "$0")/teardown.json"',
+    "",
   ].join("\n");
 }
 

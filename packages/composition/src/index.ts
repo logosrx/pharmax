@@ -40,6 +40,14 @@ export {
   type RedisCacheHandle,
 } from "./cache/ioredis-cache-client.js";
 
+export {
+  createRateLimiterFromEnv,
+  RedisRateLimiter,
+  type CreateRateLimiterFromEnvInput,
+  type IoredisEvalLike,
+  type RateLimiterHandle,
+} from "./rate-limit/ioredis-rate-limiter.js";
+
 // Re-export the cache port + read-through helpers so consumers (apps/web,
 // apps/worker) import the whole cache surface from the composition layer —
 // the same one-stop-import principle the configurator factories follow.

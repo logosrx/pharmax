@@ -21,10 +21,13 @@
 //   - SHORT TTL (`OPERATOR_PERMISSION_CACHE_TTL_MS`) — the self-healing
 //     safety net; the worst-case window if an invalidation is missed.
 //   - EXPLICIT invalidation on every grant mutation: `AssignRole` and
-//     `RevokeUserRole` are the ONLY commands that change a user's
-//     user_role rows (role_permission is seed-only, never mutated at
-//     runtime), and both dispatch routes invalidate this key on
-//     success. A revoked role stops granting access immediately.
+//     `RevokeUserRole` change a user's user_role rows, and
+//     `UpdateRolePermissions` changes a custom role's role_permission
+//     rows (which alters the effective access of EVERY holder). All
+//     three dispatch routes invalidate the affected users' keys on
+//     success — the role-permission route fans out over the command's
+//     `affectedUserIds`. A revoked grant stops conferring access
+//     immediately.
 //   - `cached()` degrades to the authoritative loader on any cache
 //     transport error — the cache is never a source of truth.
 //

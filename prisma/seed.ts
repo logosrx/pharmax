@@ -81,6 +81,16 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     description:
       "Reactivate a provider (INACTIVE -> ACTIVE) with a reason code. Re-enables new orders against the prescriber",
   },
+  {
+    code: "clinics.read",
+    description:
+      "View the clinic (practice) directory: codes, names, statuses, and pharmacy-site links; no PHI",
+  },
+  {
+    code: "inventory.read",
+    description:
+      "View the drug product catalog and inventory lots/batches (NDC, name, lot number, expiration, status); read-only",
+  },
   { code: "orders.create", description: "Create new orders" },
   { code: "orders.read", description: "View orders within scope" },
   {
@@ -222,6 +232,16 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     code: "compliance.access_review.record",
     description:
       "Dispatch RecordAccessReviewSnapshot to freeze an immutable, digest-sealed (user → role → permission) snapshot for SOC 2 CC6.2 evidence",
+  },
+  {
+    code: "api.keys.manage",
+    description:
+      "Mint and revoke partner API keys for the public v1 API (ADR-0032); raw tokens are shown once and stored only as SHA-256 hashes",
+  },
+  {
+    code: "webhooks.manage",
+    description:
+      "Create and revoke outbound webhook subscriptions (endpoint URL, event-type filter, HMAC signing secret); restricted to phi-safe registry events (ADR-0032)",
   },
 ];
 

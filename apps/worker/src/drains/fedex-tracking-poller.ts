@@ -13,13 +13,24 @@
 //   3. Build a `FedExClient` from the adapter and call
 //      `trackShipmentBatch` with up to 30 tracking numbers per
 //      request (the FedEx Track API hard cap).
-//   4. For each returned `trackResult` with a usable
-//      `latestStatusDetail.code`, dispatch `RecordShipmentTrackingEvent`
-//      with `source = "FEDEX"` and a synthetic `externalEventId`
-//      derived from `trackingNumber + derived status code +
-//      occurredAt`. The command's row-level unique constraint
-//      `(organizationId, source, externalEventId)` makes repeated
-//      polls of the same status a no-op.
+//   4. For each returned `trackResult`, ingest the FULL
+//      `scanEvents[]` history — every scan (departed facility,
+//      arrived hub, out for delivery, ...) becomes one
+//      `RecordShipmentTrackingEvent` dispatch with `source =
+//      "FEDEX"`, a synthetic per-scan `externalEventId`
+//      (`fedex:{trackingNumber}:scan:{eventType}:{date}`), and the
+//      scan's city/state/country location. Scans are dispatched
+//      oldest-first so the shipment's cached status lands on the
+//      newest scan. When a result carries no scans at all we fall
+//      back to a single event from `latestStatusDetail`. The
+//      command's row-level unique constraint `(organizationId,
+//      source, externalEventId)` makes repeated polls a no-op; a
+//      per-org pre-query of already-recorded event ids avoids
+//      re-dispatching the whole scan history on every tick.
+//
+// The carrier's current delivery estimate (`dateAndTimes` entry of
+// type `ESTIMATED_DELIVERY`) rides along on the newest dispatched
+// event and refreshes `shipment.estimatedDeliveryAt`.
 //
 // Per-shipment failures are isolated — a bad tracking result for
 // one shipment does not abort the rest of the tick. Per-org failures
@@ -38,16 +49,20 @@
 // the actual transport for the tracking call.
 
 import { executeCommand } from "@pharmax/command-bus";
-import { CarrierCredentialStatus, ShippingProvider } from "@pharmax/database";
+import {
+  CarrierCredentialStatus,
+  ShipmentTrackingSource,
+  ShippingProvider,
+} from "@pharmax/database";
 import { decryptField } from "@pharmax/crypto";
 import type { PrismaClient } from "@pharmax/database";
 import {
   FedExClient,
   isFedExTrackingNumber,
-  normalizeFedExStatus,
+  normalizeFedExTrackResult,
+  pickEstimatedDeliveryAt,
   RecordShipmentTrackingEvent,
   type FedExTrackResponse,
-  type FedExTrackResult,
 } from "@pharmax/shipping";
 import type { logger as loggerContract } from "@pharmax/platform-core";
 import { getMeter } from "@pharmax/telemetry";
@@ -110,6 +125,8 @@ export interface FedExTrackingPollerDeps {
 export interface FedExTrackingPollerOptions {
   readonly batchSize: number;
   readonly staleThresholdMs: number;
+  /** See `ClaimActiveFedExShipmentsOptions.maxShipmentAgeDays`. */
+  readonly maxShipmentAgeDays: number;
 }
 
 export interface FedExTrackingPollerTickResult {
@@ -228,38 +245,12 @@ async function buildPerOrgContext(input: {
   });
 }
 
-function pickOccurredAt(result: FedExTrackResult): Date | null {
-  const isoCandidate = result.dateAndTimes?.find(
-    (d: { dateTime?: string }) => d.dateTime !== undefined
-  )?.dateTime;
-  if (typeof isoCandidate === "string" && isoCandidate.length > 0) {
-    const parsed = new Date(isoCandidate);
-    if (!Number.isNaN(parsed.getTime())) {
-      return parsed;
-    }
-  }
-  // Fall back to the latest scanEvent's date.
-  const latestScan = result.scanEvents?.[0];
-  if (latestScan?.date !== undefined && latestScan.date.length > 0) {
-    const parsed = new Date(latestScan.date);
-    if (!Number.isNaN(parsed.getTime())) {
-      return parsed;
-    }
-  }
-  return null;
-}
-
-function deriveExternalEventId(input: {
-  trackingNumber: string;
-  statusCode: string;
-  occurredAt: Date;
-}): string {
-  // Stable id so the same status polled twice deduplicates at the
-  // RecordShipmentTrackingEvent unique-constraint layer. Timestamp
-  // is included so a re-derived status (e.g. EXCEPTION → IN_TRANSIT
-  // → EXCEPTION again at a later time) lands as separate rows.
-  return `fedex:${input.trackingNumber}:${input.statusCode}:${input.occurredAt.toISOString()}`;
-}
+// Normalization (scan extraction, externalEventId derivation, status
+// mapping, occurredAt/estimate typing) lives in `@pharmax/shipping`
+// (`fedex-track-normalization.ts`) and is SHARED with the AIV webhook
+// pipeline — both channels must derive identical externalEventIds so
+// a webhook push and a poll of the same physical scan deduplicate at
+// the unique-constraint layer.
 
 export function createFedExTrackingPoller(
   deps: FedExTrackingPollerDeps,
@@ -362,7 +353,37 @@ export function createFedExTrackingPoller(
           continue;
         }
 
-        // Step 4 — per-result dispatch inside the org's tenancy.
+        // Step 4 — pre-query already-recorded event ids for this
+        // org's claimed shipments so a steady-state tick does not
+        // re-dispatch the entire scan history of every shipment
+        // (each dispatch is a full command execution). The unique
+        // constraint remains the correctness layer; this is purely
+        // a load optimization, so a failure here degrades to
+        // constraint-layer dedupe rather than aborting the org.
+        let recordedEventIds: ReadonlySet<string>;
+        try {
+          const rows = await withSystemContext("worker-drain:fedex-tracking-dedupe", async () =>
+            deps.client.shipmentTrackingEvent.findMany({
+              where: {
+                organizationId,
+                source: ShipmentTrackingSource.FEDEX,
+                shipmentId: { in: eligible.map((s) => s.id) },
+              },
+              select: { externalEventId: true },
+            })
+          );
+          recordedEventIds = new Set(rows.map((r) => r.externalEventId));
+        } catch (cause) {
+          recordedEventIds = new Set();
+          log.warn("drain.track.dedupe_query_failed", {
+            organizationId,
+            errorMessage: cause instanceof Error ? cause.message : "unknown",
+          });
+        }
+
+        // Step 5 — per-result dispatch inside the org's tenancy.
+        // Every scan in the result's history becomes one event row;
+        // oldest-first so the cached status ends on the newest scan.
         for (const ctr of response.output.completeTrackResults) {
           const trackingNumber = ctr.trackingNumber ?? "";
           const shipment = shipmentByTracking.get(trackingNumber);
@@ -377,71 +398,89 @@ export function createFedExTrackingPoller(
             continue;
           }
 
-          const statusCode = trackResult.latestStatusDetail?.code;
-          if (typeof statusCode !== "string" || statusCode.length === 0) {
+          const events = normalizeFedExTrackResult({ trackingNumber, trackResult });
+          if (events.length === 0) {
             tally.skippedNoStatus += 1;
             continue;
           }
-          const occurredAt = pickOccurredAt(trackResult) ?? new Date();
-          const kind = normalizeFedExStatus(statusCode);
-          const externalEventId = deriveExternalEventId({
-            trackingNumber,
-            statusCode,
-            occurredAt,
-          });
+
+          const newEvents = events.filter((e) => !recordedEventIds.has(e.externalEventId));
+          tally.polled += 1;
+          if (newEvents.length === 0) {
+            // Fully up to date — nothing new since the last tick.
+            continue;
+          }
+
+          const estimatedDeliveryAt = pickEstimatedDeliveryAt(trackResult);
+          const newestEventId = newEvents[newEvents.length - 1]?.externalEventId;
           const signatureVerifiedAt = new Date();
 
-          const tenancy = buildTenancyContext({
-            organizationId: ctx.organizationId,
-            actor: { userId: ctx.actorUserId, correlationId: ulid() },
-          });
-
-          tally.polled += 1;
-          try {
-            await withTenancyContext(tenancy, async () => {
-              await executeCommand(
-                RecordShipmentTrackingEvent,
-                {
-                  shipmentId: shipment.id,
-                  source: "FEDEX",
-                  externalEventId,
-                  kind,
-                  carrierStatus: statusCode,
-                  ...(typeof trackResult.latestStatusDetail?.statusByLocale === "string"
-                    ? { carrierStatusDetail: trackResult.latestStatusDetail.statusByLocale }
-                    : {}),
-                  occurredAt: occurredAt.toISOString(),
-                  signatureVerifiedAt: signatureVerifiedAt.toISOString(),
-                  // Persist the full FedEx trackResult as the raw
-                  // payload — useful for audit + future re-projection.
-                  rawPayload: trackResult as unknown as Record<string, unknown>,
-                },
-                { idempotencyKey: `fedex-poll:${externalEventId}` }
-              );
+          for (const event of newEvents) {
+            const tenancy = buildTenancyContext({
+              organizationId: ctx.organizationId,
+              actor: { userId: ctx.actorUserId, correlationId: ulid() },
             });
-            tally.recorded += 1;
-            shippingTrackingEventsRecordedCounter.add(1, CARRIER_FEDEX);
-          } catch (cause) {
-            // Already-recorded duplicate is the most common "failure"
-            // and that's the whole point of the unique-constraint
-            // idempotency. Surface as `recorded` (the event reached
-            // its terminal state) rather than `failed`, but only when
-            // the bus reports the bus-layer idempotency conflict.
-            const code = (cause as { code?: string } | undefined)?.code;
-            if (
-              code === "COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH" ||
-              code === "SHIPMENT_TRACKING_DUPLICATE_EVENT"
-            ) {
+
+            try {
+              await withTenancyContext(tenancy, async () => {
+                await executeCommand(
+                  RecordShipmentTrackingEvent,
+                  {
+                    shipmentId: shipment.id,
+                    source: "FEDEX",
+                    externalEventId: event.externalEventId,
+                    kind: event.kind,
+                    carrierStatus: event.carrierStatus,
+                    ...(event.carrierStatusDetail !== null
+                      ? { carrierStatusDetail: event.carrierStatusDetail }
+                      : {}),
+                    occurredAt: event.occurredAt.toISOString(),
+                    signatureVerifiedAt: signatureVerifiedAt.toISOString(),
+                    ...(event.scanCity !== null ? { scanCity: event.scanCity } : {}),
+                    ...(event.scanStateOrProvince !== null
+                      ? { scanStateOrProvince: event.scanStateOrProvince }
+                      : {}),
+                    ...(event.scanCountry !== null ? { scanCountry: event.scanCountry } : {}),
+                    // The delivery estimate is a property of the
+                    // track result, not of any single scan — attach
+                    // it to the newest event only so the cached
+                    // `shipment.estimatedDeliveryAt` refreshes once
+                    // per poll.
+                    ...(estimatedDeliveryAt !== null && event.externalEventId === newestEventId
+                      ? { estimatedDeliveryAt: estimatedDeliveryAt.toISOString() }
+                      : {}),
+                    // Persist the raw scan (or full trackResult for
+                    // the fallback) — useful for audit + future
+                    // re-projection.
+                    rawPayload: event.rawPayload,
+                  },
+                  { idempotencyKey: `fedex-poll:${event.externalEventId}` }
+                );
+              });
               tally.recorded += 1;
               shippingTrackingEventsRecordedCounter.add(1, CARRIER_FEDEX);
-            } else {
-              tally.failed += 1;
-              log.error("drain.track.dispatch_failed", {
-                organizationId,
-                shipmentId: shipment.id,
-                trackingNumber,
-                errorMessage: cause instanceof Error ? cause.message : "unknown",
-              });
+            } catch (cause) {
+              // Already-recorded duplicate is the most common "failure"
+              // and that's the whole point of the unique-constraint
+              // idempotency. Surface as `recorded` (the event reached
+              // its terminal state) rather than `failed`, but only when
+              // the bus reports the bus-layer idempotency conflict.
+              const code = (cause as { code?: string } | undefined)?.code;
+              if (
+                code === "COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH" ||
+                code === "SHIPMENT_TRACKING_DUPLICATE_EVENT"
+              ) {
+                tally.recorded += 1;
+                shippingTrackingEventsRecordedCounter.add(1, CARRIER_FEDEX);
+              } else {
+                tally.failed += 1;
+                log.error("drain.track.dispatch_failed", {
+                  organizationId,
+                  shipmentId: shipment.id,
+                  trackingNumber,
+                  errorMessage: cause instanceof Error ? cause.message : "unknown",
+                });
+              }
             }
           }
         }

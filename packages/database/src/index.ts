@@ -33,6 +33,7 @@ export {
   Prisma,
   PrismaClient,
   // Enums (re-exported for ergonomic value-side usage in commands/seeds)
+  ApiKeyStatus,
   AuthSessionRevokeReason,
   BucketKind,
   CancellationDisposition,
@@ -41,6 +42,7 @@ export {
   ClinicStatus,
   CommandStatus,
   EasyPostWebhookEventStatus,
+  FedExWebhookEventStatus,
   HoldReason,
   HoldReleaseReason,
   OrderStageIntervalKind,
@@ -66,6 +68,8 @@ export {
   PackagePhotoMatchStrategy,
   PackagePhotoTrackingSource,
   PatientStatus,
+  PaymentKind,
+  PaymentMethod,
   PrescriptionStatus,
   PricingRuleStatus,
   PrintJobStatus,
@@ -86,6 +90,8 @@ export {
   UserStatus,
   VerificationDecision,
   VerificationStage,
+  WebhookDeliveryStatus,
+  WebhookSubscriptionStatus,
   WorkflowPolicyOverlayStatus,
   WorkflowPolicyStatus,
   WorkstationStatus,
@@ -96,6 +102,7 @@ export {
 // models here as the schema grows; missing exports surface as TS2305
 // errors at the consumption site.
 export type {
+  ApiKey,
   AuditChainState,
   AuditLog,
   AuthSession,
@@ -141,6 +148,7 @@ export type {
   CarrierCredential,
   ClerkWebhookEvent,
   EasyPostWebhookEvent,
+  FedExWebhookEvent,
   Shipment,
   ShipmentTrackingEvent,
   StripeCustomer,
@@ -150,6 +158,8 @@ export type {
   UserRole,
   VialLabel,
   VerificationRecord,
+  WebhookDelivery,
+  WebhookSubscription,
   WorkflowPolicy,
   Workstation,
 } from "./generated/client/client.js";

@@ -45,6 +45,7 @@ import {
   createFedExFactory,
   createUpsFactory,
   PrismaEasyPostWebhookEventStore,
+  PrismaFedExWebhookEventStore,
 } from "@pharmax/shipping";
 import {
   initTelemetry,
@@ -59,13 +60,15 @@ import {
   createQuarterlyAccessReviewLoop,
   FilesystemEvidencePublisher,
 } from "./compliance/access-review-job.js";
+import { NotificationChannelComplianceNotifier } from "./compliance/notification-channel-compliance-notifier.js";
 import { PrismaNotificationDeliveryStore } from "./notifications/prisma-notification-delivery-store.js";
 import { ResendNotificationChannel } from "./notifications/resend-notification-channel.js";
 import { createEasyPostWebhookDrainer } from "./drains/easypost-webhook-event-drainer.js";
 import { createOutboxDrainer } from "./drains/event-outbox-drainer.js";
 import { createFedExTrackingPoller } from "./drains/fedex-tracking-poller.js";
+import { createFedExWebhookDrainer } from "./drains/fedex-webhook-event-drainer.js";
 import { createNpiSyncScheduler } from "./drains/npi-sync-scheduler.js";
-import { createOutboxHandlers } from "./drains/outbox-handlers.js";
+import { createOutboxHandlers, createWebhookFanOutHook } from "./drains/outbox-handlers.js";
 import { createExpiredPackagePhotoUploadTokenReaper } from "./drains/reap-expired-package-photo-upload-tokens.js";
 import { createStaleLabelPurchaseReconciler } from "./drains/reconcile-stale-label-purchases.js";
 import {
@@ -75,9 +78,13 @@ import {
 import { createStuckNpiSyncRunReaper } from "./drains/reap-stuck-npi-sync-runs.js";
 import { createReportScheduler } from "./drains/report-scheduler.js";
 import { createSlaBreachEvaluator } from "./drains/sla-breach-evaluator.js";
-import { createEasyPostTargetResolver } from "./drains/shipping-lookups.js";
+import {
+  createEasyPostTargetResolver,
+  createFedExTargetResolver,
+} from "./drains/shipping-lookups.js";
 import { createUpsTrackingPoller } from "./drains/ups-tracking-poller.js";
 import { createStripeWebhookDrainer } from "./drains/stripe-webhook-event-drainer.js";
+import { createWebhookDeliveryDrainer } from "./drains/webhook-delivery-drainer.js";
 import { createStripeEventHandlers } from "./drains/stripe-handlers.js";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
@@ -271,6 +278,24 @@ async function main(): Promise<void> {
         })
       : undefined;
 
+  // Compliance notifier selection — same pattern as the digest
+  // publisher above. When COMPLIANCE_NOTIFY_RECIPIENT_EMAIL is set
+  // AND the Resend channel is wired, the quarterly access-review
+  // loop delivers its "walk this report" nudges as emails via
+  // NotificationChannelComplianceNotifier → COMPLIANCE_NOTICE_V1.
+  // Otherwise the loop keeps its structured-log stub and the
+  // `compliance.notify` log line remains the SOC 2 evidence.
+  const complianceRecipient = env.COMPLIANCE_NOTIFY_RECIPIENT_EMAIL;
+  const complianceRecipientConfigured =
+    typeof complianceRecipient === "string" && complianceRecipient.length > 0;
+  const complianceNotifier =
+    complianceRecipientConfigured && resendChannelWired
+      ? new NotificationChannelComplianceNotifier({
+          channel: notificationChannel,
+          recipientEmail: complianceRecipient as string,
+        })
+      : undefined;
+
   // @pharmax/shipping factory registry. The FedEx + UPS tracking
   // pollers instantiate clients directly (they decrypt the
   // credential then build a typed client), but `PurchaseShipmentLabel`
@@ -307,10 +332,16 @@ async function main(): Promise<void> {
       intervalMs: env.EASYPOST_DRAIN_INTERVAL_MS,
       leaseMs: env.EASYPOST_DRAIN_LEASE_MS,
     },
+    fedexWebhookDrain: {
+      batchSize: env.FEDEX_WEBHOOK_DRAIN_BATCH_SIZE,
+      intervalMs: env.FEDEX_WEBHOOK_DRAIN_INTERVAL_MS,
+      leaseMs: env.FEDEX_WEBHOOK_DRAIN_LEASE_MS,
+    },
     fedexTrackingPoll: {
       batchSize: env.FEDEX_TRACKING_POLL_BATCH_SIZE,
       intervalMs: env.FEDEX_TRACKING_POLL_INTERVAL_MS,
       staleThresholdMs: env.FEDEX_TRACKING_POLL_STALE_THRESHOLD_MS,
+      maxShipmentAgeDays: env.FEDEX_TRACKING_POLL_MAX_SHIPMENT_AGE_DAYS,
     },
     upsTrackingPoll: {
       batchSize: env.UPS_TRACKING_POLL_BATCH_SIZE,
@@ -373,6 +404,8 @@ async function main(): Promise<void> {
       utcHour: env.QUARTERLY_ACCESS_REVIEW_HOUR_UTC,
       utcMinute: env.QUARTERLY_ACCESS_REVIEW_MINUTE_UTC,
       lookbackDays: env.QUARTERLY_ACCESS_REVIEW_LOOKBACK_DAYS,
+      notifier: complianceNotifier !== undefined ? "notification-channel" : "logging-stub",
+      notifyRecipientConfigured: complianceRecipientConfigured,
       evidenceRoot: env.QUARTERLY_ACCESS_REVIEW_EVIDENCE_ROOT,
     },
     auditChainVerifier: {
@@ -445,10 +478,28 @@ async function main(): Promise<void> {
         stripePort,
         opsConsoleBaseUrl: env.OPS_CONSOLE_BASE_URL,
       }),
+      // Partner webhook fan-out (ADR-0032): runs after every row's
+      // domain handler and self-filters to phi-safe registry events.
+      postHandlerHook: createWebhookFanOutHook(prisma),
     },
     {
       batchSize: env.OUTBOX_DRAIN_BATCH_SIZE,
       leaseMs: env.OUTBOX_DRAIN_LEASE_MS,
+    }
+  );
+
+  // Outbound partner webhook deliveries (ADR-0032). Fan-out happens
+  // inside the outbox drainer's composed handlers; this drain owns
+  // the HTTP leg (HMAC-signed POST + retry/backoff → DEAD).
+  const webhookDeliveryDrainer = createWebhookDeliveryDrainer(
+    {
+      client: prisma,
+      logger,
+      maxAttempts: env.WEBHOOK_DELIVERY_MAX_ATTEMPTS,
+    },
+    {
+      batchSize: env.WEBHOOK_DELIVERY_BATCH_SIZE,
+      leaseMs: env.WEBHOOK_DELIVERY_LEASE_MS,
     }
   );
 
@@ -466,11 +517,26 @@ async function main(): Promise<void> {
     }
   );
 
+  const fedExWebhookEventStore = new PrismaFedExWebhookEventStore(prisma);
+  const fedExWebhookDrainer = createFedExWebhookDrainer(
+    {
+      client: prisma,
+      eventStore: fedExWebhookEventStore,
+      targetResolver: createFedExTargetResolver({ client: prisma }),
+      logger,
+    },
+    {
+      batchSize: env.FEDEX_WEBHOOK_DRAIN_BATCH_SIZE,
+      leaseMs: env.FEDEX_WEBHOOK_DRAIN_LEASE_MS,
+    }
+  );
+
   const fedexTrackingPoller = createFedExTrackingPoller(
     { client: prisma, logger },
     {
       batchSize: env.FEDEX_TRACKING_POLL_BATCH_SIZE,
       staleThresholdMs: env.FEDEX_TRACKING_POLL_STALE_THRESHOLD_MS,
+      maxShipmentAgeDays: env.FEDEX_TRACKING_POLL_MAX_SHIPMENT_AGE_DAYS,
     }
   );
 
@@ -645,8 +711,21 @@ async function main(): Promise<void> {
         utcMinute: env.QUARTERLY_ACCESS_REVIEW_MINUTE_UTC,
         evidencePublisher,
         lookbackDays: env.QUARTERLY_ACCESS_REVIEW_LOOKBACK_DAYS,
+        ...(complianceNotifier !== undefined ? { notifier: complianceNotifier } : {}),
       })
     : null;
+  if (
+    env.NODE_ENV === "production" &&
+    quarterlyAccessReviewLoop !== null &&
+    complianceNotifier === undefined
+  ) {
+    // Same shape as the digest-publisher fallback warning: name the
+    // exact missing precondition so the operator fixes the right var.
+    const reason = !complianceRecipientConfigured
+      ? "COMPLIANCE_NOTIFY_RECIPIENT_EMAIL is unset; access-review notices will be logged at INFO only and the compliance reviewer will not receive an email."
+      : "RESEND_API_KEY or NOTIFICATION_FROM_EMAIL is unset; the worker's notification channel is the in-memory fallback, so access-review notices will be logged at INFO only.";
+    logger.warn("worker.quarterly_access_review.log_only_notifier", { reason });
+  }
   if (env.NODE_ENV === "production" && quarterlyAccessReviewLoop !== null) {
     logger.warn("worker.quarterly_access_review.filesystem_publisher", {
       reason:
@@ -751,11 +830,29 @@ async function main(): Promise<void> {
     logger,
   });
 
+  const webhookDeliveryLoop = createPollLoop({
+    name: "webhook-delivery-drain",
+    intervalMs: env.WEBHOOK_DELIVERY_INTERVAL_MS,
+    tick: async () => {
+      await webhookDeliveryDrainer.tick();
+    },
+    logger,
+  });
+
   const easyPostLoop = createPollLoop({
     name: "easypost-webhook-drain",
     intervalMs: env.EASYPOST_DRAIN_INTERVAL_MS,
     tick: async () => {
       await easyPostDrainer.tick();
+    },
+    logger,
+  });
+
+  const fedExWebhookLoop = createPollLoop({
+    name: "fedex-webhook-drain",
+    intervalMs: env.FEDEX_WEBHOOK_DRAIN_INTERVAL_MS,
+    tick: async () => {
+      await fedExWebhookDrainer.tick();
     },
     logger,
   });
@@ -865,7 +962,9 @@ async function main(): Promise<void> {
 
   stripeLoop.start();
   outboxLoop.start();
+  webhookDeliveryLoop.start();
   easyPostLoop.start();
+  fedExWebhookLoop.start();
   fedexTrackingLoop.start();
   upsTrackingLoop.start();
   reportSchedulerLoop.start();
@@ -914,7 +1013,9 @@ async function main(): Promise<void> {
   await Promise.all([
     stripeLoop.stop(),
     outboxLoop.stop(),
+    webhookDeliveryLoop.stop(),
     easyPostLoop.stop(),
+    fedExWebhookLoop.stop(),
     fedexTrackingLoop.stop(),
     upsTrackingLoop.stop(),
     reportSchedulerLoop.stop(),

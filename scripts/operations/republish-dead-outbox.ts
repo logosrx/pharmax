@@ -140,38 +140,88 @@ export function parseCli(argv: ReadonlyArray<string>): ParsedCli | { readonly er
   return { mode: "republish", selector, confirmed: values.yes === true };
 }
 
+export interface DeadRowSummaryInput {
+  readonly eventType: string;
+  readonly organizationId: string;
+  readonly createdAt: Date;
+}
+
+export interface DeadRowGroup {
+  readonly eventType: string;
+  readonly organizationId: string;
+  readonly count: number;
+  readonly oldest: Date;
+  readonly newest: Date;
+}
+
+/** Group DEAD rows by (eventType, org) in JS. Exported for tests. */
+export function summarizeDeadRows(rows: ReadonlyArray<DeadRowSummaryInput>): DeadRowGroup[] {
+  const groups = new Map<string, DeadRowGroup>();
+  for (const row of rows) {
+    const key = `${row.eventType}|${row.organizationId}`;
+    const current = groups.get(key);
+    if (current === undefined) {
+      groups.set(key, {
+        eventType: row.eventType,
+        organizationId: row.organizationId,
+        count: 1,
+        oldest: row.createdAt,
+        newest: row.createdAt,
+      });
+    } else {
+      groups.set(key, {
+        ...current,
+        count: current.count + 1,
+        oldest: row.createdAt < current.oldest ? row.createdAt : current.oldest,
+        newest: row.createdAt > current.newest ? row.createdAt : current.newest,
+      });
+    }
+  }
+  return [...groups.values()].sort((a, b) =>
+    `${a.eventType}|${a.organizationId}`.localeCompare(`${b.eventType}|${b.organizationId}`)
+  );
+}
+
+/**
+ * Bounded snapshot: DEAD rows should be RARE by construction (every
+ * retry budget already ran out), so 500 covers any sane state. A
+ * larger backlog than that is itself the headline finding.
+ */
+const LIST_SCAN_LIMIT = 500;
+
 async function listDeadRows(): Promise<void> {
   await withSystemContext("scripts:republish-dead-outbox:list", async () => {
-    const groups = await prisma.eventOutbox.groupBy({
-      by: ["eventType", "organizationId"],
+    const rows = await prisma.eventOutbox.findMany({
       where: { status: "DEAD" },
-      _count: { _all: true },
-      _min: { createdAt: true },
-      _max: { createdAt: true },
+      select: {
+        id: true,
+        eventType: true,
+        organizationId: true,
+        attempts: true,
+        lastError: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: LIST_SCAN_LIMIT,
     });
 
-    if (groups.length === 0) {
+    if (rows.length === 0) {
       console.log("No DEAD outbox rows. Nothing to re-publish.");
       return;
     }
 
-    console.log(`DEAD outbox rows (${groups.length} group(s)):\n`);
+    const groups = summarizeDeadRows(rows);
+    const atLimit = rows.length === LIST_SCAN_LIMIT ? ` (showing newest ${LIST_SCAN_LIMIT})` : "";
+    console.log(`DEAD outbox rows: ${rows.length}${atLimit} in ${groups.length} group(s):\n`);
     for (const g of groups) {
       console.log(
-        `  ${g.eventType}  org=${g.organizationId}  count=${g._count._all}` +
-          `  oldest=${g._min.createdAt?.toISOString() ?? "?"}  newest=${g._max.createdAt?.toISOString() ?? "?"}`
+        `  ${g.eventType}  org=${g.organizationId}  count=${g.count}` +
+          `  oldest=${g.oldest.toISOString()}  newest=${g.newest.toISOString()}`
       );
     }
 
-    // Newest few rows with their parked error for triage.
-    const recent = await prisma.eventOutbox.findMany({
-      where: { status: "DEAD" },
-      select: { id: true, eventType: true, organizationId: true, attempts: true, lastError: true },
-      orderBy: { createdAt: "desc" },
-      take: 10,
-    });
-    console.log(`\nNewest ${recent.length} row(s):\n`);
-    for (const row of recent) {
+    console.log(`\nNewest ${Math.min(rows.length, 10)} row(s):\n`);
+    for (const row of rows.slice(0, 10)) {
       console.log(`  ${row.id}  ${row.eventType}  attempts=${row.attempts}`);
       console.log(`    lastError: ${row.lastError ?? "(none)"}`);
     }

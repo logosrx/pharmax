@@ -45,6 +45,18 @@ interface FakeCall {
   readonly args: unknown;
 }
 
+interface FakePricingRule {
+  id: string;
+  clinicId: string | null;
+  productId: string | null;
+  kind: string;
+  unitAmountCents: number;
+  currency: string;
+  effectiveFrom: Date;
+  effectiveTo: Date | null;
+  status: string;
+}
+
 interface FakeOverrides {
   /** Pre-existing invoice line (drives the idempotent short-circuit). */
   existingLine?: { id: string; invoiceId: string; amountCents: number } | null;
@@ -61,6 +73,10 @@ interface FakeOverrides {
    * P2002 race-resolution branch.
    */
   invoiceLineCreateError?: Error;
+  /** Pricing rules returned per kind (handler queries one kind at a time). */
+  pricingRulesByKind?: Record<string, FakePricingRule[]>;
+  /** Order priority returned by the order lookup. Defaults to NORMAL. */
+  orderPriority?: "NORMAL" | "RUSH" | "EMERGENCY";
 }
 
 function buildPrismaFake(overrides: FakeOverrides = {}): {
@@ -126,11 +142,19 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     },
     pricingRule: {
       // No rules configured → resolver returns null → handler
-      // falls back to FLAT_V1. Tests that exercise rule-driven
-      // pricing override this in their own fake.
+      // falls back to FLAT_V1 for the dispense fee and skips the
+      // supplemental fee kinds. Tests that exercise rule-driven
+      // pricing supply `pricingRulesByKind`.
       findMany: vi.fn(async (args: unknown) => {
         calls.push({ table: "pricingRule", op: "findMany", args });
-        return [];
+        const kind = (args as { where: { kind: string } }).where.kind;
+        return overrides.pricingRulesByKind?.[kind] ?? [];
+      }),
+    },
+    order: {
+      findUnique: vi.fn(async (args: unknown) => {
+        calls.push({ table: "order", op: "findUnique", args });
+        return { priority: overrides.orderPriority ?? "NORMAL" };
       }),
     },
     commandLog: {
@@ -300,7 +324,13 @@ describe("MaterializeShippedOrderBilling — pricing-rule resolution", () => {
           findUnique: vi.fn(async () => ({ id: CLINIC_ID, organizationId: ORG_ID })),
         },
         pricingRule: {
-          findMany: vi.fn(async () => [ruleRow]),
+          findMany: vi.fn(async (args: unknown) => {
+            const kind = (args as { where: { kind: string } }).where.kind;
+            return kind === "DISPENSE_FEE" ? [ruleRow] : [];
+          }),
+        },
+        order: {
+          findUnique: vi.fn(async () => ({ priority: "NORMAL" })),
         },
         commandLog: { create: vi.fn(async () => ({ id: "cl" })) },
         auditLog: { create: vi.fn(async () => ({ id: "al" })) },
@@ -332,6 +362,134 @@ describe("MaterializeShippedOrderBilling — pricing-rule resolution", () => {
     expect(out.pricingScheme).toBe("RULE_V2");
     expect(out.pricingRuleId).toBe("rule-clinic-1");
     expect(out.amountCents).toBe(7500);
+  });
+});
+
+describe("MaterializeShippedOrderBilling — supplemental fee lines", () => {
+  const shippingRule: FakePricingRule = {
+    id: "33333333-3333-4333-8333-000000000001",
+    clinicId: null,
+    productId: null,
+    kind: "SHIPPING_FEE",
+    unitAmountCents: 1200,
+    currency: "usd",
+    effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+    effectiveTo: null,
+    status: "ACTIVE",
+  };
+  const rushRule: FakePricingRule = {
+    id: "33333333-3333-4333-8333-000000000002",
+    clinicId: null,
+    productId: null,
+    kind: "RUSH_FEE",
+    unitAmountCents: 2500,
+    currency: "usd",
+    effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+    effectiveTo: null,
+    status: "ACTIVE",
+  };
+
+  it("materializes a SHIPPING_FEE line when a rule resolves, rolling it into totals", async () => {
+    const fake = buildPrismaFake({
+      pricingRulesByKind: { SHIPPING_FEE: [shippingRule] },
+    });
+    configureBus(fake.client);
+
+    const out = await withSystemContext("billing-test", () =>
+      executeSystemCommand(MaterializeShippedOrderBilling, validInput)
+    );
+
+    expect(out.feeLines).toHaveLength(1);
+    expect(out.feeLines[0]).toMatchObject({
+      kind: "SHIPPING_FEE",
+      amountCents: 1200,
+      pricingRuleId: shippingRule.id,
+    });
+    expect(out.totalAmountCents).toBe(FLAT_DISPENSE_FEE_CENTS + 1200);
+
+    const lineCreates = fake.calls.filter((c) => c.table === "invoiceLine" && c.op === "create");
+    expect(lineCreates).toHaveLength(2);
+    const shippingData = (lineCreates[1]!.args as { data: Record<string, unknown> }).data;
+    expect(shippingData["kind"]).toBe("SHIPPING_FEE");
+    expect(shippingData["billingEventKey"]).toBe(`ord-shipped-shipfee:${ORDER_ID}`);
+
+    // Totals roll the SUM of both lines.
+    const invoiceUpdate = fake.calls.find((c) => c.table === "invoice" && c.op === "update");
+    const updateData = (invoiceUpdate!.args as { data: Record<string, unknown> }).data;
+    expect(updateData["totalCents"]).toEqual({ increment: FLAT_DISPENSE_FEE_CENTS + 1200 });
+
+    // One outbox event per line.
+    const outboxData = (
+      fake.calls.find((c) => c.table === "eventOutbox")!.args as {
+        data: Array<{ payload: Record<string, unknown> }>;
+      }
+    ).data;
+    expect(outboxData).toHaveLength(2);
+    expect(outboxData[1]?.payload["kind"]).toBe("SHIPPING_FEE");
+    expect(outboxData[1]?.payload["pricingScheme"]).toBe("RULE_V2");
+  });
+
+  it("materializes a RUSH_FEE line for RUSH-priority orders when a rule resolves", async () => {
+    const fake = buildPrismaFake({
+      pricingRulesByKind: { RUSH_FEE: [rushRule] },
+      orderPriority: "RUSH",
+    });
+    configureBus(fake.client);
+
+    const out = await withSystemContext("billing-test", () =>
+      executeSystemCommand(MaterializeShippedOrderBilling, validInput)
+    );
+
+    expect(out.feeLines).toHaveLength(1);
+    expect(out.feeLines[0]).toMatchObject({ kind: "RUSH_FEE", amountCents: 2500 });
+    expect(out.totalAmountCents).toBe(FLAT_DISPENSE_FEE_CENTS + 2500);
+  });
+
+  it("skips the RUSH_FEE for NORMAL-priority orders even when a rule exists", async () => {
+    const fake = buildPrismaFake({
+      pricingRulesByKind: { RUSH_FEE: [rushRule] },
+      orderPriority: "NORMAL",
+    });
+    configureBus(fake.client);
+
+    const out = await withSystemContext("billing-test", () =>
+      executeSystemCommand(MaterializeShippedOrderBilling, validInput)
+    );
+
+    expect(out.feeLines).toHaveLength(0);
+    expect(out.totalAmountCents).toBe(FLAT_DISPENSE_FEE_CENTS);
+  });
+
+  it("skips fee kinds without a resolved rule — no flat fallback", async () => {
+    const fake = buildPrismaFake({ orderPriority: "RUSH" });
+    configureBus(fake.client);
+
+    const out = await withSystemContext("billing-test", () =>
+      executeSystemCommand(MaterializeShippedOrderBilling, validInput)
+    );
+
+    expect(out.feeLines).toHaveLength(0);
+    expect(out.totalAmountCents).toBe(FLAT_DISPENSE_FEE_CENTS);
+    expect(fake.calls.filter((c) => c.table === "invoiceLine" && c.op === "create")).toHaveLength(
+      1
+    );
+  });
+
+  it("skips a fee rule whose currency differs from the invoice currency", async () => {
+    const fake = buildPrismaFake({
+      pricingRulesByKind: {
+        SHIPPING_FEE: [{ ...shippingRule, currency: "eur" }],
+      },
+    });
+    configureBus(fake.client);
+
+    const out = await withSystemContext("billing-test", () =>
+      executeSystemCommand(MaterializeShippedOrderBilling, validInput)
+    );
+
+    // Invoice currency is "usd" (FLAT_V1 fallback); the eur rule is skipped.
+    expect(out.feeLines).toHaveLength(0);
+    expect(out.totalAmountCents).toBe(FLAT_DISPENSE_FEE_CENTS);
   });
 });
 
@@ -439,6 +597,9 @@ describe("MaterializeShippedOrderBilling — idempotency", () => {
         },
         pricingRule: {
           findMany: vi.fn(async () => []),
+        },
+        order: {
+          findUnique: vi.fn(async () => ({ priority: "NORMAL" })),
         },
         commandLog: { create: vi.fn(async () => ({ id: "cl-1" })) },
         auditLog: { create: vi.fn(async () => ({ id: "al-1" })) },

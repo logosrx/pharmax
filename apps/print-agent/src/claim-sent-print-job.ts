@@ -19,6 +19,8 @@ export interface ClaimedSentPrintJob {
   readonly printerId: string;
   readonly orderId: string;
   readonly orderLineId: string;
+  /** Requesting command's persisted W3C trace context; null for pre-trace rows. */
+  readonly traceparent: string | null;
 }
 
 type ClaimRow = {
@@ -27,6 +29,7 @@ type ClaimRow = {
   printerId: string;
   orderId: string;
   orderLineId: string;
+  traceparent: string | null;
 };
 
 /**
@@ -61,7 +64,7 @@ export async function claimNextSentPrintJob(
       LIMIT 1
       FOR UPDATE SKIP LOCKED
     )
-    RETURNING id, "renderedZpl", "printerId", "orderId", "orderLineId"
+    RETURNING id, "renderedZpl", "printerId", "orderId", "orderLineId", "traceparent"
   `);
 
   const row = rows[0];
@@ -75,5 +78,6 @@ export async function claimNextSentPrintJob(
     printerId: row.printerId,
     orderId: row.orderId,
     orderLineId: row.orderLineId,
+    traceparent: row.traceparent,
   };
 }

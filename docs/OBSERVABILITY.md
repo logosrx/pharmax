@@ -4,18 +4,19 @@ Where everything goes when something goes wrong, and how to find it.
 
 ## TL;DR
 
-| Signal                        | Where it lives                                                              | How to query                      |
-| ----------------------------- | --------------------------------------------------------------------------- | --------------------------------- |
-| Application logs (structured) | `stdout` of each process → log aggregator (TBD per deploy)                  | `correlationId` filter            |
-| Captured exceptions           | Sentry, project: `pharmacy-os` / `pharmacy-worker` / `pharmacy-print-agent` | `organization.id:<org-uuid>`      |
-| Domain audit events           | `audit_log` table, hash-linked                                              | SQL on `audit_log.organizationId` |
-| Workflow events               | `order_event` table                                                         | SQL on `order_event.orderId`      |
-| Outbound side effects         | `event_outbox` table                                                        | SQL on outbox status / attempts   |
-| Stripe webhook events         | `stripe_webhook_event` table                                                | SQL on `stripeEventId`            |
-| EasyPost webhook events       | `easypost_webhook_event` table                                              | SQL on `easyPostEventId`          |
-| Command execution             | `command_log` table                                                         | SQL on `commandLogId`             |
-| SLA intervals                 | `order_stage_interval` table                                                | SQL on `(orderId, kind)`          |
-| Idempotency replays           | `idempotency_key` table                                                     | SQL on `(organizationId, key)`    |
+| Signal                        | Where it lives                                                              | How to query                         |
+| ----------------------------- | --------------------------------------------------------------------------- | ------------------------------------ |
+| Application logs (structured) | `stdout` of each process → log aggregator (TBD per deploy)                  | `correlationId` filter               |
+| Distributed traces (OTel)     | OTLP collector → tracing backend (per deploy)                               | `trace_id`; see § Distributed traces |
+| Captured exceptions           | Sentry, project: `pharmacy-os` / `pharmacy-worker` / `pharmacy-print-agent` | `organization.id:<org-uuid>`         |
+| Domain audit events           | `audit_log` table, hash-linked                                              | SQL on `audit_log.organizationId`    |
+| Workflow events               | `order_event` table                                                         | SQL on `order_event.orderId`         |
+| Outbound side effects         | `event_outbox` table                                                        | SQL on outbox status / attempts      |
+| Stripe webhook events         | `stripe_webhook_event` table                                                | SQL on `stripeEventId`               |
+| EasyPost webhook events       | `easypost_webhook_event` table                                              | SQL on `easyPostEventId`             |
+| Command execution             | `command_log` table                                                         | SQL on `commandLogId`                |
+| SLA intervals                 | `order_stage_interval` table                                                | SQL on `(orderId, kind)`             |
+| Idempotency replays           | `idempotency_key` table                                                     | SQL on `(organizationId, key)`       |
 
 The first three layers (logs, Sentry, audit) are the ones an operator reaches for during an incident. The SQL tables are for forensic / compliance investigations.
 
@@ -96,6 +97,58 @@ SET LOCAL pharmax.system_context = 'off';
 ```
 
 For cross-tenant forensic queries (rare), use the `pharmax_system` role which has `system_context = 'on'`.
+
+## Distributed traces (OpenTelemetry)
+
+All three Node services initialize the OTel NodeSDK first thing at
+boot (`apps/web/instrumentation.ts` → `bootstrap()`, `apps/worker`
+and `apps/print-agent` at the top of `main()`), with service names
+`pharmacy-web` / `pharmacy-worker` / `pharmacy-print-agent`. Traces
+and metrics export over OTLP/HTTP to the collector configured by
+`OTEL_EXPORTER_OTLP_ENDPOINT`. The chokepoint package is
+[`@pharmax/telemetry`](../packages/telemetry/src/index.ts) — direct
+`@opentelemetry/api` imports are forbidden everywhere else.
+
+**Knobs** (resolved in
+[`resolve-config.ts`](../packages/telemetry/src/resolve-config.ts)):
+`OTEL_ENABLED` (default on in production, off elsewhere),
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`,
+`OTEL_TRACES_SAMPLER_ARG` (root-sampling ratio; default 0.1 in
+production, 1.0 elsewhere — applied via a parent-based ratio sampler,
+so a trace sampled at its root stays sampled across services), and
+`OTEL_SERVICE_VERSION`.
+
+**Cross-service propagation.** Pharmax's cross-service hops are
+DB-backed queues, not HTTP, so auto-instrumentation alone cannot
+stitch traces together. The producer persists the active W3C
+`traceparent` on the queue row and the consumer resumes the trace
+from it:
+
+| Hop                         | Column                         | Producer                                           | Consumer span                              |
+| --------------------------- | ------------------------------ | -------------------------------------------------- | ------------------------------------------ |
+| web/worker command → worker | `event_outbox.traceparent`     | `createOutboxEventsInTx` (`@pharmax/command-bus`)  | `outbox.process <event>` (outbox drainer)  |
+| outbox fan-out → delivery   | `webhook_delivery.traceparent` | `fanOutWebhookDeliveries` (`@pharmax/partner-api`) | `webhook.deliver <event>` (delivery drain) |
+| fill command → print-agent  | `print_job.traceparent`        | `PrintVialLabel` / `ReprintVialLabel`              | `print_job.process` (print-agent)          |
+
+The flagship end-to-end trace is: operator HTTP request (auto
+`http.server` span in web) → command execution → `print_job.process`
+in the print-agent, including the manual `zpl.send` client span
+around the raw printer TCP write (the `net` auto-instrumentation is
+deliberately disabled as too noisy). During webhook delivery the
+instrumented fetch also injects an outbound `traceparent` header, so
+partners can correlate receipts with our delivery attempts.
+
+**PHI rule for spans:** identical to logs — span names, attributes,
+and events carry ids, event types, statuses, and counts ONLY. Never
+patient fields, payload contents, or rendered label data. Custom
+spans go through `withSpan` / `getTracer` from `@pharmax/telemetry`.
+
+**Traces vs `correlationId`:** the ULID `correlationId` remains the
+forensic key that joins `command_log` → `audit_log` → `event_outbox`
+rows in the database and is retained for as long as those tables.
+OTel traces are the operational latency/causality view, sampled and
+retained per the tracing backend's policy. Use traces to see WHERE
+time went; use `correlationId` to prove WHAT happened.
 
 ## Tracing one request end-to-end
 

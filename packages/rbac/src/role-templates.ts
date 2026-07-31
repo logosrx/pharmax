@@ -44,6 +44,11 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
     permissions: [
       PERMISSIONS.PATIENTS_READ,
       PERMISSIONS.PROVIDERS_READ,
+      // Read-only directory surfaces: pharmacists verify against the
+      // drug catalog / lot status and need to see which practice an
+      // order came from. Neither grant exposes PHI or a mutation path.
+      PERMISSIONS.CLINICS_READ,
+      PERMISSIONS.INVENTORY_READ,
       PERMISSIONS.ORDERS_READ,
       PERMISSIONS.ORDERS_CANCEL,
       PERMISSIONS.ORDERS_PLACE_HOLD,
@@ -71,6 +76,10 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       PERMISSIONS.PROVIDERS_UPDATE,
       PERMISSIONS.PROVIDERS_DEACTIVATE,
       PERMISSIONS.PROVIDERS_REACTIVATE,
+      // Techs type orders against clinics and fill from lots — the
+      // read-only directory tabs are their reference surfaces.
+      PERMISSIONS.CLINICS_READ,
+      PERMISSIONS.INVENTORY_READ,
       PERMISSIONS.ORDERS_CREATE,
       PERMISSIONS.ORDERS_READ,
       PERMISSIONS.ORDERS_ADD_PRESCRIPTION,

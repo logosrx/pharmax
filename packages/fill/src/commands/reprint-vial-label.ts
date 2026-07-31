@@ -9,6 +9,7 @@ import {
 } from "@pharmax/labels";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
+import { currentTraceparent } from "@pharmax/telemetry";
 import { z } from "zod";
 
 import { assertFillAssignee, assertFillInProgressWithAssignee } from "../fill-guards.js";
@@ -163,6 +164,9 @@ export const ReprintVialLabel = defineCommand<ReprintVialLabelInput, ReprintVial
         contentHash: new Uint8Array(contentHash),
         isReprint: true,
         reprintReasonCode: input.reprintReasonCode,
+        // Same trace-context persistence as PrintVialLabel — the
+        // print-agent resumes this trace when it claims the job.
+        traceparent: currentTraceparent(),
         requestedByUserId: ctx.actor.userId,
         commandLogId,
       },

@@ -35,6 +35,7 @@ import { BillingInvoiceRefundedV1 } from "./events/billing/invoice-refunded-v1.j
 import { BillingInvoiceStripePushedV1 } from "./events/billing/invoice-stripe-pushed-v1.js";
 import { BillingInvoiceUncollectibleV1 } from "./events/billing/invoice-uncollectible-v1.js";
 import { BillingInvoiceVoidedV1 } from "./events/billing/invoice-voided-v1.js";
+import { BillingPaymentRecordedV1 } from "./events/billing/payment-recorded-v1.js";
 import { BillingPricingRuleUpsertedV1 } from "./events/billing/pricing-rule-upserted-v1.js";
 
 // ---- compliance (SOC 2 / HIPAA evidence) --------------------------------
@@ -81,6 +82,8 @@ import { OrderTypingStartedV1 } from "./events/order/typing-started-v1.js";
 
 // ---- org (tenant administration) ----------------------------------------
 import { OrgBucketsProvisionedV1 } from "./events/org/buckets-provisioned-v1.js";
+import { OrgRoleCreatedV1 } from "./events/org/role-created-v1.js";
+import { OrgRolePermissionsUpdatedV1 } from "./events/org/role-permissions-updated-v1.js";
 import { OrgSiteAddressUpdatedV1 } from "./events/org/site-address-updated-v1.js";
 import { OrgUserInvitedV1 } from "./events/org/user-invited-v1.js";
 import { OrgUserRoleGrantedV1 } from "./events/org/user-role-granted-v1.js";
@@ -88,6 +91,12 @@ import { OrgUserRoleRevokedV1 } from "./events/org/user-role-revoked-v1.js";
 
 // ---- organization (tenant lifecycle) ------------------------------------
 import { OrganizationCreatedV1 } from "./events/organization/created-v1.js";
+
+// ---- platform (partner API keys + outbound webhooks, ADR-0032) ----------
+import { PlatformApiKeyCreatedV1 } from "./events/platform/api-key-created-v1.js";
+import { PlatformApiKeyRevokedV1 } from "./events/platform/api-key-revoked-v1.js";
+import { PlatformWebhookSubscriptionCreatedV1 } from "./events/platform/webhook-subscription-created-v1.js";
+import { PlatformWebhookSubscriptionRevokedV1 } from "./events/platform/webhook-subscription-revoked-v1.js";
 
 // ---- patient -------------------------------------------------------------
 import { PatientCryptoShreddedV1 } from "./events/patient/crypto-shredded-v1.js";
@@ -147,6 +156,7 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   BillingInvoiceStripePushedV1,
   BillingInvoiceUncollectibleV1,
   BillingInvoiceVoidedV1,
+  BillingPaymentRecordedV1,
   BillingPricingRuleUpsertedV1,
   // compliance
   ComplianceAccessReviewSnapshotRecordedV1,
@@ -188,11 +198,18 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   OrderTypingStartedV1,
   // org / organization
   OrgBucketsProvisionedV1,
+  OrgRoleCreatedV1,
+  OrgRolePermissionsUpdatedV1,
   OrgSiteAddressUpdatedV1,
   OrgUserInvitedV1,
   OrgUserRoleGrantedV1,
   OrgUserRoleRevokedV1,
   OrganizationCreatedV1,
+  // platform
+  PlatformApiKeyCreatedV1,
+  PlatformApiKeyRevokedV1,
+  PlatformWebhookSubscriptionCreatedV1,
+  PlatformWebhookSubscriptionRevokedV1,
   // patient
   PatientCryptoShreddedV1,
   PatientRegisteredV1,

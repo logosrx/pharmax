@@ -28,7 +28,6 @@ export interface OrgUserRow {
   readonly email: string;
   readonly displayName: string;
   readonly status: UserStatus;
-  readonly clerkUserId: string | null;
   readonly lastLoginAt: Date | null;
   readonly createdAt: Date;
   readonly grants: ReadonlyArray<OrgUserGrant>;
@@ -67,7 +66,6 @@ export async function loadOrgAdminPageData(input: {
         email: true,
         displayName: true,
         status: true,
-        clerkUserId: true,
         lastLoginAt: true,
         createdAt: true,
         userRoles: {
@@ -101,7 +99,6 @@ export async function loadOrgAdminPageData(input: {
           email: u.email,
           displayName: u.displayName,
           status: u.status,
-          clerkUserId: u.clerkUserId,
           lastLoginAt: u.lastLoginAt,
           createdAt: u.createdAt,
           grants: u.userRoles.map((g) =>

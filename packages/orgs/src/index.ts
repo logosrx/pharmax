@@ -55,6 +55,25 @@ export {
 } from "./commands/revoke-user-role.js";
 
 export {
+  CreateRole,
+  CREATE_ROLE_CODE_ALREADY_EXISTS,
+  CREATE_ROLE_UNKNOWN_PERMISSION,
+  CREATE_ROLE_PERMISSION_NOT_SEEDED,
+  type CreateRoleInput,
+  type CreateRoleOutput,
+} from "./commands/create-role.js";
+
+export {
+  UpdateRolePermissions,
+  UPDATE_ROLE_PERMISSIONS_ROLE_NOT_FOUND,
+  UPDATE_ROLE_PERMISSIONS_ROLE_IS_SYSTEM,
+  UPDATE_ROLE_PERMISSIONS_UNKNOWN_PERMISSION,
+  UPDATE_ROLE_PERMISSIONS_NOT_SEEDED,
+  type UpdateRolePermissionsInput,
+  type UpdateRolePermissionsOutput,
+} from "./commands/update-role-permissions.js";
+
+export {
   UpsertWorkflowPolicyOverlay,
   UPSERT_OVERLAY_ACTIVE_RACE,
   UPSERT_OVERLAY_BASE_POLICY_NOT_FOUND,
@@ -71,6 +90,8 @@ import * as updatePharmacySiteAddressModule from "./commands/update-pharmacy-sit
 import * as inviteUserModule from "./commands/invite-user.js";
 import * as assignRoleModule from "./commands/assign-role.js";
 import * as revokeUserRoleModule from "./commands/revoke-user-role.js";
+import * as createRoleModule from "./commands/create-role.js";
+import * as updateRolePermissionsModule from "./commands/update-role-permissions.js";
 import * as upsertWorkflowPolicyOverlayModule from "./commands/upsert-workflow-policy-overlay.js";
 
 export const orgs = {
@@ -81,6 +102,8 @@ export const orgs = {
     InviteUser: inviteUserModule.InviteUser,
     AssignRole: assignRoleModule.AssignRole,
     RevokeUserRole: revokeUserRoleModule.RevokeUserRole,
+    CreateRole: createRoleModule.CreateRole,
+    UpdateRolePermissions: updateRolePermissionsModule.UpdateRolePermissions,
     UpsertWorkflowPolicyOverlay: upsertWorkflowPolicyOverlayModule.UpsertWorkflowPolicyOverlay,
   },
 } as const;

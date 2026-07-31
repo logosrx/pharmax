@@ -1,10 +1,13 @@
 # Break-Glass Schema
 
-> **This document specifies tables that DO NOT YET EXIST in `prisma/schema.prisma`.**
-> The `BreakGlassSessionHandle` and `runAs(...)` API in
-> [`break-glass-session.ts`](./break-glass-session.ts) is wired against a
-> `BreakGlassClient` port so it can be exercised in tests with a fake.
-> Promoting break-glass to production requires landing the migration described below.
+> **Status: LANDED.** The tables below exist in `prisma/schema.prisma`
+> (`BreakGlassSession` / `BreakGlassAction`) via the migration
+> `prisma/migrations/20260731000000_phase5_break_glass_session/`. The
+> `BreakGlassSessionHandle` and `runAs(...)` API in
+> [`break-glass-session.ts`](./break-glass-session.ts) remains wired against the
+> `BreakGlassClient` port (testable with a fake); the production adapter is
+> [`PrismaBreakGlassClient`](./prisma-break-glass-client.ts). This document is
+> retained as the design rationale.
 
 ## Why a separate session table
 
@@ -83,31 +86,38 @@ revoked at the role level.
 - `(commandLogId)` — join back to the standard command log for actions
   that went through the bus.
 
-## Audit + Outbox
+## Audit surface
 
-`open_break_glass_session` and `close_break_glass_session` write standard
-audit chain entries:
+The audit chain (`audit_log`) and outbox (`event_outbox`) are org-scoped by
+construction — every row carries a non-nullable `organizationId` and the
+chain is hashed per tenant. A break-glass session crosses ALL tenants by
+definition, so it has no home chain to append to. Rather than invent a
+synthetic "platform org" (which would weaken the per-tenant chain
+semantics), the evidence model is:
 
-- `BREAK_GLASS_SESSION_OPENED` — actorUserId = requester, resourceType =
-  `break_glass_session`, resourceId = session id, metadata = `{ ticketUrl,
-maxDurationMinutes }` (PHI-safe by construction).
-- `BREAK_GLASS_SESSION_CLOSED` — same shape with `{ resolution,
-durationSeconds }`.
+- `break_glass_session` / `break_glass_action` are THEMSELVES the
+  append-only ledger: `DELETE` is granted to neither application role on
+  either table, `UPDATE` is granted only on the session row (for the
+  close write), and `break_glass_action` is INSERT-only.
+- Every session opened in the last 24 h surfaces in the **nightly
+  security digest** (`compose-nightly-security-digest.ts` →
+  `BreakGlassSessionProbe`), which is delivered to the operator security
+  distribution list and logged as structured SOC 2 evidence.
+- Every session opened in the quarter surfaces in the **quarterly
+  access-review evidence pack** (`apps/worker/src/compliance/
+access-review-job.ts`), which is published to the write-once evidence
+  archive.
+- Actions that dispatched a command carry `commandLogId`, joining the
+  bypass back into the standard per-org `command_log` / `audit_log`
+  trail for the tenant it touched.
 
-An `event_outbox` row of type `security.break_glass_opened.v1` queues a
-notification fan-out (see `compose-nightly-security-digest.ts` for the
-digest pipeline; an immediate Slack ping on session open is a separate
-Lane 4 deliverable).
+An immediate Slack/pager ping on session open remains a separate Lane 4
+deliverable.
 
-## Migration TODO
+## Migration
 
-The migration name should be:
-
-```
-prisma/migrations/<timestamp>_phase5_break_glass_session/migration.sql
-```
-
-This package CANNOT land in production until that migration exists and the
-RLS / role grants are in place. The interface in `break-glass-session.ts`
-is shape-compatible with a future Prisma model, so the swap is mechanical
-once the schema lands.
+Landed as `prisma/migrations/20260731000000_phase5_break_glass_session/`.
+Role grants (append-only posture) and the RLS exemption rationale live in
+the migration file and `prisma/migrations/rls-exempt.txt`; the Prisma
+tenancy extension excludes both models from auto-scoping
+(`TENANT_EXCLUDED_MODELS` in `@pharmax/tenancy`).

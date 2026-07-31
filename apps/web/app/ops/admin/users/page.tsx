@@ -7,6 +7,7 @@
 //
 // PHI: none. Operator email + name are admin identifiers.
 
+import Link from "next/link";
 import { PERMISSIONS } from "@pharmax/rbac";
 
 import {
@@ -25,6 +26,7 @@ import { Card, CardContent, CardHeader } from "../../../../src/components/ui/car
 import { Badge, type Tone } from "../../../../src/components/ui/badge.js";
 import { Banner, EmptyState, PermissionDenied } from "../../../../src/components/ui/feedback.js";
 import { Field, Input, Select } from "../../../../src/components/ui/field.js";
+import { buttonClass } from "../../../../src/components/ui/button.js";
 import { ActionForm, SubmitButton } from "../../../../src/components/ops/action-form.js";
 
 function formatDate(d: Date): string {
@@ -64,9 +66,6 @@ function UserCard({
             <span className="text-sm font-medium text-fg">{user.displayName}</span>
             <Badge tone={statusTone(user.status)} dot>
               {user.status}
-            </Badge>
-            <Badge tone={user.clerkUserId !== null ? "info" : "neutral"}>
-              {user.clerkUserId !== null ? "Clerk linked" : "awaiting first sign-in"}
             </Badge>
           </div>
           <div className="text-xs text-subtle">
@@ -188,6 +187,13 @@ export default async function UserAdminPage({
         eyebrow="Administration"
         title="Users"
         description="Invite teammates, grant roles, and revoke grants. Invited users link automatically on their first Clerk sign-in when the email matches."
+        actions={
+          canManageRoles ? (
+            <Link href="/ops/admin/roles" className={buttonClass({ variant: "secondary" })}>
+              Manage privileges
+            </Link>
+          ) : null
+        }
       />
 
       {flash !== null ? <Banner tone="success">{flash}</Banner> : null}

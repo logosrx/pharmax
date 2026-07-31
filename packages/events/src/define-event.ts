@@ -109,6 +109,8 @@ export type EventOwner =
   | "workflow"
   | "reporting"
   | "auth"
+  // Platform surface (ADR-0032): partner API keys + outbound webhooks.
+  | "platform"
   | "system";
 
 /**

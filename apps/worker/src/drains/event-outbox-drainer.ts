@@ -16,7 +16,7 @@
 
 import type { PrismaClient, OutboxStatus } from "@pharmax/database";
 import type { logger as loggerContract } from "@pharmax/platform-core";
-import { getMeter } from "@pharmax/telemetry";
+import { getMeter, withSpan } from "@pharmax/telemetry";
 
 import { claimOutboxEvents } from "./claim-outbox-events.js";
 import type { ClaimOutboxEventsOptions, OutboxClaimClient } from "./claim-outbox-events.js";
@@ -24,7 +24,7 @@ import {
   outboxHandlers as defaultHandlers,
   REQUIRED_HANDLER_EVENT_TYPES,
 } from "./outbox-handlers.js";
-import type { OutboxHandlerMap } from "./outbox-handlers.js";
+import type { OutboxHandlerMap, OutboxPostHandlerHook } from "./outbox-handlers.js";
 import type { ClaimedOutboxEventRow } from "./row-types.js";
 
 const meter = getMeter("@pharmax/worker.outbox");
@@ -62,6 +62,15 @@ export interface OutboxDrainerDeps {
    * `REQUIRED_HANDLER_EVENT_TYPES`.
    */
   readonly requiredHandlerEventTypes?: ReadonlySet<string>;
+  /**
+   * Optional hook run for EVERY claimed row AFTER its domain handler
+   * (and for rows with no handler), inside the same try: a hook
+   * throw routes the row through the FAILED/backoff path exactly
+   * like a handler throw. Production wires partner webhook fan-out
+   * here (`createWebhookFanOutHook`) — the hook self-filters, so
+   * the handler map stays a pure domain registry.
+   */
+  readonly postHandlerHook?: OutboxPostHandlerHook;
 }
 
 export type OutboxDrainerOptions = ClaimOutboxEventsOptions;
@@ -146,27 +155,53 @@ export function createOutboxDrainer(
         outboxClaimLagHistogram.record(claimLagSeconds);
 
         try {
-          if (handler === undefined) {
-            if (requiredHandlerEventTypes.has(row.eventType)) {
-              // This event's side effect is load-bearing. Treating a
-              // missing handler as success would permanently discard
-              // it: rows marked DISPATCHED are never replayed, so
-              // wiring the handler later cannot recover the missed
-              // side effects (this is exactly how emergency-
-              // escalation alerts silently vanished). Route through
-              // the retry/backoff path — the row stays visible
-              // (FAILED, then DEAD with a clear lastError) and an
-              // admin re-publish can replay it once the handler
-              // ships.
-              throw new Error(
-                `No outbox handler registered for REQUIRED event type "${row.eventType}"`
-              );
+          // Consumer span resuming the producing command's trace via
+          // the persisted traceparent (the DB-backed hop has no HTTP
+          // request for auto-instrumentation to propagate through).
+          // A handler/hook throw is recorded on the span and rethrown
+          // into the existing FAILED/backoff path below. Attributes
+          // are ids + event types only — never payload contents.
+          await withSpan(
+            {
+              tracerName: "@pharmax/worker.outbox",
+              spanName: `outbox.process ${row.eventType}`,
+              kind: "consumer",
+              parentTraceparent: row.traceparent,
+              attributes: {
+                "pharmax.outbox_id": row.id,
+                "pharmax.event_type": row.eventType,
+                "pharmax.aggregate_type": row.aggregateType,
+                "pharmax.organization_id": row.organizationId,
+                "pharmax.attempts": row.attempts,
+              },
+            },
+            async () => {
+              if (handler === undefined) {
+                if (requiredHandlerEventTypes.has(row.eventType)) {
+                  // This event's side effect is load-bearing. Treating a
+                  // missing handler as success would permanently discard
+                  // it: rows marked DISPATCHED are never replayed, so
+                  // wiring the handler later cannot recover the missed
+                  // side effects (this is exactly how emergency-
+                  // escalation alerts silently vanished). Route through
+                  // the retry/backoff path — the row stays visible
+                  // (FAILED, then DEAD with a clear lastError) and an
+                  // admin re-publish can replay it once the handler
+                  // ships.
+                  throw new Error(
+                    `No outbox handler registered for REQUIRED event type "${row.eventType}"`
+                  );
+                }
+                // Benign no-op: an event with no consumer yet.
+                rowLog.warn("drain.row.no_handler_registered");
+              } else {
+                await handler(row, { logger: rowLog, receivedAt: row.createdAt });
+              }
+              if (deps.postHandlerHook !== undefined) {
+                await deps.postHandlerHook(row, { logger: rowLog, receivedAt: row.createdAt });
+              }
             }
-            // Benign no-op: an event with no consumer yet.
-            rowLog.warn("drain.row.no_handler_registered");
-          } else {
-            await handler(row, { logger: rowLog, receivedAt: row.createdAt });
-          }
+          );
 
           const fenced = await markDispatched(deps.client, {
             id: row.id,

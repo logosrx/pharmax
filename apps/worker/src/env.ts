@@ -29,10 +29,26 @@ const schema = z.object({
   OUTBOX_DRAIN_LEASE_MS: z.coerce.number().int().positive().default(60_000),
   OUTBOX_DRAIN_MAX_ATTEMPTS: z.coerce.number().int().positive().default(8),
 
+  // ---- Outbound webhook delivery drain (ADR-0032) -------------------
+  // Drains `webhook_delivery` rows fanned out by the outbox drainer
+  // toward partner HTTPS endpoints (HMAC-signed).
+  WEBHOOK_DELIVERY_BATCH_SIZE: z.coerce.number().int().positive().default(25),
+  WEBHOOK_DELIVERY_INTERVAL_MS: z.coerce.number().int().positive().default(1_000),
+  WEBHOOK_DELIVERY_LEASE_MS: z.coerce.number().int().positive().default(60_000),
+  WEBHOOK_DELIVERY_MAX_ATTEMPTS: z.coerce.number().int().positive().default(8),
+
   // ---- EasyPost webhook drain -------------------------------------
   EASYPOST_DRAIN_BATCH_SIZE: z.coerce.number().int().positive().default(10),
   EASYPOST_DRAIN_INTERVAL_MS: z.coerce.number().int().positive().default(2_000),
   EASYPOST_DRAIN_LEASE_MS: z.coerce.number().int().positive().default(60_000),
+
+  // ---- FedEx AIV webhook drain ------------------------------------
+  // Drains `fedex_webhook_event` rows persisted by the web-tier
+  // webhook receiver (near real-time channel; the poller below is
+  // the reconciliation/fallback channel).
+  FEDEX_WEBHOOK_DRAIN_BATCH_SIZE: z.coerce.number().int().positive().default(10),
+  FEDEX_WEBHOOK_DRAIN_INTERVAL_MS: z.coerce.number().int().positive().default(2_000),
+  FEDEX_WEBHOOK_DRAIN_LEASE_MS: z.coerce.number().int().positive().default(60_000),
 
   // ---- FedEx tracking poller --------------------------------------
   // FedEx (unlike EasyPost) has no native push webhook, so the worker
@@ -50,6 +66,12 @@ const schema = z.object({
     .int()
     .positive()
     .default(2 * 60 * 60_000),
+  // Age horizon after which non-DELIVERED shipments stop being
+  // polled. DELIVERED is the only status-based poll terminator
+  // (exception / RTS / failed-delivery packages keep moving and
+  // must stay visible); this bound is what prevents unbounded
+  // polling of zombie shipments.
+  FEDEX_TRACKING_POLL_MAX_SHIPMENT_AGE_DAYS: z.coerce.number().int().positive().default(45),
 
   // ---- UPS tracking poller ----------------------------------------
   // Same polling pattern as FedEx. UPS Track API v1 is one tracking
@@ -191,11 +213,12 @@ const schema = z.object({
   PACKAGE_PHOTO_ORPHAN_SWEEP_MAX_KEYS_PER_TICK: z.coerce.number().int().positive().default(1_000),
 
   // ---- Stripe outbound (finalized invoice push) -------------------
-  // OPTIONAL. When unset, the outbox handler for
-  // `billing.invoice.finalized.v1` no-ops (logs that Stripe is not
-  // configured) and the invoice stays in OPEN status without a
-  // `stripeInvoiceId`. Wire this for environments that should
-  // mirror invoices to Stripe.
+  // OPTIONAL at boot, but NOT optional once finalized invoices flow:
+  // when unset, the outbox handler for `billing.invoice.finalized.v1`
+  // FAILS each push row (retry/backoff → DEAD) so the missed billing
+  // is visible in the dead-letter dashboard and self-heals on retry
+  // once the key is configured. Leave unset only in environments
+  // that never finalize invoices.
   STRIPE_SECRET_KEY: z.string().min(1).optional(),
 
   // ---- Lifecycle ---------------------------------------------------
@@ -351,6 +374,19 @@ const schema = z.object({
   QUARTERLY_ACCESS_REVIEW_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(0),
   QUARTERLY_ACCESS_REVIEW_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(366).default(92),
   QUARTERLY_ACCESS_REVIEW_EVIDENCE_ROOT: z.string().min(1).default("./evidence"),
+
+  // Recipient email for compliance notices (today: the quarterly
+  // access-review "walk this report" nudge). When set AND the
+  // worker's Resend channel is wired (RESEND_API_KEY +
+  // NOTIFICATION_FROM_EMAIL both present), the access-review loop
+  // delivers notices via NotificationChannelComplianceNotifier →
+  // COMPLIANCE_NOTICE_V1 template → Resend. When unset, or when
+  // Resend isn't wired, the loop falls back to the structured-log
+  // stub and the `compliance.notify` log line remains the evidence.
+  // Operator-side address (e.g. a `compliance@<operator-domain>`
+  // group alias), NOT a tenant inbox. Single address only — same
+  // one-recipient-per-send rationale as the digest recipient above.
+  COMPLIANCE_NOTIFY_RECIPIENT_EMAIL: z.string().email().optional(),
 
   // ---- Nightly security digest (SOC 2 CC4.2 / CC7.2) --------------
   // Composes the per-day security digest (audit-chain status per org,

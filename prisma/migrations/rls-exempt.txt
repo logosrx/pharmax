@@ -45,6 +45,15 @@ stripe_webhook_event
 # org's tenancy to execute RecordShipmentTrackingEvent.
 easypost_webhook_event
 
+# Inbound FedEx Advanced Integrated Visibility webhook events. Same
+# reason as easypost_webhook_event: the platform doesn't know which
+# tenant a tracking event belongs to until the worker drain resolves
+# the shipment by tracking number (in system context) and enters that
+# org's tenancy to execute RecordShipmentTrackingEvent. The stored
+# payload is a PHI-minimized projection (see
+# projectFedExWebhookForStorage).
+fedex_webhook_event
+
 # Inbound Clerk (identity) webhook events. Arrive BEFORE the platform
 # resolves them to a Pharmax user row (and thus an organization). The
 # dispatcher in apps/web/src/server/auth/clerk-webhook-handlers.ts
@@ -71,3 +80,17 @@ resend_webhook_event
 # (auth_session, mfa_enrollment, recovery_code, password_history,
 # password_reset_token) ARE org-scoped and RLS-protected.
 login_attempt
+
+# Break-glass session envelope (@pharmax/security). Sessions open a
+# cross-tenant `pharmax_system` context for forensic / repair work, so
+# there is no organizationId to back an RLS predicate. Access is
+# narrowed one layer up: only @pharmax/security's system-context code
+# paths touch the model, the Prisma tenancy extension excludes it from
+# auto-scoping, and the grant layer withholds DELETE (append-only
+# evidence). See packages/security/src/break-glass/SCHEMA.md.
+break_glass_session
+
+# Per-operation ledger for break_glass_session (same cross-tenant
+# rationale). INSERT-only at the grant layer — rows are immutable
+# audit evidence of exactly what was executed under the bypass.
+break_glass_action

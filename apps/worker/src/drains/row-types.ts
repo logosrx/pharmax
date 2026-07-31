@@ -13,6 +13,7 @@
 
 import type {
   EasyPostWebhookEventStatus,
+  FedExWebhookEventStatus,
   OutboxStatus,
   Prisma,
   StripeWebhookEventStatus,
@@ -52,6 +53,23 @@ export interface ClaimedEasyPostWebhookEventRow {
   readonly nextAttemptAt: Date | null;
 }
 
+export interface ClaimedFedExWebhookEventRow {
+  readonly id: string;
+  readonly externalEventId: string;
+  readonly eventType: string;
+  readonly trackingNumber: string | null;
+  readonly carrierStatus: string | null;
+  readonly payload: Prisma.JsonValue;
+  readonly status: FedExWebhookEventStatus;
+  readonly attempts: number;
+  readonly lastError: string | null;
+  readonly receivedAt: Date;
+  readonly signatureVerifiedAt: Date;
+  readonly processingStartedAt: Date | null;
+  readonly processedAt: Date | null;
+  readonly nextAttemptAt: Date | null;
+}
+
 export interface ClaimedOutboxEventRow {
   readonly id: string;
   readonly organizationId: string;
@@ -64,5 +82,7 @@ export interface ClaimedOutboxEventRow {
   readonly lastError: string | null;
   readonly nextAttemptAt: Date | null;
   readonly dispatchedAt: Date | null;
+  /** Producer's persisted W3C trace context; null for pre-trace rows. */
+  readonly traceparent: string | null;
   readonly createdAt: Date;
 }

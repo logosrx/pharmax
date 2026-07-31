@@ -603,15 +603,15 @@ aws route53 change-resource-record-sets \
 
 ### Step 7 — vendor webhooks
 
-Stripe, EasyPost, FedEx, UPS, and Clerk all need their webhook
-endpoint changed. Each vendor dashboard has the relevant control:
+Stripe, EasyPost, FedEx, and UPS all need their webhook endpoint
+changed. Each vendor dashboard has the relevant control:
 
 - **Stripe:** Developers → Webhooks → endpoint URL → save.
-- **Clerk:** Webhooks → endpoint URL → save. Rotate the signing
-  secret if compromise is suspected; the rotation procedure is in
-  `docs/security/secrets-management.md` §5.
 - **EasyPost / FedEx / UPS:** vendor-specific. Each has a runbook
   entry above.
+
+(Authentication is in-house per ADR-0030 — there is no Clerk webhook
+endpoint to reconfigure.)
 
 This step is **manual and ordered**. A vendor that times out a
 webhook delivery during the swap will be retried; the worker
@@ -741,20 +741,22 @@ before/after CloudTrail line item showing the new key in use.
 
 ---
 
-## Rotating `CLERK_WEBHOOK_SECRET`
+## Rotating `AUTH_PASSWORD_PEPPER`
 
-**When:** scheduled rotation (annually), suspected leak, or any time the operator who provisioned the original secret leaves the team.
+**When:** suspected pepper compromise. This is a break-glass action, **not** routine rotation.
 
-The Svix webhook signature is the only thing that authenticates inbound `/api/webhooks/clerk` traffic. A leaked signing secret lets an attacker forge `user.deleted` events and lock real operators out, so rotation is treated as a SEV2 if the leak is suspected.
+The pepper (ADR-0030) is mixed into every Argon2id password hash as the KDF `secret`. It is NOT stored with the hash — a database-only breach cannot verify passwords without it. The flip side: **every stored hash was computed with the current pepper**, so changing the pepper makes all existing password hashes unverifiable. We cannot re-hash without the plaintext.
 
-**Steps:**
+**Consequence:** a pepper rotation forces a password reset for every active operator. Reserve it for a genuine compromise.
 
-1. **Rotate in the Clerk dashboard.** _Webhooks → Endpoints → your prod endpoint → "Rotate signing secret"_. Clerk shows the new secret ONCE and does not display it again. Copy it immediately to a secrets manager paste buffer.
-2. **Rotate in AWS Secrets Manager.** Update the `pharmax/<env>/clerk/webhook-secret` secret value to the new string. The ECS task definition references the secret by ARN, so a new task picks it up on the next deployment.
-3. **Restart the web tier.** Force a new deployment (`vercel deploy --force` for the Next.js Vercel deploy, or `aws ecs update-service --force-new-deployment` for ECS). The bootstrap-time hard-fail in `apps/web/src/server/bootstrap.ts` will block boot if the secret is missing — that's the safety net.
-4. **Verify the next delivery.** Trigger a Clerk webhook from the dashboard ("Send test event"). Confirm in CloudWatch Logs that the receiver ack'd 200 with status `applied` or `noop_*`. A 400 `invalid_signature` means the deployed task is still using the old secret — repeat step 3.
+**Steps (compromise response):**
 
-**During the rotation window:** Clerk does NOT serve both secrets simultaneously. There is a small window between dashboard rotation and ECS rollout where signature verification will fail; Svix retries with backoff so the missed deliveries replay automatically once the new task is live. The `clerk_webhook_event` ledger's `svixMessageId` unique constraint guarantees those replays are safe.
+1. **Rotate in AWS Secrets Manager.** Update `pharmax/<env>/auth/password-pepper` to a fresh 32+ byte base64 value.
+2. **Force a new web-tier deployment** so `configureAuth` picks up the new pepper (`aws ecs update-service --force-new-deployment`).
+3. **Force a password reset for all active users.** Dispatch `RequestPasswordReset` for each active operator (a bulk ops script), or mark accounts to require reset on next sign-in. Existing sessions remain valid until their idle/absolute expiry — revoke them too (`RevokeSessions` per user, or a bulk `auth_session` revoke in system context) if the compromise implicates sessions.
+4. **Verify.** A test operator's old password now fails to verify (expected); the reset link sets a new pepper-bound hash.
+
+There is no external webhook secret to rotate — authentication is fully in-house (Clerk retired, ADR-0030).
 
 ---
 
@@ -762,67 +764,36 @@ The Svix webhook signature is the only thing that authenticates inbound `/api/we
 
 **When:** an operator leaves the team or has their access revoked.
 
-The Pharmax `user` row is NEVER deleted (HIPAA + SOC 2 require us to retain identity history for audit-log references). Off-boarding flips the row's `status` to `TERMINATED` and clears `clerkUserId`.
+The Pharmax `user` row is NEVER deleted (HIPAA + SOC 2 require us to retain identity history for audit-log references). Off-boarding flips the row's `status` to `TERMINATED` (or `SUSPENDED`) and revokes all of that operator's sessions — in the SAME transaction — via the `DeactivateUser` command (ADR-0030). There is no external identity provider to delete from.
 
 **Procedure:**
 
-1. **Delete the Clerk identity.** Clerk dashboard → Users → find by email → "Delete". This invalidates all live sessions for that user.
-2. **Webhook flow runs automatically.** Clerk fires `user.deleted` to `/api/webhooks/clerk`. The dispatcher (`apps/web/src/server/auth/clerk-webhook-handlers.ts`) flips the linked Pharmax row to `TERMINATED`, clears `clerkUserId`, and writes a chain-linked audit_log entry with `action="auth.clerk.user_terminated"`.
-3. **Verify in audit_log.** Run inside the operator's organization tenancy:
+1. **Deactivate in the console.** Ops → Admin → Users → find the operator → **Deactivate** (choose `TERMINATED` for a departure, `SUSPENDED` for a temporary hold). This dispatches `DeactivateUser` (RBAC `users.manage`), which flips `status` and revokes every active `auth_session` row for the user with `revokedReason = USER_TERMINATED`. Session revocation is IMMEDIATE — the next request from any stale session fails at `resolveSession`.
+2. **Verify in audit_log.** Run inside the operator's organization tenancy:
 
    ```sql
    SET LOCAL pharmax.organization_id = '<org-uuid>';
    SELECT id, action, "resourceId", metadata, "occurredAt", seq
    FROM audit_log
-   WHERE action = 'auth.clerk.user_terminated'
+   WHERE action = 'user.deactivated'
      AND "resourceId" = '<pharmax-user-uuid>'
    ORDER BY seq DESC
    LIMIT 1;
    ```
 
-   The `metadata.clerkUserId` field should match the Clerk identity that was deleted; `previousStatus` records the row's status before termination.
+   `metadata.status` records the new status and `metadata.sessionsRevoked` the count of sessions killed.
 
-4. **Verify session expiry.** Any stale browser session for that operator now resolves to `RESOLVE_TENANCY_USER_NOT_ACTIVE` at `resolveOperatorTenancyContext` (the row is no longer `ACTIVE`). The operator console renders the "Account inactive" message and `auth.protect()` redirects to `/sign-in`.
+3. **Verify session death.** Any stale browser session now resolves to `RESOLVE_TENANCY_USER_NOT_ACTIVE` at `resolveOperatorTenancyContext` (the session row is revoked AND the user is no longer `ACTIVE`). The console renders "Account inactive" and redirects to `/sign-in`.
 
-**If the webhook delivery is lost:** the dispatcher is idempotent on `svix-id`. Re-fire the delivery from the Clerk dashboard (see "Re-running a missed Clerk webhook delivery" below).
-
-**Manual fallback (no webhook flow):** if the webhook is broken or you need to off-board faster than Clerk's webhook latency, run the same effect manually:
+**Manual fallback (console unavailable):** off-board directly in SQL. This bypasses the audit chain, so **file a follow-up** to write a manual `audit_log` entry — off-boarding without an audit trail is a SOC 2 gap.
 
 ```sql
 SET LOCAL pharmax.system_context = 'on';
-UPDATE "user"
-SET status = 'TERMINATED', "clerkUserId" = NULL
-WHERE "clerkUserId" = '<clerk-user-id>';
+UPDATE "user" SET status = 'TERMINATED' WHERE id = '<pharmax-user-uuid>';
+UPDATE auth_session
+   SET "revokedAt" = now(), "revokedReason" = 'USER_TERMINATED'
+ WHERE "userId" = '<pharmax-user-uuid>' AND "revokedAt" IS NULL;
 ```
-
-This bypasses the audit chain. **File a follow-up** to write a manual `audit_log` entry covering the action — operator off-boarding without an audit trail is a SOC 2 gap.
-
----
-
-## Re-running a missed Clerk webhook delivery
-
-**When:** Clerk reports an undelivered or failed webhook, OR an off-boarding event didn't propagate to Pharmax.
-
-The `clerk_webhook_event` table holds every signature-verified delivery keyed by `svix-id`. The receiver is idempotent on this id, so re-firing the same delivery is always safe.
-
-**Steps:**
-
-1. **Find the original delivery in the Clerk dashboard.** Webhooks → Endpoints → your prod endpoint → "Message Attempts". Locate the failed delivery by event id or timestamp.
-2. **Click "Resend".** Clerk re-fires the delivery with the SAME `svix-id`. The receiver:
-   - Looks up the existing `clerk_webhook_event` row.
-   - If `status` is `APPLIED` or `NOOP`, returns 200 with `status: "replay"` and does NOT re-run the dispatcher.
-   - If `status` is `PENDING` (a previous attempt crashed mid-tx), re-runs the dispatcher. Handlers' guarded updates make this safe.
-   - If `status` is `FAILED`, re-runs the dispatcher and updates the row to the new outcome.
-3. **Confirm in the ledger.**
-   ```sql
-   SET LOCAL pharmax.system_context = 'on';
-   SELECT id, "svixMessageId", "eventType", status, "dispatchOutcome",
-          attempts, "lastError", "receivedAt", "dispatchedAt"
-   FROM clerk_webhook_event
-   WHERE "svixMessageId" = 'msg_...';
-   ```
-
-**Never** craft a fake Clerk event and POST it to `/api/webhooks/clerk` — the Svix signature check rejects it (the correct behavior). The replay path is via the Clerk dashboard. The `clerk_webhook_event` ledger guarantees safety even if a replay races a fresh delivery.
 
 ---
 
@@ -830,22 +801,22 @@ The `clerk_webhook_event` table holds every signature-verified delivery keyed by
 
 **When:** a new operator is invited to an `OrgAdmin` or `BillingManager` role, or an existing operator hits a 403 with `code=MFA_REQUIRED` on a privileged write.
 
-Pharmax enforces a platform-side MFA floor for these two role codes (see ADR-0025 §3 and `apps/web/src/server/auth/require-mfa.ts`). The floor is independent of any Clerk org-level policy; the operator MUST have at least one second factor enrolled before they can finalize an invoice, issue a refund, register a carrier credential, or assign roles.
+Pharmax enforces a platform-side MFA floor for these two role codes (ADR-0030, carried forward from ADR-0025; see `apps/web/src/server/auth/require-mfa.ts` and `@pharmax/auth` `MFA_REQUIRED_ROLE_CODES`). The floor is owned entirely in-house — MFA is verified at SIGN-IN (TOTP via the `SignIn` command) and the result is recorded on the session as `mfaSatisfied`. A floor-role operator MUST have an enrolled authenticator and a session that cleared MFA before they can finalize an invoice, issue a refund, register a carrier credential, or assign roles.
 
 **Operator-facing flow:**
 
-1. Operator clicks a privileged button (e.g. "Finalize invoice") in the operator console.
-2. The route handler resolves their Clerk session and asks Clerk Backend API how many factors they have enrolled. Zero factors → the route redirects with `?error=MFA_REQUIRED:...`.
-3. The operator opens the user button (top right of the console) → **Manage account** → **Security** → **Add a method**. Clerk supports TOTP (recommended), backup codes, and SMS.
-4. After enrolling at least one factor, the operator retries the original action. The MFA gate's `React.cache` is request-scoped, so the retry triggers a fresh Clerk Backend API call and the new factor is visible.
+1. At sign-in, a floor-role operator with no authenticator gets `MFA_REQUIRED` (`enrolled: false`) — the console routes them to enrollment.
+2. Enrollment: `EnrollMfa` returns a QR (otpauth URI) + base32 secret; the operator scans it in their authenticator app, then submits a 6-digit code to `ConfirmMfa`. On success the account is enrolled and a set of single-use **recovery codes** is shown ONCE (store them safely).
+3. Subsequent sign-ins prompt for the TOTP (or a recovery code); a correct code sets `session.mfaSatisfied = true`.
+4. Privileged writes go through `dispatchOpsCommandWithMfa`, which checks `session.mfaSatisfied` (no identity-provider round-trip). A session that never cleared MFA is redirected with `?error=MFA_REQUIRED:...`.
 
 **Admin-facing diagnostics:**
 
 If an operator reports they cannot enroll, check:
 
-- **Clerk dashboard** → Users → find by email → "Multi-factor". The dashboard shows enrolled factors; if none are listed, the operator hasn't completed the enrollment ceremony.
-- **Application log feed** for `auth.mfa.required_not_enrolled` or `auth.mfa.lookup_failed` events. The latter indicates Clerk Backend API connectivity issues; rotate to the "Clerk outage" runbook section if it persists.
-- **Audit log** for `action="auth.clerk.session_created"` rows — the metadata records `userStatus`, so a `userStatus != ACTIVE` would explain a denial that's NOT MFA-related.
+- **`mfa_enrollment` table** — a verified, active enrollment is a row with `verifiedAt IS NOT NULL AND disabledAt IS NULL` for the operator's `userId`. No such row means the operator hasn't completed the enrollment ceremony (`EnrollMfa` → `ConfirmMfa`).
+- **`login_attempt` ledger** — filter by the operator's email; `outcome=MFA_REQUIRED` means the floor fired without a code (or without an enrollment), `outcome=MFA_FAILED` means a wrong TOTP/recovery code, and `outcome=USER_INACTIVE` / `INVALID_CREDENTIALS` would explain a denial that's NOT MFA-related.
+- **Audit log** for `action="user.signed_in"` rows — the metadata records `mfaUsed`, so a successful sign-in with `mfaUsed=false` for a floor-role operator indicates a session that will hit the write-time gate.
 
 **Adding a new role to the floor:** edit `MFA_REQUIRED_ROLE_CODES` in `apps/web/src/server/auth/require-mfa.ts` AND the corresponding test (`require-mfa.test.ts`'s "locks in OrgAdmin and BillingManager" assertion will fail until updated). Note the change in `SECURITY.md` per ADR-0025's ongoing obligation.
 

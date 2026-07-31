@@ -130,6 +130,7 @@ describe("processSentPrintJob", () => {
         printerId: "printer-1",
         orderId: "order-1",
         orderLineId: "line-1",
+        traceparent: null,
       }
     );
 
@@ -175,6 +176,7 @@ describe("processSentPrintJob", () => {
         printerId: "printer-1",
         orderId: "order-1",
         orderLineId: "line-1",
+        traceparent: null,
       }
     );
 

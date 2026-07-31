@@ -283,6 +283,81 @@ describe("RecordShipmentTrackingEvent — happy path", () => {
       aggregateId: SHIPMENT_ID,
     });
   });
+
+  it("persists scan location on the event row and refreshes the delivery estimate — both kept out of audit/outbox", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        RecordShipmentTrackingEvent,
+        deliveredInput({
+          source: ShipmentTrackingSource.FEDEX,
+          externalEventId: "fedex:794665654567:scan:DL:2026-05-24T18:00:00.000Z",
+          scanCity: "MEMPHIS",
+          scanStateOrProvince: "TN",
+          scanCountry: "US",
+          estimatedDeliveryAt: "2026-05-25T20:00:00.000Z",
+        }),
+        { idempotencyKey: "fedex-poll:scan-loc-1" }
+      )
+    );
+
+    const insert = callsOf(fake.calls, "shipmentTrackingEvent", "create")[0]!.args as {
+      data: Record<string, unknown>;
+    };
+    expect(insert.data).toMatchObject({
+      scanCity: "MEMPHIS",
+      scanStateOrProvince: "TN",
+      scanCountry: "US",
+    });
+
+    const shipmentUpdate = callsOf(fake.calls, "shipment", "update")[0]!.args as {
+      data: Record<string, unknown>;
+    };
+    expect(shipmentUpdate.data["estimatedDeliveryAt"]).toEqual(
+      new Date("2026-05-25T20:00:00.000Z")
+    );
+
+    // Location must not leak into audit metadata or the outbox payload.
+    const stringify = (v: unknown): string =>
+      JSON.stringify(v, (_k, val: unknown) => (typeof val === "bigint" ? val.toString() : val));
+    const auditArgs = callsOf(fake.calls, "auditLog", "create")[0]!.args;
+    expect(stringify(auditArgs)).not.toContain("MEMPHIS");
+    const outboxArgs = callsOf(fake.calls, "eventOutbox", "createMany")[0]!.args;
+    expect(stringify(outboxArgs)).not.toContain("MEMPHIS");
+  });
+
+  it("does NOT clobber the cached delivery estimate from an out-of-order older event", async () => {
+    const fake = buildPrismaFake({
+      shipment: {
+        id: SHIPMENT_ID,
+        orderId: ORDER_ID,
+        siteId: SITE_ID,
+        status: ShipmentStatus.IN_TRANSIT,
+        lastTrackingEventAt: new Date("2026-05-24T20:00:00.000Z"),
+        lastTrackingEventKind: ShipmentTrackingEventKind.IN_TRANSIT,
+      },
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        RecordShipmentTrackingEvent,
+        deliveredInput({
+          kind: ShipmentTrackingEventKind.IN_TRANSIT,
+          carrierStatus: "in_transit",
+          externalEventId: "evt_backfill_1",
+          occurredAt: "2026-05-24T10:00:00.000Z", // older than the cached event
+          estimatedDeliveryAt: "2026-05-26T00:00:00.000Z",
+        }),
+        { idempotencyKey: "easypost:evt_backfill_1" }
+      )
+    );
+
+    // Older event → no shipment update at all (estimate included).
+    expect(callsOf(fake.calls, "shipment", "update")).toHaveLength(0);
+  });
 });
 
 describe("RecordShipmentTrackingEvent — newer-only advancement", () => {

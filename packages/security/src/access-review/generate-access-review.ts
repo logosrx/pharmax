@@ -7,9 +7,9 @@
 // highlighting:
 //
 //   - Principals with elevated roles (matching `ELEVATED_ROLE_CODES`).
-//   - Principals who have not authenticated recently (90-day threshold,
-//     wired against Clerk sessions — currently a TODO until the Clerk
-//     events sync lands).
+//   - Principals who have not authenticated recently (90-day threshold
+//     against `user.lastLoginAt`, which the first-party SignIn command
+//     stamps transactionally on every successful sign-in).
 //   - Stale role assignments older than `STALE_ASSIGNMENT_THRESHOLD_DAYS`
 //     that should be re-justified.
 //
@@ -242,12 +242,6 @@ export async function generateAccessReview(
       effectivePermissions: Array.from(effective).sort() as ReadonlyArray<PermissionCode>,
     });
   }
-
-  // TODO(Clerk sync): when `clerk.session.created.v1` outbox handler
-  // is wired, replace `lastLoginAt` (Pharmax user row) with the most
-  // recent Clerk session-created event timestamp. The Pharmax field
-  // is only updated on a successful sign-in callback today, which
-  // may lag behind Clerk's actual session creation by some minutes.
 
   return {
     organizationId: org.id,

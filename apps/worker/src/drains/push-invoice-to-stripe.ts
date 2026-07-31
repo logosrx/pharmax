@@ -12,11 +12,13 @@
 //     outbox retry after a transient Stripe outage converges on
 //     the same Stripe invoice rather than creating duplicates.
 //
-//   - A missing or unconfigured Stripe SDK is a deployment shape,
-//     not a workflow error. When `STRIPE_SECRET_KEY` is unset the
-//     handler logs + no-ops; the invoice stays in OPEN status with
-//     no `stripeInvoiceId` and a future operator can re-push by
-//     re-finalizing or running a backfill.
+//   - A missing `STRIPE_SECRET_KEY` while finalized invoices are
+//     flowing is a deployment FAULT, not a benign shape: the handler
+//     FAILS the row (retry/backoff → DEAD, visible in the dead-letter
+//     dashboard) instead of no-oping, so a worker booted briefly
+//     without the key self-heals on retry once the env var is fixed,
+//     and a permanently unconfigured environment surfaces loudly
+//     rather than silently never billing customers.
 //
 // PHI: no PHI is read or written. Invoice line descriptions are
 // sanitized at materialization time.
@@ -45,8 +47,9 @@ const billingStripePushCounter = meter.createCounter("pharmax_billing_stripe_pus
 export interface CreatePushInvoiceToStripeHandlerOptions {
   readonly client: PrismaClient;
   /**
-   * Stripe port. When `null`, the handler logs that Stripe is not
-   * configured and short-circuits (no error, no retry storm).
+   * Stripe port. When `null`, the handler FAILS the row (routes it
+   * through retry/backoff → DEAD) so the missed push stays visible
+   * and self-heals once Stripe is configured — see the handler body.
    */
   readonly stripePort: StripeInvoicePort | null;
 }

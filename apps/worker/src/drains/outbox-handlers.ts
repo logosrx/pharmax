@@ -24,6 +24,7 @@
 //      through it.
 
 import type { PrismaClient } from "@pharmax/database";
+import { fanOutWebhookDeliveries, WEBHOOK_ELIGIBLE_EVENT_TYPES } from "@pharmax/partner-api";
 import type { logger as loggerContract } from "@pharmax/platform-core";
 
 import type { StripeInvoicePort } from "@pharmax/billing";
@@ -169,6 +170,52 @@ function createVialPrintOutboxHandler(deps: VialPrintOutboxHandlerDeps): OutboxE
 export const outboxHandlers: OutboxHandlerMap = {
   "organization.created.v1": handleOrganizationCreatedV1,
 };
+
+/**
+ * Post-handler hook signature the outbox drainer runs for EVERY
+ * claimed row (after the domain handler, inside the same try) —
+ * see `OutboxDrainerDeps.postHandlerHook`.
+ */
+export type OutboxPostHandlerHook = (
+  row: ClaimedOutboxEventRow,
+  context: OutboxHandlerContext
+) => Promise<void>;
+
+/**
+ * Partner webhook fan-out as a drainer post-handler hook (ADR-0032).
+ *
+ * Runs for every outbox row and SELF-FILTERS: non-eligible event
+ * types (anything not registered phi-safe) return immediately with
+ * no DB work, so this is not registered per-event-type in the
+ * handler map — the map stays a pure domain-handler registry (the
+ * registry-contract test pins that) while every phi-safe event
+ * still fans out to matching ACTIVE subscriptions.
+ *
+ * Ordering + retry semantics: a hook throw routes the row through
+ * the drainer's FAILED/backoff path. Fan-out is idempotent on
+ * (subscriptionId, outboxEventId) via `skipDuplicates`, and domain
+ * handlers are idempotent by contract, so a retry after either
+ * side's failure is safe in both directions.
+ */
+export function createWebhookFanOutHook(
+  client: Pick<PrismaClient, "$transaction">
+): OutboxPostHandlerHook {
+  return async (row, ctx) => {
+    if (!WEBHOOK_ELIGIBLE_EVENT_TYPES.has(row.eventType)) {
+      return;
+    }
+    await fanOutWebhookDeliveries({
+      client,
+      event: {
+        id: row.id,
+        organizationId: row.organizationId,
+        eventType: row.eventType,
+        payload: row.payload,
+      },
+      logger: ctx.logger,
+    });
+  };
+}
 
 /** Production registry wired from apps/worker main with Prisma + delivery port. */
 export function createOutboxHandlers(deps: OutboxHandlerDeps): OutboxHandlerMap {

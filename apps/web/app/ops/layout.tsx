@@ -135,6 +135,35 @@ const NAV: ReadonlyArray<GroupSpec> = [
     ],
   },
   {
+    label: "Directory",
+    items: [
+      {
+        href: "/ops/admin/products",
+        label: "Products",
+        icon: "products",
+        requires: PERMISSIONS.INVENTORY_READ,
+      },
+      {
+        href: "/ops/admin/batches",
+        label: "Batches",
+        icon: "batches",
+        requires: PERMISSIONS.INVENTORY_READ,
+      },
+      {
+        href: "/ops/admin/practices",
+        label: "Practices",
+        icon: "practices",
+        requires: PERMISSIONS.CLINICS_READ,
+      },
+      {
+        href: "/ops/admin/providers",
+        label: "Providers",
+        icon: "providers",
+        requires: PERMISSIONS.PROVIDERS_READ,
+      },
+    ],
+  },
+  {
     label: "Administration",
     items: [
       {
@@ -142,6 +171,12 @@ const NAV: ReadonlyArray<GroupSpec> = [
         label: "Users",
         icon: "users",
         requires: PERMISSIONS.USERS_MANAGE,
+      },
+      {
+        href: "/ops/admin/roles",
+        label: "Privileges",
+        icon: "key",
+        requires: PERMISSIONS.ROLES_MANAGE,
       },
       {
         href: "/ops/admin/patients",

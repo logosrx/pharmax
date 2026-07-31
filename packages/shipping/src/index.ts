@@ -122,6 +122,15 @@ export {
   type FedExTrackResponse,
   type FedExTrackResult,
 } from "./carriers/fedex-client.js";
+export {
+  normalizeFedExScanEvents,
+  normalizeFedExTrackResult,
+  latestStatusFallbackEvent,
+  parseFedExDate,
+  pickEstimatedDeliveryAt,
+  pickOccurredAt,
+  type NormalizedFedExTrackingEvent,
+} from "./carriers/fedex-track-normalization.js";
 export { FedExShippingAdapter } from "./carriers/fedex-adapter.js";
 export { createFedExFactory, type CreateFedExFactoryOptions } from "./carriers/fedex-factory.js";
 export {
@@ -209,7 +218,58 @@ export type {
   RecordReceivedResult,
 } from "./webhooks/event-store.js";
 
-export { EasyPostWebhookEventNotFoundError } from "./webhooks/errors.js";
+export {
+  EasyPostWebhookEventNotFoundError,
+  FedExWebhookEventNotFoundError,
+} from "./webhooks/errors.js";
+
+export {
+  verifyFedExSignature,
+  FedExSignatureError,
+  FedExWebhookConfigError,
+  type VerifyFedExSignatureInput,
+  type FedExSignatureVerificationResult,
+} from "./carriers/fedex-webhook-signature.js";
+
+export {
+  parseFedExWebhookPayload,
+  projectFedExWebhookForStorage,
+  FedExWebhookPayloadError,
+  type FedExWebhookTrackEntry,
+  type FedExWebhookStoredPayload,
+} from "./carriers/fedex-webhook-payload.js";
+
+export {
+  handleFedExWebhook,
+  deriveFedExDeliveryId,
+  FEDEX_WEBHOOK_EVENT_TYPE,
+  type HandleFedExWebhookDeps,
+  type HandleFedExWebhookInput,
+  type HandleFedExWebhookResult,
+} from "./webhooks/handle-fedex-webhook.js";
+
+export {
+  processFedExWebhookEvent,
+  executeFedExWebhookEventDispatch,
+  type FedExWebhookTargetResolver,
+  type ProcessFedExWebhookEventDeps,
+  type ProcessFedExWebhookEventResult,
+} from "./webhooks/process-fedex-webhook-event.js";
+
+export { InMemoryFedExWebhookEventStore } from "./webhooks/in-memory-fedex-event-store.js";
+
+export {
+  PrismaFedExWebhookEventStore,
+  type FedExWebhookEventClient,
+} from "./webhooks/prisma-fedex-event-store.js";
+
+export type {
+  FedExRecordReceivedInput,
+  FedExRecordReceivedResult,
+  FedExWebhookEventRecord,
+  FedExWebhookEventStatus,
+  FedExWebhookEventStore,
+} from "./webhooks/fedex-event-store.js";
 
 import * as confirmShipmentModule from "./commands/confirm-shipment.js";
 import * as createShipmentModule from "./commands/create-shipment.js";

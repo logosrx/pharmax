@@ -10,11 +10,16 @@
 //   - If a line already exists for `billingEventKey =
 //     "stripe-refund:{stripeRefundId}"`, returns cleanly with
 //     `alreadyRecorded: true` (idempotency layer 2 — bus key is
-//     layer 1).
+//     layer 1). ONE side effect still runs on this path: when the
+//     webhook reports `succeeded` and the payment ledger has no row
+//     for this refund yet (IssueRefund wrote the line while Stripe
+//     reported `pending`), THIS is the settle moment — the REFUND
+//     ledger row is appended here.
 //
 //   - Otherwise, this is an out-of-band refund. Resolve the
 //     Pharmax invoice via the Stripe charge id, write the negative
-//     line, decrement totals, emit `billing.invoice.refunded.v1`.
+//     line + the REFUND payment-ledger row, decrement totals, emit
+//     `billing.invoice.refunded.v1` + `billing.payment.recorded.v1`.
 //
 //   - If we can't resolve the invoice (orphan charge), log + return
 //     `recognized: false`. Operator can manually reconcile.
@@ -28,10 +33,22 @@
 //
 // PHI invariant: none.
 
-import type { PrismaTxClient, SystemCommand, SystemHandlerResult } from "@pharmax/command-bus";
-import { InvoiceLineKind, type Prisma } from "@pharmax/database";
+import type {
+  OutboxEventDraft,
+  PrismaTxClient,
+  SystemCommand,
+  SystemHandlerResult,
+} from "@pharmax/command-bus";
+import { InvoiceLineKind, PaymentKind, PaymentMethod, type Prisma } from "@pharmax/database";
 import { ids } from "@pharmax/platform-core";
 import { z } from "zod";
+
+import {
+  computePriorRefundedCents,
+  insertPaymentLedgerRow,
+  type PaymentLedgerRowInput,
+  paymentRecordedOutboxEvent,
+} from "../payments/payment-ledger.js";
 
 const inputSchema = z
   .object({
@@ -71,6 +88,7 @@ async function loadInvoiceByCharge(
   invoiceNumber: string;
   amountDueCents: number;
   amountPaidCents: number;
+  currency: string;
 } | null> {
   return await tx.invoice.findFirst({
     where: { stripeChargeId },
@@ -81,6 +99,7 @@ async function loadInvoiceByCharge(
       invoiceNumber: true,
       amountDueCents: true,
       amountPaidCents: true,
+      currency: true,
     },
   });
 }
@@ -104,9 +123,55 @@ export const RecordRefundReceived: SystemCommand<
     // ---- Existing line short-circuit (Pharmax-initiated refund) ----
     const existingLine = await tx.invoiceLine.findUnique({
       where: { billingEventKey },
-      select: { id: true, invoiceId: true, organizationId: true },
+      select: { id: true, invoiceId: true, organizationId: true, clinicId: true },
     });
     if (existingLine !== null) {
+      // The invoice line exists, but the PAYMENT LEDGER row may not:
+      // IssueRefund writes the line for `pending` refunds and defers
+      // the ledger row to settlement. If THIS delivery reports
+      // `succeeded`, this is the settle moment — append the ledger
+      // row now. (Idempotent: an IssueRefund that settled
+      // synchronously already owns the `stripe-refund:{id}` key, so
+      // `created` comes back false and nothing is re-announced.)
+      let paymentId: string | null = null;
+      const paymentOutboxEvents: OutboxEventDraft[] = [];
+      let ledgerRowCreated = false;
+      if (input.stripeStatus === "succeeded") {
+        const invoiceForLedger = await tx.invoice.findUnique({
+          where: { id: existingLine.invoiceId },
+          select: { currency: true },
+        });
+        if (invoiceForLedger !== null) {
+          const ledgerRow: PaymentLedgerRowInput = {
+            organizationId: existingLine.organizationId,
+            clinicId: existingLine.clinicId,
+            invoiceId: existingLine.invoiceId,
+            kind: PaymentKind.REFUND,
+            method: PaymentMethod.STRIPE,
+            amountCents: input.amountCents,
+            currency: invoiceForLedger.currency,
+            paymentEventKey: billingEventKey,
+            stripeEventId: input.stripeEventId,
+            stripeChargeId: input.stripeChargeId,
+            stripeRefundId: input.stripeRefundId,
+            occurredAt: new Date(input.refundedAt),
+            metadata: {
+              sourceEvent: "stripe-webhook-charge-refunded",
+              settledPendingRefund: true,
+              stripeReason: input.stripeReason ?? null,
+            },
+          };
+          const ledgerResult = await insertPaymentLedgerRow(tx, ledgerRow);
+          paymentId = ledgerResult.paymentId;
+          ledgerRowCreated = ledgerResult.created;
+          if (ledgerResult.created) {
+            paymentOutboxEvents.push(
+              paymentRecordedOutboxEvent({ paymentId: ledgerResult.paymentId, row: ledgerRow })
+            );
+          }
+        }
+      }
+
       return {
         output: {
           recognized: true,
@@ -116,7 +181,9 @@ export const RecordRefundReceived: SystemCommand<
         },
         targetOrganizationId: existingLine.organizationId,
         audit: {
-          action: "billing.invoice.refund_received.skipped",
+          action: ledgerRowCreated
+            ? "billing.invoice.refund_received.settled"
+            : "billing.invoice.refund_received.skipped",
           resourceType: "Invoice",
           resourceId: existingLine.invoiceId,
           metadata: {
@@ -124,12 +191,13 @@ export const RecordRefundReceived: SystemCommand<
             invoiceLineId: existingLine.id,
             stripeRefundId: input.stripeRefundId,
             stripeEventId: input.stripeEventId,
-            reason: "already-recorded",
+            reason: ledgerRowCreated ? "pending-refund-settled" : "already-recorded",
+            paymentId,
             commandLogId,
             occurredAt: now.toISOString(),
           },
         },
-        outboxEvents: [],
+        outboxEvents: paymentOutboxEvents,
       };
     }
 
@@ -212,18 +280,8 @@ export const RecordRefundReceived: SystemCommand<
     // over-refund LOUDLY in the audit row + outbox payload for the
     // billing team instead of letting the balance drift negative
     // silently.
-    const priorRefunds = await tx.invoiceLine.findMany({
-      where: {
-        invoiceId: invoice.id,
-        kind: InvoiceLineKind.CREDIT,
-        billingEventKey: { startsWith: "stripe-refund:" },
-      },
-      select: { amountCents: true },
-    });
-    const priorRefundedCents = priorRefunds.reduce(
-      (sum, line) => sum + Math.abs(line.amountCents),
-      0
-    );
+    const priorRefundTotals = await computePriorRefundedCents(tx, invoice.id);
+    const priorRefundedCents = priorRefundTotals.priorRefundedCents;
     const overRefund = priorRefundedCents + input.amountCents > invoice.amountPaidCents;
 
     const invoiceLineId = ids.generateUlid();
@@ -261,6 +319,33 @@ export const RecordRefundReceived: SystemCommand<
       },
     });
 
+    // ---- Append the REFUND ledger row ----
+    // Status was gated to `succeeded` above, so the money moved.
+    // Same tx as the line + totals: projection and ledger cannot
+    // disagree on a partial commit.
+    const ledgerRow: PaymentLedgerRowInput = {
+      organizationId: invoice.organizationId,
+      clinicId: invoice.clinicId,
+      invoiceId: invoice.id,
+      kind: PaymentKind.REFUND,
+      method: PaymentMethod.STRIPE,
+      amountCents: input.amountCents,
+      currency: invoice.currency,
+      paymentEventKey: billingEventKey,
+      stripeEventId: input.stripeEventId,
+      stripeChargeId: input.stripeChargeId,
+      stripeRefundId: input.stripeRefundId,
+      occurredAt: new Date(input.refundedAt),
+      metadata: {
+        sourceEvent: "stripe-webhook-charge-refunded",
+        stripeReason: input.stripeReason ?? null,
+      },
+    };
+    const ledgerResult = await insertPaymentLedgerRow(tx, ledgerRow);
+    const paymentOutboxEvents: OutboxEventDraft[] = ledgerResult.created
+      ? [paymentRecordedOutboxEvent({ paymentId: ledgerResult.paymentId, row: ledgerRow })]
+      : [];
+
     const amountDueCentsAfter = invoice.amountDueCents - input.amountCents;
 
     return {
@@ -289,6 +374,9 @@ export const RecordRefundReceived: SystemCommand<
           creditAmountCents: negativeAmount,
           amountDueCentsAfter,
           priorRefundedCents,
+          priorRefundedFromLinesCents: priorRefundTotals.fromInvoiceLinesCents,
+          priorRefundedFromLedgerCents: priorRefundTotals.fromPaymentLedgerCents,
+          paymentId: ledgerResult.paymentId,
           amountPaidCents: invoice.amountPaidCents,
           // True when this refund pushes total refunds past what we
           // tracked as paid — a reconciliation flag for billing.
@@ -319,6 +407,7 @@ export const RecordRefundReceived: SystemCommand<
             occurredAt: now.toISOString(),
           },
         },
+        ...paymentOutboxEvents,
       ],
     };
   },

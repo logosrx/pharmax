@@ -163,6 +163,15 @@ describe("composeTeardownScript", () => {
     expect(SCRIPT).toContain("aws rds describe-db-clusters");
     expect(SCRIPT).toContain("FAIL: cluster");
   });
+
+  it("records teardown.json next to the script so finalize can confirm the destroy", () => {
+    expect(SCRIPT).toContain('"confirmed": true');
+    expect(SCRIPT).toContain('$(dirname "$0")/teardown.json');
+    // The confirmation must come AFTER the describe-db-clusters gone-check.
+    const verifyIdx = SCRIPT.indexOf("aws rds describe-db-clusters");
+    const recordIdx = SCRIPT.indexOf("teardown.json");
+    expect(recordIdx).toBeGreaterThan(verifyIdx);
+  });
 });
 
 describe("composeEvidenceJson", () => {

@@ -2,9 +2,17 @@
 //
 // Selection rules (all AND):
 //   - `carrier = 'FEDEX'` (the only carrier the FedEx adapter can poll)
-//   - `status NOT IN (terminal lifecycle states)` — once a shipment
-//     is DELIVERED / EXCEPTION / RETURN_TO_SENDER / FAILED_DELIVERY,
-//     additional polls aren't useful
+//   - `status <> 'DELIVERED'` — delivery is the ONLY poll-terminal
+//     state. EXCEPTION / RETURN_TO_SENDER / FAILED_DELIVERY packages
+//     are still moving through the carrier network (a weather delay
+//     resolves back to in-transit; an RTS package travels all the
+//     way back to the pharmacy; a failed delivery gets reattempted).
+//     Going dark on exactly the packages an operator most needs to
+//     watch was the old behavior's visibility gap.
+//   - `createdAt > NOW - maxShipmentAgeDays` — the age horizon that
+//     replaces status-based termination as the "stop polling
+//     eventually" guarantee, so a never-delivered zombie shipment
+//     doesn't consume Track API quota forever.
 //   - `externalTrackerId IS NULL` — shipments with a tracker id were
 //     purchased via EasyPost (which provides webhook tracking already);
 //     we don't want to double-track those
@@ -29,6 +37,12 @@ export interface ActiveFedExShipmentRow {
 export interface ClaimActiveFedExShipmentsOptions {
   readonly batchSize: number;
   readonly staleThresholdMs: number;
+  /**
+   * Stop polling shipments older than this many days regardless of
+   * status — the bound that keeps non-DELIVERED zombies from being
+   * polled forever.
+   */
+  readonly maxShipmentAgeDays: number;
 }
 
 export type FedExShipmentClaimClient = Pick<PrismaClient, "$queryRaw">;
@@ -45,7 +59,7 @@ export async function claimActiveFedExShipments(
   client: FedExShipmentClaimClient,
   options: ClaimActiveFedExShipmentsOptions
 ): Promise<ActiveFedExShipmentRow[]> {
-  const { batchSize, staleThresholdMs } = options;
+  const { batchSize, staleThresholdMs, maxShipmentAgeDays } = options;
 
   // Note: no FOR UPDATE here — polling is a read-only operation
   // from the database's point of view; the dispatcher uses the
@@ -61,7 +75,8 @@ export async function claimActiveFedExShipments(
       "lastTrackingEventAt"
     FROM "shipment"
     WHERE "carrier" = 'FEDEX'
-      AND "status" NOT IN ('DELIVERED', 'EXCEPTION', 'RETURN_TO_SENDER', 'FAILED_DELIVERY')
+      AND "status" <> 'DELIVERED'
+      AND "createdAt" > NOW() - (${maxShipmentAgeDays} || ' days')::interval
       AND "externalTrackerId" IS NULL
       AND (
         "lastTrackingEventAt" IS NULL

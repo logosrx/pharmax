@@ -109,13 +109,12 @@ describe("withSentryOpsScope — happy path", () => {
     expect(scope.tags.has("surface")).toBe(false);
   });
 
-  it("sets operator context with clerkUserId when provided", async () => {
+  it("sets the operator context block", async () => {
     await withSentryOpsScope(
       {
         operatorUserId: USER_ID,
         organizationId: ORG_ID,
         operatorDisplayName: "Pat",
-        clerkUserId: "user_clerk_abc",
       },
       async () => undefined
     );
@@ -123,7 +122,6 @@ describe("withSentryOpsScope — happy path", () => {
       userId: USER_ID,
       organizationId: ORG_ID,
       displayName: "Pat",
-      clerkUserId: "user_clerk_abc",
     });
   });
 });

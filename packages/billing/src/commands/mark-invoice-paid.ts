@@ -7,7 +7,19 @@
 //   apps/worker drain claims it → dispatcher routes `invoice.paid` →
 //   stripe-handler resolves the Pharmax invoice by stripeInvoiceId →
 //   THIS COMMAND flips status OPEN → PAID, records amount + paidAt,
-//   emits `billing.invoice.paid.v1`.
+//   appends the PAYMENT row to the payment ledger, emits
+//   `billing.invoice.paid.v1` + `billing.payment.recorded.v1`.
+//
+// Payment ledger:
+//
+//   - One PAYMENT row per settled collection, keyed
+//     `"stripe-paid:{stripeEventId}"` (idempotent via the unique
+//     `paymentEventKey`). The invoice's `amountPaidCents` remains
+//     the operational projection; the ledger row is what financial
+//     reports sum over.
+//   - Zero-amount payments (Stripe reports `amount_paid: 0`, e.g. a
+//     100%-coupon invoice) do NOT produce a ledger row — no money
+//     moved.
 //
 // Idempotency:
 //
@@ -34,10 +46,21 @@
 // PHI invariant: nothing PHI is read or written. Stripe ids +
 // amounts are non-PHI.
 
-import type { PrismaTxClient, SystemCommand, SystemHandlerResult } from "@pharmax/command-bus";
-import { InvoiceStatus } from "@pharmax/database";
+import type {
+  OutboxEventDraft,
+  PrismaTxClient,
+  SystemCommand,
+  SystemHandlerResult,
+} from "@pharmax/command-bus";
+import { InvoiceStatus, PaymentKind, PaymentMethod } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { z } from "zod";
+
+import {
+  insertPaymentLedgerRow,
+  type PaymentLedgerRowInput,
+  paymentRecordedOutboxEvent,
+} from "../payments/payment-ledger.js";
 
 export const MARK_PAID_VERSION_MISMATCH = "MARK_PAID_VERSION_MISMATCH";
 export const MARK_PAID_INVALID_STATUS_TRANSITION = "MARK_PAID_INVALID_STATUS_TRANSITION";
@@ -92,6 +115,7 @@ async function loadInvoice(
   stripeInvoiceId: string | null;
   invoiceNumber: string;
   clinicId: string;
+  currency: string;
 } | null> {
   return await tx.invoice.findFirst({
     where: { id: input.invoiceId, organizationId: input.organizationId },
@@ -105,6 +129,7 @@ async function loadInvoice(
       stripeInvoiceId: true,
       invoiceNumber: true,
       clinicId: true,
+      currency: true,
     },
   });
 }
@@ -264,6 +289,42 @@ export const MarkInvoicePaid: SystemCommand<MarkInvoicePaidInput, MarkInvoicePai
       });
     }
 
+    // ---- Append the PAYMENT ledger row ----
+    // Same tx as the status flip: the projection (amountPaidCents)
+    // and the ledger can never disagree on a partial commit. The
+    // already-paid short-circuit above means this only runs on the
+    // FIRST settle, so `created` is expected true; the key-level
+    // idempotency is belt-and-suspenders for manual replays.
+    let paymentId: string | null = null;
+    const paymentOutboxEvents: OutboxEventDraft[] = [];
+    if (input.amountPaidCents > 0) {
+      const ledgerRow: PaymentLedgerRowInput = {
+        organizationId: invoice.organizationId,
+        clinicId: invoice.clinicId,
+        invoiceId: invoice.id,
+        kind: PaymentKind.PAYMENT,
+        method: PaymentMethod.STRIPE,
+        amountCents: input.amountPaidCents,
+        currency: invoice.currency,
+        paymentEventKey: `stripe-paid:${input.stripeEventId}`,
+        stripeEventId: input.stripeEventId,
+        ...(input.stripeChargeId !== undefined ? { stripeChargeId: input.stripeChargeId } : {}),
+        occurredAt: paidAtDate,
+        metadata: {
+          sourceEvent: "stripe-webhook-invoice-paid",
+          stripeInvoiceId: input.stripeInvoiceId,
+          stripeEventId: input.stripeEventId,
+        },
+      };
+      const ledgerResult = await insertPaymentLedgerRow(tx, ledgerRow);
+      paymentId = ledgerResult.paymentId;
+      if (ledgerResult.created) {
+        paymentOutboxEvents.push(
+          paymentRecordedOutboxEvent({ paymentId: ledgerResult.paymentId, row: ledgerRow })
+        );
+      }
+    }
+
     return {
       output: {
         invoiceId: invoice.id,
@@ -291,6 +352,8 @@ export const MarkInvoicePaid: SystemCommand<MarkInvoicePaidInput, MarkInvoicePai
           paidAt: paidAtDate.toISOString(),
           previousStatus: invoice.status,
           newStatus: InvoiceStatus.PAID,
+          // Null for zero-amount settles (no money moved, no row).
+          paymentId,
           commandLogId,
           occurredAt: now.toISOString(),
         },
@@ -313,6 +376,7 @@ export const MarkInvoicePaid: SystemCommand<MarkInvoicePaidInput, MarkInvoicePai
             occurredAt: now.toISOString(),
           },
         },
+        ...paymentOutboxEvents,
       ],
     };
   },

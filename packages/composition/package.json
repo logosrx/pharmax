@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@pharmax/auth": "workspace:*",
     "@pharmax/billing": "workspace:*",
     "@pharmax/cache": "workspace:*",
     "@pharmax/command-bus": "workspace:*",

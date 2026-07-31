@@ -40,8 +40,13 @@ function buildPrismaFake() {
       findUnique: vi.fn(async () => ({ id: CLINIC_ID, organizationId: ORG_ID })),
     },
     pricingRule: {
-      // Resolver finds no rule → handler falls back to FLAT_V1.
+      // Resolver finds no rule → handler falls back to FLAT_V1 for
+      // the dispense fee and skips the supplemental fee kinds.
       findMany: vi.fn(async () => []),
+    },
+    order: {
+      // Priority lookup for the RUSH_FEE decision.
+      findUnique: vi.fn(async () => ({ priority: "NORMAL" })),
     },
     commandLog: {
       create: vi.fn(async () => ({ id: "cl-1" })),

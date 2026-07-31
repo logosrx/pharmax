@@ -39,11 +39,20 @@ function buildPrismaFake(input: BuildClientInput) {
     stripeInvoiceId: STRIPE_INVOICE_ID,
     invoiceNumber: "INV-2026-05-0c0c0c0c",
     clinicId: CLINIC_ID,
+    currency: "usd",
   }));
   const invoiceUpdateMany = vi.fn(async () => ({ count: 1 }));
 
   const tx = {
     invoice: { findFirst: invoiceFindFirst, updateMany: invoiceUpdateMany },
+    // Payment-ledger row appended by MarkInvoicePaid.
+    payment: {
+      create: vi.fn(async (args: unknown) => ({
+        id: (args as { data: { id: string } }).data.id,
+      })),
+      findUnique: vi.fn(async () => null),
+      findMany: vi.fn(async () => []),
+    },
     commandLog: {
       create: vi.fn(async () => ({ id: "cl" })),
       update: vi.fn(async () => ({ ok: true })),
@@ -298,8 +307,18 @@ describe("createStripeEventHandlers — charge.refunded", () => {
             clinicId: CLINIC_ID,
             invoiceNumber: "INV-2026-05-0c0c0c0c",
             amountDueCents: 0,
+            amountPaidCents: 15000,
+            currency: "usd",
           })),
           update: vi.fn(async () => ({ id: INVOICE_ID })),
+        },
+        // Payment-ledger row appended by RecordRefundReceived.
+        payment: {
+          create: vi.fn(async (args: unknown) => ({
+            id: (args as { data: { id: string } }).data.id,
+          })),
+          findUnique: vi.fn(async () => null),
+          findMany: vi.fn(async () => []),
         },
         commandLog: {
           create: vi.fn(async () => ({ id: "cl" })),

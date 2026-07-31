@@ -2,8 +2,11 @@ export {
   MaterializeShippedOrderBilling,
   type MaterializeShippedOrderBillingInput,
   type MaterializeShippedOrderBillingOutput,
+  type MaterializedFeeLine,
   FLAT_DISPENSE_FEE_CENTS,
   FLAT_DISPENSE_FEE_DESCRIPTION,
+  SHIPPING_FEE_DESCRIPTION,
+  RUSH_FEE_DESCRIPTION,
   MATERIALIZE_BILLING_CLINIC_NOT_FOUND,
   MATERIALIZE_BILLING_INVOICE_NUMBER_COLLISION,
 } from "./commands/materialize-shipped-order-billing.js";
@@ -113,6 +116,15 @@ export {
   type RecordRefundReceivedInput,
   type RecordRefundReceivedOutput,
 } from "./commands/record-refund-received.js";
+
+export {
+  insertPaymentLedgerRow,
+  paymentRecordedOutboxEvent,
+  computePriorRefundedCents,
+  type PaymentLedgerRowInput,
+  type PaymentLedgerRowResult,
+  type PriorRefundTotals,
+} from "./payments/payment-ledger.js";
 
 export {
   configureBilling,

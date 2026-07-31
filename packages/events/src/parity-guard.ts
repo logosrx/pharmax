@@ -228,8 +228,6 @@ export const EVENT_REGISTRATION_ALLOWLIST: ReadonlyArray<string> = Object.freeze
   // BLOCKER: producer command not yet implemented. Schema is
   // ready to land alongside the command; the entry stays on the
   // allowlist until then.
-  "clerk.session.created.v1", // BLOCKER: future Clerk webhook handler in @pharmax/security — TODO at packages/security/src/access-review/generate-access-review.ts
-  "clerk.session.failed.v1", // BLOCKER: future Clerk webhook handler — TODO at apps/worker/src/security/digest-probes.ts
   "order.note.added.v1", // BLOCKER: future NoteAdded command — referenced in `@pharmax/orders/events.ts` translator (intentionally unmapped permission)
 ]);
 

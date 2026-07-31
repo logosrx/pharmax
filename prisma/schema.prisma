@@ -216,6 +216,17 @@ enum EasyPostWebhookEventStatus {
   IGNORED
 }
 
+// Same lifecycle as EasyPostWebhookEventStatus, for the FedEx AIV
+// webhook inbox. Deliberately a separate enum so the two inboxes can
+// evolve independently.
+enum FedExWebhookEventStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  IGNORED
+}
+
 // Lifecycle of a single notification send (one row per
 // (org, idempotencyKey)). QUEUED is written before the transport
 // call; SENT after the transport accepts (provider message id
@@ -739,6 +750,7 @@ model Organization {
   stripeCustomers        StripeCustomer[]
   invoices               Invoice[]
   invoiceLines           InvoiceLine[]
+  payments               Payment[]
 
   patients                 Patient[]
   providers                Provider[]
@@ -778,6 +790,11 @@ model Organization {
   recoveryCodes       RecoveryCode[]
   passwordHistory     PasswordHistory[]
   passwordResetTokens PasswordResetToken[]
+
+  // Platform surface (ADR-0032).
+  apiKeys              ApiKey[]
+  webhookSubscriptions WebhookSubscription[]
+  webhookDeliveries    WebhookDelivery[]
 
   @@map("organization")
 }
@@ -849,6 +866,7 @@ model Clinic {
   invoices                 Invoice[]
   invoiceLines             InvoiceLine[]
   pricingRules             PricingRule[]
+  payments                 Payment[]
   patients                 Patient[]
   prescriptions            Prescription[]
   orders                   Order[]
@@ -1018,6 +1036,8 @@ model User {
   shipmentsCreated              Shipment[]                @relation("ShipmentCreator")
   shipmentsConfirmed            Shipment[]                @relation("ShipmentConfirmer")
   carrierCredentialsCreated     CarrierCredential[]       @relation("CarrierCredentialCreator")
+  apiKeysCreated                ApiKey[]                  @relation("ApiKeyCreator")
+  webhookSubscriptionsCreated   WebhookSubscription[]     @relation("WebhookSubscriptionCreator")
   pricingRulesCreated           PricingRule[]             @relation("PricingRuleCreator")
   stageIntervalsActed           OrderStageInterval[]      @relation("StageIntervalActor")
   packagePhotosCaptured         PackagePhoto[]            @relation("PackagePhotoCapturer")
@@ -1036,6 +1056,10 @@ model User {
   recoveryCodes       RecoveryCode[]
   passwordHistory     PasswordHistory[]
   passwordResetTokens PasswordResetToken[]
+
+  // Break-glass sessions (@pharmax/security).
+  breakGlassSessionsRequested BreakGlassSession[] @relation("BreakGlassSessionRequester")
+  breakGlassSessionsApproved  BreakGlassSession[] @relation("BreakGlassSessionApprover")
 
   @@unique([organizationId, email])
   @@index([organizationId, status])
@@ -1298,6 +1322,82 @@ model LoginAttempt {
   @@map("login_attempt")
 }
 
+// Break-glass SESSION envelope (@pharmax/security). Opens a
+// `pharmax_system` Postgres context for an engineer performing
+// forensic / repair / triage work that crosses tenants. Distinct from
+// the per-permission break-glass GRANT in @pharmax/rbac — see
+// packages/security/src/break-glass/SCHEMA.md for the full design.
+//
+// Platform-level (RLS-exempt, recorded in rls-exempt.txt): sessions
+// cross ALL tenants by definition, so there is no organizationId to
+// back an RLS predicate. Rows are append-only evidence — DELETE is
+// not granted to the application roles; the only UPDATE the app
+// performs is the close (closedAt + resolution).
+//
+// The `id` is caller-supplied (ULID encoded as uuid, sortable by open
+// time) via `openBreakGlassSession`'s idFactory — no DB default.
+//
+// A partial index `(closedAt) WHERE closedAt IS NULL` (fast lookup of
+// open sessions for the nightly digest) lives in the migration SQL
+// only — Prisma schema syntax cannot express partial indexes.
+model BreakGlassSession {
+  id String @id @db.Uuid
+
+  requestedByUserId String @db.Uuid
+  requestedByUser   User   @relation("BreakGlassSessionRequester", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+
+  // Second engineer (four-eyes). NULL until approval lands.
+  approvedByUserId String? @db.Uuid
+  approvedByUser   User?   @relation("BreakGlassSessionApprover", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+
+  // Link to the incident / change ticket. Stored verbatim.
+  ticketUrl String
+  // Free-form summary. PHI-safe by policy (no patient identifiers).
+  reason    String
+
+  openedAt           DateTime  @default(now())
+  closedAt           DateTime?
+  // Final summary written at close time. Required when closedAt is set
+  // (enforced at the @pharmax/security command layer).
+  resolution         String?
+  maxDurationMinutes Int       @default(60)
+
+  createdAt DateTime @default(now())
+
+  actions BreakGlassAction[]
+
+  @@index([openedAt(sort: Desc)])
+  @@map("break_glass_session")
+}
+
+// One row per database operation executed inside a break-glass
+// session (`BreakGlassSessionHandle.runAs()` writes one per call).
+// Append-only: UPDATE/DELETE are not granted to the application
+// roles. Same RLS exemption rationale as break_glass_session.
+model BreakGlassAction {
+  id        String            @id @db.Uuid
+  sessionId String            @db.Uuid
+  session   BreakGlassSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+
+  actionLabel  String
+  // PHI-redacted parameters. Caller is responsible for redaction.
+  parameters   Json?
+  success      Boolean
+  errorMessage String?
+
+  // When the action dispatched a command, the resulting command_log id.
+  commandLogId String?     @db.Uuid
+  commandLog   CommandLog? @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  startedAt   DateTime
+  completedAt DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([sessionId, startedAt])
+  @@index([commandLogId])
+  @@map("break_glass_action")
+}
+
 // ===========================================================================
 // 5. Workflow policy
 // ===========================================================================
@@ -1485,6 +1585,8 @@ model CommandLog {
   shipmentsConfirmed           Shipment[]               @relation("ShipmentConfirmCommand")
   shipmentTrackingEvents       ShipmentTrackingEvent[]  @relation("ShipmentTrackingEventCommand")
   carrierCredentialsCreated    CarrierCredential[]      @relation("CarrierCredentialCreateCommand")
+  apiKeysCreated               ApiKey[]                 @relation("ApiKeyCreateCommand")
+  webhookSubscriptionsCreated  WebhookSubscription[]    @relation("WebhookSubscriptionCreateCommand")
   pricingRulesCreated          PricingRule[]            @relation("PricingRuleCreateCommandLog")
   stageIntervalsOpened         OrderStageInterval[]     @relation("StageIntervalOpenCommand")
   stageIntervalsClosed         OrderStageInterval[]     @relation("StageIntervalCloseCommand")
@@ -1494,6 +1596,7 @@ model CommandLog {
   accessReviewSnapshots        AccessReviewSnapshot[]   @relation("AccessReviewSnapshotCommand")
   providerSyncChecksDispatched ProviderSyncCheck[]      @relation("ProviderSyncCheckDispatchedCommandLog")
   providerSyncReviewsResolved  ProviderSyncReviewItem[] @relation("ProviderSyncReviewResolvedCommandLog")
+  breakGlassActions            BreakGlassAction[]
 
   @@unique([organizationId, commandName, idempotencyKey])
   @@index([organizationId, status])
@@ -1641,6 +1744,12 @@ model EventOutbox {
   nextAttemptAt DateTime?
   dispatchedAt  DateTime?
 
+  // W3C trace context of the producing command, persisted so the
+  // worker's outbox drainer can resume the distributed trace across
+  // the DB-backed async boundary (no HTTP hop for auto-instrumentation
+  // to propagate through). Null when the producer had no active span.
+  traceparent String?
+
   createdAt DateTime @default(now())
 
   @@index([status, nextAttemptAt])
@@ -1778,6 +1887,50 @@ model EasyPostWebhookEvent {
   @@index([trackingCode, receivedAt])
   @@index([receivedAt])
   @@map("easypost_webhook_event")
+}
+
+// Every signed FedEx Advanced Integrated Visibility (AIV) webhook
+// delivery is recorded here BEFORE business processing. FedEx does
+// not publish a per-delivery event id, so `externalEventId` is a
+// deterministic SHA-256 digest of the raw request body — a FedEx
+// redelivery of the same message bytes becomes a no-op insert and is
+// acked 200. A worker drains PENDING/FAILED rows, resolves each
+// tracking number to a shipment in system context, and dispatches
+// `RecordShipmentTrackingEvent` inside the org's tenancy with the
+// SAME per-scan externalEventId format the FedEx tracking poller
+// uses, so webhook pushes and polls of the same physical scan
+// deduplicate at the shipment_tracking_event unique constraint.
+// RLS-exempt for the same reason as `easypost_webhook_event`.
+model FedExWebhookEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  externalEventId String  @unique
+  eventType       String
+  trackingNumber  String?
+  carrierStatus   String?
+
+  // PHI-minimized projection (NOT the verbatim body). Account-number
+  // AIV subscriptions can carry shipper/recipient name + address; the
+  // ingestion path strips the body down to the replay-only subset
+  // (tracking numbers, scan events, latest status, date/times) via
+  // projectFedExWebhookForStorage BEFORE persisting, so recipient PHI
+  // never lands in this RLS-exempt ledger row.
+  payload Json
+
+  status    FedExWebhookEventStatus @default(PENDING)
+  attempts  Int                     @default(0)
+  lastError String?
+
+  receivedAt          DateTime  @default(now())
+  signatureVerifiedAt DateTime
+  processingStartedAt DateTime?
+  processedAt         DateTime?
+  nextAttemptAt       DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([trackingNumber, receivedAt])
+  @@index([receivedAt])
+  @@map("fedex_webhook_event")
 }
 
 // Every signature-verified Clerk webhook delivery (Svix-signed) is
@@ -1940,7 +2093,8 @@ model Invoice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lines InvoiceLine[]
+  lines    InvoiceLine[]
+  payments Payment[]
 
   @@unique([organizationId, invoiceNumber])
   @@index([organizationId, clinicId, status])
@@ -2043,6 +2197,75 @@ model PricingRule {
   @@index([organizationId, kind, status, effectiveFrom(sort: Desc)])
   @@index([organizationId, clinicId])
   @@map("pricing_rule")
+}
+
+enum PaymentKind {
+  PAYMENT
+  REFUND
+}
+
+enum PaymentMethod {
+  STRIPE
+  MANUAL
+}
+
+// Payment ledger — APPEND-ONLY record of money movements. One row
+// per settled payment or refund; the invoice's aggregate columns
+// (`amountPaidCents` / `amountDueCents`) remain the operational
+// projection, this table is the auditable source financial reports
+// sum over.
+//
+// Invariants:
+//   - Rows are IMMUTABLE. No updates, no deletes; corrections are
+//     new offsetting rows. (No `updatedAt` by design.)
+//   - `amountCents` is always POSITIVE — direction comes from
+//     `kind`, mirroring CreditInvoice's "handler owns the sign"
+//     philosophy so a UI bug can't double-flip a sign.
+//   - Only SETTLED money movements land here. Failed payment
+//     attempts and pending refunds are NOT ledger rows (the refund
+//     row is written when Stripe reports `succeeded`).
+//   - `paymentEventKey` is the idempotency anchor, same pattern as
+//     `InvoiceLine.billingEventKey`:
+//       "stripe-paid:{stripeEventId}"      (invoice.paid webhook)
+//       "stripe-refund:{stripeRefundId}"   (refund settled)
+//       "manual:{ulid}"                    (future RecordManualPayment)
+//
+// PHI: none. Stripe ids, cents, timestamps.
+model Payment {
+  id String @id @default(uuid()) @db.Uuid
+
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  clinicId       String       @db.Uuid
+  clinic         Clinic       @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  // ON DELETE RESTRICT — a payment row is the financial record; an
+  // invoice with recorded money movements can never be purged.
+  invoiceId String  @db.Uuid
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  kind        PaymentKind
+  method      PaymentMethod
+  amountCents Int
+  currency    String        @db.VarChar(3)
+
+  // Idempotency anchor (see header). Unique — concurrent webhook
+  // replays converge on a single row via P2002.
+  paymentEventKey String @unique
+
+  stripeEventId  String?
+  stripeChargeId String?
+  stripeRefundId String? @unique
+
+  // When the money actually moved (Stripe's timestamp, not ours).
+  occurredAt DateTime
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([organizationId, clinicId, occurredAt])
+  @@index([organizationId, kind, occurredAt])
+  @@index([invoiceId])
+  @@map("payment")
 }
 
 // ===========================================================================
@@ -3406,6 +3629,11 @@ model PrintJob {
   isReprint         Boolean @default(false)
   reprintReasonCode String?
 
+  // W3C trace context of the requesting command (web tier), persisted
+  // so the print-agent — a separate process polling this table — can
+  // resume the distributed trace when it claims and prints the job.
+  traceparent String?
+
   requestedByUserId String @db.Uuid
   requestedByUser   User   @relation("PrintJobRequester", fields: [requestedByUserId], references: [id], onDelete: Restrict)
 
@@ -3482,8 +3710,8 @@ model Shipment {
   // was discarded on commit and could never be printed again.
   // Non-PHI: the URL/bytes are carrier artifacts addressed by
   // tracking number; access is gated by the ops routes' RBAC.
-  labelUrl        String?
-  labelPdfBase64  String?
+  labelUrl       String?
+  labelPdfBase64 String?
 
   createdByUserId String @db.Uuid
   createdByUser   User   @relation("ShipmentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
@@ -3505,6 +3733,11 @@ model Shipment {
   // event. Authoritative history lives in `ShipmentTrackingEvent`.
   lastTrackingEventAt   DateTime?
   lastTrackingEventKind ShipmentTrackingEventKind?
+
+  // Carrier's current delivery estimate, refreshed whenever an
+  // applied tracking event carries one. Drives on-time-vs-estimate
+  // reporting and "running late" surfacing.
+  estimatedDeliveryAt DateTime?
 
   trackingEvents ShipmentTrackingEvent[]
   packagePhotos  PackagePhoto[]          @relation("PackagePhotoSourceShipment")
@@ -3539,6 +3772,14 @@ model ShipmentTrackingEvent {
   occurredAt          DateTime
   rawPayload          Json
   signatureVerifiedAt DateTime
+
+  // Structured scan location (carrier facility / delivery stop at
+  // city granularity) so "where is this package" is queryable
+  // without JSON path scans over `rawPayload`. Never copied into
+  // audit metadata or outbox payloads.
+  scanCity            String?
+  scanStateOrProvince String?
+  scanCountry         String?
 
   commandLogId String     @db.Uuid
   commandLog   CommandLog @relation("ShipmentTrackingEventCommand", fields: [commandLogId], references: [id], onDelete: Restrict)
@@ -3768,4 +4009,171 @@ model PackagePhotoUploadToken {
   @@index([organizationId, createdAt])
   @@index([organizationId, uploadedByUserId])
   @@map("package_photo_upload_token")
+}
+
+// ===========================================================================
+// 9. Platform surface (ADR-0032) — partner API keys + outbound webhooks
+// ===========================================================================
+
+enum ApiKeyStatus {
+  ACTIVE
+  REVOKED
+}
+
+// Partner API key for the public v1 API (ADR-0032). Only the SHA-256
+// (hex) hash of the opaque bearer token (`pxk_...`) is stored — the
+// raw token exists only in the HTTP response of the mint call. The
+// token is generated at the transport layer so neither command_log
+// nor the idempotency response cache ever sees the secret.
+//
+// Resolution mirrors AuthSession: unique indexed lookup by tokenHash
+// in a system-context frame, then all work runs inside the resolved
+// org's tenancy. A key acts on behalf of its creator: reads are
+// gated by `scopes` (permission codes), mutations additionally by
+// the creator's live RBAC at dispatch time.
+model ApiKey {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  /**
+   * Operator-facing label ("Acme telehealth prod"). Not secret.
+   */
+  name String
+
+  /**
+   * SHA-256 (hex) of the raw bearer token. Unique → O(1) resolution.
+   */
+  tokenHash String @unique
+
+  /**
+   * Display prefix (e.g. `pxk_3fA9`) so operators can identify a key without the secret.
+   */
+  tokenPrefix String
+
+  /**
+   * Permission codes this key may exercise (subset of the RBAC registry).
+   */
+  scopes String[]
+
+  status        ApiKeyStatus @default(ACTIVE)
+  lastUsedAt    DateTime?
+  revokedAt     DateTime?
+  revokedReason String?
+
+  createdByUserId String @db.Uuid
+  createdByUser   User   @relation("ApiKeyCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  createCommandLogId String     @db.Uuid
+  createCommandLog   CommandLog @relation("ApiKeyCreateCommand", fields: [createCommandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, status])
+  @@map("api_key")
+}
+
+enum WebhookSubscriptionStatus {
+  ACTIVE
+  DISABLED
+}
+
+// Outbound webhook subscription (ADR-0032). One row per partner
+// endpoint per org. `secretEnc` is the HMAC signing secret as a
+// `@pharmax/crypto` ciphertext envelope — plaintext is returned once
+// at creation and never stored. `eventTypes` is restricted (at the
+// command layer) to registry events with `phiSafe: true`.
+model WebhookSubscription {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  /**
+   * Partner endpoint. HTTPS-only, validated at the command layer.
+   */
+  url String
+
+  /**
+   * Envelope-encrypted HMAC-SHA-256 signing secret (`pxw_...`).
+   */
+  secretEnc Json
+
+  /**
+   * Versioned registry event names this subscription receives.
+   */
+  eventTypes String[]
+
+  description String?
+  status      WebhookSubscriptionStatus @default(ACTIVE)
+  disabledAt  DateTime?
+
+  createdByUserId String @db.Uuid
+  createdByUser   User   @relation("WebhookSubscriptionCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  createCommandLogId String     @db.Uuid
+  createCommandLog   CommandLog @relation("WebhookSubscriptionCreateCommand", fields: [createCommandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries WebhookDelivery[]
+
+  @@index([organizationId, status])
+  @@map("webhook_subscription")
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+  DEAD
+}
+
+// Outbound webhook delivery ledger (ADR-0032). One row per
+// (subscription, outbox event) — the unique pair makes fan-out
+// idempotent under outbox retries. `payload` is a registry-validated,
+// PHI-redacted snapshot so the ledger is self-contained for replay
+// and the partner-visible dead-letter view. The webhook-delivery
+// drain claims PENDING/FAILED rows with a lease and marks
+// SENT / FAILED-with-backoff / DEAD.
+model WebhookDelivery {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  subscriptionId String              @db.Uuid
+  subscription   WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  /**
+   * Source `event_outbox` row id (idempotency anchor with subscriptionId).
+   */
+  outboxEventId String @db.Uuid
+
+  eventType String
+
+  /**
+   * Registry-validated, PHI-redacted payload snapshot.
+   */
+  payload Json
+
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  lastError      String?
+  responseStatus Int?
+  nextAttemptAt  DateTime?
+  deliveredAt    DateTime?
+
+  // W3C trace context captured at fan-out (inside the worker's outbox
+  // consumer span), so the delivery drainer's attempt resumes the same
+  // distributed trace across the second DB-backed hop.
+  traceparent String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([subscriptionId, outboxEventId])
+  @@index([status, nextAttemptAt])
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([organizationId, eventType, createdAt(sort: Desc)])
+  @@map("webhook_delivery")
 }

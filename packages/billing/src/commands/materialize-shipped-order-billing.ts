@@ -48,6 +48,25 @@
 //     wired structurally; the per-line flow will adopt it when
 //     it ships.
 //
+// Supplemental fee lines (SHIPPING_FEE / RUSH_FEE):
+//   - Materialized alongside the dispense fee, in the same tx and
+//     on the same invoice. Each carries its own order-anchored
+//     `billingEventKey` (`ord-shipped-shipfee:{orderId}` /
+//     `ord-shipped-rushfee:{orderId}`).
+//   - RULE-DRIVEN ONLY — there is deliberately NO flat fallback
+//     for these kinds. An org that has not configured a
+//     SHIPPING_FEE / RUSH_FEE pricing rule keeps dispense-only
+//     invoices (the pre-fee behavior). Silently inventing a fee
+//     amount would be worse than not charging it.
+//   - RUSH_FEE applies only when the order's `priority` is not
+//     NORMAL (RUSH and EMERGENCY both bill as expedited handling);
+//     the priority is read from the order row inside the tx and
+//     stamped on the audit metadata.
+//   - A fee rule whose currency differs from the invoice currency
+//     is SKIPPED (recorded in audit metadata) — a mixed-currency
+//     invoice is unrepresentable downstream (single `currency`
+//     column, single Stripe invoice).
+//
 // Invoice number:
 //   - `INV-{YYYY-MM}-{clinicIdFirst8}` per `(organization,
 //     billing-period, clinic)`. Uniqueness is guaranteed by the
@@ -65,7 +84,7 @@
 // fields.
 
 import type { PrismaTxClient, SystemCommand, SystemHandlerResult } from "@pharmax/command-bus";
-import { InvoiceLineKind, InvoiceStatus, Prisma } from "@pharmax/database";
+import { InvoiceLineKind, InvoiceStatus, OrderPriority, Prisma } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { z } from "zod";
 
@@ -96,11 +115,26 @@ const inputSchema = z
 
 export type MaterializeShippedOrderBillingInput = z.infer<typeof inputSchema>;
 
+/** A materialized supplemental fee line (shipping / rush). */
+export interface MaterializedFeeLine {
+  readonly kind: typeof InvoiceLineKind.SHIPPING_FEE | typeof InvoiceLineKind.RUSH_FEE;
+  readonly invoiceLineId: string;
+  readonly amountCents: number;
+  /** Fee lines are rule-driven only, so the rule id is always set. */
+  readonly pricingRuleId: string;
+}
+
 export interface MaterializeShippedOrderBillingOutput {
   readonly invoiceId: string;
   readonly invoiceLineId: string;
   readonly invoiceNumber: string;
+  /** Dispense-fee line amount (the historical, always-present line). */
   readonly amountCents: number;
+  /** Supplemental fee lines materialized in the same run. Empty on
+   *  replay short-circuits and when no fee rules resolved. */
+  readonly feeLines: ReadonlyArray<MaterializedFeeLine>;
+  /** Sum of every line materialized in this run (dispense + fees). */
+  readonly totalAmountCents: number;
   /** True when an existing line was found for this orderId — handler short-circuited. */
   readonly alreadyMaterialized: boolean;
   /** True when this materialization created the invoice row (vs. appended to an existing one). */
@@ -117,6 +151,8 @@ export interface MaterializeShippedOrderBillingOutput {
  */
 export const FLAT_DISPENSE_FEE_CENTS = 5000;
 export const FLAT_DISPENSE_FEE_DESCRIPTION = "Shipped prescription order (dispense fee)";
+export const SHIPPING_FEE_DESCRIPTION = "Shipped prescription order (shipping fee)";
+export const RUSH_FEE_DESCRIPTION = "Expedited order handling (rush fee)";
 
 interface BillingPeriod {
   readonly key: string; // "2026-05"
@@ -290,6 +326,8 @@ export const MaterializeShippedOrderBilling: SystemCommand<
           invoiceLineId: existingLine.id,
           invoiceNumber: invoice?.invoiceNumber ?? "(unknown)",
           amountCents: existingLine.amountCents,
+          feeLines: [],
+          totalAmountCents: existingLine.amountCents,
           alreadyMaterialized: true,
           invoiceCreated: false,
           // The originating materialization recorded the scheme; we
@@ -367,6 +405,77 @@ export const MaterializeShippedOrderBilling: SystemCommand<
     const unitAmountCents = resolution?.unitAmountCents ?? FLAT_DISPENSE_FEE_CENTS;
     const currency = resolution?.currency ?? "usd";
 
+    // ---- Plan supplemental fee lines (shipping / rush) ----
+    // Rule-driven only — no flat fallback (see header). Rush fees
+    // require the order's priority, read inside the same tx.
+    const order = await tx.order.findUnique({
+      where: { id: input.orderId },
+      select: { priority: true },
+    });
+    const priority = order?.priority ?? OrderPriority.NORMAL;
+
+    const feeSpecs: ReadonlyArray<{
+      kind: MaterializedFeeLine["kind"];
+      billingEventKey: string;
+      description: string;
+      applicable: boolean;
+    }> = [
+      {
+        kind: InvoiceLineKind.SHIPPING_FEE,
+        billingEventKey: `ord-shipped-shipfee:${input.orderId}`,
+        description: SHIPPING_FEE_DESCRIPTION,
+        applicable: true,
+      },
+      {
+        kind: InvoiceLineKind.RUSH_FEE,
+        billingEventKey: `ord-shipped-rushfee:${input.orderId}`,
+        description: RUSH_FEE_DESCRIPTION,
+        applicable: priority !== OrderPriority.NORMAL,
+      },
+    ];
+
+    const plannedFees: Array<{
+      kind: MaterializedFeeLine["kind"];
+      billingEventKey: string;
+      description: string;
+      resolution: PricingResolution;
+    }> = [];
+    const skippedFees: Array<{ kind: string; ruleId: string; reason: string }> = [];
+
+    for (const spec of feeSpecs) {
+      if (!spec.applicable) continue;
+      const feeCandidates = await loadCandidatePricingRules(tx, {
+        organizationId: input.organizationId,
+        kind: spec.kind,
+        occurredAt: occurredAtDate,
+      });
+      const feeResolution = pickPricingRule(
+        {
+          organizationId: input.organizationId,
+          clinicId: input.clinicId,
+          productId: null,
+          kind: spec.kind,
+          occurredAt: occurredAtDate,
+        },
+        feeCandidates
+      );
+      if (feeResolution === null) continue; // no rule → no fee, by design
+      if (feeResolution.currency !== currency) {
+        skippedFees.push({
+          kind: spec.kind,
+          ruleId: feeResolution.ruleId,
+          reason: "currency-mismatch",
+        });
+        continue;
+      }
+      plannedFees.push({
+        kind: spec.kind,
+        billingEventKey: spec.billingEventKey,
+        description: spec.description,
+        resolution: feeResolution,
+      });
+    }
+
     // ---- Resolve or create the open DRAFT invoice ----
     const invoice = await resolveOrCreateOpenInvoice({
       tx,
@@ -416,6 +525,8 @@ export const MaterializeShippedOrderBilling: SystemCommand<
               invoiceLineId: winner.id,
               invoiceNumber: invoice.invoiceNumber,
               amountCents: winner.amountCents,
+              feeLines: [],
+              totalAmountCents: winner.amountCents,
               alreadyMaterialized: true,
               invoiceCreated: invoice.created,
               pricingScheme: "FLAT_V1" as const,
@@ -444,15 +555,55 @@ export const MaterializeShippedOrderBilling: SystemCommand<
       throw cause;
     }
 
+    // ---- Append the supplemental fee lines ----
+    // A P2002 here is structurally unreachable: the dispense-fee
+    // create above owns the order's key claim for this tx, so any
+    // concurrent replay already failed (and was resolved) there.
+    const feeLines: MaterializedFeeLine[] = [];
+    for (const fee of plannedFees) {
+      const feeLine = await tx.invoiceLine.create({
+        data: {
+          invoiceId: invoice.invoiceId,
+          organizationId: input.organizationId,
+          clinicId: input.clinicId,
+          orderId: input.orderId,
+          kind: fee.kind,
+          description: fee.description,
+          quantity: 1,
+          unitAmountCents: fee.resolution.unitAmountCents,
+          amountCents: fee.resolution.unitAmountCents,
+          billingEventKey: fee.billingEventKey,
+          metadata: {
+            sourceEvent: "order.shipped.v1",
+            sourceShipmentId: input.shipmentId,
+            pricingScheme: "RULE_V2",
+            pricingRuleId: fee.resolution.ruleId,
+            pricingTier: fee.resolution.tier,
+            orderPriority: priority,
+          },
+        },
+        select: { id: true },
+      });
+      feeLines.push({
+        kind: fee.kind,
+        invoiceLineId: feeLine.id,
+        amountCents: fee.resolution.unitAmountCents,
+        pricingRuleId: fee.resolution.ruleId,
+      });
+    }
+
+    const totalAmountCents =
+      unitAmountCents + feeLines.reduce((sum, line) => sum + line.amountCents, 0);
+
     // ---- Roll the invoice totals atomically ----
     // Prisma's `{ increment }` compiles to `column = column + N` —
     // safe under concurrent appends, no CAS required.
     await tx.invoice.update({
       where: { id: invoice.invoiceId },
       data: {
-        subtotalCents: { increment: unitAmountCents },
-        totalCents: { increment: unitAmountCents },
-        amountDueCents: { increment: unitAmountCents },
+        subtotalCents: { increment: totalAmountCents },
+        totalCents: { increment: totalAmountCents },
+        amountDueCents: { increment: totalAmountCents },
         version: { increment: 1 },
       },
     });
@@ -464,6 +615,8 @@ export const MaterializeShippedOrderBilling: SystemCommand<
         invoiceLineId,
         invoiceNumber: invoice.invoiceNumber,
         amountCents: unitAmountCents,
+        feeLines,
+        totalAmountCents,
         alreadyMaterialized: false,
         invoiceCreated: invoice.created,
         pricingScheme,
@@ -484,6 +637,15 @@ export const MaterializeShippedOrderBilling: SystemCommand<
           invoiceNumber: invoice.invoiceNumber,
           invoiceCreated: invoice.created,
           amountCents: unitAmountCents,
+          totalAmountCents,
+          orderPriority: priority,
+          feeLines: feeLines.map((line) => ({
+            kind: line.kind,
+            invoiceLineId: line.invoiceLineId,
+            amountCents: line.amountCents,
+            pricingRuleId: line.pricingRuleId,
+          })),
+          skippedFees,
           pricingScheme,
           pricingRuleId,
           pricingTier: resolution?.tier ?? null,
@@ -515,6 +677,30 @@ export const MaterializeShippedOrderBilling: SystemCommand<
             occurredAt: occurredAt.toISOString(),
           },
         },
+        // One event per supplemental fee line — consumers (Stripe
+        // push, budget-threshold notifications) treat every line
+        // uniformly regardless of kind.
+        ...feeLines.map((line) => ({
+          eventType: "billing.invoice_line.created.v1",
+          aggregateType: "Invoice",
+          aggregateId: invoice.invoiceId,
+          payload: {
+            organizationId: input.organizationId,
+            clinicId: input.clinicId,
+            invoiceId: invoice.invoiceId,
+            invoiceLineId: line.invoiceLineId,
+            invoiceNumber: invoice.invoiceNumber,
+            orderId: input.orderId,
+            shipmentId: input.shipmentId,
+            kind: line.kind,
+            amountCents: line.amountCents,
+            currency,
+            pricingScheme: "RULE_V2",
+            pricingRuleId: line.pricingRuleId,
+            billingPeriodKey: period.key,
+            occurredAt: occurredAt.toISOString(),
+          },
+        })),
       ],
     };
   },

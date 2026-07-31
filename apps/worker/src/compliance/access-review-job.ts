@@ -100,8 +100,9 @@ export interface QuarterlyAccessReviewLoopOptions {
   readonly lookbackDays?: number;
   /**
    * Optional probe for break-glass sessions opened in the period.
-   * Defaults to returning an empty list — the schema is not yet
-   * promoted to Prisma (see `packages/security/src/break-glass/SCHEMA.md`).
+   * Defaults to reading the `break_glass_session` table
+   * (phase5_break_glass_session migration) via `options.prisma`;
+   * tests inject a fake.
    */
   readonly listBreakGlassSessions?: (args: {
     readonly periodStart: Date;
@@ -149,7 +150,7 @@ export function createQuarterlyAccessReviewLoop(
   const lookbackDays = options.lookbackDays ?? 92;
   const now = options.now ?? (() => new Date());
   const listBreakGlassSessions =
-    options.listBreakGlassSessions ?? (async () => [] as ReadonlyArray<BreakGlassSessionLite>);
+    options.listBreakGlassSessions ?? buildPrismaBreakGlassSessionLiteSource(options.prisma);
 
   async function runOnce(at: Date): Promise<AccessReviewRunSummary> {
     const quarter = resolveCompletedQuarter(at);
@@ -352,6 +353,39 @@ export function createQuarterlyAccessReviewLoop(
       return scheduler.stop();
     },
     runOnce,
+  };
+}
+
+/**
+ * Default break-glass evidence source: every session OPENED inside
+ * the review period, projected onto the PHI-free `BreakGlassSessionLite`
+ * shape the renderer + JSONL records consume. Break-glass sessions are
+ * cross-tenant by definition, so the SAME list appears in every org's
+ * evidence pack — a bypass with the keys to everything is every
+ * tenant's business.
+ */
+function buildPrismaBreakGlassSessionLiteSource(
+  prisma: PrismaClient
+): (args: {
+  readonly periodStart: Date;
+  readonly periodEnd: Date;
+}) => Promise<ReadonlyArray<BreakGlassSessionLite>> {
+  return async (args) => {
+    const rows = await withSystemContext("compliance:access-review:list-break-glass", () =>
+      prisma.breakGlassSession.findMany({
+        where: { openedAt: { gte: args.periodStart, lt: args.periodEnd } },
+        orderBy: { openedAt: "asc" },
+      })
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      requestedByUserId: row.requestedByUserId,
+      approvedByUserId: row.approvedByUserId,
+      openedAt: row.openedAt.toISOString(),
+      closedAt: row.closedAt === null ? null : row.closedAt.toISOString(),
+      ticketUrl: row.ticketUrl,
+      resolution: row.resolution,
+    }));
   };
 }
 

@@ -89,6 +89,8 @@ export interface ListAgedInvoicesOptions {
 
 const MS_PER_DAY = 24 * 60 * 60_000;
 
+/** Keep in sync with `classifyAgingBucket` in `@pharmax/reporting`'s
+ *  invoice-aging report (domain isolation forbids sharing the code). */
 export function classifyAgingBucket(daysOverdue: number): AgingBucket {
   if (daysOverdue <= 0) return "CURRENT";
   if (daysOverdue <= 30) return "DAYS_1_30";

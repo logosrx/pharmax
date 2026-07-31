@@ -20,7 +20,7 @@ import { RoleScope } from "@pharmax/database";
 import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
 import { configureCommandBus, resetCommandBusConfigurationForTests } from "./configure.js";
-import { executeCommand } from "./execute-command.js";
+import { executeCommand, executeCommandDetailed } from "./execute-command.js";
 import { hashRequestKeyed } from "./hash.js";
 import type { Command, HandlerResult } from "./types.js";
 import {
@@ -373,6 +373,125 @@ describe("executeCommand — idempotency", () => {
       ).rejects.toMatchObject({ code: "COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH" });
     });
     expect(callsTo(prisma, "commandLog")).toHaveLength(0);
+  });
+});
+
+describe("executeCommandDetailed — replay visibility (ADR-0032 one-time secrets)", () => {
+  it("fresh execution → replayed: false, handler output returned", async () => {
+    const cmd = sampleCommand();
+    const orderId = "44444444-4444-7444-a444-444444444444";
+    const result = await withTenancyContext(ctxFor(), () =>
+      executeCommandDetailed(cmd, { orderId }, { idempotencyKey: "detailed-fresh" })
+    );
+    expect(result.replayed).toBe(false);
+    expect(result.output).toEqual({ accepted: true });
+  });
+
+  it("idempotency hit → replayed: true, cached output, handler NOT run", async () => {
+    const orderId = "44444444-4444-7444-a444-444444444444";
+    const input = { orderId };
+    prisma.setIdempotencyHit({
+      requestHash: hashRequestKeyed(input, TEST_REQUEST_HASH_KEY),
+      responsePayload: { accepted: false },
+      responseStatus: null,
+    });
+
+    let handlerCalls = 0;
+    const cmd = sampleCommand({
+      handle: async ({ input: i }) => {
+        handlerCalls += 1;
+        return {
+          output: { accepted: true },
+          audit: { action: "sample.x", resourceType: "Order", resourceId: i.orderId },
+          outboxEvents: [],
+        };
+      },
+    });
+
+    const result = await withTenancyContext(ctxFor(), () =>
+      executeCommandDetailed(cmd, input, { idempotencyKey: "detailed-replay" })
+    );
+    expect(result.replayed).toBe(true);
+    expect(result.output).toEqual({ accepted: false });
+    expect(handlerCalls).toBe(0);
+  });
+});
+
+describe("executeCommand — hashExcludeFields (transport-generated secret material)", () => {
+  // Mirrors the CreateApiKey / CreateWebhookSubscription shape: the
+  // transport layer regenerates `secret` on every attempt, so the
+  // request hash must cover only the client-controlled fields.
+  const secretSchema = z.object({ name: z.string(), secret: z.string() });
+  type SecretInput = z.infer<typeof secretSchema>;
+  function secretCommand(): Command<SecretInput, SampleOutput> {
+    return {
+      name: "SecretCommand",
+      inputSchema: secretSchema,
+      permission: PERMISSIONS.ORDERS_CREATE,
+      redactFields: ["secret"],
+      hashExcludeFields: ["secret"],
+      async handle() {
+        return {
+          output: { accepted: true },
+          audit: { action: "x", resourceType: "ApiKey", resourceId: "k-1" },
+          outboxEvents: [],
+        };
+      },
+    };
+  }
+
+  it("retry with a DIFFERENT excluded secret but same client fields → replay, not mismatch", async () => {
+    // First attempt stored a hash computed WITHOUT the secret field.
+    prisma.setIdempotencyHit({
+      requestHash: hashRequestKeyed({ name: "acme-prod" }, TEST_REQUEST_HASH_KEY),
+      responsePayload: { accepted: false },
+      responseStatus: null,
+    });
+
+    const result = await withTenancyContext(ctxFor(), () =>
+      executeCommandDetailed(
+        secretCommand(),
+        { name: "acme-prod", secret: "pxw_regenerated-on-retry" },
+        { idempotencyKey: "secret-retry-key" }
+      )
+    );
+    expect(result.replayed).toBe(true);
+    expect(result.output).toEqual({ accepted: false });
+    expect(callsTo(prisma, "commandLog")).toHaveLength(0);
+  });
+
+  it("same key but DIFFERENT client-controlled field → mismatch (guard not weakened)", async () => {
+    prisma.setIdempotencyHit({
+      requestHash: hashRequestKeyed({ name: "acme-prod" }, TEST_REQUEST_HASH_KEY),
+      responsePayload: { accepted: false },
+      responseStatus: null,
+    });
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommandDetailed(
+          secretCommand(),
+          { name: "DIFFERENT-name", secret: "pxw_whatever" },
+          { idempotencyKey: "secret-retry-key" }
+        )
+      ).rejects.toMatchObject({ code: "COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH" });
+    });
+  });
+
+  it("stores the exclusion-adjusted hash on first execution", async () => {
+    await withTenancyContext(ctxFor(), () =>
+      executeCommandDetailed(
+        secretCommand(),
+        { name: "acme-prod", secret: "pxw_first-attempt" },
+        { idempotencyKey: "secret-first-key" }
+      )
+    );
+    const stored = callsTo(prisma, "idempotencyKey", "create")[0]?.args as {
+      data: { requestHash: string };
+    };
+    expect(stored.data.requestHash).toBe(
+      hashRequestKeyed({ name: "acme-prod" }, TEST_REQUEST_HASH_KEY)
+    );
   });
 });
 

@@ -31,7 +31,7 @@ import "server-only";
 import { buildAuthConfiguration, configureAuth, createArgon2idHasher } from "@pharmax/auth";
 import { configureBilling } from "@pharmax/billing";
 import { configureCommandBus } from "@pharmax/command-bus";
-import { buildKmsAdapterFromEnv } from "@pharmax/composition";
+import { buildKmsAdapterFromEnv, createRateLimiterFromEnv } from "@pharmax/composition";
 import { configureCrypto } from "@pharmax/crypto";
 import { prisma, readReportingInOrgScope, reportingClientIsReplica } from "@pharmax/database";
 import { clock } from "@pharmax/platform-core";
@@ -498,10 +498,20 @@ async function doBootstrap(): Promise<void> {
       reason: "password hashing runs without a pepper; provision via Secrets Manager.",
     });
   }
+  // Distributed sign-in rate limiter (in front of the durable DB
+  // lockout). Redis-backed when REDIS_URL is set (shared across web
+  // instances); otherwise an in-process limiter. Fails open on Redis
+  // error so a cache blip never blocks all logins.
+  const rateLimiterHandle = createRateLimiterFromEnv({
+    redisUrl: env.REDIS_URL,
+    logger: logger.child({ component: "auth-rate-limit" }),
+  });
+
   configureAuth(
     buildAuthConfiguration({
       clock: clock.systemClock,
       hasher: createArgon2idHasher({ pepper }),
+      rateLimiter: rateLimiterHandle.rateLimiter,
       // Credential-setup link delivery (invite + reset). Dev logs the
       // link; production email send over the notifications channel is
       // the remaining notifications-slice wiring.

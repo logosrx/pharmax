@@ -42,6 +42,8 @@ export {
   breakGlassSessionExpiredError,
 } from "./break-glass/errors.js";
 
+export { PrismaBreakGlassClient } from "./break-glass/prisma-break-glass-client.js";
+
 export {
   ELEVATED_ROLE_CODES,
   INACTIVE_USER_THRESHOLD_DAYS,

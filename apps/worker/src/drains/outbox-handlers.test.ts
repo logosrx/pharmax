@@ -32,6 +32,7 @@ function fakeOrgCreatedRow(): ClaimedOutboxEventRow {
     lastError: null,
     nextAttemptAt: null,
     dispatchedAt: null,
+    traceparent: null,
     createdAt: new Date("2026-05-21T18:30:00.000Z"),
   });
 }

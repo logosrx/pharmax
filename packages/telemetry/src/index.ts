@@ -5,3 +5,10 @@ export {
 } from "./init-telemetry.js";
 export { resolveTelemetryConfigFromEnv, type TelemetryConfig } from "./resolve-config.js";
 export { getMeter } from "./get-meter.js";
+export {
+  currentTraceparent,
+  getTracer,
+  withSpan,
+  type PharmaxSpanKind,
+  type WithSpanOptions,
+} from "./tracing.js";

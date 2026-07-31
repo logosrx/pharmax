@@ -26,6 +26,7 @@ export * from "./order/index.js";
 export * from "./org/index.js";
 export * from "./organization/index.js";
 export * from "./patient/index.js";
+export * from "./platform/index.js";
 export * from "./provider/index.js";
 export * from "./reporting/index.js";
 export * from "./shipment/index.js";

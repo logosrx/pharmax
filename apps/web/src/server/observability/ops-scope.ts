@@ -42,8 +42,6 @@ export interface OpsScopeBindings {
   readonly organizationId: string;
   /** Display name — admin operator identity; PHI-safe. */
   readonly operatorDisplayName?: string;
-  /** Clerk identity id; used as a join key for support tickets. */
-  readonly clerkUserId?: string;
   /** Stable command name (e.g. "ApprovePV1", "UpdatePatient"). */
   readonly commandName?: string;
   /** Stable route (e.g. "POST /api/ops/orders/[orderId]/approve-pv1"). */
@@ -88,7 +86,6 @@ export async function withSentryOpsScope<T>(
       ...(bindings.operatorDisplayName !== undefined
         ? { displayName: bindings.operatorDisplayName }
         : {}),
-      ...(bindings.clerkUserId !== undefined ? { clerkUserId: bindings.clerkUserId } : {}),
     });
     return await fn();
   });

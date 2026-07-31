@@ -15,11 +15,11 @@
 //   1. Audit chain integrity status per org. Calls into the
 //      configured verifier port.
 //   2. Break-glass sessions opened in the last 24h. Pulls from the
-//      `break_glass_session` table (via the BreakGlassClient port,
-//      which currently still depends on the SCHEMA.md migration).
-//   3. Failed login spike (placeholder). Wired against a Clerk events
-//      port that returns an aggregate count per org; production
-//      adapter lands with the Clerk webhook handler.
+//      `break_glass_session` table (phase5_break_glass_session
+//      migration) via the worker's BreakGlassSessionProbe.
+//   3. Failed login spikes. Per-org counts over the in-house identity
+//      engine's `login_attempt` ledger (ADR-0030), reported when the
+//      window count meets the configured threshold.
 //   4. Outbox status — count of `OutboxStatus = "DEAD"` rows added
 //      in the last 24h, per org.
 //   5. Sentry error volume (placeholder). Wired against a future

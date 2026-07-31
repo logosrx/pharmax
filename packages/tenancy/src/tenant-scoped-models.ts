@@ -84,6 +84,12 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["Invoice", { kind: "organizationId" }] as const,
   ["InvoiceLine", { kind: "organizationId" }] as const,
   ["PricingRule", { kind: "organizationId" }] as const,
+  // Payment is the append-only settled-money-movement ledger
+  // (payment_ledger migration). NON-NULLABLE organizationId (rule 1);
+  // rows are written by system commands inside the resolved org's
+  // tenancy and read by finance reports — auto-scoping closes the
+  // cross-tenant leak surface for both paths.
+  ["Payment", { kind: "organizationId" }] as const,
 
   // Phase 2 — PHI domain entities. PHI columns themselves are
   // envelope-encrypted (see `@pharmax/crypto`); auto-scoping at the
@@ -187,6 +193,25 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["RecoveryCode", { kind: "organizationId" }] as const,
   ["PasswordHistory", { kind: "organizationId" }] as const,
   ["PasswordResetToken", { kind: "organizationId" }] as const,
+
+  // Platform surface (ADR-0032). All three carry a NON-NULLABLE
+  // `organizationId` (rule 1).
+  //
+  // ApiKey: resolution by tokenHash happens PRE-tenant in a
+  //   system-context frame (mirrors AuthSession); every other read
+  //   (ops key list, revoke lookup) is org-scoped and auto-filtered.
+  //
+  // WebhookSubscription: partner endpoint + event filter + encrypted
+  //   signing secret. Cross-tenant reads would leak partner
+  //   infrastructure metadata AND enable cross-org delivery — the
+  //   auto-filter closes both.
+  //
+  // WebhookDelivery: per-org delivery ledger / dead-letter view.
+  //   Fan-out inserts run in system context (worker), reads are the
+  //   org's own delivery history.
+  ["ApiKey", { kind: "organizationId" }] as const,
+  ["WebhookSubscription", { kind: "organizationId" }] as const,
+  ["WebhookDelivery", { kind: "organizationId" }] as const,
 ]);
 
 /**
@@ -218,6 +243,12 @@ export const TENANT_EXCLUDED_MODELS: ReadonlySet<string> = new Set([
   // shipment by tracking number and enters that org's tenancy to
   // execute RecordShipmentTrackingEvent.
   "EasyPostWebhookEvent",
+  // Inbound FedEx Advanced Integrated Visibility webhook events.
+  // Same reason as EasyPostWebhookEvent — the platform doesn't know
+  // which tenant a tracking event belongs to until the worker drain
+  // resolves the shipment by tracking number and enters that org's
+  // tenancy to execute RecordShipmentTrackingEvent.
+  "FedExWebhookEvent",
   // Inbound Clerk (identity) webhook events. Same reason as the two
   // above — the platform does not know which tenant a Clerk event
   // resolves to until the dispatcher (apps/web/src/server/auth/
@@ -239,6 +270,16 @@ export const TENANT_EXCLUDED_MODELS: ReadonlySet<string> = new Set([
   // (security feed, lockout checks) filter explicitly at the
   // repository layer.
   "LoginAttempt",
+  // Break-glass session envelope + per-operation ledger
+  // (@pharmax/security). Sessions open a cross-tenant
+  // `pharmax_system` context by definition, so neither table has an
+  // organizationId at all. Writes/reads happen only inside
+  // @pharmax/security's system-context frames (open/close/runAs, the
+  // nightly digest probe, the quarterly access-review evidence pack).
+  // Append-only invariants are enforced at the DB grant layer — see
+  // the phase5_break_glass_session migration.
+  "BreakGlassSession",
+  "BreakGlassAction",
 ]);
 
 /**

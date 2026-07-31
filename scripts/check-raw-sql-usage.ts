@@ -100,10 +100,15 @@ const ALLOWLIST: ReadonlySet<string> = new Set<string>([
   "apps/worker/src/drains/claim-due-report-schedules.ts",
   // EasyPost webhook-event claim drain (platform ledger, system ctx).
   "apps/worker/src/drains/claim-easypost-webhook-events.ts",
+  // FedEx AIV webhook-event claim drain (platform ledger, system ctx).
+  "apps/worker/src/drains/claim-fedex-webhook-events.ts",
   // Event-outbox claim drain — FOR UPDATE SKIP LOCKED (system ctx).
   "apps/worker/src/drains/claim-outbox-events.ts",
   // Stripe webhook-event claim drain (platform ledger, system ctx).
   "apps/worker/src/drains/claim-stripe-webhook-events.ts",
+  // Partner webhook-delivery claim drain — FOR UPDATE SKIP LOCKED
+  // across orgs (system ctx); completion writes are org-scoped.
+  "apps/worker/src/drains/claim-webhook-deliveries.ts",
   // Read-only per-org bucket-count aggregate for metrics (system ctx).
   "apps/worker/src/metrics/workflow-bucket-scraper.ts",
   // Per-org audit-chain serialization via pg_advisory_xact_lock.

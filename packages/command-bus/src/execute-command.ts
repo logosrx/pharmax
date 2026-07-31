@@ -67,7 +67,7 @@ import {
 import { FALLBACK_REQUEST_HASH_KEY, hashRequestKeyed } from "./hash.js";
 import { lookupIdempotency, storeIdempotencyInTx, type LookupResult } from "./idempotency.js";
 import { redactPayload } from "./redact.js";
-import type { Command, ExecuteOptions, PrismaTxClient } from "./types.js";
+import type { Command, ExecuteCommandResult, ExecuteOptions, PrismaTxClient } from "./types.js";
 import {
   createAuditLogInTx,
   createCommandLog,
@@ -125,6 +125,23 @@ export async function executeCommand<TInput, TOutput>(
   rawInput: unknown,
   options: ExecuteOptions
 ): Promise<TOutput> {
+  const result = await executeCommandDetailed(command, rawInput, options);
+  return result.output;
+}
+
+/**
+ * Like `executeCommand`, but the result carries a `replayed` flag so
+ * transport layers can distinguish "the handler ran now" from "this
+ * is the idempotency cache". Required whenever the route generates
+ * one-time secret material outside the command (ADR-0032): on a
+ * replay that fresh secret was never stored and MUST NOT be
+ * returned.
+ */
+export async function executeCommandDetailed<TInput, TOutput>(
+  command: Command<TInput, TOutput>,
+  rawInput: unknown,
+  options: ExecuteOptions
+): Promise<ExecuteCommandResult<TOutput>> {
   const config = getCommandBusConfiguration();
   const log = config.logger.child({ component: "command-bus", command: command.name });
   const startHrTimeNs = process.hrtime.bigint();
@@ -155,9 +172,15 @@ export async function executeCommand<TInput, TOutput>(
 
   // The request hash covers the FULL parsed input (keyed HMAC), not
   // the redacted projection — see hash.ts for why. command_log and
-  // idempotency_key still store only the REDACTED payload.
+  // idempotency_key still store only the REDACTED payload. The one
+  // narrow exception: `hashExcludeFields` drops transport-generated
+  // secret material (regenerated per HTTP attempt) so an honest
+  // retry hashes identically and replays instead of 409ing.
   const idempotencyKey = options.idempotencyKey;
-  const requestHash = hashRequestKeyed(input, resolveRequestHashKey(config, log));
+  const requestHash = hashRequestKeyed(
+    omitHashExcludedFields(input, command.hashExcludeFields),
+    resolveRequestHashKey(config, log)
+  );
 
   const replayOutcome = (payload: unknown): TOutput => {
     log.info("command replay (idempotency hit)", {
@@ -219,7 +242,7 @@ export async function executeCommand<TInput, TOutput>(
     });
   }
   if (preflight.kind === "replay") {
-    return replayOutcome(preflight.responsePayload);
+    return { output: replayOutcome(preflight.responsePayload), replayed: true };
   }
   const commandLogId = preflight.commandLogId;
 
@@ -294,7 +317,7 @@ export async function executeCommand<TInput, TOutput>(
         })
       );
       if (lookup.kind === "replay") {
-        return replayOutcome(lookup.responsePayload);
+        return { output: replayOutcome(lookup.responsePayload), replayed: true };
       }
       // Winner's tx not committed/visible yet — surface a stable 409.
       throw commandInFlightError({ commandName: command.name });
@@ -351,7 +374,25 @@ export async function executeCommand<TInput, TOutput>(
 
   // Step 20 — Side effects fire from the drainer asynchronously.
   // Nothing to do here; the outbox row is already PENDING.
-  return handlerResult.output;
+  return { output: handlerResult.output, replayed: false };
+}
+
+/**
+ * Drop `hashExcludeFields` (transport-generated secret material)
+ * from the payload before it enters the idempotency request hash.
+ * Only top-level keys, mirroring redactFields Phase 1 semantics.
+ */
+function omitHashExcludedFields(
+  input: unknown,
+  fields: ReadonlyArray<string> | undefined
+): unknown {
+  if (fields === undefined || fields.length === 0) return input;
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return input;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    if (!fields.includes(k)) out[k] = v;
+  }
+  return out;
 }
 
 // ---- Pre-flight helpers ---------------------------------------------------

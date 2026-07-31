@@ -48,7 +48,25 @@ export async function signIn(input: SignInInput): Promise<SignInResult> {
     userAgent: input.userAgent ?? null,
   } as const;
 
-  // 1. Lockout gate.
+  // 1a. Burst rate limit (per-IP + per-email) BEFORE the KDF, so a
+  // flood can't use Argon2id as a CPU-exhaustion oracle. Distributed
+  // when a Redis limiter is wired. RATE_LIMITED does NOT feed the
+  // lockout counter (it's not a credential failure).
+  const ip = input.ipAddress ?? "unknown";
+  const [ipDecision, emailDecision] = await Promise.all([
+    config.rateLimiter.hit(`signin:ip:${ip}`, config.signInRateLimit.perIp),
+    config.rateLimiter.hit(`signin:email:${email}`, config.signInRateLimit.perEmail),
+  ]);
+  if (!ipDecision.allowed || !emailDecision.allowed) {
+    await recordLoginAttempt({
+      ...attemptBase,
+      outcome: LoginOutcome.RATE_LIMITED,
+      reasonCode: "rate_limited",
+    });
+    throw invalidCredentialsError("rate_limited");
+  }
+
+  // 1b. Durable lockout gate.
   if (await isLockedOut({ emailAttempted: email, config })) {
     await recordLoginAttempt({
       ...attemptBase,

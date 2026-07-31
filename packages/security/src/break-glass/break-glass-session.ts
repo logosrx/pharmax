@@ -1,8 +1,10 @@
-// TODO(Phase 5 schema): the schema for `break_glass_session` and
-// `break_glass_action` tables is described in SCHEMA.md in this folder.
-// Until the migration lands, this module talks to a port
-// (`BreakGlassClient`) rather than the Prisma client directly so it is
-// fully testable with a fake.
+// Break-glass session lifecycle. The `break_glass_session` and
+// `break_glass_action` tables landed in the
+// `phase5_break_glass_session` migration (design notes in SCHEMA.md in
+// this folder). This module talks to a port (`BreakGlassClient`)
+// rather than the Prisma client directly so it is fully testable with
+// a fake; the production adapter is `PrismaBreakGlassClient` in
+// `prisma-break-glass-client.ts`.
 //
 // Break-glass SESSION (this module) is distinct from break-glass GRANT
 // (in `@pharmax/rbac/break-glass.ts`):

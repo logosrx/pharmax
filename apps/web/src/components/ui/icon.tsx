@@ -236,6 +236,41 @@ const ICON_PATHS = {
       <rect x="7" y="15" width="10" height="6" rx="1" />
     </>
   ),
+  products: (
+    <>
+      <rect x="7" y="6.5" width="10" height="14" rx="2" />
+      <path d="M8.5 6.5V4.5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v2" />
+      <path d="M7 11h10" />
+    </>
+  ),
+  batches: (
+    <>
+      <path d="m12 3 8.5 5L12 13 3.5 8Z" />
+      <path d="m3.5 12.5 8.5 5 8.5-5" />
+      <path d="m3.5 16.5 8.5 5 8.5-5" />
+    </>
+  ),
+  practices: (
+    <>
+      <path d="M4.5 20.5V9.5L12 4l7.5 5.5v11" />
+      <path d="M3.5 20.5h17" />
+      <path d="M12 10.5v5M9.5 13h5" />
+    </>
+  ),
+  providers: (
+    <>
+      <circle cx="9" cy="8" r="3.2" />
+      <path d="M3.5 19.5a5.5 5.5 0 0 1 11 0" />
+      <path d="M17.5 6.5v5M15 9h5" />
+    </>
+  ),
+  key: (
+    <>
+      <circle cx="8" cy="15.5" r="4.5" />
+      <path d="m11.5 12 8-8" />
+      <path d="M17 6.5 20 9.5M14.5 9l2 2" />
+    </>
+  ),
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

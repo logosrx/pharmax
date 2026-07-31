@@ -72,6 +72,16 @@ const inputSchema = z
     occurredAt: z.iso.datetime({ offset: true }),
     signatureVerifiedAt: z.iso.datetime({ offset: true }),
     rawPayload: z.record(z.string(), z.unknown()),
+    // Structured scan location (city-level carrier facility /
+    // delivery stop). Stored on the event row only — kept out of
+    // audit metadata and outbox payloads.
+    scanCity: z.string().max(64).optional(),
+    scanStateOrProvince: z.string().max(32).optional(),
+    scanCountry: z.string().max(8).optional(),
+    // Carrier's current delivery estimate as reported alongside
+    // this event. Refreshes `shipment.estimatedDeliveryAt` when the
+    // event is strictly newer than the cached one.
+    estimatedDeliveryAt: z.iso.datetime({ offset: true }).optional(),
   })
   .strict();
 
@@ -137,6 +147,9 @@ export const RecordShipmentTrackingEvent: Command<
           occurredAt,
           rawPayload: input.rawPayload as Prisma.InputJsonValue,
           signatureVerifiedAt,
+          scanCity: input.scanCity ?? null,
+          scanStateOrProvince: input.scanStateOrProvince ?? null,
+          scanCountry: input.scanCountry ?? null,
           commandLogId,
         },
       });
@@ -161,6 +174,15 @@ export const RecordShipmentTrackingEvent: Command<
       occurredAt.getTime() > shipment.lastTrackingEventAt.getTime();
     const shouldAdvanceCache = newCachedStatus !== null && isStrictlyNewer;
 
+    // The carrier's delivery estimate rides along with whichever
+    // event carries it; only a strictly-newer event may refresh the
+    // cached estimate (an out-of-order backfill must not clobber a
+    // fresher one).
+    const estimatedDeliveryUpdate =
+      input.estimatedDeliveryAt !== undefined && isStrictlyNewer
+        ? { estimatedDeliveryAt: new Date(input.estimatedDeliveryAt) }
+        : {};
+
     if (shouldAdvanceCache) {
       await tx.shipment.update({
         where: { id: shipment.id },
@@ -168,6 +190,7 @@ export const RecordShipmentTrackingEvent: Command<
           status: newCachedStatus,
           lastTrackingEventAt: occurredAt,
           lastTrackingEventKind: input.kind,
+          ...estimatedDeliveryUpdate,
         },
       });
     } else if (isStrictlyNewer) {
@@ -179,6 +202,7 @@ export const RecordShipmentTrackingEvent: Command<
         data: {
           lastTrackingEventAt: occurredAt,
           lastTrackingEventKind: input.kind,
+          ...estimatedDeliveryUpdate,
         },
       });
     }
