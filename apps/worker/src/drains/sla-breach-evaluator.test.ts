@@ -18,15 +18,13 @@ interface EscalateResult {
 }
 
 const executeCommandMock = vi.hoisted(() =>
-  vi.fn(
-    async (_cmd: unknown, _input: unknown, _options?: unknown): Promise<EscalateResult> => ({
-      orderId: "ord-1",
-      bucketId: "emergency-bucket",
-      alreadyEscalated: false,
-      previousBucketId: "fill-bucket",
-      version: 4,
-    })
-  )
+  vi.fn(async (_cmd: unknown, _input: unknown, _options?: unknown): Promise<EscalateResult> => ({
+    orderId: "ord-1",
+    bucketId: "emergency-bucket",
+    alreadyEscalated: false,
+    previousBucketId: "fill-bucket",
+    version: 4,
+  }))
 );
 
 // Partial mock: keep the real `defineCommand` (needed when

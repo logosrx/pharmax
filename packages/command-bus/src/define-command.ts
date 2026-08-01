@@ -165,8 +165,7 @@ export interface LockedOrderTarget {
  *     row by `(organizationId, code, version)`.
  */
 export type LoadPolicySpec =
-  | { readonly from: "target" }
-  | { readonly code: string; readonly version: number };
+  { readonly from: "target" } | { readonly code: string; readonly version: number };
 
 /** Resolved policy row exposed to the handler. */
 export interface LoadedPolicy {

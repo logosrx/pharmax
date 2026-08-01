@@ -175,19 +175,17 @@ export async function loadCandidatePricingRules(
   });
   // Prisma's runtime types match our narrowed shape; assert through
   // ReadonlyArray for the public type contract.
-  return rows.map(
-    (r): PricingRuleCandidate => ({
-      id: r.id,
-      clinicId: r.clinicId,
-      productId: r.productId,
-      kind: r.kind,
-      unitAmountCents: r.unitAmountCents,
-      currency: r.currency,
-      effectiveFrom: r.effectiveFrom,
-      effectiveTo: r.effectiveTo,
-      status: r.status,
-    })
-  );
+  return rows.map((r): PricingRuleCandidate => ({
+    id: r.id,
+    clinicId: r.clinicId,
+    productId: r.productId,
+    kind: r.kind,
+    unitAmountCents: r.unitAmountCents,
+    currency: r.currency,
+    effectiveFrom: r.effectiveFrom,
+    effectiveTo: r.effectiveTo,
+    status: r.status,
+  }));
 }
 
 // Re-export Prisma's narrow type so callers can build raw queries

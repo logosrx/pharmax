@@ -143,8 +143,7 @@ export interface RefundLineCandidate {
 }
 
 export type RefundBackfillPlan =
-  | { readonly kind: "row"; readonly row: PaymentLedgerRowInput }
-  | { readonly kind: "skip-pending" };
+  { readonly kind: "row"; readonly row: PaymentLedgerRowInput } | { readonly kind: "skip-pending" };
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)

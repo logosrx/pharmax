@@ -18,14 +18,7 @@ export interface StatusMeta {
 }
 
 export type WorkflowStage =
-  | "intake"
-  | "typing"
-  | "pv1"
-  | "fill"
-  | "final"
-  | "shipping"
-  | "done"
-  | "exception";
+  "intake" | "typing" | "pv1" | "fill" | "final" | "shipping" | "done" | "exception";
 
 export const STAGE_ORDER: ReadonlyArray<WorkflowStage> = [
   "intake",

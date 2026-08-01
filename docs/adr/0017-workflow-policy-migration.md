@@ -64,9 +64,9 @@ DRAFT  →  ACTIVE  →  SUPERSEDED  →  ARCHIVED
 
 Two distinct selectors, encoded in `@pharmax/workflow`:
 
-| Selector                       | Used by            | Accepts       |
+| Selector | Used by | Accepts |
 | ------------------------------ | ------------------ | ------------- | ----------- |
-| `pickPolicyForCreate`          | `CreateOrder` etc. | `ACTIVE` only |
+| `pickPolicyForCreate` | `CreateOrder` etc. | `ACTIVE` only |
 | `loadPolicy({from: "target"})` | All in-flight cmds | `ACTIVE       | SUPERSEDED` |
 
 The pure function `pickPolicyForCreate` returns `{ok, policy}` or

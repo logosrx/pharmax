@@ -15,13 +15,7 @@ import { cx } from "./cx.js";
 import { Icon, type IconName } from "./icon.js";
 
 export type ButtonVariant =
-  | "primary"
-  | "secondary"
-  | "ghost"
-  | "danger"
-  | "go"
-  | "subtle"
-  | "outline";
+  "primary" | "secondary" | "ghost" | "danger" | "go" | "subtle" | "outline";
 
 export type ButtonSize = "sm" | "md" | "lg" | "icon";
 

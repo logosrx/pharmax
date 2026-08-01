@@ -41,8 +41,7 @@ export const WORKFLOW_POLICY_NOT_ACTIVE = "WORKFLOW_POLICY_NOT_ACTIVE" as const;
 export const WORKFLOW_POLICY_NOT_FOUND_FOR_CREATE = "WORKFLOW_POLICY_NOT_FOUND_FOR_CREATE" as const;
 
 export type PolicySelectionErrorCode =
-  | typeof WORKFLOW_POLICY_NOT_ACTIVE
-  | typeof WORKFLOW_POLICY_NOT_FOUND_FOR_CREATE;
+  typeof WORKFLOW_POLICY_NOT_ACTIVE | typeof WORKFLOW_POLICY_NOT_FOUND_FOR_CREATE;
 
 /**
  * Lifecycle status of a `WorkflowPolicy` row. Mirrors the

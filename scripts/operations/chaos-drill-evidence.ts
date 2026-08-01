@@ -51,10 +51,7 @@ export interface StatusCount {
 }
 
 export type SnapshotTable =
-  | "event_outbox"
-  | "webhook_delivery"
-  | "print_job"
-  | "stripe_webhook_event";
+  "event_outbox" | "webhook_delivery" | "print_job" | "stripe_webhook_event";
 
 export interface QueueTableSnapshot {
   readonly table: SnapshotTable;

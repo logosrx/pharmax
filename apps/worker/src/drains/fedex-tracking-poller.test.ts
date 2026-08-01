@@ -543,11 +543,7 @@ describe("createFedExTrackingPoller.tick — skip paths", () => {
             completeTrackResults: [
               {
                 trackingNumber: TRACKING_NUMBER,
-                trackResults: [
-                  {
-                    /* no latestStatusDetail */
-                  },
-                ],
+                trackResults: [{/* no latestStatusDetail */}],
               },
             ],
           },

@@ -83,11 +83,7 @@ export interface ReportNumberField extends BaseField {
 }
 
 export type ReportParameterField =
-  | ReportDateField
-  | ReportEnumField
-  | ReportMultiEnumField
-  | ReportTextField
-  | ReportNumberField;
+  ReportDateField | ReportEnumField | ReportMultiEnumField | ReportTextField | ReportNumberField;
 
 /**
  * The standard `from` + `to` date-range pair every shipped report

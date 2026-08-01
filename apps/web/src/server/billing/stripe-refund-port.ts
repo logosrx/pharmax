@@ -48,10 +48,7 @@ export function buildStripeRefundPortFromEnv(): StripeRefundPort | null {
         return Object.freeze({
           stripeRefundId: refund.id,
           stripeStatus: (refund.status ?? "succeeded") as
-            | "succeeded"
-            | "pending"
-            | "failed"
-            | "canceled",
+            "succeeded" | "pending" | "failed" | "canceled",
           amountCents: refund.amount ?? request.amountCents,
         });
       } catch (cause) {

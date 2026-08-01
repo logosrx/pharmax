@@ -15,11 +15,7 @@
 import type Stripe from "stripe";
 
 export type StripeWebhookEventStatus =
-  | "PENDING"
-  | "PROCESSING"
-  | "SUCCEEDED"
-  | "FAILED"
-  | "IGNORED";
+  "PENDING" | "PROCESSING" | "SUCCEEDED" | "FAILED" | "IGNORED";
 
 export interface StripeWebhookEventRecord {
   readonly id: string;

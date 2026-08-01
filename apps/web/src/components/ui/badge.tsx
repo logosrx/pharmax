@@ -11,14 +11,7 @@ import { cx } from "./cx.js";
 import { Icon, type IconName } from "./icon.js";
 
 export type Tone =
-  | "neutral"
-  | "brand"
-  | "success"
-  | "warning"
-  | "danger"
-  | "info"
-  | "violet"
-  | "cyan";
+  "neutral" | "brand" | "success" | "warning" | "danger" | "info" | "violet" | "cyan";
 
 const TONES: Record<Tone, string> = {
   neutral: "border-line-strong bg-surface-2 text-muted",

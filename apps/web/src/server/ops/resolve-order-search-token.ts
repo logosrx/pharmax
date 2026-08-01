@@ -29,8 +29,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const VIAL_BARCODE_RE = /^PX:([0-9a-f-]{36})$/i;
 
 export type ResolvedOrderSearchToken =
-  | { readonly kind: "order-id"; readonly orderId: string }
-  | { readonly kind: "not-found" };
+  { readonly kind: "order-id"; readonly orderId: string } | { readonly kind: "not-found" };
 
 export async function resolveOrderSearchToken(input: {
   readonly organizationId: string;
