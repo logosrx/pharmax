@@ -459,6 +459,12 @@ resource "aws_ecs_task_definition" "print_agent" {
         { name = "AWS_REGION", value = var.aws_region },
         { name = "AWS_KMS_APP_KEY_ID", value = var.data_kms_key_alias },
         { name = "AWS_KMS_DATA_KEY_ID", value = var.data_kms_key_alias },
+        # Required by the print-agent production boot guard alongside the
+        # data key (barcode blind-index verification uses the search CMK).
+        # The IAM grant landed with "grant print-agent KMS search"
+        # (9a78bbf); this env var is the missing half — without it the
+        # task crash-loops at boot.
+        { name = "AWS_KMS_SEARCH_KEY_ID", value = var.search_kms_key_alias },
         # Trust the Amazon RDS CA bundle baked into the image so Prisma 7's
         # verify-full TLS to RDS (force_ssl=1) succeeds (see Dockerfile).
         { name = "NODE_EXTRA_CA_CERTS", value = "/etc/pki/rds/global-bundle.pem" },
