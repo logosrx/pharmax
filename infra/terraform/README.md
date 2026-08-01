@@ -45,6 +45,8 @@ infra/terraform/
 │   ├── iam/                 ← per-service task roles, least-privilege
 │   ├── iam-github-oidc-apply/ ← OIDC role for the gated terraform-apply
 │   │                          workflow (trust scoped to GH Environments)
+│   ├── iam-github-oidc-drill/ ← read-only OIDC role for the quarterly
+│   │                          restore-drill preflight (2 describes)
 │   ├── kms/                 ← eight CMKs (rds / docs / audit-archive /
 │   │                          secrets / data / search / asymm-sign / logs)
 │   ├── network/             ← VPC + 3 subnet tiers + NAT + flow logs
@@ -143,7 +145,7 @@ For the full first-time-deployment procedure — bootstrap, OIDC role
 setup, plan review, post-apply secrets backfill, rollback — see
 [`docs/operations/production-deployment.md`](../../docs/operations/production-deployment.md).
 
-Two GitHub workflows automate the parts that can be automated:
+Three GitHub workflows automate the parts that can be automated:
 
 - [`.github/workflows/terraform-ci.yml`](../../.github/workflows/terraform-ci.yml)
   — runs `fmt-check + validate + tflint` (the three no-credential
@@ -156,6 +158,13 @@ Two GitHub workflows automate the parts that can be automated:
   (drift) opens a `infra/drift`-labeled GitHub issue with the plan
   tail. The workflow gracefully no-ops when the `AWS_DRIFT_ROLE_ARN`
   repository variable is unset (forks, pre-bootstrap repos).
+- [`.github/workflows/restore-drill.yml`](../../.github/workflows/restore-drill.yml)
+  — quarterly DR drill reminder plus, when
+  `enable_restore_drill_role = true` has been applied and the
+  `AWS_DRILL_ROLE_ARN` / `DRILL_SOURCE_CLUSTER_ID` / `DRILL_KMS_ALIAS`
+  repository variables are set, an automated read-only preflight
+  (backup-retention window + `LatestRestorableTime` + CMK health)
+  attached to the drill issue. Role: `modules/iam-github-oidc-drill`.
 
 Production `terraform apply` can run two ways:
 

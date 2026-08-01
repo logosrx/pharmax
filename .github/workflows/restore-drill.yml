@@ -26,12 +26,23 @@
 # AWS access (optional preflight only):
 #
 #   Assumes an IAM role via GitHub Actions OIDC, exposed as the repo
-#   variable `AWS_DRILL_ROLE_ARN`. The role needs ONLY read-only
-#   describes: `rds:Describe*`, `kms:DescribeKey`, `kms:ListAliases`,
-#   `backup:Describe*` / `backup:List*`. NO restore / create / delete —
-#   the actual restore is operator-driven. If the variable (or the
-#   `DRILL_SOURCE_CLUSTER_ID` / `DRILL_KMS_ALIAS` vars) are unset, the
-#   preflight job no-ops and only the reminder issue is posted.
+#   variable `AWS_DRILL_ROLE_ARN`. The role is provisioned by
+#   `infra/terraform/modules/iam-github-oidc-drill` (enable with
+#   `enable_restore_drill_role = true` in the working directory that owns
+#   the source cluster) and holds exactly the two read-only calls the
+#   preflight makes: `rds:DescribeDBClusters` on the source cluster and
+#   `kms:DescribeKey` on its storage CMK. NO restore / create / delete —
+#   the actual restore is operator-driven.
+#
+#   Setup (one-time, three repo variables — see
+#   docs/operations/production-deployment.md § 2.5):
+#
+#     AWS_DRILL_ROLE_ARN      = terraform output restore_drill_role_arn
+#     DRILL_SOURCE_CLUSTER_ID = terraform output restore_drill_source_cluster_id
+#     DRILL_KMS_ALIAS         = terraform output restore_drill_kms_alias
+#
+#   If any of the three is unset, the preflight job no-ops and only the
+#   reminder issue is posted (so forks and pre-bootstrap repos stay green).
 
 name: restore-drill
 
@@ -77,6 +88,7 @@ jobs:
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "::notice::AWS_DRILL_ROLE_ARN / DRILL_SOURCE_CLUSTER_ID / DRILL_KMS_ALIAS not all set."
             echo "::notice::Skipping the read-only preflight; only the reminder issue will be posted."
+            echo "::notice::To enable it: apply infra/terraform with enable_restore_drill_role = true, then set the three repo variables from the restore_drill_* outputs (docs/operations/production-deployment.md section 2.5)."
           fi
 
   preflight:
@@ -171,7 +183,7 @@ jobs:
 
             let preflightLine;
             if (preflightResult === 'skipped') {
-              preflightLine = '- Automated preflight: **skipped** (no read-only OIDC role configured — set `AWS_DRILL_ROLE_ARN`, `DRILL_SOURCE_CLUSTER_ID`, `DRILL_KMS_ALIAS`).';
+              preflightLine = '- Automated preflight: **skipped** — the read-only OIDC role is not configured. Apply `infra/terraform` with `enable_restore_drill_role = true`, then set `AWS_DRILL_ROLE_ARN`, `DRILL_SOURCE_CLUSTER_ID`, `DRILL_KMS_ALIAS` from the `restore_drill_*` outputs (docs/operations/production-deployment.md § 2.5). Run the `pnpm drill:preflight` checklist item manually this quarter.';
             } else if (preflightOutcome === 'pass') {
               preflightLine = '- Automated preflight: **PASS** — backups confirmed restorable to a recent point in time.';
             } else {

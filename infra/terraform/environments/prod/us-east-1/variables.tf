@@ -272,3 +272,26 @@ variable "tfapply_oidc_provider_arn" {
   type    = string
   default = ""
 }
+
+# ---- Restore-drill preflight role (GitHub Actions OIDC) ----------------------
+
+variable "enable_restore_drill_role" {
+  type    = bool
+  default = false
+}
+variable "drill_github_repository" {
+  type    = string
+  default = ""
+}
+variable "drill_github_ref" {
+  type    = string
+  default = "refs/heads/main"
+}
+variable "drill_create_oidc_provider" {
+  type    = bool
+  default = false
+}
+variable "drill_oidc_provider_arn" {
+  type    = string
+  default = ""
+}

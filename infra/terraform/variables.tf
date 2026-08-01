@@ -699,3 +699,38 @@ variable "tfapply_oidc_provider_arn" {
   type        = string
   default     = ""
 }
+
+# ---- Restore-drill preflight role (GitHub Actions OIDC) ---------------------
+# Read-only role assumed by .github/workflows/restore-drill.yml — surface its
+# ARN as the repo variable AWS_DRILL_ROLE_ARN. Enable only in the working
+# directory that owns the cluster the quarterly drill restores FROM.
+
+variable "enable_restore_drill_role" {
+  description = "Provision the read-only GitHub Actions OIDC role for the restore-drill workflow's preflight phase. Without it the workflow posts 'Automated preflight: skipped' every quarter."
+  type        = bool
+  default     = false
+}
+
+variable "drill_github_repository" {
+  description = "GitHub repository ('owner/repo') trusted to assume the drill preflight role. Required when enable_restore_drill_role = true."
+  type        = string
+  default     = ""
+}
+
+variable "drill_github_ref" {
+  description = "Git ref the restore-drill workflow runs on. Scheduled runs always use the default branch, so this is refs/heads/main unless the default branch is renamed."
+  type        = string
+  default     = "refs/heads/main"
+}
+
+variable "drill_create_oidc_provider" {
+  description = "Create the account-level GitHub OIDC provider in the drill-role module. Usually false — the cicd-deploy module owns it when enabled in the same working directory (the root composition passes its ARN through automatically)."
+  type        = bool
+  default     = false
+}
+
+variable "drill_oidc_provider_arn" {
+  description = "Explicit ARN of an existing GitHub OIDC provider. When empty, falls back to the cicd-deploy module's provider (if enabled here), else the module must create one (drill_create_oidc_provider = true)."
+  type        = string
+  default     = ""
+}

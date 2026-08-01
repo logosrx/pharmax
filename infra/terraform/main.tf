@@ -451,6 +451,37 @@ module "terraform_apply_role" {
 }
 
 # -----------------------------------------------------------------------------
+# Restore-drill preflight role — GitHub Actions OIDC role for the read-only
+# preflight phase of the quarterly DR drill (.github/workflows/restore-drill.yml).
+# Optional (off by default); enable in the working directory that owns the
+# cluster the drill restores FROM (prod primary). Permissions are exactly
+# rds:DescribeDBClusters on that cluster + kms:DescribeKey on its CMK — the
+# destructive drill phases stay operator-driven.
+# -----------------------------------------------------------------------------
+
+module "restore_drill_role" {
+  count  = var.enable_restore_drill_role ? 1 : 0
+  source = "./modules/iam-github-oidc-drill"
+
+  name_prefix = local.name_prefix
+
+  github_repository = var.drill_github_repository
+  github_ref        = var.drill_github_ref
+
+  source_cluster_arns = [module.rds.cluster_arn]
+  kms_key_arns        = [module.kms.rds_key_arn]
+
+  # Same provider resolution as the apply role: explicit ARN wins, else re-use
+  # the provider the cicd-deploy module owns in this working directory.
+  create_oidc_provider = var.drill_create_oidc_provider
+  oidc_provider_arn = var.drill_oidc_provider_arn != "" ? var.drill_oidc_provider_arn : try(
+    module.cicd_deploy[0].oidc_provider_arn, ""
+  )
+
+  tags = local.common_tags
+}
+
+# -----------------------------------------------------------------------------
 # CloudWatch — alarms + dashboard.
 # -----------------------------------------------------------------------------
 

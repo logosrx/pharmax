@@ -66,6 +66,12 @@ output "cicd_github_oidc_provider_arn" { value = module.stack.cicd_github_oidc_p
 output "terraform_apply_role_arn" { value = module.stack.terraform_apply_role_arn }
 output "terraform_plan_role_arn" { value = module.stack.terraform_plan_role_arn }
 
+# ---- Restore-drill preflight role --------------------------------------------
+# The three repository variables .github/workflows/restore-drill.yml gates on.
+output "restore_drill_role_arn" { value = module.stack.restore_drill_role_arn }
+output "restore_drill_source_cluster_id" { value = module.stack.restore_drill_source_cluster_id }
+output "restore_drill_kms_alias" { value = module.stack.restore_drill_kms_alias }
+
 # ---- Aurora Global Database -------------------------------------------------
 output "rds_cluster_arn" { value = module.stack.rds_cluster_arn }
 output "rds_global_cluster_id" { value = module.stack.rds_global_cluster_id }

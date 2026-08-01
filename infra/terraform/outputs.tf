@@ -326,3 +326,27 @@ output "terraform_apply_role_arn" {
   description = "ARN of the GitHub Actions terraform-apply role (null unless enable_terraform_apply_role = true). Set as the AWS_APPLY_ROLE_ARN_PROD (or _STAGING) repository variable."
   value       = try(module.terraform_apply_role[0].apply_role_arn, null)
 }
+
+# ---- Restore-drill preflight role -------------------------------------------
+#
+# The three values below are the three repository variables the restore-drill
+# workflow gates on. Read them together after an apply:
+#
+#   terraform output restore_drill_role_arn
+#   terraform output restore_drill_source_cluster_id
+#   terraform output restore_drill_kms_alias
+
+output "restore_drill_role_arn" {
+  description = "ARN of the read-only restore-drill preflight role (null unless enable_restore_drill_role = true). Set as the AWS_DRILL_ROLE_ARN repository variable."
+  value       = try(module.restore_drill_role[0].role_arn, null)
+}
+
+output "restore_drill_source_cluster_id" {
+  description = "Aurora cluster the quarterly drill restores FROM. Set as the DRILL_SOURCE_CLUSTER_ID repository variable."
+  value       = module.rds.cluster_id
+}
+
+output "restore_drill_kms_alias" {
+  description = "Alias of the CMK encrypting the source cluster's storage. Set as the DRILL_KMS_ALIAS repository variable."
+  value       = module.kms.rds_key_alias
+}

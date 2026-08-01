@@ -38,6 +38,16 @@ tear the restored cluster down. The live primary is never touched.
 
 ## 0. Pre-flight
 
+> **Automated.** The quarterly
+> [`restore-drill.yml`](../../.github/workflows/restore-drill.yml)
+> workflow opens the drill ticket on the 1st of each quarter and — when
+> the read-only OIDC role is configured
+> ([production-deployment.md § 2.5](./production-deployment.md#25-create-the-restore-drill-preflight-role))
+> — runs the `preflight` phase below for you, attaching PASS/FAIL and
+> the evidence artifact to the ticket. When the ticket says
+> `Automated preflight: skipped`, the role isn't wired up yet and the
+> checks in this section are entirely manual for that quarter.
+
 - [ ] Open the quarterly drill ticket (template at the bottom of this
       file). Assign the drill captain and one observer.
 - [ ] Snapshot the in-flight scheduled date. The drill MUST land within

@@ -94,19 +94,20 @@ durable (encrypted backup, password manager attachment, etc.).
 
 ## 2. One-time per account: GitHub Actions OIDC roles
 
-Two workflows authenticate to AWS via GitHub Actions OIDC (NOT
+Three workflows authenticate to AWS via GitHub Actions OIDC (NOT
 long-lived AWS access keys):
 
-| Workflow                                                             | Role variable                                            | Permissions                                             | When it runs                                          |
-| -------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------- |
-| [`terraform-drift.yml`](../../.github/workflows/terraform-drift.yml) | `AWS_DRIFT_ROLE_ARN`                                     | READ-ONLY — `Describe*` / `Get*` / `List*` only         | Daily schedule + `workflow_dispatch`                  |
-| [`terraform-apply.yml`](../../.github/workflows/terraform-apply.yml) | `AWS_APPLY_ROLE_ARN_STAGING` / `AWS_APPLY_ROLE_ARN_PROD` | WRITE — the IAM the modules need (creates/updates/etc.) | `workflow_dispatch` only, gated by GitHub Environment |
+| Workflow                                                             | Role variable                                            | Permissions                                                      | When it runs                                          |
+| -------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------- |
+| [`terraform-drift.yml`](../../.github/workflows/terraform-drift.yml) | `AWS_DRIFT_ROLE_ARN`                                     | READ-ONLY — `Describe*` / `Get*` / `List*` only                  | Daily schedule + `workflow_dispatch`                  |
+| [`terraform-apply.yml`](../../.github/workflows/terraform-apply.yml) | `AWS_APPLY_ROLE_ARN_STAGING` / `AWS_APPLY_ROLE_ARN_PROD` | WRITE — the IAM the modules need (creates/updates/etc.)          | `workflow_dispatch` only, gated by GitHub Environment |
+| [`restore-drill.yml`](../../.github/workflows/restore-drill.yml)     | `AWS_DRILL_ROLE_ARN`                                     | READ-ONLY — `rds:DescribeDBClusters` + `kms:DescribeKey`, 2 ARNs | Quarterly schedule + `workflow_dispatch`              |
 
-The two roles MUST be separate. The drift role runs unattended every
-day; keeping it read-only means a hypothetical token compromise
-cannot mutate AWS. The apply role is more powerful but only assumable
-inside the gated `terraform-apply-<env-region>` GitHub Environment,
-which requires a human reviewer to click Approve.
+The roles MUST be separate. The drift and drill roles run unattended;
+keeping them read-only means a hypothetical token compromise cannot
+mutate AWS. The apply role is more powerful but only assumable inside
+the gated `terraform-apply-<env-region>` GitHub Environment, which
+requires a human reviewer to click Approve.
 
 ### 2.1 Configure the OIDC trust relationship
 
@@ -304,6 +305,67 @@ No environment secrets are needed — the role ARN is a repo variable
 (not a secret) per § 2.2 / § 2.3, and the AWS resources the apply
 role touches (Secrets Manager values, KMS keys) are read at AWS-API
 time using the role's permissions.
+
+### 2.5 Create the restore-drill preflight role
+
+The quarterly [`restore-drill.yml`](../../.github/workflows/restore-drill.yml)
+workflow always opens its tracking issue, but it can only run the
+drill's automated **preflight** — "are the backups restorable to a
+recent point in time?" — when a read-only role is configured. Until
+then every quarterly issue reads `Automated preflight: skipped` and
+restorability is only discovered on drill day.
+
+Provision it in the working directory that owns the Aurora cluster the
+drill restores FROM (prod / us-east-1), via
+[`infra/terraform/modules/iam-github-oidc-drill/`](../../infra/terraform/modules/iam-github-oidc-drill/main.tf):
+
+```hcl
+# environments/prod/us-east-1/terraform.tfvars
+enable_restore_drill_role = true
+drill_github_repository   = "<owner>/<repo>"
+```
+
+The role is deliberately tiny — exactly the two API calls the preflight
+phase of `scripts/operations/run-restore-drill.ts` makes:
+
+- `rds:DescribeDBClusters`, resource-scoped to the source cluster ARN
+  (backup retention + `LatestRestorableTime`).
+- `kms:DescribeKey`, resource-scoped to the storage CMK ARN (key state
+  - usage + spec).
+
+There is no data-plane permission of any kind, so the role cannot read
+PHI even if its token leaked. Trust is exact-match on **both** the
+branch-ref subject claim and the `job_workflow_ref` claim, so only the
+drill workflow file — not any other workflow on the default branch —
+can assume it.
+
+After `terraform apply`, set three repository variables (Settings →
+Secrets and variables → Actions → Variables):
+
+| Repository variable       | Value                                              |
+| ------------------------- | -------------------------------------------------- |
+| `AWS_DRILL_ROLE_ARN`      | `terraform output restore_drill_role_arn`          |
+| `DRILL_SOURCE_CLUSTER_ID` | `terraform output restore_drill_source_cluster_id` |
+| `DRILL_KMS_ALIAS`         | `terraform output restore_drill_kms_alias`         |
+
+Or, from the env-region working directory:
+
+```bash
+gh variable set AWS_DRILL_ROLE_ARN      --body "$(terraform output -raw restore_drill_role_arn)"
+gh variable set DRILL_SOURCE_CLUSTER_ID --body "$(terraform output -raw restore_drill_source_cluster_id)"
+gh variable set DRILL_KMS_ALIAS         --body "$(terraform output -raw restore_drill_kms_alias)"
+```
+
+`DRILL_AWS_REGION` is optional (defaults to `us-east-1`); set it if the
+source cluster lives elsewhere. Verify with
+`gh workflow run restore-drill.yml` — the run should show a green
+`Read-only restore preflight` job and the issue comment should read
+`Automated preflight: PASS`. All three variables are ARNs / identifiers,
+not credentials, so they are variables rather than secrets.
+
+A preflight FAILURE is a real finding: it means the backup retention
+window or the CMK would not support a restore, and it fails the
+workflow loudly rather than waiting for drill day.
 
 ---
 

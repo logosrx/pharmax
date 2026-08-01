@@ -115,4 +115,13 @@ module "stack" {
   tfapply_github_environments  = var.tfapply_github_environments
   tfapply_create_oidc_provider = var.tfapply_create_oidc_provider
   tfapply_oidc_provider_arn    = var.tfapply_oidc_provider_arn
+
+  # Restore-drill preflight role (GitHub Actions OIDC). This stack owns the
+  # Aurora cluster the quarterly DR drill restores FROM, so the read-only
+  # preflight role belongs here.
+  enable_restore_drill_role  = var.enable_restore_drill_role
+  drill_github_repository    = var.drill_github_repository
+  drill_github_ref           = var.drill_github_ref
+  drill_create_oidc_provider = var.drill_create_oidc_provider
+  drill_oidc_provider_arn    = var.drill_oidc_provider_arn
 }

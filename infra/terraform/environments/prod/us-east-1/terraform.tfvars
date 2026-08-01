@@ -94,6 +94,14 @@ enable_cicd_deploy_role = true
 cicd_github_repository  = "logosrx/pharmax"
 cicd_github_environment = "production"
 
+# ---- Restore-drill preflight role (GitHub Actions OIDC) ---------------------
+# Read-only role for the quarterly DR drill's automated preflight. Scoped to
+# rds:DescribeDBClusters on this stack's Aurora cluster + kms:DescribeKey on
+# its storage CMK — nothing else. After apply, set the three repo variables
+# from `terraform output restore_drill_*` (see docs/operations/production-deployment.md § 2.5).
+enable_restore_drill_role = true
+drill_github_repository   = "logosrx/pharmax"
+
 tags = {
   CostCenter = "engineering-prod"
 }

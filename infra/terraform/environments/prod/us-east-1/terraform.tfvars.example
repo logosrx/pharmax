@@ -131,6 +131,18 @@ tfapply_github_environments = [
   "terraform-apply-prod-uw2",
 ]
 
+# ---- Restore-drill preflight role (GitHub Actions OIDC) ---------------------
+# Enable here — this stack owns the Aurora cluster the quarterly DR drill
+# restores FROM. Read-only (rds:DescribeDBClusters + kms:DescribeKey on this
+# stack's cluster and CMK only). After apply, set THREE repository variables
+# from the outputs so .github/workflows/restore-drill.yml stops posting
+# "Automated preflight: skipped":
+#   AWS_DRILL_ROLE_ARN       = terraform output restore_drill_role_arn
+#   DRILL_SOURCE_CLUSTER_ID  = terraform output restore_drill_source_cluster_id
+#   DRILL_KMS_ALIAS          = terraform output restore_drill_kms_alias
+enable_restore_drill_role = true
+drill_github_repository   = "REPLACE_owner/repo"
+
 tags = {
   CostCenter = "engineering-prod"
 }
