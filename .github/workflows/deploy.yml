@@ -194,6 +194,92 @@ jobs:
           container-name: ${{ matrix.service }}
           image: ${{ steps.ecr.outputs.registry }}/${{ needs.preflight.outputs.name_prefix }}/${{ matrix.service }}:${{ needs.preflight.outputs.image_tag }}
 
+      # Secret-value preflight.
+      #
+      # Terraform creates every Secrets Manager entry as an EMPTY container
+      # — modules/secrets/main.tf deliberately leaves `initial_values` unset
+      # so secret material never lands in Terraform state — and the
+      # operator populates it out-of-band. That leaves a window where a
+      # secret's ARN resolves but carries no AWSCURRENT version, and a task
+      # referencing it dies at ResourceInitializationError BEFORE the
+      # container starts. ECS surfaces that only as an ~11-minute
+      # circuit-breaker rollback whose message names neither the secret nor
+      # the cause (this is exactly what broke the 2026-08-01 worker rollout
+      # on `database-url-system`, applied 84 minutes before it was
+      # populated). DescribeSecret answers the same question in seconds and
+      # names the offending secret.
+      #
+      # DescribeSecret returns version ids + staging labels only, never
+      # `SecretString` — so this check cannot read a production credential.
+      # See the SecretsPreflightDescribeOnly statement in
+      # infra/terraform/modules/cicd-deploy/main.tf.
+      - name: Preflight — do the referenced secrets have values?
+        env:
+          TASK_DEFINITION: ${{ steps.render.outputs.task-definition }}
+        run: |
+          set -uo pipefail
+
+          arns=$(jq -r '[.containerDefinitions[]?.secrets[]?.valueFrom] | unique | .[]' \
+                   "$TASK_DEFINITION")
+          if [ -z "$arns" ]; then
+            echo "Task definition references no secrets; nothing to check."
+            exit 0
+          fi
+
+          err=$(mktemp)
+          missing=()
+          checked=0
+
+          while IFS= read -r raw; do
+            [ -n "$raw" ] || continue
+            case "$raw" in
+              arn:aws:secretsmanager:*) ;;
+              *) echo "Skipping (not a Secrets Manager ARN): $raw"; continue ;;
+            esac
+
+            # A bare secret ARN is exactly 7 colon-delimited fields; ECS
+            # also accepts an optional :json-key:version-stage:version-id
+            # suffix, which DescribeSecret would reject.
+            arn=$(printf '%s' "$raw" | cut -d: -f1-7)
+
+            if ! stages=$(aws secretsmanager describe-secret \
+                            --secret-id "$arn" \
+                            --query 'VersionIdsToStages' \
+                            --output json 2>"$err"); then
+              # Graceful no-op when the IAM change below has not been
+              # applied yet, so this workflow is safe to merge first.
+              if grep -qi 'AccessDenied' "$err"; then
+                echo "::warning::Deploy role lacks secretsmanager:DescribeSecret; skipping the secret-value preflight."
+                echo "::warning::Apply infra/terraform/modules/cicd-deploy to turn this check on."
+                exit 0
+              fi
+              echo "::error::Could not describe $arn"
+              cat "$err"
+              exit 1
+            fi
+
+            if printf '%s' "$stages" \
+                 | jq -e '[( . // {} ) | .[]? | .[]?] | any(. == "AWSCURRENT")' >/dev/null; then
+              checked=$((checked + 1))
+            else
+              missing+=("$arn")
+            fi
+          done <<< "$arns"
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            for m in "${missing[@]}"; do
+              echo "::error::Secret exists but has no AWSCURRENT value: $m"
+            done
+            echo "::error::ECS cannot start a task whose secrets have no value — every placement"
+            echo "::error::fails with ResourceInitializationError and the circuit breaker rolls back."
+            echo "::error::Populate each secret, then re-run this workflow:"
+            echo "::error::  aws secretsmanager put-secret-value --secret-id <name> --secret-string <value>"
+            echo "::error::See docs/security/secrets-management.md."
+            exit 1
+          fi
+
+          echo "All $checked referenced secret(s) have an AWSCURRENT value."
+
       - name: Deploy to ECS service
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
