@@ -229,6 +229,7 @@ jobs:
           err=$(mktemp)
           missing=()
           checked=0
+          describe_denied=0
 
           while IFS= read -r raw; do
             [ -n "$raw" ] || continue
@@ -248,10 +249,11 @@ jobs:
                             --output json 2>"$err"); then
               # Graceful no-op when the IAM change below has not been
               # applied yet, so this workflow is safe to merge first.
+              # Stop probing, but still report anything already found
+              # empty — a denial must never launder a known-bad secret.
               if grep -qi 'AccessDenied' "$err"; then
-                echo "::warning::Deploy role lacks secretsmanager:DescribeSecret; skipping the secret-value preflight."
-                echo "::warning::Apply infra/terraform/modules/cicd-deploy to turn this check on."
-                exit 0
+                describe_denied=1
+                break
               fi
               echo "::error::Could not describe $arn"
               cat "$err"
@@ -276,6 +278,12 @@ jobs:
             echo "::error::  aws secretsmanager put-secret-value --secret-id <name> --secret-string <value>"
             echo "::error::See docs/security/secrets-management.md."
             exit 1
+          fi
+
+          if [ "$describe_denied" -eq 1 ]; then
+            echo "::warning::Deploy role lacks secretsmanager:DescribeSecret; secret-value preflight is incomplete ($checked verified before the denial)."
+            echo "::warning::Apply infra/terraform/modules/cicd-deploy to turn this check on."
+            exit 0
           fi
 
           echo "All $checked referenced secret(s) have an AWSCURRENT value."
