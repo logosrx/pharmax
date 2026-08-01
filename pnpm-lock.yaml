@@ -243,6 +243,9 @@ importers:
       '@pharmax/labels':
         specifier: workspace:*
         version: link:../../packages/labels
+      '@pharmax/orders':
+        specifier: workspace:*
+        version: link:../../packages/orders
       '@pharmax/orgs':
         specifier: workspace:*
         version: link:../../packages/orgs

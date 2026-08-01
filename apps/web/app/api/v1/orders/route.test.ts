@@ -10,7 +10,14 @@ const resolveApiKeyMock = vi.hoisted(() => vi.fn());
 const rateLimitHitMock = vi.hoisted(() => vi.fn());
 const readInOrgScopeMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@pharmax/partner-api", () => ({ resolveApiKey: resolveApiKeyMock }));
+vi.mock("@pharmax/partner-api", () => ({
+  resolveApiKey: resolveApiKeyMock,
+  getApiKeyQuota: () => ({
+    tier: "STANDARD",
+    burst: { limit: 120, windowMs: 60_000 },
+    daily: { limit: 50_000, windowMs: 86_400_000 },
+  }),
+}));
 
 vi.mock("@pharmax/composition", () => ({
   createRateLimiterFromEnv: () => ({ rateLimiter: { hit: rateLimitHitMock } }),
@@ -20,14 +27,28 @@ vi.mock("@pharmax/database", () => ({
   prisma: {},
   readInOrgScope: readInOrgScopeMock,
   OrderStatus: { RECEIVED: "RECEIVED", SHIPPED: "SHIPPED" },
+  IntakeSourceKind: { API: "API" },
 }));
 
 vi.mock("@pharmax/rbac", () => ({
-  PERMISSIONS: { ORDERS_READ: "orders.read" },
+  PERMISSIONS: { ORDERS_READ: "orders.read", ORDERS_CREATE: "orders.create" },
 }));
 
 vi.mock("@pharmax/tenancy", () => ({
   buildTenancyContext: (input: unknown) => input,
+  withTenancyContext: (_ctx: unknown, fn: () => unknown) => fn(),
+}));
+
+// The POST intake path dispatches CreateOrder through the command
+// bus; mocking both keeps @pharmax/orders' heavy transitive graph
+// (workflow policy, SLA interval recorder, …) out of this route-layer
+// suite, same as the other v1 route tests.
+const executeCommandDetailedMock = vi.hoisted(() => vi.fn());
+vi.mock("@pharmax/command-bus", () => ({
+  executeCommandDetailed: executeCommandDetailedMock,
+}));
+vi.mock("@pharmax/orders", () => ({
+  CreateOrder: { name: "CreateOrder" },
 }));
 
 vi.mock("@/server/env", () => ({ env: { REDIS_URL: undefined } }));
@@ -46,6 +67,7 @@ const RESOLVED_KEY = {
   name: "Acme prod",
   tokenPrefix: "pxk_abcd",
   scopes: ["orders.read"],
+  quotaTier: "STANDARD",
   createdByUserId: "user-1",
 } as const;
 

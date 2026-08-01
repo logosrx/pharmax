@@ -21,6 +21,11 @@ const FRESH_SECRET = vi.hoisted(() => `pxw_${"s".repeat(43)}`);
 vi.mock("@pharmax/partner-api", () => ({
   resolveApiKey: resolveApiKeyMock,
   CreateWebhookSubscription: { name: "CreateWebhookSubscription" },
+  getApiKeyQuota: () => ({
+    tier: "STANDARD",
+    burst: { limit: 120, windowMs: 60_000 },
+    daily: { limit: 50_000, windowMs: 86_400_000 },
+  }),
   generateWebhookSecret: () => FRESH_SECRET,
   listWebhookEligibleEventTypes: () => [
     "order.shipped.v1",
@@ -68,6 +73,7 @@ const RESOLVED_KEY = {
   name: "Acme prod",
   tokenPrefix: "pxk_abcd",
   scopes: ["webhooks.manage"],
+  quotaTier: "STANDARD",
   createdByUserId: "user-1",
 } as const;
 

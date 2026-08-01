@@ -17,3 +17,7 @@ export {
   PlatformWebhookSubscriptionRevokedV1,
   type PlatformWebhookSubscriptionRevokedV1Payload,
 } from "./webhook-subscription-revoked-v1.js";
+export {
+  PlatformWebhookSubscriptionSecretRotatedV1,
+  type PlatformWebhookSubscriptionSecretRotatedV1Payload,
+} from "./webhook-subscription-secret-rotated-v1.js";

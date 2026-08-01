@@ -179,6 +179,18 @@ const NAV: ReadonlyArray<GroupSpec> = [
         requires: PERMISSIONS.ROLES_MANAGE,
       },
       {
+        href: "/ops/admin/api-keys",
+        label: "API keys",
+        icon: "key",
+        requires: PERMISSIONS.API_KEYS_MANAGE,
+      },
+      {
+        href: "/ops/admin/webhooks",
+        label: "Webhooks",
+        icon: "externalLink",
+        requires: PERMISSIONS.WEBHOOKS_MANAGE,
+      },
+      {
         href: "/ops/admin/patients",
         label: "Patients",
         icon: "patients",

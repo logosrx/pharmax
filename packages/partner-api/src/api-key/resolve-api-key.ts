@@ -12,7 +12,7 @@
 //
 // PHI: none. Key metadata only.
 
-import type { PrismaClient } from "@pharmax/database";
+import type { ApiKeyQuotaTier, PrismaClient } from "@pharmax/database";
 import {
   applySystemSessionGuc,
   withSystemContext,
@@ -36,6 +36,8 @@ export interface ResolvedApiKey {
   readonly name: string;
   readonly tokenPrefix: string;
   readonly scopes: ReadonlyArray<string>;
+  /** Named quota tier — resolved to actual limits via `getApiKeyQuota`. */
+  readonly quotaTier: ApiKeyQuotaTier;
   /** The operator the key acts on behalf of (its minter). */
   readonly createdByUserId: string;
 }
@@ -72,6 +74,7 @@ export async function resolveApiKey(input: {
           name: true,
           tokenPrefix: true,
           scopes: true,
+          quotaTier: true,
           status: true,
           lastUsedAt: true,
           createdByUserId: true,
@@ -109,6 +112,7 @@ export async function resolveApiKey(input: {
       name: row.name,
       tokenPrefix: row.tokenPrefix,
       scopes: Object.freeze([...row.scopes]),
+      quotaTier: row.quotaTier,
       createdByUserId: row.createdByUserId,
     }),
   });

@@ -16,6 +16,7 @@ interface FakeKeyRow {
   tokenHash: string;
   tokenPrefix: string;
   scopes: string[];
+  quotaTier: "STANDARD" | "ELEVATED";
   status: "ACTIVE" | "REVOKED";
   lastUsedAt: Date | null;
   createdByUserId: string;
@@ -54,6 +55,7 @@ function makeRow(overrides: Partial<FakeKeyRow> & { tokenHash: string }): FakeKe
     name: "Test key",
     tokenPrefix: "pxk_abcd",
     scopes: ["orders.read"],
+    quotaTier: "STANDARD",
     status: "ACTIVE",
     lastUsedAt: null,
     createdByUserId: "33333333-3333-4333-8333-333333333333",
@@ -97,6 +99,7 @@ describe("resolveApiKey", () => {
     const row = makeRow({
       tokenHash: generated.tokenHash,
       scopes: ["orders.read", "webhooks.manage"],
+      quotaTier: "ELEVATED",
     });
     const { client } = createFakeClient([row]);
 
@@ -106,6 +109,7 @@ describe("resolveApiKey", () => {
       expect(result.key.apiKeyId).toBe(row.id);
       expect(result.key.organizationId).toBe(row.organizationId);
       expect(result.key.scopes).toEqual(["orders.read", "webhooks.manage"]);
+      expect(result.key.quotaTier).toBe("ELEVATED");
       expect(result.key.createdByUserId).toBe(row.createdByUserId);
     }
   });

@@ -33,6 +33,7 @@ export {
   Prisma,
   PrismaClient,
   // Enums (re-exported for ergonomic value-side usage in commands/seeds)
+  ApiKeyQuotaTier,
   ApiKeyStatus,
   AuthSessionRevokeReason,
   BucketKind,

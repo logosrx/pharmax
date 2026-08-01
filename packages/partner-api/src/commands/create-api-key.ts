@@ -15,7 +15,7 @@
 // PHI: none.
 
 import type { Command, HandlerResult } from "@pharmax/command-bus";
-import { Prisma } from "@pharmax/database";
+import { ApiKeyQuotaTier, Prisma } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { isPermissionCode, PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
@@ -35,6 +35,12 @@ const inputSchema = z
     tokenPrefix: z.string().min(4).max(16),
     /** Permission codes the key may exercise. MUST be non-empty. */
     scopes: z.array(z.string().trim().min(1).max(128)).min(1).max(200),
+    /**
+     * Named quota tier (ADR-0032). Defaults to STANDARD; ELEVATED is
+     * granted per partner agreement. The tier's numbers live in
+     * `api-key/quota.ts`, not on the row.
+     */
+    quotaTier: z.enum(ApiKeyQuotaTier).default(ApiKeyQuotaTier.STANDARD),
   })
   .strict();
 
@@ -45,6 +51,7 @@ export interface CreateApiKeyOutput {
   readonly name: string;
   readonly tokenPrefix: string;
   readonly scopes: ReadonlyArray<string>;
+  readonly quotaTier: ApiKeyQuotaTier;
 }
 
 export const CreateApiKey: Command<CreateApiKeyInput, CreateApiKeyOutput> = {
@@ -82,6 +89,7 @@ export const CreateApiKey: Command<CreateApiKeyInput, CreateApiKeyOutput> = {
           tokenHash: input.tokenHash,
           tokenPrefix: input.tokenPrefix,
           scopes,
+          quotaTier: input.quotaTier,
           createdByUserId: ctx.actor.userId,
           createCommandLogId: commandLogId,
         },
@@ -107,6 +115,7 @@ export const CreateApiKey: Command<CreateApiKeyInput, CreateApiKeyOutput> = {
         name: input.name,
         tokenPrefix: input.tokenPrefix,
         scopes: Object.freeze(scopes),
+        quotaTier: input.quotaTier,
       }),
       audit: {
         action: "platform.api_key.created",
@@ -116,6 +125,7 @@ export const CreateApiKey: Command<CreateApiKeyInput, CreateApiKeyOutput> = {
           name: input.name,
           tokenPrefix: input.tokenPrefix,
           scopes,
+          quotaTier: input.quotaTier,
           commandLogId,
         },
       },
@@ -130,6 +140,7 @@ export const CreateApiKey: Command<CreateApiKeyInput, CreateApiKeyOutput> = {
             name: input.name,
             tokenPrefix: input.tokenPrefix,
             scopes,
+            quotaTier: input.quotaTier,
             createdByUserId: ctx.actor.userId,
             occurredAt: new Date().toISOString(),
           },

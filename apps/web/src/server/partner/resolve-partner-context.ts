@@ -4,10 +4,17 @@
 // does it act in, and is it allowed to do what it's asking?". Flow:
 //
 //   1. Read `Authorization: Bearer pxk_...`. Malformed / absent ⇒ 401.
-//   2. Per-key rate limit (Redis-backed when REDIS_URL is set,
-//      in-process otherwise; fails open on limiter error).
-//   3. `resolveApiKey` — system-context hash lookup. Not found /
+//   2. `resolveApiKey` — system-context hash lookup. Not found /
 //      revoked ⇒ 401 (indistinguishable to the caller by design).
+//   3. Per-key quota-tier enforcement (Redis-backed when REDIS_URL is
+//      set, in-process otherwise; fails open on limiter error). Two
+//      windows per the key's tier (`getApiKeyQuota`):
+//        - burst (per-minute) ⇒ 429 RATE_LIMITED — transient, back
+//          off `Retry-After` seconds and continue;
+//        - daily quota ⇒ 429 QUOTA_EXCEEDED — the integration is
+//          over its tier; upgrade or wait for the window to reset.
+//      The daily counter only counts requests that pass the burst
+//      gate, so a spike being shaped doesn't also burn quota.
 //   4. Build the org's `TenancyContext` with the key's minter as the
 //      acting user; all downstream reads/dispatches run inside it.
 //
@@ -20,7 +27,7 @@
 
 import "server-only";
 
-import { resolveApiKey, type ResolvedApiKey } from "@pharmax/partner-api";
+import { getApiKeyQuota, resolveApiKey, type ResolvedApiKey } from "@pharmax/partner-api";
 import { createRateLimiterFromEnv } from "@pharmax/composition";
 import { prisma } from "@pharmax/database";
 import { ids } from "@pharmax/platform-core";
@@ -29,9 +36,6 @@ import { NextResponse } from "next/server";
 
 import { env } from "../env.js";
 import { logger } from "../logger.js";
-
-/** Rolling per-key limit for the whole v1 surface (ADR-0032 P0). */
-const PARTNER_RATE_LIMIT = Object.freeze({ limit: 120, windowMs: 60_000 });
 
 const rateLimiterHandle = createRateLimiterFromEnv({
   redisUrl: env.REDIS_URL,
@@ -89,18 +93,43 @@ export async function resolvePartnerContext(
     });
   }
 
-  const limit = await rateLimiterHandle.rateLimiter.hit(
-    `partner-api:${resolved.key.apiKeyId}`,
-    PARTNER_RATE_LIMIT
+  const quota = getApiKeyQuota(resolved.key.quotaTier);
+
+  const burst = await rateLimiterHandle.rateLimiter.hit(
+    `partner-api:burst:${resolved.key.apiKeyId}`,
+    quota.burst
   );
-  if (!limit.allowed) {
+  if (!burst.allowed) {
     return Object.freeze({
       ok: false,
       response: partnerJsonError({
         status: 429,
         code: "RATE_LIMITED",
-        message: "Rate limit exceeded for this API key.",
-        headers: { "retry-after": String(Math.ceil(limit.retryAfterMs / 1000)) },
+        message: `Rate limit exceeded for this API key (${quota.burst.limit} requests/minute on the ${resolved.key.quotaTier} tier).`,
+        headers: { "retry-after": String(Math.ceil(burst.retryAfterMs / 1000)) },
+      }),
+    });
+  }
+
+  // Only requests that pass the burst gate consume daily quota — a
+  // spike being shaped shouldn't also burn the partner's allowance.
+  const daily = await rateLimiterHandle.rateLimiter.hit(
+    `partner-api:daily:${resolved.key.apiKeyId}`,
+    quota.daily
+  );
+  if (!daily.allowed) {
+    logger.warn("partner_api.quota_exceeded", {
+      tokenPrefix: resolved.key.tokenPrefix,
+      organizationId: resolved.key.organizationId,
+      quotaTier: resolved.key.quotaTier,
+    });
+    return Object.freeze({
+      ok: false,
+      response: partnerJsonError({
+        status: 429,
+        code: "QUOTA_EXCEEDED",
+        message: `Daily quota exceeded for this API key (${quota.daily.limit} requests/day on the ${resolved.key.quotaTier} tier). Wait for the window to reset or contact the pharmacy to raise the tier.`,
+        headers: { "retry-after": String(Math.ceil(daily.retryAfterMs / 1000)) },
       }),
     });
   }

@@ -23,7 +23,12 @@
 // PHI: none.
 
 import { executeCommandDetailed } from "@pharmax/command-bus";
-import { CreateApiKey, generateApiKeyToken } from "@pharmax/partner-api";
+import {
+  API_KEY_QUOTA_TIER_NAMES,
+  CreateApiKey,
+  generateApiKeyToken,
+  isApiKeyQuotaTier,
+} from "@pharmax/partner-api";
 import { errors, ids } from "@pharmax/platform-core";
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
 import { NextResponse } from "next/server";
@@ -94,6 +99,15 @@ export async function POST(request: Request): Promise<Response> {
   if (scopes === null || scopes.length === 0) {
     return jsonError(400, "SCOPES_REQUIRED", "scopes must be a non-empty array.");
   }
+  // Optional named quota tier (ADR-0032); omitted ⇒ STANDARD.
+  const rawTier = body["quotaTier"];
+  if (rawTier !== undefined && !isApiKeyQuotaTier(rawTier)) {
+    return jsonError(
+      400,
+      "QUOTA_TIER_INVALID",
+      `quotaTier must be one of: ${API_KEY_QUOTA_TIER_NAMES.join(", ")}.`
+    );
+  }
 
   // The raw token exists only in this stack frame and the response.
   const generated = generateApiKeyToken();
@@ -121,6 +135,7 @@ export async function POST(request: Request): Promise<Response> {
               tokenHash: generated.tokenHash,
               tokenPrefix: generated.tokenPrefix,
               scopes,
+              ...(rawTier !== undefined ? { quotaTier: rawTier } : {}),
             },
             // Caller-owned retry boundary, namespaced per operator so
             // two operators reusing the same header value never
@@ -148,6 +163,7 @@ export async function POST(request: Request): Promise<Response> {
                 name: output.name,
                 tokenPrefix: output.tokenPrefix,
                 scopes: output.scopes,
+                quotaTier: output.quotaTier,
                 // Only available on FIRST creation. Revoke + re-mint
                 // if the original response was lost.
                 token: null,
@@ -169,6 +185,7 @@ export async function POST(request: Request): Promise<Response> {
               name: output.name,
               tokenPrefix: output.tokenPrefix,
               scopes: output.scopes,
+              quotaTier: output.quotaTier,
               // Shown exactly once; not recoverable after this response.
               token: generated.token,
             },

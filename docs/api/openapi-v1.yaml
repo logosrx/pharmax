@@ -15,10 +15,23 @@ info:
     any time. Unknown, malformed, and revoked keys all yield the same
     401 — the API never confirms whether a revoked key was once valid.
 
-    ## Rate limiting
-    120 requests per rolling 60 seconds per API key across the whole
-    v1 surface. 429 responses include a `Retry-After` header
-    (seconds).
+    ## Rate limiting and quotas
+    Every API key belongs to a named quota tier with two independent
+    ceilings enforced across the whole v1 surface:
+
+    | Tier     | Burst rate  | Daily quota      |
+    |----------|-------------|------------------|
+    | STANDARD | 120 req/min | 50,000 req/day   |
+    | ELEVATED | 600 req/min | 250,000 req/day  |
+
+    Exceeding the burst rate yields `429` with `error.code:
+    RATE_LIMITED` — a transient condition; wait `Retry-After` seconds
+    and continue. Exceeding the daily quota yields `429` with
+    `error.code: QUOTA_EXCEEDED` — the integration is over its tier;
+    wait for the window to reset (`Retry-After`, seconds) or ask the
+    pharmacy to move the key to a higher tier. Requests rejected by
+    the burst gate do not consume daily quota. New keys default to
+    STANDARD; ELEVATED is granted per partner agreement.
 
     ## Idempotency
     Every mutation (POST/DELETE) requires an `Idempotency-Key` header
@@ -99,6 +112,109 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/ScopeDenied" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      operationId: createOrder
+      tags: [Orders]
+      summary: Submit an order (intake)
+      description: |
+        Order intake. The order enters the workflow at `RECEIVED` and
+        is subject to every platform invariant (clinic/site linkage,
+        patient and prescription ownership, workflow policy, SLA
+        timers). Requires the `orders.create` scope and an
+        `Idempotency-Key` header.
+
+        `intakeSourceKind` is set by the platform (always `API` on
+        this endpoint) and must not be supplied.
+
+        All references (`clinicId`, `siteId`, `patientId`,
+        `lines[].prescriptionId`) must identify existing records in
+        your organization; patient demographics and prescription
+        content are provisioned out-of-band and never cross this
+        surface.
+
+        Retrying with the same `Idempotency-Key` returns the original
+        order as a 200 with `meta.idempotentReplay: true` — no
+        duplicate order is created.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clinicId, siteId, patientId, lines]
+              properties:
+                clinicId:
+                  type: string
+                  format: uuid
+                siteId:
+                  type: string
+                  format: uuid
+                patientId:
+                  type: string
+                  format: uuid
+                externalOrderNumber:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                  description: |
+                    Optional clinic-assigned order number. Must not
+                    carry PHI.
+                intakeSourceRefId:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                  description: |
+                    Optional upstream identifier (e.g. an encounter
+                    or batch-row id). Must not carry PHI.
+                priority:
+                  type: string
+                  enum: [NORMAL, RUSH, EMERGENCY]
+                  default: NORMAL
+                lines:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  items:
+                    type: object
+                    required: [prescriptionId, quantityToFill, daysSupplyToFill]
+                    properties:
+                      prescriptionId:
+                        type: string
+                        format: uuid
+                      quantityToFill:
+                        type: number
+                        exclusiveMinimum: 0
+                      daysSupplyToFill:
+                        type: integer
+                        minimum: 1
+      responses:
+        "201":
+          description: Order created at `RECEIVED`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrderCreated" }
+        "200":
+          description: Idempotent replay of a previous submission.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrderCreated" }
+                  meta:
+                    type: object
+                    properties:
+                      idempotentReplay: { type: boolean, enum: [true] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ScopeDenied" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
   /orders/{orderId}:
@@ -270,6 +386,69 @@ paths:
         "422": { $ref: "#/components/responses/Unprocessable" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
+  /webhook-subscriptions/{subscriptionId}/rotate-secret:
+    post:
+      operationId: rotateWebhookSubscriptionSecret
+      tags: [Webhook Subscriptions]
+      summary: Rotate a subscription's signing secret
+      description: |
+        Replaces the HMAC signing secret in place. The 200 response
+        contains the NEW `secret` exactly once — store it
+        immediately; it cannot be retrieved again.
+
+        Cut-over is immediate and single-secret: every delivery
+        attempt after this call — including retries of previously
+        failed deliveries — is signed with the new secret. Install
+        the new secret on your receiver as soon as you receive it.
+
+        Only `ACTIVE` subscriptions can be rotated; a disabled
+        subscription must be replaced with a new one. Requires the
+        `webhooks.manage` scope and an `Idempotency-Key` header.
+
+        Retrying with the same `Idempotency-Key` returns a 200 with
+        `secret: null` and `meta.idempotentReplay: true` — the secret
+        stored by the ORIGINAL attempt remains active and is not
+        re-disclosed. If the first response was lost, rotate again
+        with a new `Idempotency-Key`.
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: |
+            Secret rotated (`secret` shown once) — or an idempotent
+            replay (`secret: null`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      subscriptionId: { type: string, format: uuid }
+                      url: { type: string, format: uri }
+                      rotatedAt: { type: string, format: date-time }
+                      secret:
+                        type: [string, "null"]
+                        description: |
+                          The new `pxw_` signing secret. Present only
+                          on the first response for a given
+                          `Idempotency-Key`; `null` on replays.
+                  meta:
+                    type: object
+                    properties:
+                      idempotentReplay: { type: boolean, enum: [true] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ScopeDenied" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
   /webhook-deliveries:
     get:
       operationId: listWebhookDeliveries
@@ -351,7 +530,11 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     RateLimited:
-      description: Per-key rate limit exceeded. See `Retry-After`.
+      description: >-
+        Per-key limit exceeded. `error.code` distinguishes the burst
+        rate (`RATE_LIMITED` — transient, back off `Retry-After`
+        seconds) from the daily tier quota (`QUOTA_EXCEEDED` — wait
+        for the window to reset or upgrade the key's tier).
       headers:
         Retry-After:
           schema: { type: integer }
@@ -402,6 +585,17 @@ components:
     WebhookDeliveryStatus:
       type: string
       enum: [PENDING, SENT, FAILED, DEAD]
+
+    OrderCreated:
+      type: object
+      description: Result of a successful intake submission.
+      properties:
+        orderId: { type: string, format: uuid }
+        orderLineIds:
+          type: array
+          items: { type: string, format: uuid }
+        currentStatus: { type: string, enum: [RECEIVED] }
+        version: { type: integer, enum: [0] }
 
     OrderSummary:
       type: object

@@ -9,7 +9,14 @@ const resolveApiKeyMock = vi.hoisted(() => vi.fn());
 const rateLimitHitMock = vi.hoisted(() => vi.fn());
 const readInOrgScopeMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@pharmax/partner-api", () => ({ resolveApiKey: resolveApiKeyMock }));
+vi.mock("@pharmax/partner-api", () => ({
+  resolveApiKey: resolveApiKeyMock,
+  getApiKeyQuota: () => ({
+    tier: "STANDARD",
+    burst: { limit: 120, windowMs: 60_000 },
+    daily: { limit: 50_000, windowMs: 86_400_000 },
+  }),
+}));
 
 vi.mock("@pharmax/composition", () => ({
   createRateLimiterFromEnv: () => ({ rateLimiter: { hit: rateLimitHitMock } }),
@@ -45,6 +52,7 @@ const RESOLVED_KEY = {
   name: "Acme prod",
   tokenPrefix: "pxk_abcd",
   scopes: ["webhooks.manage"],
+  quotaTier: "STANDARD",
   createdByUserId: "user-1",
 } as const;
 

@@ -74,11 +74,15 @@ infra/terraform/**/backend.tf
 !infra/terraform/**/backend.tf.example
 !infra/terraform/**/terraform.tfvars.example
 !infra/terraform/backend.tf.example
-# Env-region tfvars ARE committed: the terraform-apply workflow's CI plan
-# job needs them, and they carry sizing/domains/feature flags only —
-# NEVER secrets (those live in Secrets Manager; see the no-secrets-in-code
-# policy). backend.tf stays operator-local (state-bucket coords).
+# Env-region tfvars AND backend.tf ARE committed: the terraform-apply
+# workflow's CI plan job needs both — tfvars carry sizing/domains/feature
+# flags, backend.tf carries state-bucket coordinates (bucket/lock-table
+# names + KMS ARN). Neither holds secrets (those live in Secrets Manager;
+# see the no-secrets-in-code policy). Without a committed backend.tf the
+# CI plan inits an EMPTY local state and plans the whole stack from
+# scratch (caught by the expected_changes gate on the first real run).
 !infra/terraform/environments/*/*/terraform.tfvars
+!infra/terraform/environments/*/*/backend.tf
 
 # DR-drill evidence is operator-local, never committed (see docs/soc2/evidence-inventory.md)
 evidence/

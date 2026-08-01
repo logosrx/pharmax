@@ -21,6 +21,11 @@ const payloadSchema = z
     tokenPrefix: z.string().min(4).max(16),
     /** Permission codes the key may exercise. */
     scopes: z.array(z.string().min(1).max(128)).max(200),
+    /**
+     * Named quota tier (ADR-0032). Optional because events emitted
+     * before tiers existed have no tier — absent means STANDARD.
+     */
+    quotaTier: z.enum(["STANDARD", "ELEVATED"]).optional(),
     createdByUserId: z.uuid(),
     occurredAt: z.iso.datetime({ offset: true }),
   })

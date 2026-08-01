@@ -4056,6 +4056,14 @@ model ApiKey {
    */
   scopes String[]
 
+  /**
+   * Named quota tier (ADR-0032). The tier's actual numbers (burst
+   * rate + daily quota) live in code (`@pharmax/partner-api`
+   * API_KEY_QUOTA_TIERS) so they can change without a migration;
+   * the row only records WHICH tier the key was minted into.
+   */
+  quotaTier ApiKeyQuotaTier @default(STANDARD)
+
   status        ApiKeyStatus @default(ACTIVE)
   lastUsedAt    DateTime?
   revokedAt     DateTime?
@@ -4072,6 +4080,15 @@ model ApiKey {
 
   @@index([organizationId, status])
   @@map("api_key")
+}
+
+// Named per-key quota tier (ADR-0032). STANDARD is the default for
+// every minted key; ELEVATED is granted per partner agreement. The
+// numbers behind each tier (burst per-minute limit + sustained daily
+// quota) are code-owned in `@pharmax/partner-api`.
+enum ApiKeyQuotaTier {
+  STANDARD
+  ELEVATED
 }
 
 enum WebhookSubscriptionStatus {

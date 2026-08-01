@@ -15,6 +15,15 @@ export {
 } from "./api-key/token.js";
 
 export {
+  API_KEY_QUOTA_TIERS,
+  API_KEY_QUOTA_TIER_NAMES,
+  getApiKeyQuota,
+  isApiKeyQuotaTier,
+  type ApiKeyQuota,
+  type ApiKeyQuotaRule,
+} from "./api-key/quota.js";
+
+export {
   resolveApiKey,
   RESOLVE_API_KEY_MALFORMED,
   RESOLVE_API_KEY_NOT_FOUND,
@@ -58,6 +67,14 @@ export {
 } from "./commands/revoke-webhook-subscription.js";
 
 export {
+  RotateWebhookSubscriptionSecret,
+  ROTATE_WEBHOOK_SUBSCRIPTION_SECRET_NOT_FOUND,
+  ROTATE_WEBHOOK_SUBSCRIPTION_SECRET_DISABLED,
+  type RotateWebhookSubscriptionSecretInput,
+  type RotateWebhookSubscriptionSecretOutput,
+} from "./commands/rotate-webhook-subscription-secret.js";
+
+export {
   WEBHOOK_ELIGIBLE_EVENT_TYPES,
   isWebhookEligibleEventType,
   listWebhookEligibleEventTypes,
@@ -92,6 +109,7 @@ import * as createApiKeyModule from "./commands/create-api-key.js";
 import * as revokeApiKeyModule from "./commands/revoke-api-key.js";
 import * as createWebhookSubscriptionModule from "./commands/create-webhook-subscription.js";
 import * as revokeWebhookSubscriptionModule from "./commands/revoke-webhook-subscription.js";
+import * as rotateWebhookSubscriptionSecretModule from "./commands/rotate-webhook-subscription-secret.js";
 
 export const partnerApi = {
   commands: {
@@ -99,5 +117,7 @@ export const partnerApi = {
     RevokeApiKey: revokeApiKeyModule.RevokeApiKey,
     CreateWebhookSubscription: createWebhookSubscriptionModule.CreateWebhookSubscription,
     RevokeWebhookSubscription: revokeWebhookSubscriptionModule.RevokeWebhookSubscription,
+    RotateWebhookSubscriptionSecret:
+      rotateWebhookSubscriptionSecretModule.RotateWebhookSubscriptionSecret,
   },
 } as const;

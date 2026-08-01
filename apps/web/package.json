@@ -19,6 +19,7 @@
     "@pharmax/database": "workspace:*",
     "@pharmax/fill": "workspace:*",
     "@pharmax/labels": "workspace:*",
+    "@pharmax/orders": "workspace:*",
     "@pharmax/orgs": "workspace:*",
     "@pharmax/partner-api": "workspace:*",
     "@pharmax/package-capture": "workspace:*",

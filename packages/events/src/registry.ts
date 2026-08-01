@@ -97,6 +97,7 @@ import { PlatformApiKeyCreatedV1 } from "./events/platform/api-key-created-v1.js
 import { PlatformApiKeyRevokedV1 } from "./events/platform/api-key-revoked-v1.js";
 import { PlatformWebhookSubscriptionCreatedV1 } from "./events/platform/webhook-subscription-created-v1.js";
 import { PlatformWebhookSubscriptionRevokedV1 } from "./events/platform/webhook-subscription-revoked-v1.js";
+import { PlatformWebhookSubscriptionSecretRotatedV1 } from "./events/platform/webhook-subscription-secret-rotated-v1.js";
 
 // ---- patient -------------------------------------------------------------
 import { PatientCryptoShreddedV1 } from "./events/patient/crypto-shredded-v1.js";
@@ -210,6 +211,7 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   PlatformApiKeyRevokedV1,
   PlatformWebhookSubscriptionCreatedV1,
   PlatformWebhookSubscriptionRevokedV1,
+  PlatformWebhookSubscriptionSecretRotatedV1,
   // patient
   PatientCryptoShreddedV1,
   PatientRegisteredV1,

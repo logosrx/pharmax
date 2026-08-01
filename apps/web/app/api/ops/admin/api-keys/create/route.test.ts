@@ -26,6 +26,8 @@ vi.mock("@pharmax/command-bus", () => ({
 vi.mock("@pharmax/partner-api", () => ({
   CreateApiKey: { name: "CreateApiKey" },
   generateApiKeyToken: () => GENERATED,
+  API_KEY_QUOTA_TIER_NAMES: ["STANDARD", "ELEVATED"],
+  isApiKeyQuotaTier: (v: unknown) => v === "STANDARD" || v === "ELEVATED",
 }));
 
 vi.mock("@pharmax/tenancy", () => ({
@@ -90,6 +92,7 @@ const COMMAND_OUTPUT = {
   name: VALID_BODY.name,
   tokenPrefix: GENERATED.tokenPrefix,
   scopes: VALID_BODY.scopes,
+  quotaTier: "STANDARD",
 };
 
 beforeEach(() => {
@@ -140,6 +143,52 @@ describe("POST /api/ops/admin/api-keys/create", () => {
     );
     expect(noScopes.status).toBe(400);
     expect((await noScopes.json()).error.code).toBe("SCOPES_REQUIRED");
+  });
+
+  it("400s an unknown quotaTier before any command dispatch", async () => {
+    const res = await POST(
+      request({
+        idempotencyKey: "mint-attempt-1",
+        body: { ...VALID_BODY, quotaTier: "PLATINUM" },
+      })
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("QUOTA_TIER_INVALID");
+    expect(executeCommandDetailedMock).not.toHaveBeenCalled();
+  });
+
+  it("passes a valid quotaTier through to the command and echoes it in the response", async () => {
+    executeCommandDetailedMock.mockResolvedValue({
+      output: { ...COMMAND_OUTPUT, quotaTier: "ELEVATED" },
+      replayed: false,
+    });
+
+    const res = await POST(
+      request({
+        idempotencyKey: "mint-attempt-1",
+        body: { ...VALID_BODY, quotaTier: "ELEVATED" },
+      })
+    );
+    expect(res.status).toBe(201);
+    expect((await res.json()).data.quotaTier).toBe("ELEVATED");
+
+    const [, input] = executeCommandDetailedMock.mock.calls[0] as [
+      unknown,
+      Record<string, unknown>,
+    ];
+    expect(input["quotaTier"]).toBe("ELEVATED");
+  });
+
+  it("omits quotaTier from the command input when the body omits it (command defaults STANDARD)", async () => {
+    executeCommandDetailedMock.mockResolvedValue({ output: COMMAND_OUTPUT, replayed: false });
+
+    await POST(request({ idempotencyKey: "mint-attempt-1", body: VALID_BODY }));
+
+    const [, input] = executeCommandDetailedMock.mock.calls[0] as [
+      unknown,
+      Record<string, unknown>,
+    ];
+    expect("quotaTier" in input).toBe(false);
   });
 
   it("201s a FIRST mint: token shown once, idempotency key = operator + header (NOT the token hash)", async () => {

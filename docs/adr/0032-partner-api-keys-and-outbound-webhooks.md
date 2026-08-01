@@ -99,6 +99,62 @@ attempt, two bus-level accommodations exist:
   developer portal UI. Each lands as its own increment on this
   foundation.
 
+> **Amendment (2026-07-31):** three of the deferred increments have
+> landed on this foundation:
+>
+> - **Order intake** — `POST /api/v1/orders` dispatches the existing
+>   `CreateOrder` command under the `orders.create` scope.
+>   `intakeSourceKind` is forced to `API` at the transport (a client
+>   claim of intake provenance is rejected, not coerced). All
+>   workflow invariants stay in the command.
+> - **Secret rotation** — `RotateWebhookSubscriptionSecret` re-keys a
+>   subscription in place (`POST
+/api/v1/webhook-subscriptions/{id}/rotate-secret`). Same
+>   transport contract as creation: secret generated at the route,
+>   redacted + hash-excluded through the bus, returned exactly once;
+>   replays return `secret: null`. Single-secret cut-over — every
+>   attempt after commit signs with the new secret. Only ACTIVE
+>   subscriptions rotate (no silent re-arm of a revoked endpoint).
+>   Announced as `platform.webhook_subscription.secret_rotated.v1`.
+> - **Developer portal (operator side)** — `/ops/admin/api-keys`
+>   (mint/revoke, fetch-based because of the one-time token) and
+>   `/ops/admin/webhooks` (subscription list with per-status delivery
+>   counts, delivery ledger/dead-letter view, MFA-gated revoke kill
+>   switch). Partner-side subscription management remains on the v1
+>   API itself.
+>
+> Still open: per-key rate quotas beyond the shared limiter; a
+> partner-facing (not operator-facing) portal; dual-secret rotation
+> overlap windows.
+
+> **Amendment (2026-07-31, quota tiers):** per-key quotas landed as
+> **named tiers**. The `api_key` row records WHICH tier a key belongs
+> to (`quotaTier` enum, default `STANDARD`); the numbers behind each
+> tier live in code (`@pharmax/partner-api` `API_KEY_QUOTA_TIERS`) so
+> they can change without a migration. Each tier carries two
+> independent ceilings, enforced as two limiter windows on the
+> partner request path:
+>
+> - **burst** (per-minute) → `429 RATE_LIMITED` + `Retry-After` —
+>   transient traffic shaping; STANDARD's 120/min is exactly the
+>   pre-tier shared limit, so no existing partner's ceiling changed.
+> - **daily quota** → `429 QUOTA_EXCEEDED` + `Retry-After` — the
+>   integration is over its tier (STANDARD 50k/day, ELEVATED
+>   250k/day); upgrade or wait for the reset. Requests rejected by
+>   the burst gate do not consume daily quota, and unauthenticated
+>   requests never touch the limiter (anonymous traffic cannot burn
+>   a partner's quota).
+>
+> The tier is chosen at mint time (command input, ops-console
+> selector), recorded in the audit trail and the
+> `platform.api_key.created.v1` payload (optional field — events
+> emitted before tiers existed mean STANDARD).
+>
+> Still open: a partner-facing portal; dual-secret rotation overlap
+> windows; tier changes on a LIVE key (today the path is revoke +
+> re-mint at the new tier — acceptable while tier changes are rare
+> partner-agreement events, revisit if they become routine).
+
 ## Consequences
 
 - Two new permissions (`api.keys.manage`, `webhooks.manage`) enter
@@ -110,8 +166,9 @@ attempt, two bus-level accommodations exist:
   REQUIRED_HANDLER_EVENT_TYPES semantics intact.
 - Compromise blast radius of a leaked partner key is bounded by its
   scopes and its creator's RBAC; recovery is `RevokeApiKey` (audited).
-- HMAC secrets can be rotated only by revoke + recreate in this
-  slice; in-place rotation is a follow-up.
+- ~~HMAC secrets can be rotated only by revoke + recreate in this
+  slice; in-place rotation is a follow-up.~~ Superseded 2026-07-31:
+  in-place rotation landed (see amendment above).
 
 ## Alternatives Considered
 
