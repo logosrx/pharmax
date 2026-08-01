@@ -42,8 +42,7 @@ export interface VerifyFedExSignatureInput {
 }
 
 export type FedExSignatureVerificationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly error: FedExSignatureError };
+  { readonly ok: true } | { readonly ok: false; readonly error: FedExSignatureError };
 
 function expectedSignature(secret: string, body: Buffer): Buffer {
   return createHmac("sha256", secret).update(body).digest();

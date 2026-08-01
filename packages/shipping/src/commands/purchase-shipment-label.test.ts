@@ -295,19 +295,17 @@ type StubFactoryAdapter = ShippingAdapter & {
 };
 
 function fakeAdapter(overrides: Partial<PurchasedLabel> = {}): StubFactoryAdapter {
-  const purchaseLabel = vi.fn(
-    async (_input: PurchaseLabelInput): Promise<PurchasedLabel> => ({
-      carrier: ShipmentCarrier.USPS,
-      serviceLevel: "Priority",
-      trackingNumber: "9400111899223344556677",
-      externalShipmentId: "shp_demo",
-      externalTrackerId: "trk_demo",
-      labelUrl: "https://example.invalid/label.png",
-      labelPdfBase64: null,
-      postageRateCents: 940,
-      ...overrides,
-    })
-  );
+  const purchaseLabel = vi.fn(async (_input: PurchaseLabelInput): Promise<PurchasedLabel> => ({
+    carrier: ShipmentCarrier.USPS,
+    serviceLevel: "Priority",
+    trackingNumber: "9400111899223344556677",
+    externalShipmentId: "shp_demo",
+    externalTrackerId: "trk_demo",
+    labelUrl: "https://example.invalid/label.png",
+    labelPdfBase64: null,
+    postageRateCents: 940,
+    ...overrides,
+  }));
   return { providerName: "stub", purchaseLabel };
 }
 

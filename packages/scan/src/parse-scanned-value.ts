@@ -33,11 +33,7 @@ export interface ParsedUnknownScan extends ParsedScannedValueBase {
 }
 
 export type ParsedScannedValue =
-  | ParsedGs1Scan
-  | ParsedNdcScan
-  | ParsedVialLabelScan
-  | ParsedLotScan
-  | ParsedUnknownScan;
+  ParsedGs1Scan | ParsedNdcScan | ParsedVialLabelScan | ParsedLotScan | ParsedUnknownScan;
 
 const VIAL_LABEL_PATTERN = /^PX:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 

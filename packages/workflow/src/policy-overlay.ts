@@ -282,8 +282,7 @@ export function mergePolicyWithOverlay(
   // attestations, breaking the composition law that
   // `composeOverlays` relies on.
   let attestationsByTransitionId:
-    | Readonly<Record<string, ReadonlyArray<AttestationRequirement>>>
-    | undefined;
+    Readonly<Record<string, ReadonlyArray<AttestationRequirement>>> | undefined;
   const survivingTransitionIds = new Set(filteredTransitions.map((t) => t.transitionId));
   const map: Record<string, ReadonlyArray<AttestationRequirement>> = {};
   if (base.attestationsByTransitionId !== undefined) {

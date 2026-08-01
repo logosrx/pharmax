@@ -26,10 +26,7 @@ import { ALL_PERMISSION_CODES, PERMISSION_METADATA, type PermissionCode } from "
 
 /** Where the effective decision for a given permission came from. */
 export type PermissionSource =
-  | "role_default"
-  | "override_granted"
-  | "override_revoked"
-  | "not_available";
+  "role_default" | "override_granted" | "override_revoked" | "not_available";
 
 export interface PermissionWithSource {
   readonly permission: PermissionCode;

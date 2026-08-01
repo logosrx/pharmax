@@ -48,17 +48,17 @@ Phase 2's first migration.
 
 ### B.2 RBAC
 
-| Aspect                  | EONPRO                                             | Pharmax enterprise                                                                                                                                                             |
+| Aspect | EONPRO | Pharmax enterprise |
 | ----------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- | ------ | ---- | --------------------------------------------------------------------------------------------------------------- |
-| Catalog                 | Hardcoded `PERMISSIONS` constant                   | Hardcoded **registry** + `permission` table seeded from it; admin UI grants from the table; parity is asserted by `permissions.test.ts`                                        |
-| Roles                   | 9 hardcoded roles                                  | Same registry pattern + `role` table seeded from `role_template` constants; per-tenant custom roles allowed                                                                    |
-| Overrides               | `User.permissions: Json` with `{granted, revoked}` | Same model **plus** every override row records `granted_by_user_id`, `expires_at`, `reason_code`                                                                               |
-| Scoping                 | Flat (clinic-wide)                                 | Permissions scoped to `(organization                                                                                                                                           | site | clinic | team | bucket)`— a user can be`pharmacist`on clinic A but`tech`on clinic B; already implemented in`appliesInContext()` |
-| Separation of Duties    | None                                               | Hardcoded SoD rules: same user cannot perform `PV1_APPROVE` and `FINAL_APPROVE` on the same order; enforced by command bus via `@pharmax/rbac` SoD module                      |
-| Features (capabilities) | None separately                                    | Parallel `FEATURES` registry for capability flags (`telehealth_callbacks`, `package_photos`, `easypost_outbound`) — distinct from action permissions                           |
-| Break-glass             | `emergency: true` flag in audit                    | Time-limited grant (max 4h), force-audit `BREAK_GLASS` event, auto-revoke job, daily report to security@                                                                       |
-| Caching                 | None (compute every check)                         | Effective permission set computed per-request, cached in WeakMap keyed on the frozen `TenancyContext` object — already implemented in `resolver.ts`                            |
-| Admin UI introspection  | None                                               | `getEffectivePermissionsWithSource()` returns each permission with `source: 'role_default' \| 'override_granted' \| 'override_revoked' \| 'not_available'` for the role editor |
+| Catalog | Hardcoded `PERMISSIONS` constant | Hardcoded **registry** + `permission` table seeded from it; admin UI grants from the table; parity is asserted by `permissions.test.ts` |
+| Roles | 9 hardcoded roles | Same registry pattern + `role` table seeded from `role_template` constants; per-tenant custom roles allowed |
+| Overrides | `User.permissions: Json` with `{granted, revoked}` | Same model **plus** every override row records `granted_by_user_id`, `expires_at`, `reason_code` |
+| Scoping | Flat (clinic-wide) | Permissions scoped to `(organization                                                                                                                                           | site | clinic | team | bucket)`— a user can be`pharmacist`on clinic A but`tech`on clinic B; already implemented in`appliesInContext()` |
+| Separation of Duties | None | Hardcoded SoD rules: same user cannot perform `PV1_APPROVE` and `FINAL_APPROVE` on the same order; enforced by command bus via `@pharmax/rbac` SoD module |
+| Features (capabilities) | None separately | Parallel `FEATURES` registry for capability flags (`telehealth_callbacks`, `package_photos`, `easypost_outbound`) — distinct from action permissions |
+| Break-glass | `emergency: true` flag in audit | Time-limited grant (max 4h), force-audit `BREAK_GLASS` event, auto-revoke job, daily report to security@ |
+| Caching | None (compute every check) | Effective permission set computed per-request, cached in WeakMap keyed on the frozen `TenancyContext` object — already implemented in `resolver.ts` |
+| Admin UI introspection | None | `getEffectivePermissionsWithSource()` returns each permission with `source: 'role_default' \| 'override_granted' \| 'override_revoked' \| 'not_available'` for the role editor |
 
 Owner package: `@pharmax/rbac`. Permission registry, scoped grant
 matching, resolver, and the primary `requirePermission` guard are

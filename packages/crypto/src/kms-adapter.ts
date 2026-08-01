@@ -115,10 +115,7 @@ export interface VerifyRootInput extends SignRootInput {
  * dispatches on this tag.
  */
 export type SignatureAlgorithm =
-  | "HMAC_SHA_256"
-  | "ECDSA_SHA_256"
-  | "ECDSA_SHA_384"
-  | "RSASSA_PSS_SHA_256";
+  "HMAC_SHA_256" | "ECDSA_SHA_256" | "ECDSA_SHA_384" | "RSASSA_PSS_SHA_256";
 
 export interface KmsAdapter {
   /** Generate a fresh DEK and wrap it under the current per-tenant KEK. */

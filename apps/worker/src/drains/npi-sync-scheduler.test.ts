@@ -43,23 +43,21 @@ const runNpiSyncForOrgMock = vi.hoisted(() => {
       fetchFailedCount: number;
     };
   };
-  return vi.fn(
-    async (_deps: unknown, _input: unknown): Promise<Result> => ({
-      runId: "run-1",
-      status: "COMPLETED",
-      summary: {
-        providersScanned: 3,
-        providersFetchedFromCms: 3,
-        noChangeCount: 2,
-        providersUpdated: 1,
-        providersDeactivated: 0,
-        reactivationCandidatesCreated: 0,
-        notFoundAtCmsCount: 0,
-        enumerationTypeMismatchCount: 0,
-        fetchFailedCount: 0,
-      },
-    })
-  );
+  return vi.fn(async (_deps: unknown, _input: unknown): Promise<Result> => ({
+    runId: "run-1",
+    status: "COMPLETED",
+    summary: {
+      providersScanned: 3,
+      providersFetchedFromCms: 3,
+      noChangeCount: 2,
+      providersUpdated: 1,
+      providersDeactivated: 0,
+      reactivationCandidatesCreated: 0,
+      notFoundAtCmsCount: 0,
+      enumerationTypeMismatchCount: 0,
+      fetchFailedCount: 0,
+    },
+  }));
 });
 
 const buildProductionDispatchersMock = vi.hoisted(() =>

@@ -357,10 +357,7 @@ export function createStripeEventHandlers(options: CreateStripeEventHandlersOpti
           stripeRefundId: latest.id,
           amountCents: latest.amount,
           stripeStatus: (latest.status ?? "succeeded") as
-            | "succeeded"
-            | "pending"
-            | "failed"
-            | "canceled",
+            "succeeded" | "pending" | "failed" | "canceled",
           ...(latest.reason !== null && latest.reason !== undefined
             ? {
                 stripeReason: latest.reason as

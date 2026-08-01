@@ -44,8 +44,7 @@ export interface VerifyEasyPostSignatureInput {
 }
 
 export type EasyPostSignatureVerificationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly error: EasyPostSignatureError };
+  { readonly ok: true } | { readonly ok: false; readonly error: EasyPostSignatureError };
 
 function expectedSignatureHex(secret: string, body: Buffer): string {
   return createHmac("sha256", secret).update(body).digest("hex");

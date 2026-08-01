@@ -171,8 +171,8 @@ async function resolveOperatorTenancyContextImpl(
 // the RBAC permission WeakMap warm). React `cache()` is request-scoped
 // on the server, so there is no cross-request leakage. The injectable
 // path (tests) bypasses the memo.
-const cachedResolveOperatorTenancyContext = cache(
-  (): Promise<ResolveTenancyResult> => resolveOperatorTenancyContextImpl()
+const cachedResolveOperatorTenancyContext = cache((): Promise<ResolveTenancyResult> =>
+  resolveOperatorTenancyContextImpl()
 );
 
 export function resolveOperatorTenancyContext(

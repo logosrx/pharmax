@@ -79,8 +79,7 @@ export interface ParsedPackagePhotoUploadError {
 }
 
 export type ParsePackagePhotoUploadResult =
-  | ParsedPackagePhotoUpload
-  | ParsedPackagePhotoUploadError;
+  ParsedPackagePhotoUpload | ParsedPackagePhotoUploadError;
 
 /**
  * Inspect a multipart `FormData` and produce either a validated

@@ -15,11 +15,7 @@
 import type { EasyPostTrackerWebhookPayload } from "../carriers/easypost-payload.js";
 
 export type EasyPostWebhookEventStatus =
-  | "PENDING"
-  | "PROCESSING"
-  | "SUCCEEDED"
-  | "FAILED"
-  | "IGNORED";
+  "PENDING" | "PROCESSING" | "SUCCEEDED" | "FAILED" | "IGNORED";
 
 export interface EasyPostWebhookEventRecord {
   readonly id: string;
