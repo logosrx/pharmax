@@ -33,7 +33,7 @@
     "@pharmax/tenancy": "workspace:*",
     "@pharmax/verification": "workspace:*",
     "@sentry/core": "^8.55.2",
-    "@sentry/nextjs": "^8.55.2",
+    "@sentry/nextjs": "^10.68.0",
     "next": "^16.2.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
