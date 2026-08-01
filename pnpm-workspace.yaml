@@ -9,6 +9,13 @@ overrides:
   # by @sentry/nextjs to the patched >=3.30.0. Selected by resolved version so
   # the unrelated rollup 4.x (vite/vitest) is left untouched.
   "rollup@<3.30.0": "^3.30.0"
+  # Collapse @types/node onto exactly one resolution. Two satisfying versions
+  # in the lockfile make pnpm build two `stripe` peer instances, and TypeScript
+  # then treats their `Stripe.Event` as two distinct nominal types under
+  # `exactOptionalPropertyTypes`, breaking `apps/worker` typecheck. Any partial
+  # re-resolve (i.e. every Dependabot bump) could trigger that, so the root
+  # spec is pinned exactly and referenced here as the single source of truth.
+  "@types/node": "$@types/node"
 
 allowBuilds:
   esbuild: true
