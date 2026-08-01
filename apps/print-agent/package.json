@@ -18,7 +18,7 @@
     "@pharmax/rbac": "workspace:*",
     "@pharmax/telemetry": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
-    "@sentry/node": "^8.55.2",
+    "@sentry/node": "^10.69.0",
     "ulid": "^2.3.0",
     "zod": "^4.4.3"
   },

@@ -115,12 +115,16 @@ const config = sentryEnabled
       // Tunnel browser SDK events through the app to bypass ad-blockers.
       // Keeps the surface area small — Next will generate /monitoring.
       tunnelRoute: "/monitoring",
-      // Hide the original source map files from the production bundle.
-      hideSourceMaps: true,
+      // The v8-era `hideSourceMaps` option no longer exists. Its intent is
+      // covered by `sourcemaps.deleteSourcemapsAfterUpload`, which defaults
+      // to true, so uploaded maps are stripped from the build output and
+      // never served from the production bundle.
       // Auto-disable when no DSN is configured. Prevents "Sentry is set
       // up but doing nothing" warnings during local builds.
       disableLogger: true,
-      automaticVercelMonitors: false,
+      webpack: {
+        automaticVercelMonitors: false,
+      },
     })
   : nextConfig;
 
