@@ -427,11 +427,14 @@ async function seedFillDemoStack(input: {
 async function seedDemoOrganization(): Promise<{ orgId: string }> {
   const org = await prisma.organization.upsert({
     where: { slug: "acme" },
-    update: { name: "Acme Pharmacy (DEMO)" },
+    // Demo org opts into self-serve provider onboarding (ADR-0033)
+    // so the public apply endpoint is exercisable out of the box.
+    update: { name: "Acme Pharmacy (DEMO)", providerOnboardingEnabled: true },
     create: {
       slug: "acme",
       name: "Acme Pharmacy (DEMO)",
       status: OrganizationStatus.ACTIVE,
+      providerOnboardingEnabled: true,
     },
   });
 
@@ -709,6 +712,97 @@ async function seedDemoOrganization(): Promise<{ orgId: string }> {
     });
   }
 
+  // Provider-onboarding service identity (ADR-0033). Used by the
+  // public apply endpoint AND the worker's NPPES proofing drain to
+  // enter per-org tenancy and dispatch
+  // SubmitProviderOnboardingApplication /
+  // RecordProviderOnboardingProofing. Granted via the dedicated
+  // `ProviderOnboardingService` role template — machine-only,
+  // exactly `providers.onboarding.submit`.
+  const providerOnboardingUser = await prisma.user.upsert({
+    where: {
+      organizationId_email: {
+        organizationId: org.id,
+        email: `provider-onboarding@${org.slug}.test`,
+      },
+    },
+    update: { displayName: "Provider Onboarding Service (DEMO)" },
+    create: {
+      organizationId: org.id,
+      email: `provider-onboarding@${org.slug}.test`,
+      displayName: "Provider Onboarding Service (DEMO)",
+      status: UserStatus.ACTIVE,
+    },
+  });
+  const providerOnboardingRole = await prisma.role.findUniqueOrThrow({
+    where: {
+      organizationId_code: { organizationId: org.id, code: "ProviderOnboardingService" },
+    },
+  });
+  const existingProviderOnboardingGrant = await prisma.userRole.findFirst({
+    where: {
+      userId: providerOnboardingUser.id,
+      roleId: providerOnboardingRole.id,
+      siteId: null,
+      clinicId: null,
+      teamId: null,
+    },
+  });
+  if (!existingProviderOnboardingGrant) {
+    await prisma.userRole.create({
+      data: {
+        userId: providerOnboardingUser.id,
+        roleId: providerOnboardingRole.id,
+        organizationId: org.id,
+      },
+    });
+  }
+
+  // Provider-portal service identity (ADR-0033 slice 3). The actor
+  // the portal profile route dispatches `UpdateProvider` as when a
+  // signed-in prescriber edits their own contact details. Granted
+  // via the dedicated `ProviderPortalService` role template —
+  // machine-only, exactly `providers.update`. Separate from the
+  // npi-sync identity so audit provenance stays truthful.
+  const providerPortalUser = await prisma.user.upsert({
+    where: {
+      organizationId_email: {
+        organizationId: org.id,
+        email: `provider-portal@${org.slug}.test`,
+      },
+    },
+    update: { displayName: "Provider Portal Service (DEMO)" },
+    create: {
+      organizationId: org.id,
+      email: `provider-portal@${org.slug}.test`,
+      displayName: "Provider Portal Service (DEMO)",
+      status: UserStatus.ACTIVE,
+    },
+  });
+  const providerPortalRole = await prisma.role.findUniqueOrThrow({
+    where: {
+      organizationId_code: { organizationId: org.id, code: "ProviderPortalService" },
+    },
+  });
+  const existingProviderPortalGrant = await prisma.userRole.findFirst({
+    where: {
+      userId: providerPortalUser.id,
+      roleId: providerPortalRole.id,
+      siteId: null,
+      clinicId: null,
+      teamId: null,
+    },
+  });
+  if (!existingProviderPortalGrant) {
+    await prisma.userRole.create({
+      data: {
+        userId: providerPortalUser.id,
+        roleId: providerPortalRole.id,
+        organizationId: org.id,
+      },
+    });
+  }
+
   // Workstation print agent service identity (no password; used by
   // apps/print-agent polling loop to confirm thermal print jobs).
   const printAgentUser = await prisma.user.upsert({
@@ -784,6 +878,39 @@ async function seedDemoOrganization(): Promise<{ orgId: string }> {
           "SHIPPED",
         ],
         transitions: [],
+      },
+      publishedAt: new Date(),
+    },
+  });
+
+  // provider.onboarding v1 — the first non-order workflow policy
+  // (ADR-0033). The definition documents the application state
+  // machine; the onboarding commands validate transitions against
+  // their own (much smaller) table and pin this row's id + version
+  // on every application.
+  await prisma.workflowPolicy.upsert({
+    where: {
+      organizationId_code_version: {
+        organizationId: org.id,
+        code: "provider.onboarding",
+        version: 1,
+      },
+    },
+    update: {},
+    create: {
+      organizationId: org.id,
+      code: "provider.onboarding",
+      version: 1,
+      status: WorkflowPolicyStatus.ACTIVE,
+      description: "Provider self-serve onboarding workflow (ADR-0033).",
+      definition: {
+        states: ["SUBMITTED", "NEEDS_REVIEW", "APPROVED", "REJECTED"],
+        transitions: [
+          { from: "SUBMITTED", to: "APPROVED", via: "RecordProviderOnboardingProofing" },
+          { from: "SUBMITTED", to: "NEEDS_REVIEW", via: "RecordProviderOnboardingProofing" },
+          { from: "NEEDS_REVIEW", to: "APPROVED", via: "ApproveProviderOnboardingApplication" },
+          { from: "NEEDS_REVIEW", to: "REJECTED", via: "RejectProviderOnboardingApplication" },
+        ],
       },
       publishedAt: new Date(),
     },
