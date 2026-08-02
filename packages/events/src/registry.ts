@@ -145,6 +145,9 @@ import { UserPasswordResetRequestedV1 } from "./events/user/password-reset-reque
 import { UserPasswordResetV1 } from "./events/user/password-reset-v1.js";
 import { UserSessionsRevokedV1 } from "./events/user/sessions-revoked-v1.js";
 import { UserSignedInV1 } from "./events/user/signed-in-v1.js";
+import { UserWebAuthnAuthenticationStartedV1 } from "./events/user/webauthn-authentication-started-v1.js";
+import { UserWebAuthnCredentialEnrolledV1 } from "./events/user/webauthn-credential-enrolled-v1.js";
+import { UserWebAuthnRegistrationStartedV1 } from "./events/user/webauthn-registration-started-v1.js";
 
 // ---- workflow (per-tenant policy administration) ------------------------
 import { WorkflowOverlayUpsertedV1 } from "./events/workflow/overlay-upserted-v1.js";
@@ -261,6 +264,9 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   UserPasswordResetV1,
   UserSessionsRevokedV1,
   UserSignedInV1,
+  UserWebAuthnAuthenticationStartedV1,
+  UserWebAuthnCredentialEnrolledV1,
+  UserWebAuthnRegistrationStartedV1,
   // workflow
   WorkflowOverlayUpsertedV1,
 ]) as ReadonlyArray<EventDefinition<Record<string, unknown>>>;

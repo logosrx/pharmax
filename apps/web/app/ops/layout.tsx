@@ -13,6 +13,7 @@
 //     `proxy.ts`); the not-provisioned / inactive states render a
 //     calm, branded message instead of throwing.
 
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { PERMISSIONS, type PermissionCode } from "@pharmax/rbac";
@@ -323,10 +324,14 @@ export default async function OpsLayout({ children }: Readonly<{ children: React
             </div>
             <OrderSearch />
             <div className="ml-auto flex items-center gap-3">
-              <div className="hidden text-right leading-tight sm:block">
+              <Link
+                href="/ops/account/security"
+                className="hidden rounded-md text-right leading-tight hover:opacity-80 sm:block"
+                title="Account security"
+              >
                 <div className="text-sm font-medium text-fg">{result.operator.displayName}</div>
                 <div className="text-2xs text-subtle">{result.operator.email}</div>
-              </div>
+              </Link>
               <ThemeToggle />
               <SignOutButton />
             </div>

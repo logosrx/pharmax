@@ -10,3 +10,6 @@ export { UserPasswordResetRequestedV1 } from "./password-reset-requested-v1.js";
 export { UserPasswordResetV1 } from "./password-reset-v1.js";
 export { UserSessionsRevokedV1 } from "./sessions-revoked-v1.js";
 export { UserSignedInV1 } from "./signed-in-v1.js";
+export { UserWebAuthnAuthenticationStartedV1 } from "./webauthn-authentication-started-v1.js";
+export { UserWebAuthnCredentialEnrolledV1 } from "./webauthn-credential-enrolled-v1.js";
+export { UserWebAuthnRegistrationStartedV1 } from "./webauthn-registration-started-v1.js";
