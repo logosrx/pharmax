@@ -21,6 +21,9 @@
 #        - DESCRIBE (never read) this stack's Secrets Manager entries, so the
 #          deploy can verify each referenced secret has an AWSCURRENT value
 #          before rollout
+#        - run ONE one-off task on the worker definition (schema migrations,
+#          which must precede the rollout) and read back that task's log
+#          group, so CI records which migrations were applied
 #
 # It deliberately holds NO Create*/Delete* infrastructure permissions — image
 # rollout only. Infra changes stay operator-driven through a separate role
@@ -159,6 +162,45 @@ data "aws_iam_policy_document" "deploy" {
       "ecs:UpdateService",
     ]
     resources = local.service_arns
+  }
+
+  # Lets deploy.yml run `prisma migrate deploy` as a one-off Fargate task
+  # on the worker definition BEFORE it rolls any service over, so
+  # application code can never start against a database that is missing
+  # its tables. RunTask is scoped to this cluster by condition; the task
+  # definition wildcard is unavoidable because the revision number is
+  # minted at deploy time.
+  statement {
+    sid    = "EcsRunMigrationTask"
+    effect = "Allow"
+    actions = [
+      "ecs:RunTask",
+      "ecs:DescribeTasks",
+    ]
+    resources = [
+      "arn:aws:ecs:${var.region}:${var.aws_account_id}:task-definition/${var.name_prefix}-worker:*",
+      "arn:aws:ecs:${var.region}:${var.aws_account_id}:task/${local.cluster_name}/*",
+    ]
+
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values   = ["arn:aws:ecs:${var.region}:${var.aws_account_id}:cluster/${local.cluster_name}"]
+    }
+  }
+
+  # The migration task's stdout — which migrations were applied — is the
+  # deploy's audit trail, so CI reads back that one log group. Read-only,
+  # and scoped to the worker group alone.
+  statement {
+    sid    = "ReadMigrationTaskLogs"
+    effect = "Allow"
+    actions = [
+      "logs:GetLogEvents",
+    ]
+    resources = [
+      "arn:aws:logs:${var.region}:${var.aws_account_id}:log-group:/ecs/${var.name_prefix}/worker:*",
+    ]
   }
 
   # Lets deploy.yml assert that every secret a task definition references
