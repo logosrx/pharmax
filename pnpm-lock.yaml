@@ -259,6 +259,9 @@ importers:
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../../packages/platform-core
+      '@pharmax/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
       '@pharmax/rbac':
         specifier: workspace:*
         version: link:../../packages/rbac
@@ -1039,6 +1042,9 @@ importers:
 
   packages/providers:
     dependencies:
+      '@pharmax/auth':
+        specifier: workspace:*
+        version: link:../auth
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../command-bus
