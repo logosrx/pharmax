@@ -221,6 +221,65 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
     permissions: [PERMISSIONS.PROVIDERS_UPDATE, PERMISSIONS.PROVIDERS_DEACTIVATE],
   },
   {
+    // ---------------------------------------------------------------
+    // ProviderOnboardingService — machine-only role for provider
+    // self-serve onboarding (ADR-0033): the per-org
+    // `provider-onboarding@<org-slug>.test` service user that acts
+    // for the public apply endpoint AND the worker's NPPES proofing
+    // drain.
+    //
+    // Why one permission covers both commands: the apply endpoint
+    // dispatches SubmitProviderOnboardingApplication and the drain
+    // dispatches RecordProviderOnboardingProofing — both are
+    // machine-initiated steps of the same pipeline, so they share
+    // `providers.onboarding.submit`. Human decisions (approve /
+    // reject from the review queue) require the SEPARATE
+    // `providers.onboarding.review`, which this role deliberately
+    // does NOT carry: a compromised onboarding service user can
+    // file applications and record proofing outcomes, but a
+    // proofing PASS still only auto-approves through the command's
+    // own NPPES-match gate — it cannot rubber-stamp the review
+    // queue.
+    // ---------------------------------------------------------------
+    code: "ProviderOnboardingService",
+    name: "Provider Onboarding Service (machine)",
+    scope: RoleScope.ORGANIZATION,
+    description:
+      "Per-org service identity for provider self-serve onboarding (public apply endpoint + NPPES proofing drain). Machine-only; not assignable to human users. Grants ONLY `providers.onboarding.submit`.",
+    permissions: [PERMISSIONS.PROVIDERS_ONBOARDING_SUBMIT],
+  },
+  {
+    // ---------------------------------------------------------------
+    // ProviderPortalService — machine-only role for prescriber-portal
+    // writes (ADR-0033 slice 3): the per-org
+    // `provider-portal@<org-slug>.test` service user that dispatches
+    // `UpdateProvider` when a signed-in prescriber edits their own
+    // contact details.
+    //
+    // Why a DEDICATED role instead of reusing NpiSyncWorker (which
+    // also carries `providers.update`): audit attribution. A
+    // provider row updated by the npi-sync identity means "CMS
+    // registry drift"; updated by THIS identity it means "the
+    // prescriber edited their own profile" — collapsing the two
+    // would make the audit trail lie about provenance. The portal
+    // route pins the target to the SESSION's own providerId and
+    // restricts the field set to contact info (no name, no DEA, no
+    // NPI) before dispatch; the command's RBAC gate is this role's
+    // single grant.
+    //
+    // SOC 2 / HIPAA: a compromised portal service user can update
+    // provider demographics org-wide (same blast radius as the
+    // npi-sync identity, no PHI). Recovery is operational: disable
+    // the user row, review provider.updated.v1 audit entries.
+    // ---------------------------------------------------------------
+    code: "ProviderPortalService",
+    name: "Provider Portal Service (machine)",
+    scope: RoleScope.ORGANIZATION,
+    description:
+      "Per-org service identity for prescriber-portal profile updates (routes through UpdateProvider). Machine-only; not assignable to human users. Grants ONLY `providers.update`.",
+    permissions: [PERMISSIONS.PROVIDERS_UPDATE],
+  },
+  {
     code: "ClinicViewer",
     name: "Clinic Viewer",
     scope: RoleScope.CLINIC,

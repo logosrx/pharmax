@@ -270,6 +270,22 @@ export const NOTIFICATION_TEMPLATES = {
     description:
       "Operations lead alert when an order escalates to the emergency bucket for an SLA breach.",
   },
+  /** A prescriber's order shipped — sent to the prescriber's portal
+   *  account email. Triggers from `order.shipped.v1`, filtered to
+   *  providers who hold an ACTIVE portal account (portal enrollment
+   *  is the opt-in). Context is PHI-free by construction: the
+   *  order's external number, the prescriber's own rx numbers, the
+   *  carrier tracking number (when present), and an ISO timestamp.
+   *  NO patient fields — the prescriber correlates rx numbers to
+   *  patients from their own records (ADR-0033 slice 3). */
+  PORTAL_ORDER_SHIPPED_V1: {
+    id: "PORTAL_ORDER_SHIPPED_V1",
+    channelKinds: ["email"] as const,
+    phiAllowed: false,
+    requiredContextKeys: ["orderExternalNumber", "rxNumbers", "shippedAtIso"] as const,
+    description:
+      "Prescriber-facing shipment notice: their order left the pharmacy. Optional `trackingNumber` when the carrier assigned one before confirmation. Recipients are resolved through ACTIVE portal accounts only.",
+  },
   /** Escalation acknowledged by an operator. Triggers from
    *  `order.escalation_acknowledged.v1`. */
   SHIPMENT_ESCALATION_ACKNOWLEDGED_V1: {
