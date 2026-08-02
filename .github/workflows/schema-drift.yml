@@ -1,0 +1,248 @@
+# Schema drift detection — is the RUNNING code's schema actually applied?
+#
+# Why this exists
+# ---------------
+# On 2026-08-02 the first deploy that carried a migration gate applied 29
+# pending migrations, the oldest dating to 2026-07-10. Production had spent
+# roughly a month executing code against a schema that lacked its tables:
+# phase6_auth_engine, payment_ledger, shipment_label_artifacts,
+# print_job_agent_lease, break_glass_session and more had never landed. Every
+# feature touching those tables was failing in production, and nothing said so.
+#
+# The migration gate in deploy.yml prevents that going forward, but only at
+# deploy time. It answers "did this deploy's migrations land?" — it cannot
+# answer "is production correct right now?", because a deploy that never
+# happens never checks. That is precisely how a month accumulated: the gap was
+# invisible in the window between deploys, which is where the platform spends
+# essentially all of its time.
+#
+# So this is the standing assertion. It runs daily and asks the one question
+# that would have caught the outage on day one:
+#
+#     does the schema satisfy the migrations baked into the image that is
+#     serving traffic at this moment?
+#
+# Note it deliberately checks the DEPLOYED task definition rather than `main`.
+# Migrations sitting unmerged or merged-but-undeployed on `main` are just
+# normal in-flight work; alarming on those would make this noisy and it would
+# be muted within a week. A pending migration in the running image is never
+# normal — it means live code is already reaching for tables that do not
+# exist. This alarm is therefore true every time it fires.
+#
+# Cost note: one short-lived Fargate task per day. It reuses the existing
+# AWS_DEPLOY_ROLE_ARN and needs no new IAM — the EcsRunMigrationTask and
+# ReadMigrationTaskLogs statements added to modules/cicd-deploy for the deploy
+# gate already cover RunTask on the worker family and reading its log group.
+name: Schema Drift
+
+on:
+  schedule:
+    # 07:00 UTC daily — an hour ahead of terraform-drift so both land in the
+    # same morning review window without competing for the on-call's attention.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # OIDC token issuance for assume-role.
+  id-token: write
+  # Issue creation when the schema is behind.
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  # Same graceful-skip philosophy as deploy.yml and terraform-drift.yml: on a
+  # fork or an unbootstrapped account this returns false and everything
+  # downstream is skipped, rather than failing nightly with a false alarm.
+  preflight:
+    name: Preflight — is the deploy target configured?
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+      name_prefix: ${{ vars.ECS_NAME_PREFIX }}
+      region: ${{ steps.check.outputs.region }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ vars.AWS_DEPLOY_ROLE_ARN }}" ] && [ -n "${{ vars.ECS_NAME_PREFIX }}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "Deploy target configured; schema drift check will run."
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AWS_DEPLOY_ROLE_ARN and/or ECS_NAME_PREFIX not set."
+            echo "::notice::Skipping schema drift detection."
+          fi
+          region="${{ vars.AWS_DEPLOY_REGION }}"
+          echo "region=${region:-us-east-1}" >> "$GITHUB_OUTPUT"
+
+  schema-status:
+    name: prisma migrate status — prod
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLUSTER: ${{ needs.preflight.outputs.name_prefix }}-cluster
+      SERVICE: ${{ needs.preflight.outputs.name_prefix }}-worker
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ needs.preflight.outputs.region }}
+          role-session-name: gh-actions-schema-drift
+
+      - name: Run migrate status against the deployed image
+        id: status
+        run: |
+          set -uo pipefail
+
+          # The task definition the worker service is ACTUALLY running — not
+          # the newest revision, and not anything built from main. Its image
+          # carries the migration set the live code expects, which is the
+          # thing being asserted.
+          td=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+                 --query 'services[0].taskDefinition' --output text)
+          if [ -z "$td" ] || [ "$td" = "None" ]; then
+            echo "::error::Could not resolve the running task definition for $SERVICE."
+            exit 1
+          fi
+          echo "Deployed worker task definition: $td"
+
+          net=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+                  --query 'services[0].networkConfiguration' --output json)
+          if [ -z "$net" ] || [ "$net" = "null" ]; then
+            echo "::error::Could not read networkConfiguration from $SERVICE."
+            exit 1
+          fi
+
+          # Read-only: `migrate status` only reads _prisma_migrations and
+          # compares it to the migrations on disk. It never applies anything,
+          # so a scheduled job can safely run it unattended.
+          overrides=$(jq -nc '{
+            containerOverrides: [{
+              name: "worker",
+              command: ["sh","-lc","cd /app && pnpm exec prisma migrate status"]
+            }]
+          }')
+
+          task_arn=$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition "$td" \
+            --launch-type FARGATE \
+            --network-configuration "$net" \
+            --overrides "$overrides" \
+            --started-by "gh-schema-drift-${GITHUB_RUN_ID}" \
+            --query 'tasks[0].taskArn' --output text)
+
+          if [ -z "$task_arn" ] || [ "$task_arn" = "None" ]; then
+            echo "::error::RunTask returned no task ARN; schema status is unknown."
+            exit 1
+          fi
+          echo "Status task: $task_arn"
+
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$task_arn" || true
+
+          exit_code=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" \
+                        --query 'tasks[0].containers[0].exitCode' --output text)
+
+          group=$(aws ecs describe-task-definition --task-definition "$td" \
+                    --query 'taskDefinition.containerDefinitions[?name==`worker`].logConfiguration.options."awslogs-group"' \
+                    --output text)
+          prefix=$(aws ecs describe-task-definition --task-definition "$td" \
+                     --query 'taskDefinition.containerDefinitions[?name==`worker`].logConfiguration.options."awslogs-stream-prefix"' \
+                     --output text)
+
+          echo "--- prisma migrate status ---"
+          aws logs get-log-events \
+            --log-group-name "$group" \
+            --log-stream-name "$prefix/worker/${task_arn##*/}" \
+            --limit 250 --query 'events[].message' --output text 2>/dev/null \
+            | tee /tmp/status.txt \
+            || echo "(log stream not available)" | tee /tmp/status.txt
+          echo "--- end ---"
+
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          {
+            echo "output<<STATUS_EOF"
+            head -c 4000 /tmp/status.txt
+            echo ""
+            echo "STATUS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          # `prisma migrate status` exits non-zero when migrations are pending
+          # or the schema has drifted; 0 means the live image's schema is fully
+          # applied. Reported as an output so the issue step can run first.
+          if [ "$exit_code" = "0" ]; then
+            echo "Schema is up to date with the deployed image."
+          else
+            echo "::warning::migrate status exited $exit_code — schema is behind the running code."
+          fi
+
+      - name: Open or update the schema drift issue
+        if: steps.status.outputs.exit_code != '0'
+        uses: actions/github-script@v7
+        env:
+          STATUS_OUTPUT: ${{ steps.status.outputs.output }}
+        with:
+          script: |
+            const title = 'Schema drift: production schema is behind the deployed code';
+            const body = [
+              '`prisma migrate status`, run against the task definition the',
+              'worker service is currently running, reports migrations that',
+              'have not been applied.',
+              '',
+              '**This means live application code is executing against a',
+              'database that lacks tables or columns it expects.** Features',
+              'touching those tables are failing in production right now, and',
+              'will keep failing silently until the migrations are applied.',
+              '',
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              '',
+              '```',
+              (process.env.STATUS_OUTPUT || '(no output captured)').trim(),
+              '```',
+              '',
+              '**Fix:** dispatch `.github/workflows/deploy.yml`. Its `migrate`',
+              'job applies pending migrations before any service rolls over,',
+              'and `prisma migrate deploy` is idempotent, so re-running is',
+              'safe. See `docs/RUNBOOK.md` § "Migrations: rules of the road".',
+            ].join('\n');
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'schema/drift',
+            });
+            if (existing.data.length > 0) {
+              const issue = existing.data[0];
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: body,
+              });
+              core.info(`Appended schema drift report to existing issue #${issue.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['schema/drift'],
+              });
+              core.info(`Opened schema drift issue #${created.data.number}`);
+            }
+
+      - name: Fail the job when the schema is behind
+        if: steps.status.outputs.exit_code != '0'
+        run: |
+          echo "::error::prisma migrate status exited ${{ steps.status.outputs.exit_code }}."
+          echo "::error::Production code is running ahead of its schema. Dispatch deploy.yml"
+          echo "::error::to apply the pending migrations."
+          exit 1
