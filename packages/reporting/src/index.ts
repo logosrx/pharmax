@@ -7,6 +7,8 @@ export {
 
 export { toCsv } from "./csv.js";
 
+export { toPdf, type ReportPdfInput } from "./pdf.js";
+
 export {
   orderVolumeByStageReport,
   type OrderVolumeByStageParams,
