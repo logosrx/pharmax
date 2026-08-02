@@ -204,3 +204,37 @@ jobs:
           # service's circuit breaker (Terraform) auto-rolls-back a
           # failed rollout, which surfaces here as a job failure.
           wait-for-service-stability: true
+
+      # Post-rollout SSR smoke check (web only).
+      #
+      # The ECS container health check hits `/health`, a cheap liveness
+      # route that does NOT exercise the Next.js instrumentation hook or
+      # SSR render path. Twice in 2026-07 a boot-time instrumentation
+      # failure (missing RDS CA bundle; missing @node-rs/argon2) let every
+      # SSR request 500 while `/health` stayed green — so ECS reported the
+      # rollout stable and the outage was invisible to the pipeline. This
+      # step curls a REAL server-rendered route and fails the deploy on any
+      # 5xx, so a page-level boot failure can never again pass silently.
+      #
+      # Opt-in: only runs when APP_SMOKE_URL is set (graceful no-op on
+      # forks / unbootstrapped accounts, matching the preflight philosophy).
+      - name: Post-rollout SSR smoke check
+        if: ${{ matrix.service == 'web' && vars.APP_SMOKE_URL != '' }}
+        env:
+          SMOKE_URL: ${{ vars.APP_SMOKE_URL }}
+        run: |
+          echo "Smoke-checking SSR route: $SMOKE_URL"
+          code=000
+          for attempt in $(seq 1 6); do
+            code=$(curl -sS -o /tmp/smoke.html -w '%{http_code}' --max-time 15 "$SMOKE_URL" || echo 000)
+            echo "attempt $attempt: HTTP $code"
+            if [ "$code" -ge 200 ] && [ "$code" -lt 400 ]; then
+              echo "SSR route healthy (HTTP $code)."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::SSR smoke check failed: $SMOKE_URL returned $code after retries."
+          echo "::error::A green /health can mask an instrumentation-hook / SSR boot failure"
+          echo "::error::(this masked two prod outages in 2026-07). Failing the deploy loudly."
+          exit 1
