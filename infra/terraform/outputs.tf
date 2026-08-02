@@ -315,6 +315,11 @@ output "cicd_github_oidc_provider_arn" {
   value       = try(module.cicd_deploy[0].oidc_provider_arn, null)
 }
 
+output "cicd_schema_check_role_arn" {
+  description = "ARN of the read-only schema-drift checker role (null unless enable_cicd_deploy_role = true). Set as the AWS_SCHEMA_CHECK_ROLE_ARN repo variable, consumed by .github/workflows/schema-drift.yml."
+  value       = try(module.cicd_deploy[0].schema_check_role_arn, null)
+}
+
 # ---- Terraform-apply role ---------------------------------------------------
 
 output "terraform_plan_role_arn" {

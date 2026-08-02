@@ -68,13 +68,14 @@ jobs:
     steps:
       - id: check
         run: |
-          if [ -n "${{ vars.AWS_DEPLOY_ROLE_ARN }}" ] && [ -n "${{ vars.ECS_NAME_PREFIX }}" ]; then
+          if [ -n "${{ vars.AWS_SCHEMA_CHECK_ROLE_ARN }}" ] && [ -n "${{ vars.ECS_NAME_PREFIX }}" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
-            echo "Deploy target configured; schema drift check will run."
+            echo "Schema check role configured; drift check will run."
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::AWS_DEPLOY_ROLE_ARN and/or ECS_NAME_PREFIX not set."
-            echo "::notice::Skipping schema drift detection."
+            echo "::notice::AWS_SCHEMA_CHECK_ROLE_ARN and/or ECS_NAME_PREFIX not set."
+            echo "::notice::Apply infra/terraform (module cicd-deploy) and set the variable to"
+            echo "::notice::the cicd_schema_check_role_arn output. Skipping schema drift detection."
           fi
           region="${{ vars.AWS_DEPLOY_REGION }}"
           echo "region=${region:-us-east-1}" >> "$GITHUB_OUTPUT"
@@ -89,10 +90,17 @@ jobs:
       CLUSTER: ${{ needs.preflight.outputs.name_prefix }}-cluster
       SERVICE: ${{ needs.preflight.outputs.name_prefix }}-worker
     steps:
+      # Deliberately NOT the deploy role. That one is trusted only for
+      # `environment:<name>`, and the production Environment requires a
+      # human reviewer — a nightly cron gated on an approval prompt is a
+      # nightly cron nobody reads. This role is trusted on the main-branch
+      # ref instead and can only describe the worker service, run its task
+      # definition, and read the resulting logs. See
+      # infra/terraform/modules/cicd-deploy/schema-check.tf.
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_SCHEMA_CHECK_ROLE_ARN }}
           aws-region: ${{ needs.preflight.outputs.region }}
           role-session-name: gh-actions-schema-drift
 
