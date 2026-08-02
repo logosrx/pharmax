@@ -328,7 +328,11 @@ jobs:
     needs: [preflight, build, migrate]
     if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Must exceed the deploy step's wait-for-minutes (15) with room for the
+    # preceding render/preflight steps and the failure diagnostics. If these
+    # two numbers ever invert again, stuck rollouts go back to reporting an
+    # unexplained "cancelled".
+    timeout-minutes: 25
     environment: ${{ vars.DEPLOY_ENVIRONMENT || 'staging' }}
     strategy:
       # Deploy services independently — a worker rollback shouldn't abort
@@ -472,6 +476,61 @@ jobs:
           # service's circuit breaker (Terraform) auto-rolls-back a
           # failed rollout, which surfaces here as a job failure.
           wait-for-service-stability: true
+          # MUST stay below this job's timeout-minutes. The action's own
+          # default is 30 minutes — longer than the 20-minute job timeout
+          # this job used to carry, which meant GitHub cancelled the job
+          # before the action could ever time out. A genuinely stuck
+          # rollout was therefore structurally incapable of reporting a
+          # real failure: it surfaced as a bare "cancelled" with none of
+          # the service events or stopped-task reasons the action prints
+          # on timeout, and the diagnostics step below never ran (a
+          # cancelled job skips `if: failure()`). print-agent hit exactly
+          # this on 2026-08-02. Keeping this margin means the step fails
+          # first, inside the job, where its output survives.
+          wait-for-minutes: 15
+
+      # Turns a stuck rollout into a self-explaining one. Without this the
+      # only artifact of a failed deploy is "service did not stabilize",
+      # which does not distinguish a slow-but-healthy start from a
+      # crash-looping task, a failed container health check, or a circuit
+      # breaker rollback — each of which needs a different response.
+      - name: Explain the failed rollout
+        if: failure()
+        env:
+          CLUSTER: ${{ needs.preflight.outputs.name_prefix }}-cluster
+          SERVICE: ${{ needs.preflight.outputs.name_prefix }}-${{ matrix.service }}
+        run: |
+          set -uo pipefail
+
+          echo "--- deployments (rolloutState explains WHY it never stabilized) ---"
+          aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].deployments[].{status:status,rollout:rolloutState,reason:rolloutStateReason,desired:desiredCount,running:runningCount,pending:pendingCount,td:taskDefinition}' \
+            --output table || echo "(describe-services unavailable)"
+
+          echo "--- recent service events ---"
+          aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].events[:15].[createdAt,message]' \
+            --output text || echo "(events unavailable)"
+
+          # A task that stops on its own is the signature of a boot crash:
+          # stoppedReason plus the container exit code usually names the
+          # cause outright (missing env var, failed health check, OOM).
+          echo "--- most recent stopped tasks (boot crashes land here) ---"
+          stopped=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
+                      --desired-status STOPPED --max-items 5 \
+                      --query 'taskArns' --output text 2>/dev/null || echo "")
+          if [ -n "$stopped" ] && [ "$stopped" != "None" ]; then
+            aws ecs describe-tasks --cluster "$CLUSTER" --tasks $stopped \
+              --query 'tasks[].{stopped:stoppedReason,code:containers[0].exitCode,health:healthStatus,container:containers[0].reason}' \
+              --output table || true
+          else
+            echo "(no stopped tasks — the rollout is slow or unhealthy rather than crashing)"
+          fi
+
+          echo "::error::${{ matrix.service }} did not reach a stable state. The rollout"
+          echo "::error::detail above says which failure mode this is. ECS keeps"
+          echo "::error::converging after this job ends — the circuit breaker will roll"
+          echo "::error::back on its own if the new tasks cannot start."
 
       # Post-rollout SSR smoke check (web only).
       #

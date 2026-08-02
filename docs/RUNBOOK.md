@@ -405,13 +405,25 @@ if (!result.valid) {
    migrations applied — is echoed into the job log as the deploy's
    record. `prisma migrate deploy` is idempotent, so re-running a failed
    deploy is safe.
-1. **Forward-only.** No `prisma migrate dev` against the prod DB. Use `prisma migrate deploy`.
-2. **Every new tenant table needs RLS + FORCE RLS + a `tenant_isolation` policy.** The `pnpm check:migrations` linter enforces this on every PR.
-3. **Index every FK and every `(organizationId, ...)` filter combination you actually query.** RLS + missing index = full sequential scan per row.
-4. **Destructive changes (DROP, RENAME, type changes) require a two-step:**
+1. **A daily alarm catches what the gate cannot.** The deploy gate only
+   fires when someone deploys, so it says nothing about the days in
+   between — which is how production once ran a month behind its schema
+   unnoticed (29 migrations, oldest from 2026-07-10, applied on
+   2026-08-02). `.github/workflows/schema-drift.yml` runs
+   `prisma migrate status` daily against the task definition the worker
+   service is _actually running_ and opens a `schema/drift` issue if
+   anything is pending. It checks the deployed image rather than `main`
+   on purpose: unshipped migrations on `main` are ordinary in-flight
+   work, but a pending migration in the running image always means live
+   code is reaching for tables that do not exist. Treat that issue as an
+   active production incident — the fix is to dispatch `deploy.yml`.
+2. **Forward-only.** No `prisma migrate dev` against the prod DB. Use `prisma migrate deploy`.
+3. **Every new tenant table needs RLS + FORCE RLS + a `tenant_isolation` policy.** The `pnpm check:migrations` linter enforces this on every PR.
+4. **Index every FK and every `(organizationId, ...)` filter combination you actually query.** RLS + missing index = full sequential scan per row.
+5. **Destructive changes (DROP, RENAME, type changes) require a two-step:**
    - Step 1: deploy the new column/table alongside the old. Backfill. Dual-write from code.
    - Step 2: a future PR drops the old. Never single-step a destructive change against live traffic.
-5. **A migration that fails halfway through is a SEV1.** Postgres is transactional but some DDL (e.g. `CREATE INDEX CONCURRENTLY`) isn't. If a migration aborts:
+6. **A migration that fails halfway through is a SEV1.** Postgres is transactional but some DDL (e.g. `CREATE INDEX CONCURRENTLY`) isn't. If a migration aborts:
    - Do **not** run `prisma migrate resolve` to mark it applied. Investigate the partial state first.
    - Open an incident, then either complete the migration manually inside `psql` or write a new forward-only migration that resolves the half-state.
 
