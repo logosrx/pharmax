@@ -49,6 +49,30 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
 }
+/** "2d 4.5h" / "7.2h" / "45m" — operator-readable transit duration. */
+function formatDuration(seconds: number): string {
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  const hours = seconds / 3600;
+  if (hours < 24) return `${(Math.round(hours * 10) / 10).toString()}h`;
+  const days = Math.floor(hours / 24);
+  const remHours = Math.round((hours - days * 24) * 10) / 10;
+  return remHours === 0 ? `${days}d` : `${days}d ${remHours}h`;
+}
+function shipmentStatusTone(status: string): Tone {
+  switch (status) {
+    case "DELIVERED":
+      return "success";
+    case "EXCEPTION":
+    case "RETURN_TO_SENDER":
+    case "FAILED_DELIVERY":
+      return "danger";
+    case "IN_TRANSIT":
+    case "OUT_FOR_DELIVERY":
+      return "info";
+    default:
+      return "neutral";
+  }
+}
 function matchStrategyLabel(strategy: string): string {
   switch (strategy) {
     case "EXTERNAL_ORDER_NUMBER":
@@ -353,6 +377,107 @@ export default async function OrderDetailPage({
               </Card>
             ))}
           </div>
+        )}
+      </Section>
+
+      <Section title="Shipment">
+        {detail.shipment === null ? (
+          <EmptyState
+            icon="shipping"
+            title="No shipment yet"
+            description="Created when the order is released to shipping and a label is purchased or a tracking number is entered."
+          />
+        ) : (
+          (() => {
+            const s = detail.shipment;
+            // On-time verdict against the carrier's estimate. The
+            // delivered comparison uses the persisted delivered-scan
+            // moment; undelivered shipments show "past estimate"
+            // once the estimate lapses.
+            const onTime: { label: string; tone: Tone } | null =
+              s.estimatedDeliveryAt === null
+                ? null
+                : s.deliveredAt !== null
+                  ? s.deliveredAt.getTime() <= s.estimatedDeliveryAt.getTime()
+                    ? { label: "Delivered on time", tone: "success" }
+                    : { label: "Delivered late", tone: "danger" }
+                  : Date.now() > s.estimatedDeliveryAt.getTime()
+                    ? { label: "Past carrier estimate", tone: "warning" }
+                    : null;
+            return (
+              <Card>
+                <CardHeader>
+                  <div>
+                    <CardTitle className="text-base">
+                      {s.carrier} · {s.serviceLevel}
+                    </CardTitle>
+                    <div className="mt-0.5 font-mono text-xs text-subtle">{s.trackingNumber}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {onTime !== null ? <Badge tone={onTime.tone}>{onTime.label}</Badge> : null}
+                    <Badge tone={shipmentStatusTone(s.status)} dot>
+                      {s.status.replaceAll("_", " ")}
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <DataList
+                    columns={3}
+                    items={[
+                      {
+                        label: "Handed to carrier",
+                        value: s.confirmedAt === null ? "—" : formatDateTime(s.confirmedAt),
+                      },
+                      {
+                        label: "Picked up",
+                        value: s.pickedUpAt === null ? "—" : formatDateTime(s.pickedUpAt),
+                      },
+                      {
+                        label: "Delivered",
+                        value: s.deliveredAt === null ? "—" : formatDateTime(s.deliveredAt),
+                      },
+                      {
+                        label: "Transit (pickup → delivery)",
+                        value:
+                          s.transitSeconds === null ? (
+                            "—"
+                          ) : (
+                            <span className="font-semibold tabular-nums">
+                              {formatDuration(s.transitSeconds)}
+                            </span>
+                          ),
+                      },
+                      {
+                        label: "Carrier estimate",
+                        value:
+                          s.estimatedDeliveryAt === null
+                            ? "—"
+                            : formatDateTime(s.estimatedDeliveryAt),
+                      },
+                      {
+                        label: "Signature required",
+                        value:
+                          s.signatureOption === null
+                            ? "Carrier default"
+                            : s.signatureOption.replaceAll("_", " ").toLowerCase(),
+                      },
+                      {
+                        label: "Last carrier event",
+                        value:
+                          s.lastTrackingEventAt === null
+                            ? "—"
+                            : `${formatDateTime(s.lastTrackingEventAt)}${
+                                s.lastTrackingEventKind === null
+                                  ? ""
+                                  : ` (${s.lastTrackingEventKind.replaceAll("_", " ").toLowerCase()})`
+                              }`,
+                      },
+                    ]}
+                  />
+                </CardContent>
+              </Card>
+            );
+          })()
         )}
       </Section>
 
