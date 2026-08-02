@@ -197,6 +197,8 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["AuthSession", { kind: "organizationId" }] as const,
   ["MfaEnrollment", { kind: "organizationId" }] as const,
   ["RecoveryCode", { kind: "organizationId" }] as const,
+  ["WebAuthnCredential", { kind: "organizationId" }] as const,
+  ["WebAuthnChallenge", { kind: "organizationId" }] as const,
   ["PasswordHistory", { kind: "organizationId" }] as const,
   ["PasswordResetToken", { kind: "organizationId" }] as const,
 

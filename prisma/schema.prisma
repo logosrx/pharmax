@@ -791,6 +791,8 @@ model Organization {
   recoveryCodes       RecoveryCode[]
   passwordHistory     PasswordHistory[]
   passwordResetTokens PasswordResetToken[]
+  webAuthnCredentials WebAuthnCredential[]
+  webAuthnChallenges  WebAuthnChallenge[]
 
   // Platform surface (ADR-0032).
   apiKeys                      ApiKey[]
@@ -1061,6 +1063,8 @@ model User {
   recoveryCodes       RecoveryCode[]
   passwordHistory     PasswordHistory[]
   passwordResetTokens PasswordResetToken[]
+  webAuthnCredentials WebAuthnCredential[]
+  webAuthnChallenges  WebAuthnChallenge[]
 
   // Break-glass sessions (@pharmax/security).
   breakGlassSessionsRequested BreakGlassSession[] @relation("BreakGlassSessionRequester")
@@ -1259,6 +1263,81 @@ model RecoveryCode {
   // (R3 in check-prisma-schema).
   @@index([organizationId])
   @@map("recovery_code")
+}
+
+// A registered WebAuthn authenticator (security key / passkey) for an
+// operator (ADR-0036 slice 1). The public key is public by definition
+// (possession of the row is useless without the authenticator's
+// private key), so it is NOT KMS-sealed — unlike TOTP secrets. The
+// signature counter is BIGINT because the spec allows the full uint32
+// range. Multiple credentials per user are allowed; `disabledAt` is a
+// soft revocation stamp (never delete — audit evidence).
+model WebAuthnCredential {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  userId         String       @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Base64url credential id as returned by the authenticator.
+  credentialId String   @unique
+  // Base64url-encoded COSE public key.
+  publicKey    String
+  // Signature counter for clone detection (uint32 → BIGINT).
+  counter      BigInt   @default(0)
+  // Authenticator transports reported at registration (usb/nfc/ble/
+  // internal/hybrid) — replayed into allowCredentials hints.
+  transports   String[]
+  // Authenticator model identifier from attestation (may be zeroes
+  // under attestation "none").
+  aaguid       String?
+  // User-visible label ("YubiKey 5C", "MacBook Touch ID").
+  label        String
+
+  lastUsedAt DateTime?
+  disabledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, disabledAt])
+  // Planner-friendly index for the RLS `organizationId = guc` filter
+  // (R3 in check-prisma-schema).
+  @@index([organizationId])
+  @@map("webauthn_credential")
+}
+
+// Which WebAuthn ceremony a challenge was minted for. A registration
+// challenge can never verify an assertion and vice versa.
+enum WebAuthnCeremony {
+  REGISTRATION
+  AUTHENTICATION
+}
+
+// Single-use, short-TTL WebAuthn ceremony challenge (ADR-0036). The
+// verifying command consumes the row (`consumedAt`) in the same
+// transaction as the cryptographic check, so a challenge can never
+// verify twice. Expired rows are purged opportunistically at mint time.
+model WebAuthnChallenge {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  userId         String       @db.Uuid
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  purpose    WebAuthnCeremony
+  // Base64url challenge exactly as embedded in the ceremony options.
+  challenge  String
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, purpose])
+  // Planner-friendly index for the RLS `organizationId = guc` filter
+  // (R3 in check-prisma-schema).
+  @@index([organizationId])
+  @@map("webauthn_challenge")
 }
 
 // Anti-reuse history of prior password hashes (Argon2id). The engine
