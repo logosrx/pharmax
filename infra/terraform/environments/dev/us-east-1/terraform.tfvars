@@ -1,0 +1,81 @@
+# =============================================================================
+# Pharmax — dev / us-east-1 values.
+#
+# Sizing here favors low cost over availability — dev runs single-NAT,
+# no Multi-AZ RDS, short log retention.
+# =============================================================================
+
+project     = "pharmax"
+environment = "dev"
+region      = "us-east-1"
+
+# ---- Network ----------------------------------------------------------------
+vpc_cidr                     = "10.40.0.0/16"
+availability_zone_count      = 2
+nat_gateway_strategy         = "single"
+vpc_flow_logs_retention_days = 30
+
+# ---- ALB --------------------------------------------------------------------
+acm_certificate_domain   = "dev.pharmax.co"
+alb_idle_timeout_seconds = 60
+
+# ---- KMS --------------------------------------------------------------------
+asymm_sign_key_spec = "ECC_NIST_P384"
+
+# ---- Database (Aurora PostgreSQL) -------------------------------------------
+# Dev favors cost: Aurora Serverless v2, writer-only (no reader). The reader
+# count is 0 so reports read the primary (REPORTING_DATABASE_URL not injected).
+aurora_capacity_mode      = "serverless"
+aurora_serverless_min_acu = 0.5
+aurora_serverless_max_acu = 4
+aurora_reader_count       = 0
+
+rds_engine_version                      = "16.4"
+rds_backup_retention_days               = 7
+rds_deletion_protection                 = false
+rds_performance_insights_retention_days = 7
+
+# instance_class is only used in provisioned mode; kept for when dev switches.
+rds_instance_class = "db.t4g.medium"
+
+# DEPRECATED (Aurora auto-scales storage / derives its param-group family /
+# is inherently Multi-AZ via readers). Retained so this file stays valid.
+rds_allocated_storage_gb     = 50
+rds_max_allocated_storage_gb = 200
+rds_parameter_group_family   = "postgres16"
+rds_multi_az                 = false
+
+# ---- ECS --------------------------------------------------------------------
+ecs_web_cpu                    = 512
+ecs_web_memory                 = 1024
+ecs_web_desired_count          = 1
+ecs_web_min_count              = 1
+ecs_web_max_count              = 3
+ecs_worker_cpu                 = 512
+ecs_worker_memory              = 1024
+ecs_worker_desired_count       = 1
+ecs_print_agent_cpu            = 256
+ecs_print_agent_memory         = 512
+ecs_print_agent_desired_count  = 1
+ecs_log_retention_days         = 14
+ecs_container_insights_enabled = true
+
+# ---- WAF / Alarms -----------------------------------------------------------
+waf_rate_limit_per_5min = 5000
+alarm_sns_topic_arn     = ""
+
+# ---- Audit archive ----------------------------------------------------------
+audit_archive_retention_years         = 7
+audit_archive_glacier_transition_days = 90
+
+tags = {
+  CostCenter = "engineering-dev"
+}
+
+# ---- CI/CD deploy role ------------------------------------------------------
+# Creates the GitHub Actions OIDC deploy role for .github/workflows/deploy.yml.
+# dev creates the account-level OIDC provider (first working dir to do so).
+enable_cicd_deploy_role   = true
+cicd_github_repository    = "logosrx/pharmax"
+cicd_github_environment   = "dev"
+cicd_create_oidc_provider = true
