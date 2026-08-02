@@ -202,3 +202,15 @@ describe("EasyPostShippingAdapter.purchaseLabel", () => {
     expect(result.trackingNumber).toBe("1Z9999999999999999");
   });
 });
+
+describe("EasyPostShippingAdapter — signature options", () => {
+  it("rejects a signatureOption loudly instead of silently downgrading", async () => {
+    const client = makeClient(() => {
+      throw new Error("HTTP must not be reached when the option is unsupported");
+    });
+    const adapter = new EasyPostShippingAdapter({ client });
+    await expect(
+      adapter.purchaseLabel({ ...PURCHASE_INPUT, signatureOption: "ADULT" })
+    ).rejects.toMatchObject({ code: "SIGNATURE_OPTION_UNSUPPORTED" });
+  });
+});

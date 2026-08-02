@@ -34,12 +34,30 @@ export interface ShippingParcel {
   readonly weightOunces: number;
 }
 
+/**
+ * Delivery signature requirement. Carrier-agnostic names; each
+ * adapter maps to its provider's codes.
+ *
+ * Compliance note: prescription shipments — controlled substances
+ * especially — often REQUIRE direct or adult signature. Adapters
+ * that cannot honor a requested option MUST throw
+ * (`SIGNATURE_OPTION_UNSUPPORTED`), never silently downgrade: a
+ * package that ships without its required signature is a compliance
+ * incident, not a fallback.
+ */
+export type SignatureOption = "NO_SIGNATURE_REQUIRED" | "INDIRECT" | "DIRECT" | "ADULT";
+
 export interface PurchaseLabelInput {
   readonly fromAddress: ShippingAddress;
   readonly toAddress: ShippingAddress;
   readonly parcel: ShippingParcel;
   readonly carrier: ShipmentCarrier;
   readonly serviceLevel: string;
+  /**
+   * Omitted → the carrier's service default (no special service
+   * requested on the label).
+   */
+  readonly signatureOption?: SignatureOption;
 }
 
 export interface PurchasedLabel {
@@ -59,6 +77,47 @@ export interface PurchasedLabel {
    */
   readonly labelPdfBase64: string | null;
   readonly postageRateCents: number | null;
+}
+
+/**
+ * Normalized deliverability verdict from a carrier address check.
+ *
+ *   - CONFIRMED   — carrier confirms the address as deliverable
+ *                   (FedEx: DPV true).
+ *   - UNCONFIRMED — the address resolved but the carrier could not
+ *                   confirm the delivery point. Callers should
+ *                   PROCEED (blocking here would false-positive on
+ *                   new construction, rural routes, suites).
+ *   - INVALID     — the carrier could not resolve the address at
+ *                   all. Callers should block before spending money
+ *                   on a label.
+ */
+export type AddressDeliverability = "CONFIRMED" | "UNCONFIRMED" | "INVALID";
+
+export interface AddressValidationResult {
+  readonly deliverability: AddressDeliverability;
+  /** BUSINESS / RESIDENTIAL / MIXED / UNKNOWN (carrier-normalized). */
+  readonly classification: string | null;
+}
+
+export interface GetRatesInput {
+  readonly fromAddress: ShippingAddress;
+  readonly toAddress: ShippingAddress;
+  readonly parcel: ShippingParcel;
+}
+
+/**
+ * One purchasable service option from a rate-shopping call.
+ * `serviceLevel` is the carrier service code, directly usable as
+ * `PurchaseLabelInput.serviceLevel` — quote → pick → buy round-trips
+ * without translation.
+ */
+export interface RateQuoteOption {
+  readonly carrier: ShipmentCarrier;
+  readonly serviceLevel: string;
+  /** Human-readable service name when the carrier provides one. */
+  readonly serviceName: string | null;
+  readonly rateCents: number;
 }
 
 export interface CancelLabelResult {
@@ -92,4 +151,21 @@ export interface ShippingAdapter {
    * second call if the provider already considers it cancelled.
    */
   cancelLabel?(input: { trackingNumber: string }): Promise<CancelLabelResult>;
+  /**
+   * Validate a destination address against the carrier's address
+   * database BEFORE purchasing a label. Providers without a
+   * validation API omit this; callers feature-check.
+   *
+   * Availability contract: implementations should throw only for
+   * transport/API failures — the CALLER decides whether to fail
+   * open (a validation-service outage must not block shipping).
+   */
+  validateAddress?(input: ShippingAddress): Promise<AddressValidationResult>;
+  /**
+   * Quote every purchasable service for a shipment (rate shopping)
+   * WITHOUT buying anything. Providers without a rating API omit
+   * this; callers feature-check. Returned options sort cheapest
+   * first.
+   */
+  getRates?(input: GetRatesInput): Promise<ReadonlyArray<RateQuoteOption>>;
 }

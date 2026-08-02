@@ -56,6 +56,8 @@ const CARRIERS: ReadonlySet<ShipmentCarrier> = new Set([
   ShipmentCarrier.OTHER,
 ]);
 
+const SIGNATURE_OPTIONS = new Set(["NO_SIGNATURE_REQUIRED", "INDIRECT", "DIRECT", "ADULT"]);
+
 function readString(body: FormData | Record<string, unknown>, key: string): string | null {
   const raw = body instanceof FormData ? body.get(key) : (body as Record<string, unknown>)[key];
   return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
@@ -89,6 +91,15 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
       }
       if (serviceLevel === null) return { error: "serviceLevel is required." };
 
+      // Optional delivery-signature requirement. Empty / absent →
+      // carrier service default (field omitted from the command).
+      const signatureOption = readString(body, "signatureOption");
+      if (signatureOption !== null && !SIGNATURE_OPTIONS.has(signatureOption)) {
+        return {
+          error: `signatureOption must be one of: ${Array.from(SIGNATURE_OPTIONS).join(", ")}.`,
+        };
+      }
+
       const resolved = await resolvePurchaseContext({ organizationId, orderId });
       if (!resolved.ok) {
         return { error: `${resolved.code}: ${resolved.message}` };
@@ -102,6 +113,12 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
         fromAddress: resolved.context.fromAddress,
         toAddress: resolved.context.toAddress,
         parcel: resolved.context.parcel,
+        ...(signatureOption !== null
+          ? {
+              signatureOption: signatureOption as
+                "NO_SIGNATURE_REQUIRED" | "INDIRECT" | "DIRECT" | "ADULT",
+            }
+          : {}),
       };
     },
     successRedirect: () => `/ops/shipping?flash=shipment_created&orderId=${orderId}`,

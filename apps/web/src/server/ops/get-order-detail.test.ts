@@ -112,6 +112,7 @@ function buildOrderRow(overrides: Record<string, unknown> = {}): Record<string, 
         sha256: "feedface0001",
       },
     ],
+    shipments: [],
     ...overrides,
   };
 }
@@ -170,6 +171,46 @@ describe("getOrderDetail — happy path", () => {
     // The matchedOrderId/matchedPatientId are redundant on this
     // relation (it IS the matched order) so they're not selected.
     expect("notesEnc" in selectArg.select).toBe(false);
+  });
+
+  it("projects the shipment with the pickup-to-delivery transit columns", async () => {
+    prismaMock.order.findFirst.mockResolvedValueOnce(
+      buildOrderRow({
+        shipments: [
+          {
+            id: "00000000-0000-4000-8000-0000000000ee",
+            status: "DELIVERED",
+            carrier: "FEDEX",
+            serviceLevel: "FEDEX_GROUND",
+            trackingNumber: "794665654567",
+            confirmedAt: new Date("2026-07-28T15:00:00.000Z"),
+            estimatedDeliveryAt: new Date("2026-07-30T20:00:00.000Z"),
+            pickedUpAt: new Date("2026-07-28T18:00:00.000Z"),
+            deliveredAt: new Date("2026-07-30T14:00:00.000Z"),
+            transitSeconds: 44 * 3600,
+            lastTrackingEventAt: new Date("2026-07-30T14:00:00.000Z"),
+            lastTrackingEventKind: "DELIVERED",
+          },
+        ],
+      })
+    );
+    decryptMock.mockResolvedValue("x");
+    const result = await getOrderDetail({ organizationId: ORG_ID, orderId: ORDER_ID });
+    expect(result?.shipment).toMatchObject({
+      shipmentId: "00000000-0000-4000-8000-0000000000ee",
+      trackingNumber: "794665654567",
+      pickedUpAt: new Date("2026-07-28T18:00:00.000Z"),
+      deliveredAt: new Date("2026-07-30T14:00:00.000Z"),
+      transitSeconds: 44 * 3600,
+      estimatedDeliveryAt: new Date("2026-07-30T20:00:00.000Z"),
+    });
+  });
+
+  it("projects a null shipment when the order has none", async () => {
+    prismaMock.order.findFirst.mockResolvedValueOnce(buildOrderRow());
+    decryptMock.mockResolvedValue("x");
+    const result = await getOrderDetail({ organizationId: ORG_ID, orderId: ORDER_ID });
+    expect(result?.shipment).toBeNull();
   });
 
   it("projects an empty packagePhotos array when the order has none", async () => {

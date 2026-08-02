@@ -83,6 +83,11 @@ export interface FedExPackagePayload {
     readonly height: number;
     readonly units: "IN" | "CM";
   };
+  /** Package-level special services (signature options etc.). */
+  readonly packageSpecialServices?: {
+    readonly signatureOptionType?:
+      "SERVICE_DEFAULT" | "NO_SIGNATURE_REQUIRED" | "INDIRECT" | "DIRECT" | "ADULT";
+  };
 }
 
 export interface FedExRateQuoteRequest {
@@ -239,6 +244,38 @@ export interface FedExTrackResponse {
   };
 }
 
+/**
+ * Address Validation API request. One address per call — the API
+ * accepts a batch but our pre-flight validates a single ship-to.
+ */
+export interface FedExAddressValidationRequest {
+  readonly addressesToValidate: ReadonlyArray<{
+    readonly address: FedExAddressPayload;
+  }>;
+}
+
+export interface FedExResolvedAddress {
+  readonly streetLinesToken?: ReadonlyArray<string>;
+  readonly city?: string;
+  readonly stateOrProvinceCode?: string;
+  readonly postalCode?: string;
+  readonly countryCode?: string;
+  /** BUSINESS / RESIDENTIAL / MIXED / UNKNOWN. */
+  readonly classification?: string;
+  /**
+   * String-typed booleans as FedEx returns them, e.g.
+   * `{ "DPV": "true", "Resolved": "true", "Matched": "true" }`.
+   */
+  readonly attributes?: Readonly<Record<string, string>>;
+}
+
+export interface FedExAddressValidationResponse {
+  readonly output?: {
+    readonly resolvedAddresses?: ReadonlyArray<FedExResolvedAddress>;
+    readonly alerts?: ReadonlyArray<{ readonly code?: string; readonly message?: string }>;
+  };
+}
+
 const DEFAULT_BASE_URL = "https://apis.fedex.com";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_TOKEN_SAFETY_WINDOW_MS = 30_000;
@@ -346,6 +383,22 @@ export class FedExClient {
     return this.bearerRequest<FedExCancelShipmentResponse>(
       "PUT",
       "/ship/v1/shipments/cancel",
+      body
+    );
+  }
+
+  /**
+   * Resolve / validate a destination address via the FedEx Address
+   * Validation API (`POST /address/v1/addresses/resolve`). Returns
+   * the raw resolution; the adapter derives the normalized
+   * deliverability verdict.
+   */
+  public async validateAddress(
+    body: FedExAddressValidationRequest
+  ): Promise<FedExAddressValidationResponse> {
+    return this.bearerRequest<FedExAddressValidationResponse>(
+      "POST",
+      "/address/v1/addresses/resolve",
       body
     );
   }

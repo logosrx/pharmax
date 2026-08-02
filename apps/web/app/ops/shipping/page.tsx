@@ -13,6 +13,8 @@
 //
 // PHI: queue surface is non-PHI.
 
+import Link from "next/link";
+
 import { ShipmentCarrier, type ShipmentStatus, type ShippingProvider } from "@pharmax/database";
 import { PERMISSIONS } from "@pharmax/rbac";
 
@@ -28,6 +30,7 @@ import {
 import { ALLOWED_CARRIERS_BY_PROVIDER } from "../../../src/server/ops/resolve-purchase-context.js";
 import { PageHeader, Section } from "../../../src/components/ui/page.js";
 import { Badge, type Tone } from "../../../src/components/ui/badge.js";
+import { buttonClass } from "../../../src/components/ui/button.js";
 import { Banner, EmptyState, PermissionDenied } from "../../../src/components/ui/feedback.js";
 import { Field, Input, Select } from "../../../src/components/ui/field.js";
 import { Icon } from "../../../src/components/ui/icon.js";
@@ -49,6 +52,16 @@ const CARRIER_OPTIONS: ReadonlyArray<ShipmentCarrier> = [
   ShipmentCarrier.DHL,
   ShipmentCarrier.OTHER,
 ];
+
+/** "2d 4.5h" / "7.2h" / "45m" — operator-readable transit duration. */
+function formatDuration(seconds: number): string {
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  const hours = seconds / 3600;
+  if (hours < 24) return `${(Math.round(hours * 10) / 10).toString()}h`;
+  const days = Math.floor(hours / 24);
+  const remHours = Math.round((hours - days * 24) * 10) / 10;
+  return remHours === 0 ? `${days}d` : `${days}d ${remHours}h`;
+}
 
 function shipmentStatusTone(status: ShipmentStatus): Tone {
   switch (status) {
@@ -127,6 +140,28 @@ function ShippingRow({
                 ) : null}
               </div>
             ) : null}
+            {row.shipment!.transitSeconds !== null ? (
+              // Delivered: show the door-to-door time the package took.
+              <div className="text-xs text-subtle">
+                Transit (pickup → delivery):{" "}
+                <span className="font-semibold tabular-nums text-fg">
+                  {formatDuration(row.shipment!.transitSeconds)}
+                </span>
+              </div>
+            ) : row.shipment!.estimatedDeliveryAt !== null ? (
+              // In flight: show the carrier's ETA, flagged once lapsed.
+              <div className="text-xs text-subtle">
+                Carrier ETA:{" "}
+                <span className="tabular-nums">
+                  {row.shipment!.estimatedDeliveryAt.toISOString().replace("T", " ").slice(0, 16)}Z
+                </span>
+                {nowMs > row.shipment!.estimatedDeliveryAt.getTime() ? (
+                  <Badge tone="warning" className="ml-2">
+                    past estimate
+                  </Badge>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -175,7 +210,7 @@ function ShippingRow({
                   ))}
                 </Select>
               </Field>
-              <Field label="Service level" className="sm:col-span-2">
+              <Field label="Service level">
                 <Input
                   type="text"
                   name="serviceLevel"
@@ -183,8 +218,29 @@ function ShippingRow({
                   placeholder="PRIORITY, FEDEX_GROUND, UPS_GROUND"
                 />
               </Field>
-              <div className="sm:col-span-4">
+              <Field label="Signature">
+                {/* Compliance control: controlled substances typically
+                    require DIRECT or ADULT. FedEx honors all options;
+                    other providers reject with a clear error rather
+                    than silently downgrading. */}
+                <Select name="signatureOption" defaultValue="">
+                  <option value="">Carrier default</option>
+                  <option value="NO_SIGNATURE_REQUIRED">No signature</option>
+                  <option value="INDIRECT">Indirect signature</option>
+                  <option value="DIRECT">Direct signature</option>
+                  <option value="ADULT">Adult signature</option>
+                </Select>
+              </Field>
+              <div className="flex items-center gap-3 sm:col-span-4">
                 <SubmitButton icon="package">Auto-purchase label</SubmitButton>
+                {availableProviders.includes("FEDEX" as ShippingProvider) ? (
+                  <Link
+                    href={`/ops/shipping/${row.orderId}/rates?provider=FEDEX`}
+                    className={buttonClass({ variant: "secondary", size: "sm" })}
+                  >
+                    Shop rates first
+                  </Link>
+                ) : null}
               </div>
             </ActionForm>
           </div>

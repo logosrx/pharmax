@@ -4159,6 +4159,29 @@ model Shipment {
   labelUrl       String?
   labelPdfBase64 String?
 
+  // Postage cost of the purchased label in integer USD cents, as
+  // reported by the carrier at purchase time. NULL for manual
+  // BYO-tracking shipments, for rows created before cost persistence
+  // landed, and when the carrier omits rating from the ship
+  // response. Reports must treat NULL as "cost unknown", not zero.
+  postageRateCents Int?
+
+  // Pre-purchase carrier address-validation outcome (verdict only,
+  // never address content). NULL = not validated (provider without
+  // a validation API, validation-service outage fail-open, manual
+  // shipment, or pre-migration row). INVALID never lands here —
+  // those purchases are blocked in PurchaseShipmentLabel.
+  addressDeliverability String?
+  addressClassification String?
+  addressValidatedAt    DateTime?
+
+  // Delivery-signature requirement the label was purchased with
+  // (NO_SIGNATURE_REQUIRED / INDIRECT / DIRECT / ADULT). NULL =
+  // carrier default or manual shipment. Non-NULL means the carrier
+  // accepted the requirement (unsupported combinations throw at
+  // purchase time — no silent downgrade).
+  signatureOption String?
+
   createdByUserId String @db.Uuid
   createdByUser   User   @relation("ShipmentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
 
@@ -4184,6 +4207,17 @@ model Shipment {
   // applied tracking event carries one. Drives on-time-vs-estimate
   // reporting and "running late" surfacing.
   estimatedDeliveryAt DateTime?
+
+  // Pickup-to-delivery transit, maintained by
+  // RecordShipmentTrackingEvent from the scan ledger. `pickedUpAt`
+  // is the EARLIEST movement scan (min semantics — backfills pull it
+  // back, never forward); `deliveredAt` is the earliest DELIVERED
+  // scan; `transitSeconds` is their difference, persisted so every
+  // order carries its door-to-door time as a plain column. NULL
+  // until both endpoints are known.
+  pickedUpAt     DateTime?
+  deliveredAt    DateTime?
+  transitSeconds Int?
 
   trackingEvents ShipmentTrackingEvent[]
   packagePhotos  PackagePhoto[]          @relation("PackagePhotoSourceShipment")

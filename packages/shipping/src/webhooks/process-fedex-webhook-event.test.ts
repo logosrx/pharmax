@@ -122,6 +122,8 @@ function buildPrismaFake() {
         status: "CONFIRMED",
         lastTrackingEventAt: null,
         lastTrackingEventKind: null,
+        pickedUpAt: null,
+        deliveredAt: null,
       })),
       update: shipmentUpdate,
     },

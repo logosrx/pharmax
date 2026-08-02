@@ -83,6 +83,8 @@ interface FakeOverrides {
     status: ShipmentStatus;
     lastTrackingEventAt: Date | null;
     lastTrackingEventKind: ShipmentTrackingEventKind | null;
+    pickedUpAt?: Date | null;
+    deliveredAt?: Date | null;
   } | null;
   createThrows?: Error | null;
 }
@@ -93,17 +95,22 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
 } {
   const calls: FakeCall[] = [];
 
+  const defaultShipmentRow = {
+    id: SHIPMENT_ID,
+    orderId: ORDER_ID,
+    siteId: SITE_ID,
+    status: ShipmentStatus.CONFIRMED,
+    lastTrackingEventAt: null,
+    lastTrackingEventKind: null,
+    pickedUpAt: null,
+    deliveredAt: null,
+  };
   const shipmentRow =
     overrides.shipment === undefined
-      ? {
-          id: SHIPMENT_ID,
-          orderId: ORDER_ID,
-          siteId: SITE_ID,
-          status: ShipmentStatus.CONFIRMED,
-          lastTrackingEventAt: null,
-          lastTrackingEventKind: null,
-        }
-      : overrides.shipment;
+      ? defaultShipmentRow
+      : overrides.shipment === null
+        ? null
+        : { pickedUpAt: null, deliveredAt: null, ...overrides.shipment };
   const createThrows = overrides.createThrows ?? null;
 
   const tx = {
@@ -355,8 +362,157 @@ describe("RecordShipmentTrackingEvent — happy path", () => {
       )
     );
 
-    // Older event → no shipment update at all (estimate included).
-    expect(callsOf(fake.calls, "shipment", "update")).toHaveLength(0);
+    // Older event → the estimate must NOT be clobbered. The event
+    // does stamp `pickedUpAt` (first observed movement), but that
+    // endpoint-only update carries no estimate, no status, and no
+    // heartbeat.
+    const updates = callsOf(fake.calls, "shipment", "update");
+    expect(updates).toHaveLength(1);
+    const updateData = (updates[0]!.args as { data: Record<string, unknown> }).data;
+    expect(updateData).not.toHaveProperty("estimatedDeliveryAt");
+    expect(updateData).not.toHaveProperty("status");
+    expect(updateData).not.toHaveProperty("lastTrackingEventAt");
+  });
+});
+
+describe("RecordShipmentTrackingEvent — pickup-to-delivery transit", () => {
+  it("stamps pickedUpAt on the first movement scan without setting transitSeconds", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        RecordShipmentTrackingEvent,
+        deliveredInput({
+          kind: ShipmentTrackingEventKind.IN_TRANSIT,
+          carrierStatus: "PU",
+          externalEventId: "evt_pickup_1",
+          occurredAt: "2026-05-24T12:00:00.000Z",
+        }),
+        { idempotencyKey: "fedex-poll:evt_pickup_1" }
+      )
+    );
+
+    const updateData = (
+      callsOf(fake.calls, "shipment", "update")[0]!.args as { data: Record<string, unknown> }
+    ).data;
+    expect(updateData["pickedUpAt"]).toEqual(new Date("2026-05-24T12:00:00.000Z"));
+    expect(updateData["deliveredAt"]).toBeNull();
+    expect(updateData["transitSeconds"]).toBeNull();
+  });
+
+  it("stamps deliveredAt on the DELIVERED scan and computes transitSeconds from pickedUpAt", async () => {
+    const fake = buildPrismaFake({
+      shipment: {
+        id: SHIPMENT_ID,
+        orderId: ORDER_ID,
+        siteId: SITE_ID,
+        status: ShipmentStatus.IN_TRANSIT,
+        lastTrackingEventAt: new Date("2026-05-24T12:00:00.000Z"),
+        lastTrackingEventKind: ShipmentTrackingEventKind.IN_TRANSIT,
+        pickedUpAt: new Date("2026-05-24T12:00:00.000Z"),
+        deliveredAt: null,
+      },
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        RecordShipmentTrackingEvent,
+        deliveredInput({
+          externalEventId: "evt_delivered_1",
+          occurredAt: "2026-05-25T15:30:00.000Z", // 27.5h after pickup
+        }),
+        { idempotencyKey: "fedex-poll:evt_delivered_1" }
+      )
+    );
+
+    const updateData = (
+      callsOf(fake.calls, "shipment", "update")[0]!.args as { data: Record<string, unknown> }
+    ).data;
+    expect(updateData["deliveredAt"]).toEqual(new Date("2026-05-25T15:30:00.000Z"));
+    expect(updateData["transitSeconds"]).toBe(27.5 * 3600);
+    // The delivered event also advances the cached status.
+    expect(updateData["status"]).toBe(ShipmentStatus.DELIVERED);
+  });
+
+  it("pulls pickedUpAt BACK on an out-of-order earlier movement scan and recomputes transit", async () => {
+    // Shipment already delivered; a backfilled scan reveals pickup
+    // happened 6h earlier than previously known. The event is older
+    // than the cached last event (no status/heartbeat change) but the
+    // transit endpoints must still move.
+    const fake = buildPrismaFake({
+      shipment: {
+        id: SHIPMENT_ID,
+        orderId: ORDER_ID,
+        siteId: SITE_ID,
+        status: ShipmentStatus.DELIVERED,
+        lastTrackingEventAt: new Date("2026-05-25T15:30:00.000Z"),
+        lastTrackingEventKind: ShipmentTrackingEventKind.DELIVERED,
+        pickedUpAt: new Date("2026-05-24T12:00:00.000Z"),
+        deliveredAt: new Date("2026-05-25T15:30:00.000Z"),
+      },
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        RecordShipmentTrackingEvent,
+        deliveredInput({
+          kind: ShipmentTrackingEventKind.IN_TRANSIT,
+          carrierStatus: "PU",
+          externalEventId: "evt_backfill_pickup_1",
+          occurredAt: "2026-05-24T06:00:00.000Z",
+        }),
+        { idempotencyKey: "fedex-poll:evt_backfill_pickup_1" }
+      )
+    );
+
+    const updateData = (
+      callsOf(fake.calls, "shipment", "update")[0]!.args as { data: Record<string, unknown> }
+    ).data;
+    expect(updateData["pickedUpAt"]).toEqual(new Date("2026-05-24T06:00:00.000Z"));
+    expect(updateData["transitSeconds"]).toBe(33.5 * 3600); // 6h more than before
+    // Endpoint-only update: no status, no heartbeat.
+    expect(updateData).not.toHaveProperty("status");
+    expect(updateData).not.toHaveProperty("lastTrackingEventAt");
+  });
+
+  it("does NOT move endpoints for later duplicate-ish scans (min semantics)", async () => {
+    const fake = buildPrismaFake({
+      shipment: {
+        id: SHIPMENT_ID,
+        orderId: ORDER_ID,
+        siteId: SITE_ID,
+        status: ShipmentStatus.IN_TRANSIT,
+        lastTrackingEventAt: new Date("2026-05-24T12:00:00.000Z"),
+        lastTrackingEventKind: ShipmentTrackingEventKind.IN_TRANSIT,
+        pickedUpAt: new Date("2026-05-24T12:00:00.000Z"),
+        deliveredAt: null,
+      },
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        RecordShipmentTrackingEvent,
+        deliveredInput({
+          kind: ShipmentTrackingEventKind.IN_TRANSIT,
+          carrierStatus: "AR",
+          externalEventId: "evt_later_scan_1",
+          occurredAt: "2026-05-24T18:00:00.000Z", // later movement scan
+        }),
+        { idempotencyKey: "fedex-poll:evt_later_scan_1" }
+      )
+    );
+
+    // Strictly-newer heartbeat update happens, but pickedUpAt is not
+    // pushed forward by the later scan.
+    const updateData = (
+      callsOf(fake.calls, "shipment", "update")[0]!.args as { data: Record<string, unknown> }
+    ).data;
+    expect(updateData).not.toHaveProperty("pickedUpAt");
+    expect(updateData).not.toHaveProperty("transitSeconds");
   });
 });
 
@@ -389,7 +545,15 @@ describe("RecordShipmentTrackingEvent — newer-only advancement", () => {
 
     expect(out.applied).toBe(true);
     expect(out.cachedStatusAdvanced).toBe(false);
-    expect(callsOf(fake.calls, "shipment", "update")).toHaveLength(0);
+    // The older IN_TRANSIT scan is this shipment's first observed
+    // movement, so it stamps `pickedUpAt` — but as an ENDPOINT-ONLY
+    // update: status and heartbeat must not move.
+    const updates = callsOf(fake.calls, "shipment", "update");
+    expect(updates).toHaveLength(1);
+    const updateData = (updates[0]!.args as { data: Record<string, unknown> }).data;
+    expect(updateData).not.toHaveProperty("status");
+    expect(updateData).not.toHaveProperty("lastTrackingEventAt");
+    expect(updateData["pickedUpAt"]).toEqual(new Date("2026-05-24T10:00:00.000Z"));
     expect(callsOf(fake.calls, "shipmentTrackingEvent", "create")).toHaveLength(1);
   });
 

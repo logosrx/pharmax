@@ -65,6 +65,17 @@ export class UpsShippingAdapter implements ShippingAdapter {
   public constructor(private readonly options: UpsShippingAdapterOptions) {}
 
   public async purchaseLabel(input: PurchaseLabelInput): Promise<PurchasedLabel> {
+    // Not wired for UPS yet — loud failure, never a silent
+    // signature-requirement downgrade (see the EasyPost adapter for
+    // the compliance rationale).
+    if (input.signatureOption !== undefined) {
+      throw new errors.ValidationError({
+        code: "SIGNATURE_OPTION_UNSUPPORTED",
+        message:
+          "Signature options are not supported on the UPS provider yet. Use the FedEx provider or purchase without a signature requirement.",
+        metadata: { provider: "ups", signatureOption: input.signatureOption },
+      });
+    }
     if (input.carrier !== ShipmentCarrier.UPS && input.carrier !== ShipmentCarrier.OTHER) {
       throw new errors.ValidationError({
         code: "UPS_CARRIER_MISMATCH",
