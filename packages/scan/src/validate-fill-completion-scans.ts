@@ -11,18 +11,40 @@ export const FILL_SCAN_DUPLICATE_LINE = "FILL_SCAN_DUPLICATE_LINE";
 export const FILL_SCAN_PARSE_FAILED = "FILL_SCAN_PARSE_FAILED";
 export const FILL_SCAN_LOT_MISMATCH = "FILL_SCAN_LOT_MISMATCH";
 export const FILL_SCAN_LOT_NUMBER_REQUIRED = "FILL_SCAN_LOT_NUMBER_REQUIRED";
+export const FILL_SCAN_LOT_SCAN_REQUIRED = "FILL_SCAN_LOT_SCAN_REQUIRED";
+export const FILL_SCAN_COMPOUND_LOT_UNEXPECTED = "FILL_SCAN_COMPOUND_LOT_UNEXPECTED";
 export const FILL_SCAN_NDC_MISMATCH = "FILL_SCAN_NDC_MISMATCH";
 export const FILL_SCAN_VIAL_LABEL_MISMATCH = "FILL_SCAN_VIAL_LABEL_MISMATCH";
 
-export interface FillLineScanExpectation {
-  readonly orderLineId: string;
-  readonly expectedLotNumber: string;
-  readonly expectedNdc: string;
-}
+/**
+ * Per-line scan expectation, discriminated by line kind (ADR-0035
+ * slice 4):
+ *
+ *  - STOCK: the line dispenses from an assigned inventory lot — the
+ *    tech must scan the physical lot barcode AND the printed vial
+ *    label.
+ *  - COMPOUND: a patient-specific compounded preparation with no
+ *    finished-goods lot — there is no manufacturer barcode to scan,
+ *    so a lot scan is FORBIDDEN (its presence means the wrong
+ *    physical item is on the bench) and the vial label scan (which
+ *    encodes the order line id) is the physical check.
+ */
+export type FillLineScanExpectation =
+  | {
+      readonly orderLineId: string;
+      readonly kind: "STOCK";
+      readonly expectedLotNumber: string;
+      readonly expectedNdc: string;
+    }
+  | {
+      readonly orderLineId: string;
+      readonly kind: "COMPOUND";
+    };
 
 export interface FillLineScanInput {
   readonly orderLineId: string;
-  readonly lotScan: string;
+  /** Required for STOCK lines; must be absent for COMPOUND lines. */
+  readonly lotScan?: string | undefined;
   readonly vialLabelScan: string;
 }
 
@@ -141,6 +163,35 @@ export function validateFillCompletionScans(input: {
         result: "HARD_STOP",
         code: FILL_SCAN_UNKNOWN_LINE,
         message: "Scan payload references an order line that is not on this order.",
+        metadata: { orderLineId: scan.orderLineId },
+      };
+    }
+
+    if (expectation.kind === "COMPOUND") {
+      // No finished-goods lot exists for a patient-specific prep. A
+      // lot scan here means a stock bottle is on the bench for a
+      // line that should hold the compounded preparation — hard stop.
+      if (scan.lotScan !== undefined && scan.lotScan.trim().length > 0) {
+        return {
+          result: "HARD_STOP",
+          code: FILL_SCAN_COMPOUND_LOT_UNEXPECTED,
+          message:
+            "This line is a compounded preparation with no stock lot — a lot barcode was scanned. Verify the physical item on the bench.",
+          metadata: { orderLineId: scan.orderLineId },
+        };
+      }
+      const compoundVialFailure = validateVialLabelScan(scan.orderLineId, scan.vialLabelScan);
+      if (compoundVialFailure !== null) {
+        return compoundVialFailure;
+      }
+      continue;
+    }
+
+    if (scan.lotScan === undefined || scan.lotScan.trim().length === 0) {
+      return {
+        result: "HARD_STOP",
+        code: FILL_SCAN_LOT_SCAN_REQUIRED,
+        message: "This line dispenses from an assigned lot; scan the physical lot barcode.",
         metadata: { orderLineId: scan.orderLineId },
       };
     }

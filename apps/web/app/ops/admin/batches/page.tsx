@@ -98,7 +98,15 @@ export default async function BatchAdminPage({
       <PageHeader
         eyebrow="Directory"
         title="Batches"
-        description="Inventory lots by soonest expiration. Expired or held lots are blocked at assignment time — status changes happen through the fill workflow, never here."
+        description="Inventory lots by soonest expiration. Expired or held lots are blocked at assignment time — status changes happen through the fill workflow; new stock arrives through DSCSA receiving."
+        actions={
+          hasOperatorPermission(permissions, PERMISSIONS.INVENTORY_RECEIVE) ? (
+            <Link href="/ops/admin/batches/receive" className={buttonClass({ variant: "go" })}>
+              <Icon name="check" size={16} />
+              Receive inventory
+            </Link>
+          ) : null
+        }
       />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -134,7 +142,14 @@ export default async function BatchAdminPage({
             <TBody>
               {result.rows.map((row) => (
                 <TR key={row.lotId}>
-                  <TD className="font-mono text-xs font-medium">{row.lotNumber}</TD>
+                  <TD className="font-mono text-xs font-medium">
+                    <Link
+                      href={`/ops/admin/batches/${row.lotId}`}
+                      className="text-brand hover:underline"
+                    >
+                      {row.lotNumber}
+                    </Link>
+                  </TD>
                   <TD>
                     <div className="font-medium">
                       {row.productName}

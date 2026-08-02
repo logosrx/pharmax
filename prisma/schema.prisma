@@ -568,6 +568,13 @@ enum InventoryTransactionReason {
   LOT_ASSIGNED
   LOT_RELEASED
   ADJUSTMENT
+  // Ingredient lot consumed by a compounding preparation (ADR-0035
+  // slice 2). Distinct from LOT_ASSIGNED, which means "dispensed lot
+  // bound to an order line".
+  COMPOUND_CONSUMED
+  // Inbound receipt credit written by ReceiveLot (ADR-0035 slice 3);
+  // paired 1:1 with a dscsa_transaction row.
+  LOT_RECEIVED
 }
 
 enum ShipmentCarrier {
@@ -806,9 +813,16 @@ model Organization {
   webAuthnChallenges  WebAuthnChallenge[]
 
   // Platform surface (ADR-0032).
-  apiKeys              ApiKey[]
-  webhookSubscriptions WebhookSubscription[]
-  webhookDeliveries    WebhookDelivery[]
+  apiKeys                      ApiKey[]
+  webhookSubscriptions         WebhookSubscription[]
+  webhookDeliveries            WebhookDelivery[]
+  compoundFormulas             CompoundFormula[]
+  compoundFormulaIngredients   CompoundFormulaIngredient[]
+  compoundingRecords           CompoundingRecord[]
+  compoundingRecordIngredients CompoundingRecordIngredient[]
+  dscsaTransactions            DscsaTransaction[]
+
+  controlledSubstanceDispensings ControlledSubstanceDispensing[]
 
   @@map("organization")
 }
@@ -873,18 +887,20 @@ model Clinic {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  siteLinks                ClinicSite[]
-  buckets                  Bucket[]
-  userRoles                UserRole[]
-  stripeCustomer           StripeCustomer?
-  invoices                 Invoice[]
-  invoiceLines             InvoiceLine[]
-  pricingRules             PricingRule[]
-  payments                 Payment[]
-  patients                 Patient[]
-  prescriptions            Prescription[]
-  orders                   Order[]
-  orderLines               OrderLine[]
+  siteLinks                      ClinicSite[]
+  buckets                        Bucket[]
+  userRoles                      UserRole[]
+  stripeCustomer                 StripeCustomer?
+  invoices                       Invoice[]
+  invoiceLines                   InvoiceLine[]
+  pricingRules                   PricingRule[]
+  payments                       Payment[]
+  patients                       Patient[]
+  prescriptions                  Prescription[]
+  orders                         Order[]
+  orderLines                     OrderLine[]
+  controlledSubstanceDispensings ControlledSubstanceDispensing[]
+
   packagePhotos            PackagePhoto[]
   packagePhotoUploadTokens PackagePhotoUploadToken[]
   workflowPolicyOverlays   WorkflowPolicyOverlay[]
@@ -1077,6 +1093,11 @@ model User {
   // Break-glass sessions (@pharmax/security).
   breakGlassSessionsRequested BreakGlassSession[] @relation("BreakGlassSessionRequester")
   breakGlassSessionsApproved  BreakGlassSession[] @relation("BreakGlassSessionApprover")
+  compoundFormulasAuthored    CompoundFormula[]   @relation("CompoundFormulaAuthor")
+  compoundingRecordsPrepared  CompoundingRecord[] @relation("CompoundingRecordPreparer")
+  dscsaTransactionsReceived   DscsaTransaction[]  @relation("DscsaTransactionReceiver")
+
+  controlledSubstancesDispensed ControlledSubstanceDispensing[]
 
   @@unique([organizationId, email])
   @@index([organizationId, status])
@@ -1541,6 +1562,7 @@ model WorkflowPolicy {
   verificationRecords            VerificationRecord[]
   overlays                       WorkflowPolicyOverlay[]
   providerOnboardingApplications ProviderOnboardingApplication[]
+  compoundingRecords             CompoundingRecord[]
 
   @@unique([organizationId, code, version])
   @@index([organizationId, status])
@@ -1690,6 +1712,10 @@ model CommandLog {
   providerSyncChecksDispatched ProviderSyncCheck[]      @relation("ProviderSyncCheckDispatchedCommandLog")
   providerSyncReviewsResolved  ProviderSyncReviewItem[] @relation("ProviderSyncReviewResolvedCommandLog")
   breakGlassActions            BreakGlassAction[]
+  compoundingRecords           CompoundingRecord[]
+  dscsaTransactions            DscsaTransaction[]
+
+  controlledSubstanceDispensings ControlledSubstanceDispensing[]
 
   @@unique([organizationId, commandName, idempotencyKey])
   @@index([organizationId, status])
@@ -3011,6 +3037,23 @@ model Prescription {
   // Dispense As Written code (0–9; 0 = generic OK).
   daw                 Int      @default(0)
 
+  // --- Controlled substances (ADR-0037 commitment 1) ---
+
+  // Snapshot of the drug's DEA schedule AS OF issuance, copied from
+  // `product.controlledSubstanceSchedule`. Denormalized deliberately:
+  // rescheduling a substance must not retroactively change the rules
+  // that governed an already-written prescription, and the Part 1306
+  // evaluators must never need a join to decide whether a fill is
+  // lawful.
+  controlledSubstanceSchedule ControlledSubstanceSchedule @default(NON_CONTROLLED)
+
+  // Earliest date a pharmacy may fill, per the prescriber's written
+  // instruction on a multiple-prescription Schedule II sequence
+  // (21 CFR 1306.12(b)(1)(ii)). 21 CFR 1306.14(e) makes this a hard
+  // bar: "no pharmacist may fill the prescription before that date."
+  // NULL = fillable immediately.
+  earliestFillDate DateTime? @db.Date
+
   // --- Encrypted PHI ---
   sigEnc              Json
   noteToPharmacistEnc Json?
@@ -3022,7 +3065,8 @@ model Prescription {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orderLines OrderLine[]
+  orderLines                     OrderLine[]
+  controlledSubstanceDispensings ControlledSubstanceDispensing[]
 
   @@unique([organizationId, clinicId, rxNumber])
   @@index([organizationId, patientId])
@@ -3030,6 +3074,9 @@ model Prescription {
   @@index([organizationId, rxNumberBi])
   @@index([organizationId, drugNdc])
   @@index([organizationId, status, expiresAt])
+  // Controlled-substance recordkeeping and reporting (21 CFR 1304):
+  // "every CS prescription in this org, by schedule, over a period".
+  @@index([organizationId, controlledSubstanceSchedule, originalDateWritten])
   @@map("prescription")
 }
 
@@ -3125,6 +3172,9 @@ model Order {
   // The queue-shaped index. Order matters: scanner filters by
   // bucket+status, sorts by priority desc + SLA asc + receivedAt
   // asc. Postgres can serve this from one btree.
+  compoundingRecords             CompoundingRecord[]
+  controlledSubstanceDispensings ControlledSubstanceDispensing[]
+
   @@index([organizationId, currentBucketId, currentStatus, priority, slaDeadlineAt, receivedAt])
   // "What is this user currently working on?"
   @@index([organizationId, currentAssigneeUserId, currentStatus])
@@ -3169,8 +3219,10 @@ model OrderLine {
   printJobs             PrintJob[]
   vialLabelRecord       VialLabel?             @relation("VialLabelOrderLine")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt                     DateTime                       @default(now())
+  updatedAt                     DateTime                       @updatedAt
+  compoundingRecords            CompoundingRecord[]
+  controlledSubstanceDispensing ControlledSubstanceDispensing?
 
   @@index([orderId])
   @@index([prescriptionId])
@@ -3769,11 +3821,20 @@ model Product {
   strength String?
   form     String?
 
+  // DEA schedule for this NDC (21 CFR part 1308). The catalog is the
+  // source of truth; `prescription.controlledSubstanceSchedule` is a
+  // point-in-time SNAPSHOT taken at prescription creation, because a
+  // substance can be rescheduled and an already-written prescription
+  // must continue to be governed by the schedule in force when it was
+  // issued.
+  controlledSubstanceSchedule ControlledSubstanceSchedule @default(NON_CONTROLLED)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lots         Lot[]
-  pricingRules PricingRule[]
+  lots                       Lot[]
+  pricingRules               PricingRule[]
+  compoundFormulaIngredients CompoundFormulaIngredient[]
 
   @@unique([organizationId, ndc])
   @@index([organizationId, name])
@@ -3798,13 +3859,72 @@ model Lot {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orderLines            OrderLine[]
-  lotAssignments        LotAssignment[]
-  inventoryTransactions InventoryTransaction[]
+  orderLines                   OrderLine[]
+  lotAssignments               LotAssignment[]
+  inventoryTransactions        InventoryTransaction[]
+  compoundingRecordIngredients CompoundingRecordIngredient[]
+  dscsaTransactions            DscsaTransaction[]
 
   @@unique([organizationId, siteId, productId, lotNumber])
   @@index([organizationId, siteId, status, expirationDate])
   @@map("lot")
+}
+
+// DSCSA transaction record for an inbound lot receipt (ADR-0035
+// slice 3; 21 USC 360eee). One row PER RECEIPT — a lot can arrive
+// across multiple shipments. Post-2023 enhanced-security exchange:
+// structured Transaction Information snapshot + the seller's
+// Transaction Statement attestation gate; Transaction History is no
+// longer exchanged. Supply-chain data only, no PHI. Statutory
+// retention 6 years — append-only, never deleted or updated.
+model DscsaTransaction {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  lotId String @db.Uuid
+  lot   Lot    @relation(fields: [lotId], references: [id], onDelete: Restrict)
+
+  // Transaction Information (360eee(26)) — denormalized snapshot so
+  // the record stays complete even if the catalog row changes.
+  productName     String
+  strength        String
+  dosageForm      String
+  ndc             String
+  containerSize   String
+  containerCount  Int
+  lotNumber       String
+  quantity        Decimal   @db.Decimal(18, 4)
+  transactionDate DateTime  @db.Date
+  // Only when it differs from the transaction date, per the statute.
+  shipmentDate    DateTime? @db.Date
+
+  sellerName    String
+  sellerAddress String
+  buyerName     String
+  buyerAddress  String
+
+  // The seller's Transaction Statement (360eee(27)) accompanied the
+  // shipment. ReceiveLot refuses receipt when false — accepting
+  // product without TI+TS is the statutory violation this gate
+  // prevents.
+  transactionStatementReceived Boolean
+
+  // Where the electronic TI/TS lives (EPCIS event/file id, ASN or
+  // invoice reference from the trading partner).
+  sourceDocumentRef String?
+
+  receivedByUserId String @db.Uuid
+  receivedByUser   User   @relation("DscsaTransactionReceiver", fields: [receivedByUserId], references: [id], onDelete: Restrict)
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, lotId])
+  @@index([organizationId, transactionDate])
+  @@map("dscsa_transaction")
 }
 
 // Structured record of a lot scan + assignment during fill.
@@ -4553,4 +4673,285 @@ model WebhookDelivery {
   @@index([organizationId, createdAt(sort: Desc)])
   @@index([organizationId, eventType, createdAt(sort: Desc)])
   @@map("webhook_delivery")
+}
+
+// DEA controlled-substance schedule (ADR-0037 commitment 1; 21 CFR
+// part 1308). Drives the Part 1306 dispensing rules in
+// `@pharmax/controlled-substances`.
+//
+// Schedule I is deliberately ABSENT. Schedule I substances have no
+// accepted medical use and cannot be the subject of a prescription
+// (21 CFR 1308.11), so a dispensable Pharmax record can never carry
+// that value. Modelling it would create a state the workflow must
+// then defend against everywhere for no legitimate case.
+enum ControlledSubstanceSchedule {
+  NON_CONTROLLED
+  CII
+  CIII
+  CIV
+  CV
+}
+
+// Basis on which a controlled substance was partially dispensed.
+// Mirrors `PartialFillBasis` in `@pharmax/controlled-substances`; the
+// Schedule II bases are distinct members rather than one PARTIAL flag
+// because each carries a DIFFERENT completion window (72 hours /
+// 30 days / 60 days — 21 CFR 1306.13(a), (b)(2), (c)).
+enum ControlledSubstancePartialFillBasis {
+  PHARMACIST_SUPPLY_SHORTFALL
+  PATIENT_OR_PRESCRIBER_REQUEST
+  LTCF_OR_TERMINALLY_ILL
+  SCHEDULE_III_TO_V
+}
+
+// No PHI: ids, quantities, dates, and the schedule only. Patient
+// identity is reachable by join under RLS, never stored in the row.
+model ControlledSubstanceDispensing {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  clinicId       String       @db.Uuid
+  clinic         Clinic       @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  prescriptionId String       @db.Uuid
+  prescription   Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Restrict)
+  orderId        String       @db.Uuid
+  order          Order        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  // One dispensing per order line. The unique is the structural guard
+  // against double-counting: if an order is reworked and `CompleteFill`
+  // runs again on the same line, the drug was still only dispensed
+  // once, and a second row would fabricate a refill that never
+  // happened.
+  orderLineId String    @unique @db.Uuid
+  orderLine   OrderLine @relation(fields: [orderLineId], references: [id], onDelete: Restrict)
+
+  // Snapshot of the prescription's schedule at the moment of
+  // dispensing, so a later rescheduling cannot rewrite history.
+  schedule          ControlledSubstanceSchedule
+  fillNumber        Int
+  quantityDispensed Decimal                              @db.Decimal(18, 4)
+  partialFillBasis  ControlledSubstancePartialFillBasis?
+
+  dispensedAt       DateTime
+  dispensedByUserId String   @db.Uuid
+  dispensedBy       User     @relation(fields: [dispensedByUserId], references: [id], onDelete: Restrict)
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  // The evaluator's read path: "this prescription's fill history, in
+  // fill order".
+  @@index([organizationId, prescriptionId, fillNumber])
+  // 21 CFR 1304 reporting: "controlled substances dispensed by this
+  // org, by schedule, over a period".
+  @@index([organizationId, schedule, dispensedAt])
+  @@map("controlled_substance_dispensing")
+}
+
+enum CompoundFormulaStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum CompoundPreparationKind {
+  NONSTERILE
+  STERILE
+}
+
+enum CompoundBudBasis {
+  USP795_NONAQUEOUS
+  USP795_AQUEOUS_PRESERVED
+  USP795_AQUEOUS_NONPRESERVED
+  USP797_CATEGORY_1
+  USP797_CATEGORY_2
+  USP797_CATEGORY_3
+  STABILITY_STUDY
+}
+
+enum CompoundStorageCondition {
+  ROOM_TEMPERATURE
+  REFRIGERATED
+  FROZEN
+}
+
+enum CompoundFormulaRetireReason {
+  SAFETY
+  FORMULARY_CHANGE
+  INGREDIENT_SOURCING
+  REGULATORY
+  ERROR
+}
+
+enum CompoundingQualityOutcome {
+  PASS
+  FAIL
+}
+
+model CompoundFormula {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  code    String
+  version Int
+  status  CompoundFormulaStatus @default(DRAFT)
+
+  name        String
+  description String?
+
+  preparationKind CompoundPreparationKind
+  // USP <800>: preparation involves a hazardous drug (NIOSH list) and
+  // requires containment/PPE controls, documented on the slice-2
+  // compounding record.
+  hazardous       Boolean                 @default(false)
+
+  // Finished-preparation dosage form / strength (free text like
+  // Product.form/strength; e.g. "suspension", "2 mg/mL").
+  finalForm     String?
+  finalStrength String?
+
+  // Beyond-use date policy: preparedAt + budDays, justified by
+  // budBasis (caps enforced at the command layer per USP <795>).
+  // budReference is required when budBasis = STABILITY_STUDY.
+  budDays          Int
+  budBasis         CompoundBudBasis
+  budReference     String?
+  storageCondition CompoundStorageCondition
+
+  instructions  String
+  qualityChecks String?
+
+  createdByUserId String @db.Uuid
+  createdByUser   User   @relation("CompoundFormulaAuthor", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  publishedAt   DateTime?
+  retiredAt     DateTime?
+  retiredReason CompoundFormulaRetireReason?
+
+  ingredients        CompoundFormulaIngredient[]
+  compoundingRecords CompoundingRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The partial UNIQUE "at most one DRAFT per (organizationId, code)"
+  // lives in the SQL migration (Prisma cannot express the WHERE
+  // clause). It serializes concurrent draft creation for a code.
+  @@unique([organizationId, code, version])
+  @@index([organizationId, status, code])
+  @@map("compound_formula")
+}
+
+model CompoundFormulaIngredient {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  formulaId String          @db.Uuid
+  formula   CompoundFormula @relation(fields: [formulaId], references: [id], onDelete: Restrict)
+
+  productId String?  @db.Uuid
+  product   Product? @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  ingredientName String
+  quantity       Decimal @db.Decimal(18, 4)
+  unit           String
+  sortOrder      Int     @default(0)
+
+  compoundingRecordIngredients CompoundingRecordIngredient[]
+
+  createdAt DateTime @default(now())
+
+  @@index([formulaId])
+  @@index([organizationId, productId])
+  @@map("compound_formula_ingredient")
+}
+
+model CompoundingRecord {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  orderId     String    @db.Uuid
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderLineId String    @db.Uuid
+  orderLine   OrderLine @relation(fields: [orderLineId], references: [id], onDelete: Restrict)
+
+  // Pinned recipe: id + denormalized (code, version) so the record
+  // stays self-describing even in exports that don't join.
+  formulaId      String          @db.Uuid
+  formula        CompoundFormula @relation(fields: [formulaId], references: [id], onDelete: Restrict)
+  formulaCode    String
+  formulaVersion Int
+
+  preparedByUserId String   @db.Uuid
+  preparedByUser   User     @relation("CompoundingRecordPreparer", fields: [preparedByUserId], references: [id], onDelete: Restrict)
+  preparedAt       DateTime
+
+  // Beyond-use date computed at preparation time: preparedAt +
+  // formula.budDays, clamped to the earliest consumed-ingredient
+  // expiration (USP: BUD never exceeds a component's expiration).
+  budAt            DateTime
+  storageCondition CompoundStorageCondition
+
+  // USP <800> snapshot + containment/PPE documentation (required at
+  // the command layer when the formula is hazardous).
+  hazardous     Boolean
+  handlingNotes String?
+
+  qualityOutcome CompoundingQualityOutcome
+  qualityNotes   String?
+
+  // Order-workflow policy pin (house rule: every verification-grade
+  // record stores the policy it was made under).
+  workflowPolicyId      String         @db.Uuid
+  workflowPolicy        WorkflowPolicy @relation(fields: [workflowPolicyId], references: [id], onDelete: Restrict)
+  workflowPolicyVersion Int
+
+  renderedDocument String
+  documentSha256   Bytes
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  ingredients CompoundingRecordIngredient[]
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, orderId])
+  @@index([organizationId, orderLineId])
+  @@index([organizationId, formulaId, preparedAt])
+  @@map("compounding_record")
+}
+
+model CompoundingRecordIngredient {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  recordId String            @db.Uuid
+  record   CompoundingRecord @relation(fields: [recordId], references: [id], onDelete: Restrict)
+
+  formulaIngredientId String                    @db.Uuid
+  formulaIngredient   CompoundFormulaIngredient @relation(fields: [formulaIngredientId], references: [id], onDelete: Restrict)
+  ingredientName      String
+
+  lotId                String?   @db.Uuid
+  lot                  Lot?      @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  manualLotNumber      String?
+  manualExpirationDate DateTime? @db.Date
+
+  quantity  Decimal @db.Decimal(18, 4)
+  unit      String
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([recordId])
+  @@index([organizationId, lotId])
+  @@map("compounding_record_ingredient")
 }
