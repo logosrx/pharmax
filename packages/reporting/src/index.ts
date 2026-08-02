@@ -72,6 +72,26 @@ export {
 } from "./reports/invoice-aging.js";
 
 export {
+  paymentsReceivedReport,
+  type PaymentsReceivedParams,
+  type PaymentsReceivedRow,
+} from "./reports/payments-received.js";
+
+export {
+  refundActivityReport,
+  type RefundActivityParams,
+  type RefundActivityRow,
+} from "./reports/refund-activity.js";
+
+export {
+  clinicStatementReport,
+  type ClinicStatementParams,
+  type ClinicStatementRow,
+  type StatementEntryType,
+  STATEMENT_ENTRY_TYPES,
+} from "./reports/clinic-statement.js";
+
+export {
   userProductivityByStageReport,
   type UserProductivityByStageParams,
   type UserProductivityByStageRow,
