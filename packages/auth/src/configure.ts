@@ -13,6 +13,7 @@ import { runtime } from "@pharmax/platform-core";
 import type { clock } from "@pharmax/platform-core";
 
 import { authNotConfiguredError } from "./errors.js";
+import { createSimpleWebAuthnAdapter, type WebAuthnAdapter } from "./mfa/webauthn.js";
 import type { PasswordHasher } from "./password/hasher.js";
 import { DEFAULT_PASSWORD_POLICY, type PasswordPolicy } from "./password/policy.js";
 import { InMemoryRateLimiter, type RateLimiter, type RateLimitRule } from "./rate-limit.js";
@@ -52,6 +53,15 @@ export interface MfaPolicy {
    * more broadly; they cannot go below this.
    */
   readonly requiredRoleCodes: ReadonlySet<string>;
+}
+
+export interface WebAuthnPolicy {
+  /** User-visible relying-party name shown in authenticator prompts. */
+  readonly rpName: string;
+  /** How long a minted ceremony challenge stays redeemable. */
+  readonly challengeTtlMs: number;
+  /** Ceremony implementation (ADR-0036 port). Fakeable in tests. */
+  readonly adapter: WebAuthnAdapter;
 }
 
 /** The privileged-role MFA floor carried forward from ADR-0025. */
@@ -96,12 +106,16 @@ export const DEFAULT_SIGN_IN_RATE_LIMIT: SignInRateLimitPolicy = Object.freeze({
   perEmail: Object.freeze({ limit: 10, windowMs: 60 * 1000 }),
 });
 
+/** WebAuthn ceremony defaults: 5-minute challenge TTL. */
+export const DEFAULT_WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+
 export interface AuthConfiguration {
   readonly clock: clock.Clock;
   readonly hasher: PasswordHasher;
   readonly password: PasswordPolicy;
   readonly session: SessionPolicy;
   readonly mfa: MfaPolicy;
+  readonly webauthn: WebAuthnPolicy;
   readonly lockout: LockoutPolicy;
   /** Sign-in burst limits (in front of the durable DB lockout). */
   readonly signInRateLimit: SignInRateLimitPolicy;
@@ -145,6 +159,7 @@ export function buildAuthConfiguration(input: {
   readonly password?: Partial<PasswordPolicy>;
   readonly session?: Partial<SessionPolicy>;
   readonly mfa?: Partial<MfaPolicy>;
+  readonly webauthn?: Partial<WebAuthnPolicy>;
   readonly lockout?: Partial<LockoutPolicy>;
   readonly resetTokenTtlMs?: number;
   readonly passwordResetMailer?: PasswordResetMailer;
@@ -157,6 +172,11 @@ export function buildAuthConfiguration(input: {
     password: Object.freeze({ ...DEFAULT_PASSWORD_POLICY, ...input.password }),
     session: Object.freeze({ ...DEFAULT_SESSION_POLICY, ...input.session }),
     mfa: Object.freeze({ ...DEFAULT_MFA_POLICY, ...input.mfa }),
+    webauthn: Object.freeze({
+      rpName: input.webauthn?.rpName ?? DEFAULT_MFA_POLICY.issuer,
+      challengeTtlMs: input.webauthn?.challengeTtlMs ?? DEFAULT_WEBAUTHN_CHALLENGE_TTL_MS,
+      adapter: input.webauthn?.adapter ?? createSimpleWebAuthnAdapter(),
+    }),
     lockout: Object.freeze({ ...DEFAULT_LOCKOUT_POLICY, ...input.lockout }),
     signInRateLimit: Object.freeze({ ...DEFAULT_SIGN_IN_RATE_LIMIT, ...input.signInRateLimit }),
     rateLimiter: input.rateLimiter ?? new InMemoryRateLimiter(),

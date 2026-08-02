@@ -35,6 +35,7 @@
     "@pharmax/verification": "workspace:*",
     "@sentry/core": "^10.69.0",
     "@sentry/nextjs": "^10.69.0",
+    "@simplewebauthn/browser": "^13.3.0",
     "next": "^16.2.12",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
