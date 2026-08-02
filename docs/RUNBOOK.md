@@ -393,6 +393,18 @@ if (!result.valid) {
 
 ## Migrations: rules of the road
 
+0. **The deploy pipeline applies them; you do not.** The `migrate` job in
+   `.github/workflows/deploy.yml` runs `prisma migrate deploy` (then
+   `prisma migrate status` as an assertion) as a one-off Fargate task on
+   the worker task definition, and the ECS rollout is gated on it. So a
+   `workflow_dispatch` of `deploy.yml` is the whole procedure — there is
+   no separate manual migration step, and no window where application
+   code is live against a schema that lacks its tables. The task runs
+   under `DIRECT_URL` (the owner connection) because the runtime
+   `DATABASE_URL` roles do not own the schema. Its stdout — the list of
+   migrations applied — is echoed into the job log as the deploy's
+   record. `prisma migrate deploy` is idempotent, so re-running a failed
+   deploy is safe.
 1. **Forward-only.** No `prisma migrate dev` against the prod DB. Use `prisma migrate deploy`.
 2. **Every new tenant table needs RLS + FORCE RLS + a `tenant_isolation` policy.** The `pnpm check:migrations` linter enforces this on every PR.
 3. **Index every FK and every `(organizationId, ...)` filter combination you actually query.** RLS + missing index = full sequential scan per row.

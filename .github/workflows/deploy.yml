@@ -1,11 +1,14 @@
 # Pharmax deploy — build container images, push to ECR, roll out to ECS.
 #
-# Pipeline: source → ECR → ECS Fargate. Builds the `web` and `worker`
-# images from apps/<svc>/Dockerfile, pushes immutable release tags to the
-# per-service ECR repos provisioned by infra/terraform/modules/ecr, then
-# registers a new task-definition revision per service and updates the
-# ECS service (with deployment circuit-breaker rollback already configured
-# on the service in Terraform).
+# Pipeline: source → ECR → migrate → ECS Fargate. Builds the `web` and
+# `worker` images from apps/<svc>/Dockerfile, pushes immutable release
+# tags to the per-service ECR repos provisioned by
+# infra/terraform/modules/ecr, applies any pending Prisma migrations as a
+# one-off Fargate task (see the `migrate` job — the rollout is gated on
+# it so code never runs ahead of the schema), then registers a new
+# task-definition revision per service and updates the ECS service (with
+# deployment circuit-breaker rollback already configured on the service
+# in Terraform).
 #
 # ---------------------------------------------------------------------------
 # Why this is gated behind a GitHub Environment + repo/Environment vars
@@ -31,6 +34,10 @@
 #       ecr:BatchGetImage (scoped to the pharmax/* repos)
 #     - ecs:DescribeServices, ecs:DescribeTaskDefinition,
 #       ecs:RegisterTaskDefinition, ecs:UpdateService
+#     - ecs:RunTask, ecs:DescribeTasks (the pre-rollout migration task,
+#       scoped to this cluster + the worker task-definition family)
+#     - logs:GetLogEvents on /ecs/<name_prefix>/worker (read back which
+#       migrations the task applied)
 #     - iam:PassRole for the task execution + task roles (scoped to the
 #       ARNs from infra/terraform/modules/iam)
 #
@@ -149,9 +156,176 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
+  # Schema migrations — MUST land before any service rolls over.
+  #
+  # Without this job the pipeline shipped code that was ahead of the
+  # database: nothing here (and nothing in either Dockerfile's CMD)
+  # applied migrations, so `prisma migrate deploy` was a manual,
+  # out-of-band step an operator had to remember. Miss it and the new
+  # containers query tables that do not exist yet — while the ECS
+  # container health check and even the SSR smoke check below can still
+  # report green, because a boot-time liveness route need not touch the
+  # new tables. That is the same class of silent failure the smoke check
+  # was added to catch.
+  #
+  # Why a one-off task on the WORKER definition rather than a step on
+  # this runner: RDS is private to the VPC, so a GitHub-hosted runner
+  # cannot reach it. The worker image is the only one that can run the
+  # CLI — it copies the whole workspace (so `prisma/migrations` is
+  # present), installs devDependencies (so the `prisma` CLI resolves —
+  # its own build step already runs `prisma generate`), and carries the
+  # RDS CA bundle. The web image is standalone Next.js output with none
+  # of that.
+  #
+  # Credentials: the task definition already injects DIRECT_URL — the
+  # owner/superuser connection reserved for DDL — and `prisma.config.ts`
+  # points the CLI's datasource at DIRECT_URL (falling back to
+  # DATABASE_URL only for local dev). The runtime DATABASE_URL selects
+  # `pharmax_system`, which is BYPASSRLS but does NOT own the schema, so
+  # migrations would fail against it. Nothing is overridden here; the
+  # command override alone selects the right role.
+  #
+  # `prisma migrate deploy` is idempotent — already-applied migrations
+  # are skipped — so re-running a failed deploy is safe. The trailing
+  # `migrate status` turns "did every migration land?" into a
+  # pipeline-enforced assertion instead of an operator's manual check.
+  migrate:
+    name: Apply database migrations
+    needs: [preflight, build]
+    if: needs.preflight.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ vars.DEPLOY_ENVIRONMENT || 'staging' }}
+    env:
+      CLUSTER: ${{ needs.preflight.outputs.name_prefix }}-cluster
+      FAMILY: ${{ needs.preflight.outputs.name_prefix }}-worker
+      SERVICE: ${{ needs.preflight.outputs.name_prefix }}-worker
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ needs.preflight.outputs.region }}
+          role-session-name: gh-actions-migrate
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Fetch worker task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$FAMILY" \
+            --query 'taskDefinition' \
+            --output json > td.raw.json
+          jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' \
+            td.raw.json > td.json
+
+      # RunTask cannot override the image, so the migration has to run
+      # from a revision that already carries the new one — otherwise the
+      # old image would apply the OLD migration set and the schema would
+      # still trail the code.
+      - name: Render the new image into the task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: td.json
+          container-name: worker
+          image: ${{ steps.ecr.outputs.registry }}/${{ needs.preflight.outputs.name_prefix }}/worker:${{ needs.preflight.outputs.image_tag }}
+
+      - name: Register the migration task definition
+        id: register
+        run: |
+          arn=$(aws ecs register-task-definition \
+                  --cli-input-json "file://${{ steps.render.outputs.task-definition }}" \
+                  --query 'taskDefinition.taskDefinitionArn' \
+                  --output text)
+          echo "Registered: $arn"
+          echo "td_arn=$arn" >> "$GITHUB_OUTPUT"
+
+      - name: Apply migrations (one-off Fargate task)
+        run: |
+          set -uo pipefail
+
+          # Reuse the worker service's own subnets + security groups so
+          # the task lands where RDS already accepts connections from.
+          net=$(aws ecs describe-services \
+                  --cluster "$CLUSTER" --services "$SERVICE" \
+                  --query 'services[0].networkConfiguration' --output json)
+          if [ -z "$net" ] || [ "$net" = "null" ]; then
+            echo "::error::Could not read networkConfiguration from $SERVICE."
+            exit 1
+          fi
+
+          overrides=$(jq -nc '{
+            containerOverrides: [{
+              name: "worker",
+              command: ["sh","-lc","cd /app && pnpm db:migrate:deploy && pnpm exec prisma migrate status"]
+            }]
+          }')
+
+          err=$(mktemp)
+          task_arn=$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition "${{ steps.register.outputs.td_arn }}" \
+            --launch-type FARGATE \
+            --network-configuration "$net" \
+            --overrides "$overrides" \
+            --started-by "gh-migrate-${GITHUB_RUN_ID}" \
+            --query 'tasks[0].taskArn' --output text 2>"$err")
+
+          if [ -z "$task_arn" ] || [ "$task_arn" = "None" ]; then
+            cat "$err"
+            # Unlike the secret preflight below, this does NOT degrade to a
+            # warning when the IAM grant is missing: skipping migrations is
+            # the exact failure this job exists to prevent, so it fails
+            # closed and the rollout never starts.
+            if grep -qi 'AccessDenied' "$err"; then
+              echo "::error::Deploy role cannot RunTask — apply infra/terraform/modules/cicd-deploy"
+              echo "::error::(statement EcsRunMigrationTask) before dispatching this workflow."
+            fi
+            echo "::error::RunTask returned no task ARN; migrations did not run."
+            exit 1
+          fi
+          echo "Migration task: $task_arn"
+
+          # `wait tasks-stopped` polls for up to ~10 minutes. If it gives
+          # up we still fall through to the exit-code check, which fails
+          # closed rather than letting the rollout proceed.
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$task_arn" || true
+
+          exit_code=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" \
+                        --query 'tasks[0].containers[0].exitCode' --output text)
+          reason=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$task_arn" \
+                        --query 'tasks[0].stoppedReason' --output text)
+          echo "exitCode=$exit_code stoppedReason=$reason"
+
+          # The task's stdout is the record of which migrations ran, so
+          # print it whether or not the task succeeded.
+          group=$(jq -r '.containerDefinitions[] | select(.name=="worker")
+                         | .logConfiguration.options["awslogs-group"]' td.json)
+          prefix=$(jq -r '.containerDefinitions[] | select(.name=="worker")
+                          | .logConfiguration.options["awslogs-stream-prefix"]' td.json)
+          echo "--- migration task output ---"
+          aws logs get-log-events \
+            --log-group-name "$group" \
+            --log-stream-name "$prefix/worker/${task_arn##*/}" \
+            --limit 250 --query 'events[].message' --output text 2>/dev/null \
+            || echo "(log stream not available yet)"
+          echo "--- end migration task output ---"
+
+          if [ "$exit_code" != "0" ]; then
+            echo "::error::Migrations failed (exit $exit_code) — the schema was NOT advanced."
+            echo "::error::The ECS rollout is intentionally blocked, so application code"
+            echo "::error::never starts against a database that lacks its tables."
+            echo "::error::prisma migrate deploy is idempotent; fix the cause and re-run."
+            exit 1
+          fi
+          echo "Migrations applied; migrate status reports the schema up to date."
+
   deploy:
     name: Deploy to ECS (${{ matrix.service }})
-    needs: [preflight, build]
+    needs: [preflight, build, migrate]
     if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
