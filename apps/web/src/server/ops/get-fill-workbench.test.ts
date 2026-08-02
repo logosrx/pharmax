@@ -52,6 +52,7 @@ function buildOrderRow(overrides: Record<string, unknown> = {}): Record<string, 
         id: "00000000-0000-4000-8000-0000000000c1",
         quantityToFill: 30,
         lot: null,
+        compoundingRecords: [],
         vialLabel: null,
         prescription: {
           id: "00000000-0000-4000-8000-0000000000b1",
@@ -65,6 +66,7 @@ function buildOrderRow(overrides: Record<string, unknown> = {}): Record<string, 
         id: "00000000-0000-4000-8000-0000000000c2",
         quantityToFill: 14,
         lot: { id: "00000000-0000-4000-8000-0000000000d2", lotNumber: "LOT-A2" },
+        compoundingRecords: [],
         vialLabel: {
           id: "00000000-0000-4000-8000-0000000000e2",
           barcodeValue: "VL2-bc",
@@ -139,6 +141,7 @@ describe("getFillWorkbench — readyForCompletionScans flips when every line has
             id: "c1",
             quantityToFill: 30,
             lot: { id: "lot-x", lotNumber: "LOT-X" },
+            compoundingRecords: [],
             vialLabel: {
               id: "vl1",
               barcodeValue: "vl1-bc",
@@ -160,6 +163,94 @@ describe("getFillWorkbench — readyForCompletionScans flips when every line has
     prismaMock.workstation.findMany.mockResolvedValueOnce([]);
     const result = await getFillWorkbench({ organizationId: ORG_ID, orderId: ORDER_ID });
     expect(result?.readyForCompletionScans).toBe(true);
+  });
+});
+
+describe("getFillWorkbench — compound-prep lines (ADR-0035 slice 4)", () => {
+  it("a passing, unexpired compounding record readies a lot-less line", async () => {
+    prismaMock.order.findFirst.mockResolvedValueOnce(
+      buildOrderRow({
+        orderLines: [
+          {
+            id: "c1",
+            quantityToFill: 1,
+            lot: null,
+            compoundingRecords: [
+              {
+                id: "cr-1",
+                formulaCode: "MAGIC-MOUTHWASH",
+                formulaVersion: 2,
+                qualityOutcome: "PASS",
+                budAt: new Date("2099-01-01"),
+              },
+            ],
+            vialLabel: {
+              id: "vl1",
+              barcodeValue: "vl1-bc",
+              activePrintJob: { status: "COMPLETED" },
+            },
+            prescription: {
+              id: "rx1",
+              rxNumber: "RX1",
+              drugNdc: "00781111101",
+              drugName: "Magic Mouthwash",
+              drugStrength: null,
+            },
+          },
+        ],
+      })
+    );
+    prismaMock.lot.findMany.mockResolvedValueOnce([]);
+    prismaMock.labelPrinter.findMany.mockResolvedValueOnce([]);
+    prismaMock.workstation.findMany.mockResolvedValueOnce([]);
+    const result = await getFillWorkbench({ organizationId: ORG_ID, orderId: ORDER_ID });
+    expect(result?.lines[0]?.compoundPrep).toMatchObject({
+      formulaCode: "MAGIC-MOUTHWASH",
+      qualityOutcome: "PASS",
+      budExpired: false,
+    });
+    expect(result?.readyForCompletionScans).toBe(true);
+  });
+
+  it("an expired BUD blocks readiness", async () => {
+    prismaMock.order.findFirst.mockResolvedValueOnce(
+      buildOrderRow({
+        orderLines: [
+          {
+            id: "c1",
+            quantityToFill: 1,
+            lot: null,
+            compoundingRecords: [
+              {
+                id: "cr-1",
+                formulaCode: "MAGIC-MOUTHWASH",
+                formulaVersion: 2,
+                qualityOutcome: "PASS",
+                budAt: new Date("2020-01-01"),
+              },
+            ],
+            vialLabel: {
+              id: "vl1",
+              barcodeValue: "vl1-bc",
+              activePrintJob: { status: "COMPLETED" },
+            },
+            prescription: {
+              id: "rx1",
+              rxNumber: "RX1",
+              drugNdc: "00781111101",
+              drugName: "Magic Mouthwash",
+              drugStrength: null,
+            },
+          },
+        ],
+      })
+    );
+    prismaMock.lot.findMany.mockResolvedValueOnce([]);
+    prismaMock.labelPrinter.findMany.mockResolvedValueOnce([]);
+    prismaMock.workstation.findMany.mockResolvedValueOnce([]);
+    const result = await getFillWorkbench({ organizationId: ORG_ID, orderId: ORDER_ID });
+    expect(result?.lines[0]?.compoundPrep?.budExpired).toBe(true);
+    expect(result?.readyForCompletionScans).toBe(false);
   });
 });
 

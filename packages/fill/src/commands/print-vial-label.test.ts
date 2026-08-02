@@ -41,7 +41,10 @@ import {
   PRINT_TEMPLATE_NOT_FOUND,
   VIAL_LABEL_ALREADY_EXISTS,
 } from "./print-vial-label.js";
-import { VIAL_LABEL_LOT_NOT_ASSIGNED } from "../load-vial-label-context.js";
+import {
+  VIAL_LABEL_COMPOUND_QUALITY_FAILED,
+  VIAL_LABEL_LOT_NOT_ASSIGNED,
+} from "../load-vial-label-context.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const SITE_ID = "00000000-0000-4000-8000-000000000003";
@@ -125,6 +128,7 @@ function buildOrderLineForRender(): Record<string, unknown> {
       lotNumber: "LOT-A1",
       expirationDate: new Date("2027-12-31T00:00:00.000Z"),
     },
+    compoundingRecords: [],
   };
 }
 
@@ -452,6 +456,64 @@ describe("PrintVialLabel — guards", () => {
       await expect(
         executeCommand(PrintVialLabel, validInput(), { idempotencyKey: "k" })
       ).rejects.toMatchObject({ code: VIAL_LABEL_LOT_NOT_ASSIGNED });
+    });
+  });
+
+  // ADR-0035 slice 4: patient-specific preps have no finished-goods
+  // lot — the label falls back to the latest PASS compounding record
+  // (CR id as lot, BUD as expiration).
+  it("compound line with PASS record → label renders CR + BUD", async () => {
+    const fake = buildPrismaFake({
+      orderLineForRender: {
+        ...buildOrderLineForRender(),
+        lotId: null,
+        lot: null,
+        compoundingRecords: [
+          {
+            id: "aabbccdd-0000-4000-8000-000000000001",
+            qualityOutcome: "PASS",
+            budAt: new Date("2026-06-06T00:00:00.000Z"),
+          },
+        ],
+      },
+    });
+    configureBus(fake.client);
+
+    const out = await withTenancyContext(ctxFor(), () =>
+      executeCommand(PrintVialLabel, validInput(), { idempotencyKey: "print-compound-1" })
+    );
+    expect(out).toMatchObject({ printJobId: "pj-1", vialLabelId: "vl-1" });
+
+    const printJobData = (
+      callsOf(fake.calls, "printJob", "create")[0]!.args as {
+        data: Record<string, unknown>;
+      }
+    ).data;
+    expect(String(printJobData["renderedZpl"])).toContain("CR-AABBCCDD");
+    expect(String(printJobData["renderedZpl"])).toContain("2026-06-06");
+  });
+
+  it("compound line with latest FAIL record → VIAL_LABEL_COMPOUND_QUALITY_FAILED", async () => {
+    const fake = buildPrismaFake({
+      orderLineForRender: {
+        ...buildOrderLineForRender(),
+        lotId: null,
+        lot: null,
+        compoundingRecords: [
+          {
+            id: "aabbccdd-0000-4000-8000-000000000002",
+            qualityOutcome: "FAIL",
+            budAt: new Date("2026-06-06T00:00:00.000Z"),
+          },
+        ],
+      },
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(PrintVialLabel, validInput(), { idempotencyKey: "k" })
+      ).rejects.toMatchObject({ code: VIAL_LABEL_COMPOUND_QUALITY_FAILED });
     });
   });
 
