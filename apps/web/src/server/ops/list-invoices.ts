@@ -148,6 +148,11 @@ export interface InvoiceDetail {
   readonly stripeInvoiceId: string | null;
   readonly stripeCustomerId: string | null;
   readonly stripeChargeId: string | null;
+  readonly approvedAt: Date | null;
+  readonly approvedByUserId: string | null;
+  /** Invoice `version` the approval is anchored to; approval is
+   *  FRESH when this equals `version` (finalize requires it). */
+  readonly approvedVersion: number | null;
   readonly version: number;
   readonly createdAt: Date;
   readonly lines: ReadonlyArray<InvoiceDetailLine>;
@@ -177,6 +182,9 @@ export async function getInvoiceDetail(input: {
         stripeInvoiceId: true,
         stripeCustomerId: true,
         stripeChargeId: true,
+        approvedAt: true,
+        approvedByUserId: true,
+        approvedVersion: true,
         version: true,
         createdAt: true,
         lines: {
@@ -212,6 +220,9 @@ export async function getInvoiceDetail(input: {
       stripeInvoiceId: row.stripeInvoiceId,
       stripeCustomerId: row.stripeCustomerId,
       stripeChargeId: row.stripeChargeId,
+      approvedAt: row.approvedAt,
+      approvedByUserId: row.approvedByUserId,
+      approvedVersion: row.approvedVersion,
       version: row.version,
       createdAt: row.createdAt,
       lines: row.lines.map((l) =>

@@ -9,6 +9,11 @@
 //   - `RecordRefundReceived` — REFUND row for out-of-band refunds,
 //     and the settle-time row for refunds that were `pending` when
 //     IssueRefund wrote the invoice line.
+//   - `RecordManualPayment` — PAYMENT row (method MANUAL) for
+//     operator-recorded checks / ACH / wires / cash.
+//   - `ApplyClinicCredit` — PAYMENT row (method CREDIT_BALANCE) when
+//     stored clinic credit settles an invoice. NOTE: no new cash
+//     arrives on these — the cash moved when the credit was granted.
 //
 // Only SETTLED movements are announced — a consumer can treat this
 // stream as "money actually moved". Failed attempts and pending
@@ -28,7 +33,7 @@ const payloadSchema = z
     invoiceId: z.uuid(),
     paymentId: z.uuid(),
     kind: z.enum(["PAYMENT", "REFUND"]),
-    method: z.enum(["STRIPE", "MANUAL"]),
+    method: z.enum(["STRIPE", "MANUAL", "CREDIT_BALANCE"]),
     /** Always positive; direction comes from `kind`. */
     amountCents: z.number().int().min(1),
     currency: z.string().min(3).max(3),

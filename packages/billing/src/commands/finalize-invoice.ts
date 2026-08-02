@@ -5,10 +5,26 @@
 // Lifecycle:
 //
 //   DRAFT (accepts new lines)
+//     → ApproveInvoice   (review gate — required first)
+//   DRAFT + approval stamp
 //     → FinalizeInvoice
 //   OPEN  (no new lines; awaiting Stripe push + collection)
 //     → (worker) push to Stripe → write stripeInvoiceId
 //     → (Stripe) payment → webhook → status flips PAID
+//
+// Approval requirement:
+//
+//   - Finalization requires a FRESH approval: `approvedAt` set AND
+//     `approvedVersion === version`. The materializer bumps `version`
+//     on every line append, so a late shipped-order line landing
+//     after the review structurally invalidates the approval —
+//     `FINALIZE_INVOICE_APPROVAL_STALE` — and the reviewer looks at
+//     the new total before anything reaches Stripe.
+//   - `billing.approve_invoice` and `billing.finalize_invoice` are
+//     distinct permissions, so orgs can split reviewer and finalizer
+//     across roles (segregation of duties). Auto-finalize (the
+//     period-boundary cron slice) will finalize APPROVED drafts only,
+//     so the human review stays load-bearing under automation.
 //
 // Why a manual finalize step (vs. auto-finalize on period boundary):
 //
@@ -56,6 +72,30 @@ import { PERMISSIONS } from "@pharmax/rbac";
 import { getMeter } from "@pharmax/telemetry";
 import { z } from "zod";
 
+import {
+  assertReadyToFinalize,
+  FINALIZE_INVOICE_APPROVAL_STALE,
+  FINALIZE_INVOICE_EMPTY,
+  FINALIZE_INVOICE_NOT_APPROVED,
+  FINALIZE_INVOICE_NOT_FOUND,
+  FINALIZE_INVOICE_VERSION_MISMATCH,
+  invoiceFinalizedOutboxEvent,
+  loadInvoiceForFinalize,
+  performFinalizeCas,
+} from "../finalize-invoice-core.js";
+
+// The guards, CAS, and outbox shape live in `finalize-invoice-core.ts`,
+// shared with the period-boundary cron's `AutoFinalizeDueInvoice`.
+// Error codes are re-exported here — this module remains the public
+// API path for them.
+export {
+  FINALIZE_INVOICE_APPROVAL_STALE,
+  FINALIZE_INVOICE_EMPTY,
+  FINALIZE_INVOICE_NOT_APPROVED,
+  FINALIZE_INVOICE_NOT_FOUND,
+  FINALIZE_INVOICE_VERSION_MISMATCH,
+};
+
 const meter = getMeter("@pharmax/billing");
 
 const billingInvoiceFinalizedCounter = meter.createCounter(
@@ -65,10 +105,6 @@ const billingInvoiceFinalizedCounter = meter.createCounter(
       "Invoices transitioned DRAFT → OPEN via FinalizeInvoice. Idempotent re-finalizations (alreadyFinalized=true) are NOT counted.",
   }
 );
-
-export const FINALIZE_INVOICE_NOT_FOUND = "FINALIZE_INVOICE_NOT_FOUND";
-export const FINALIZE_INVOICE_EMPTY = "FINALIZE_INVOICE_EMPTY";
-export const FINALIZE_INVOICE_VERSION_MISMATCH = "FINALIZE_INVOICE_VERSION_MISMATCH";
 
 const inputSchema = z
   .object({
@@ -113,22 +149,9 @@ export const FinalizeInvoice: Command<FinalizeInvoiceInput, FinalizeInvoiceOutpu
     commandLogId,
   }): Promise<HandlerResult<FinalizeInvoiceOutput>> {
     // ---- Load the invoice scoped to this tenancy ----
-    const invoice = await tx.invoice.findFirst({
-      where: { id: input.invoiceId, organizationId: ctx.organizationId },
-      select: {
-        id: true,
-        clinicId: true,
-        invoiceNumber: true,
-        status: true,
-        currency: true,
-        subtotalCents: true,
-        totalCents: true,
-        amountDueCents: true,
-        issuedAt: true,
-        dueAt: true,
-        version: true,
-        _count: { select: { lines: true } },
-      },
+    const invoice = await loadInvoiceForFinalize(tx, {
+      invoiceId: input.invoiceId,
+      organizationId: ctx.organizationId,
     });
     if (invoice === null) {
       throw new errors.NotFoundError({
@@ -154,7 +177,7 @@ export const FinalizeInvoice: Command<FinalizeInvoiceInput, FinalizeInvoiceOutpu
           dueAt: (invoice.dueAt ?? now).toISOString(),
           subtotalCents: invoice.subtotalCents,
           totalCents: invoice.totalCents,
-          lineCount: invoice._count.lines,
+          lineCount: invoice.lineCount,
           version: invoice.version,
           alreadyFinalized: true,
         },
@@ -175,51 +198,18 @@ export const FinalizeInvoice: Command<FinalizeInvoiceInput, FinalizeInvoiceOutpu
       };
     }
 
-    // ---- Empty-invoice guard ----
-    // Finalizing an empty invoice is almost always a UX bug
-    // (operator clicked finalize on a draft with no lines). Fail
-    // loudly with a typed code so the UI can show a clear "this
-    // invoice has no lines" message instead of pushing a $0
-    // invoice to Stripe.
-    if (invoice._count.lines === 0) {
-      throw new errors.ValidationError({
-        code: FINALIZE_INVOICE_EMPTY,
-        message: "Cannot finalize an invoice with zero lines.",
-        metadata: { invoiceId: invoice.id, invoiceNumber: invoice.invoiceNumber },
-      });
-    }
+    // ---- Guards (empty / not-approved / stale) + CAS ----
+    // Both live in `finalize-invoice-core.ts`, shared verbatim with
+    // the period-boundary cron. Typed failures propagate unchanged.
+    assertReadyToFinalize(invoice);
 
-    // ---- Compute timestamps ----
     const now = clock.now();
-    const issuedAt = now;
-    const dueAt = new Date(now.getTime() + input.daysUntilDue * 24 * 60 * 60_000);
-    const nextVersion = invoice.version + 1;
-
-    // ---- CAS update ----
-    // `updateMany where: { id, version }` returns count=1 on hit,
-    // count=0 if a concurrent finalize already bumped the version.
-    // We surface the count=0 case as a typed conflict so the caller
-    // can retry / re-read fresh state.
-    const updated = await tx.invoice.updateMany({
-      where: { id: invoice.id, version: invoice.version },
-      data: {
-        status: InvoiceStatus.OPEN,
-        issuedAt,
-        dueAt,
-        version: nextVersion,
-      },
+    const cas = await performFinalizeCas(tx, {
+      invoice,
+      daysUntilDue: input.daysUntilDue,
+      now,
     });
-    if (updated.count !== 1) {
-      throw new errors.ConflictError({
-        code: FINALIZE_INVOICE_VERSION_MISMATCH,
-        message:
-          "Invoice version was bumped by a concurrent finalization. Refresh the invoice and retry.",
-        metadata: {
-          invoiceId: invoice.id,
-          attemptedVersion: invoice.version,
-        },
-      });
-    }
+    const { issuedAt, dueAt, nextVersion } = cas;
 
     // Metric emit AFTER the CAS succeeds. If the surrounding tx
     // rolls back, the counter is off by 1 — acceptable for a
@@ -236,7 +226,7 @@ export const FinalizeInvoice: Command<FinalizeInvoiceInput, FinalizeInvoiceOutpu
         dueAt: dueAt.toISOString(),
         subtotalCents: invoice.subtotalCents,
         totalCents: invoice.totalCents,
-        lineCount: invoice._count.lines,
+        lineCount: invoice.lineCount,
         version: nextVersion,
         alreadyFinalized: false,
       },
@@ -252,33 +242,25 @@ export const FinalizeInvoice: Command<FinalizeInvoiceInput, FinalizeInvoiceOutpu
           newStatus: InvoiceStatus.OPEN,
           subtotalCents: invoice.subtotalCents,
           totalCents: invoice.totalCents,
-          lineCount: invoice._count.lines,
+          lineCount: invoice.lineCount,
           daysUntilDue: input.daysUntilDue,
           issuedAt: issuedAt.toISOString(),
           dueAt: dueAt.toISOString(),
+          // The approval this finalization consumed — auditors read
+          // "who reviewed, which revision" from the same row.
+          approvedByUserId: invoice.approvedByUserId,
+          approvedVersion: invoice.approvedVersion,
+          approvedAt: invoice.approvedAt?.toISOString() ?? null,
           commandLogId,
         },
       },
       outboxEvents: [
-        {
-          eventType: "billing.invoice.finalized.v1",
-          aggregateType: "Invoice",
-          aggregateId: invoice.id,
-          payload: {
-            organizationId: ctx.organizationId,
-            clinicId: invoice.clinicId,
-            invoiceId: invoice.id,
-            invoiceNumber: invoice.invoiceNumber,
-            currency: invoice.currency,
-            subtotalCents: invoice.subtotalCents,
-            totalCents: invoice.totalCents,
-            amountDueCents: invoice.amountDueCents,
-            lineCount: invoice._count.lines,
-            issuedAt: issuedAt.toISOString(),
-            dueAt: dueAt.toISOString(),
-            occurredAt: now.toISOString(),
-          },
-        },
+        invoiceFinalizedOutboxEvent({
+          organizationId: ctx.organizationId,
+          invoice,
+          cas,
+          occurredAt: now,
+        }),
       ],
     };
   },

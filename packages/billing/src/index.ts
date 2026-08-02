@@ -12,10 +12,31 @@ export {
 } from "./commands/materialize-shipped-order-billing.js";
 
 export {
+  ApproveInvoice,
+  type ApproveInvoiceInput,
+  type ApproveInvoiceOutput,
+  APPROVE_INVOICE_NOT_FOUND,
+  APPROVE_INVOICE_INVALID_STATUS,
+  APPROVE_INVOICE_EMPTY,
+  APPROVE_INVOICE_VERSION_MISMATCH,
+} from "./commands/approve-invoice.js";
+
+export {
+  AutoFinalizeDueInvoice,
+  type AutoFinalizeDueInvoiceInput,
+  type AutoFinalizeDueInvoiceOutput,
+  AUTO_FINALIZE_INVOICE_NOT_FOUND,
+  AUTO_FINALIZE_PERIOD_NOT_ENDED,
+  AUTO_FINALIZE_NO_BILLING_PERIOD,
+} from "./commands/auto-finalize-due-invoice.js";
+
+export {
   FinalizeInvoice,
   type FinalizeInvoiceInput,
   type FinalizeInvoiceOutput,
   FINALIZE_INVOICE_NOT_FOUND,
+  FINALIZE_INVOICE_NOT_APPROVED,
+  FINALIZE_INVOICE_APPROVAL_STALE,
   FINALIZE_INVOICE_EMPTY,
   FINALIZE_INVOICE_VERSION_MISMATCH,
 } from "./commands/finalize-invoice.js";
@@ -118,6 +139,37 @@ export {
 } from "./commands/record-refund-received.js";
 
 export {
+  RecordManualPayment,
+  type RecordManualPaymentInput,
+  type RecordManualPaymentOutput,
+  type ManualPaymentInstrument,
+  MANUAL_PAYMENT_INSTRUMENTS,
+  RECORD_MANUAL_PAYMENT_INVOICE_NOT_FOUND,
+  RECORD_MANUAL_PAYMENT_INVALID_STATUS,
+  RECORD_MANUAL_PAYMENT_AMOUNT_EXCEEDS_DUE,
+  RECORD_MANUAL_PAYMENT_RECEIVED_AT_IN_FUTURE,
+  RECORD_MANUAL_PAYMENT_VERSION_MISMATCH,
+} from "./commands/record-manual-payment.js";
+
+export {
+  GrantClinicCredit,
+  type GrantClinicCreditInput,
+  type GrantClinicCreditOutput,
+  GRANT_CLINIC_CREDIT_RECEIVED_AT_IN_FUTURE,
+} from "./commands/grant-clinic-credit.js";
+
+export {
+  ApplyClinicCredit,
+  type ApplyClinicCreditInput,
+  type ApplyClinicCreditOutput,
+  APPLY_CLINIC_CREDIT_INVOICE_NOT_FOUND,
+  APPLY_CLINIC_CREDIT_INVALID_STATUS,
+  APPLY_CLINIC_CREDIT_AMOUNT_EXCEEDS_DUE,
+  APPLY_CLINIC_CREDIT_INSUFFICIENT_BALANCE,
+  APPLY_CLINIC_CREDIT_VERSION_MISMATCH,
+} from "./commands/apply-clinic-credit.js";
+
+export {
   insertPaymentLedgerRow,
   paymentRecordedOutboxEvent,
   computePriorRefundedCents,
@@ -125,6 +177,16 @@ export {
   type PaymentLedgerRowResult,
   type PriorRefundTotals,
 } from "./payments/payment-ledger.js";
+
+export {
+  insertClinicCreditEntry,
+  clinicCreditRecordedOutboxEvent,
+  computeClinicCreditBalanceCents,
+  lockClinicForCredit,
+  type ClinicCreditEntryInput,
+  type ClinicCreditEntryResult,
+  CLINIC_CREDIT_CLINIC_NOT_FOUND,
+} from "./credit/clinic-credit.js";
 
 export {
   configureBilling,

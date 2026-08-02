@@ -1,12 +1,16 @@
 // FinalizeInvoice contract tests.
 //
 // Surface:
-//   - Happy path: DRAFT → OPEN, CAS bumps version, emits the v1 event
-//     with the full snapshot (subtotal/total/lineCount + due dates).
+//   - Happy path: DRAFT + fresh approval → OPEN, CAS bumps version,
+//     emits the v1 event with the full snapshot (subtotal/total/
+//     lineCount + due dates).
 //   - Already-finalized: status !== DRAFT short-circuits with
 //     `alreadyFinalized: true`, no mutation, no outbox emit, audit
 //     row records the no-op for the timeline.
 //   - Empty-invoice guard: zero lines → FINALIZE_INVOICE_EMPTY.
+//   - Approval gate: no stamp → FINALIZE_INVOICE_NOT_APPROVED;
+//     stamp anchored to an older revision (line landed after the
+//     review) → FINALIZE_INVOICE_APPROVAL_STALE.
 //   - CAS miss (concurrent finalize): FINALIZE_INVOICE_VERSION_MISMATCH.
 //   - Not-in-tenancy: FINALIZE_INVOICE_NOT_FOUND.
 
@@ -29,7 +33,9 @@ import {
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
 
 import {
+  FINALIZE_INVOICE_APPROVAL_STALE,
   FINALIZE_INVOICE_EMPTY,
+  FINALIZE_INVOICE_NOT_APPROVED,
   FINALIZE_INVOICE_NOT_FOUND,
   FINALIZE_INVOICE_VERSION_MISMATCH,
   FinalizeInvoice,
@@ -37,6 +43,7 @@ import {
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const USER_ID = "00000000-0000-4000-8000-000000000009";
+const APPROVER_ID = "00000000-0000-4000-8000-000000000010";
 const INVOICE_ID = "1111aaaa-1111-4111-8111-000000000001";
 const CLINIC_ID = "0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c";
 
@@ -59,6 +66,9 @@ interface FakeInvoiceRow {
   amountDueCents: number;
   issuedAt: Date | null;
   dueAt: Date | null;
+  approvedAt: Date | null;
+  approvedByUserId: string | null;
+  approvedVersion: number | null;
   version: number;
   _count: { lines: number };
 }
@@ -79,6 +89,11 @@ const defaultInvoice = (): FakeInvoiceRow => ({
   amountDueCents: 15000,
   issuedAt: null,
   dueAt: null,
+  // Fresh approval: anchored to the CURRENT version — the default
+  // invoice is finalizable. Guard tests override these.
+  approvedAt: new Date("2026-05-31T18:00:00.000Z"),
+  approvedByUserId: APPROVER_ID,
+  approvedVersion: 3,
   version: 3,
   _count: { lines: 3 },
 });
@@ -236,6 +251,19 @@ describe("FinalizeInvoice — happy path", () => {
     expect(outboxData[0]?.eventType).toBe("billing.invoice.finalized.v1");
     expect(outboxData[0]?.payload["totalCents"]).toBe(15000);
     expect(outboxData[0]?.payload["lineCount"]).toBe(3);
+
+    // The audit row records WHICH approval this finalization consumed.
+    const auditCall = fake.calls.find(
+      (c) =>
+        c.table === "auditLog" &&
+        c.op === "create" &&
+        (c.args as { data: { action: string } }).data.action === "billing.invoice.finalized"
+    );
+    expect(auditCall).toBeDefined();
+    const auditMeta = (auditCall!.args as { data: { metadata: Record<string, unknown> } }).data
+      .metadata;
+    expect(auditMeta["approvedByUserId"]).toBe(APPROVER_ID);
+    expect(auditMeta["approvedVersion"]).toBe(3);
   });
 
   it("respects an explicit daysUntilDue", async () => {
@@ -307,6 +335,48 @@ describe("FinalizeInvoice — guards", () => {
         executeCommand(FinalizeInvoice, { invoiceId: INVOICE_ID }, { idempotencyKey: "fin-empty" })
       )
     ).rejects.toMatchObject({ code: FINALIZE_INVOICE_EMPTY });
+  });
+
+  it("throws FINALIZE_INVOICE_NOT_APPROVED when the draft was never reviewed", async () => {
+    const fake = buildPrismaFake({
+      invoice: {
+        ...defaultInvoice(),
+        approvedAt: null,
+        approvedByUserId: null,
+        approvedVersion: null,
+      },
+    });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctxFor(), () =>
+        executeCommand(FinalizeInvoice, { invoiceId: INVOICE_ID }, { idempotencyKey: "fin-unapp" })
+      )
+    ).rejects.toMatchObject({ code: FINALIZE_INVOICE_NOT_APPROVED });
+    // The gate rejects BEFORE any mutation.
+    expect(fake.calls.filter((c) => c.table === "invoice" && c.op === "updateMany")).toHaveLength(
+      0
+    );
+  });
+
+  it("throws FINALIZE_INVOICE_APPROVAL_STALE when lines landed after the review", async () => {
+    // Approved at version 2; a materializer append bumped to 3.
+    const fake = buildPrismaFake({
+      invoice: { ...defaultInvoice(), approvedVersion: 2, version: 3 },
+    });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctxFor(), () =>
+        executeCommand(FinalizeInvoice, { invoiceId: INVOICE_ID }, { idempotencyKey: "fin-stale" })
+      )
+    ).rejects.toMatchObject({
+      code: FINALIZE_INVOICE_APPROVAL_STALE,
+      metadata: expect.objectContaining({ approvedVersion: 2, currentVersion: 3 }),
+    });
+    expect(fake.calls.filter((c) => c.table === "invoice" && c.op === "updateMany")).toHaveLength(
+      0
+    );
   });
 
   it("throws FINALIZE_INVOICE_VERSION_MISMATCH on CAS miss", async () => {

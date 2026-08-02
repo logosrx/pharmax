@@ -482,6 +482,26 @@ export default tseslint.config(
     },
   },
 
+  // Override 3m: the nightly payment-ledger reconciliation verifier —
+  // ONE named module, same cross-tenant integrity-cron shape as the
+  // security/ jobs in 3d:
+  //   1. A daily scheduler tick fires (tenant-less by definition).
+  //   2. The job enumerates ALL organizations via withSystemContext —
+  //      the cross-tenant sweep IS the job.
+  //   3. Per org, it runs READ-ONLY parity checks (payment-ledger
+  //      sums vs invoice projections) and emits logs + counters. No
+  //      writes, no state transitions, no order aggregate to gate.
+  // Deliberately scoped to the single file so the rest of
+  // apps/worker/src/billing (Stripe adapters and any future business
+  // logic) stays under the full ban. Keep the Prisma ban; drop the
+  // system-context ban.
+  {
+    files: ["apps/worker/src/billing/payment-ledger-reconciliation-loop.ts"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
   // Override 3n: the provider-portal auth bridge modules (ADR-0033
   // slice 2) — the portal twin of packages/auth (3i), deliberately
   // scoped to the four named files rather than the package. Every one
@@ -512,6 +532,27 @@ export default tseslint.config(
       "packages/providers/src/portal/issue-setup-token.ts",
       "packages/providers/src/portal/change-password.ts",
     ],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
+  // Override 3o: the daily invoice auto-finalize loop. The flow
+  // mirrors the reconciliation loop in 3m:
+  //   1. Daily scheduler tick fires (tenant-less by definition).
+  //   2. The loop enumerates ALL organizations via withSystemContext —
+  //      the cross-tenant sweep IS the job — and runs a READ-ONLY
+  //      scan per org (period-ended DRAFT invoices + approval state).
+  //   3. Every WRITE goes through executeSystemCommand
+  //      (AutoFinalizeDueInvoice) — full command_log / audit /
+  //      outbox ritual inside the command's own tx. The loop itself
+  //      never mutates rows; withSystemContext only brackets the
+  //      scan and the dispatch, exactly like drains/ bridge code.
+  // Deliberately scoped to the single file so the rest of
+  // apps/worker/src/billing stays under the full ban. Keep the
+  // Prisma ban; drop the system-context ban.
+  {
+    files: ["apps/worker/src/billing/invoice-auto-finalize-loop.ts"],
     rules: {
       "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
     },

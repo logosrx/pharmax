@@ -763,6 +763,7 @@ model Organization {
   invoices               Invoice[]
   invoiceLines           InvoiceLine[]
   payments               Payment[]
+  clinicCreditEntries    ClinicCreditEntry[]
 
   patients                       Patient[]
   providers                      Provider[]
@@ -895,6 +896,7 @@ model Clinic {
   invoiceLines                   InvoiceLine[]
   pricingRules                   PricingRule[]
   payments                       Payment[]
+  clinicCreditEntries            ClinicCreditEntry[]
   patients                       Patient[]
   prescriptions                  Prescription[]
   orders                         Order[]
@@ -1080,6 +1082,7 @@ model User {
   providerSyncRunsTriggered     ProviderSyncRun[]               @relation("ProviderSyncRunTriggeredBy")
   providerSyncReviewsResolved   ProviderSyncReviewItem[]        @relation("ProviderSyncReviewResolvedBy")
   providerOnboardingDecisions   ProviderOnboardingApplication[] @relation("ProviderOnboardingDecidedBy")
+  invoicesApproved              Invoice[]                       @relation("InvoiceApprover")
 
   // Authentication (ADR-0030, in-house identity engine).
   authSessions        AuthSession[]
@@ -2206,14 +2209,27 @@ model Invoice {
   paidAt             DateTime?
   voidedAt           DateTime?
 
+  // Review/approval stamp written by ApproveInvoice (DRAFT only).
+  // `approvedVersion` records the invoice `version` AS OF the
+  // approval commit; FinalizeInvoice requires
+  // `approvedVersion === version`, so any line appended after the
+  // review (materializer bumps `version`) automatically invalidates
+  // the approval and forces a re-review. The stamp is historical —
+  // it survives finalization untouched.
+  approvedAt       DateTime?
+  approvedByUserId String?   @db.Uuid
+  approvedBy       User?     @relation("InvoiceApprover", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+  approvedVersion  Int?
+
   // Optimistic locking counter; required for any mutating command.
   version Int @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lines    InvoiceLine[]
-  payments Payment[]
+  lines              InvoiceLine[]
+  payments           Payment[]
+  creditApplications ClinicCreditEntry[]
 
   @@unique([organizationId, invoiceNumber])
   @@index([organizationId, clinicId, status])
@@ -2326,6 +2342,13 @@ enum PaymentKind {
 enum PaymentMethod {
   STRIPE
   MANUAL
+  // Settlement from the clinic's stored credit balance
+  // (ApplyClinicCredit). The cash itself moved EARLIER, when the
+  // credit was granted (e.g. an overpaid check) — a CREDIT_BALANCE
+  // row keeps the invoice projection / payment-ledger parity intact
+  // without claiming new money arrived. Bank-reconciliation views
+  // should filter to STRIPE + MANUAL.
+  CREDIT_BALANCE
 }
 
 // Payment ledger — APPEND-ONLY record of money movements. One row
@@ -2380,6 +2403,10 @@ model Payment {
   occurredAt DateTime
   metadata   Json?
   createdAt  DateTime @default(now())
+
+  // Back-link from the clinic-credit APPLICATION entry when this
+  // row was created by ApplyClinicCredit (method CREDIT_BALANCE).
+  creditApplication ClinicCreditEntry?
 
   @@index([organizationId, clinicId, occurredAt])
   @@index([organizationId, kind, occurredAt])
@@ -4954,4 +4981,51 @@ model CompoundingRecordIngredient {
   @@index([recordId])
   @@index([organizationId, lotId])
   @@map("compounding_record_ingredient")
+}
+
+enum ClinicCreditEntryKind {
+  GRANT
+  APPLICATION
+}
+
+enum ClinicCreditSource {
+  // Clinic paid more than an invoice's balance (e.g. an overpaid
+  // check); the excess is stored here instead of a negative
+  // amountDue.
+  OVERPAYMENT
+  GOODWILL
+  OTHER
+}
+
+model ClinicCreditEntry {
+  id String @id @default(uuid()) @db.Uuid
+
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  clinicId       String       @db.Uuid
+  clinic         Clinic       @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  kind   ClinicCreditEntryKind
+  // GRANT rows only; null for APPLICATION.
+  source ClinicCreditSource?
+
+  amountCents Int
+  currency    String @db.VarChar(3)
+
+  creditEventKey String @unique
+
+  // APPLICATION rows only: the invoice the credit settled against
+  // and the payment-ledger row that carried the settlement.
+  appliedToInvoiceId String?  @db.Uuid
+  appliedToInvoice   Invoice? @relation(fields: [appliedToInvoiceId], references: [id], onDelete: Restrict)
+  appliedPaymentId   String?  @unique @db.Uuid
+  appliedPayment     Payment? @relation(fields: [appliedPaymentId], references: [id], onDelete: Restrict)
+
+  occurredAt DateTime
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([organizationId, clinicId, currency, occurredAt])
+  @@index([appliedToInvoiceId])
+  @@map("clinic_credit_entry")
 }

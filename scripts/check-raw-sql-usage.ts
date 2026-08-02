@@ -85,6 +85,11 @@ const SKIP_DIR_SEGMENTS = new Set(["node_modules", "generated", "dist", ".next",
 const ALLOWLIST: ReadonlySet<string> = new Set<string>([
   // FOR UPDATE SKIP LOCKED claim of sent print jobs (agent context).
   "apps/print-agent/src/claim-sent-print-job.ts",
+  // Clinic-row SELECT … FOR UPDATE that serializes credit-ledger
+  // mutations (balance-never-negative invariant). Tagged-template
+  // with bound params; runs inside the command tx with the org GUC
+  // set AND an explicit organizationId filter (tenant-scoped).
+  "packages/billing/src/credit/clinic-credit.ts",
   // Operator role-code read; runs inside the request's tenancy tx
   // with the org GUC already set (tenant-scoped raw read).
   "apps/web/src/server/auth/load-operator-role-codes.ts",

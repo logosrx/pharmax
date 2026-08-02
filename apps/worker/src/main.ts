@@ -54,6 +54,8 @@ import {
 } from "@pharmax/telemetry";
 import Stripe from "stripe";
 
+import { createInvoiceAutoFinalizeLoop } from "./billing/invoice-auto-finalize-loop.js";
+import { createPaymentLedgerReconciliationLoop } from "./billing/payment-ledger-reconciliation-loop.js";
 import { createStripeInvoiceAdapter } from "./billing/stripe-invoice-adapter.js";
 import { createStripeRefundAdapter } from "./billing/stripe-refund-adapter.js";
 import {
@@ -427,6 +429,12 @@ async function main(): Promise<void> {
       windowHours: env.NIGHTLY_SECURITY_DIGEST_WINDOW_HOURS,
       publisher: securityDigestPublisher !== undefined ? "notification-channel" : "in-memory",
       recipientConfigured: digestRecipientConfigured,
+    },
+    paymentLedgerReconciler: {
+      enabled: env.PAYMENT_LEDGER_RECONCILER_ENABLED,
+      utcHour: env.PAYMENT_LEDGER_RECONCILER_HOUR_UTC,
+      utcMinute: env.PAYMENT_LEDGER_RECONCILER_MINUTE_UTC,
+      pageSize: env.PAYMENT_LEDGER_RECONCILER_PAGE_SIZE,
     },
   });
 
@@ -836,6 +844,50 @@ async function main(): Promise<void> {
     });
   }
 
+  // Nightly payment-ledger reconciliation (flagship billing, slice 3).
+  // Read-only cross-check of the `payment` ledger against the invoice
+  // projection; drift is logged + counted, never auto-fixed. Fires at
+  // 03:30 UTC, after the security jobs, so nightly scans don't stack.
+  const paymentLedgerReconciliationLoop = env.PAYMENT_LEDGER_RECONCILER_ENABLED
+    ? createPaymentLedgerReconciliationLoop({
+        prisma,
+        logger,
+        utcHour: env.PAYMENT_LEDGER_RECONCILER_HOUR_UTC,
+        utcMinute: env.PAYMENT_LEDGER_RECONCILER_MINUTE_UTC,
+        pageSize: env.PAYMENT_LEDGER_RECONCILER_PAGE_SIZE,
+      })
+    : null;
+  if (env.NODE_ENV === "production" && paymentLedgerReconciliationLoop === null) {
+    logger.warn("worker.payment_ledger_reconciler.disabled", {
+      reason:
+        "PAYMENT_LEDGER_RECONCILER_ENABLED=false in production. Payment-ledger vs invoice-projection drift will not be detected. " +
+        "Disable only if a separate scheduler runs the reconciliation.",
+    });
+  }
+
+  // Daily period-boundary invoice auto-finalize. APPROVED drafts
+  // whose billing period ended go DRAFT → OPEN via the same core as
+  // the operator's FinalizeInvoice; unapproved drafts are surfaced
+  // as an awaiting-review backlog, never forced. 04:10 UTC, after
+  // the payment-ledger reconciler.
+  const invoiceAutoFinalizeLoop = env.BILLING_AUTO_FINALIZE_ENABLED
+    ? createInvoiceAutoFinalizeLoop({
+        prisma,
+        logger,
+        utcHour: env.BILLING_AUTO_FINALIZE_HOUR_UTC,
+        utcMinute: env.BILLING_AUTO_FINALIZE_MINUTE_UTC,
+        pageSize: env.BILLING_AUTO_FINALIZE_PAGE_SIZE,
+        daysUntilDue: env.BILLING_AUTO_FINALIZE_DAYS_UNTIL_DUE,
+      })
+    : null;
+  if (env.NODE_ENV === "production" && invoiceAutoFinalizeLoop === null) {
+    logger.info("worker.billing_auto_finalize.disabled", {
+      reason:
+        "BILLING_AUTO_FINALIZE_ENABLED=false. Period-ended approved drafts will wait for manual finalization; " +
+        "this is a supported configuration for orgs that want a fully-manual billing close.",
+    });
+  }
+
   // Wrap each drainer's `tick` so its tally result is discarded — the
   // poll-loop contract is `() => Promise<void>` and TypeScript is
   // strict about it. Drainer results are already surfaced via
@@ -1025,6 +1077,12 @@ async function main(): Promise<void> {
   if (quarterlyAccessReviewLoop !== null) {
     quarterlyAccessReviewLoop.start();
   }
+  if (paymentLedgerReconciliationLoop !== null) {
+    paymentLedgerReconciliationLoop.start();
+  }
+  if (invoiceAutoFinalizeLoop !== null) {
+    invoiceAutoFinalizeLoop.start();
+  }
 
   // Liveness marker for the ECS/Fargate container health check
   // (`test -f /tmp/pharmax-worker-alive` in
@@ -1069,6 +1127,8 @@ async function main(): Promise<void> {
     merkleRootLoop.stop(),
     ...(nightlySecurityDigestLoop !== null ? [nightlySecurityDigestLoop.stop()] : []),
     ...(quarterlyAccessReviewLoop !== null ? [quarterlyAccessReviewLoop.stop()] : []),
+    ...(paymentLedgerReconciliationLoop !== null ? [paymentLedgerReconciliationLoop.stop()] : []),
+    ...(invoiceAutoFinalizeLoop !== null ? [invoiceAutoFinalizeLoop.stop()] : []),
   ]);
   await prisma.$disconnect();
 

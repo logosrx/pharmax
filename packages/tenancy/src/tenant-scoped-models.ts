@@ -101,6 +101,10 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["CompoundFormulaIngredient", { kind: "organizationId" }] as const,
   ["CompoundingRecord", { kind: "organizationId" }] as const,
   ["CompoundingRecordIngredient", { kind: "organizationId" }] as const,
+  // Clinic credit ledger (clinic_credit_ledger migration). Same
+  // posture as Payment: NON-NULLABLE organizationId, written by
+  // billing commands, read by finance reports.
+  ["ClinicCreditEntry", { kind: "organizationId" }] as const,
 
   // Phase 2 — PHI domain entities. PHI columns themselves are
   // envelope-encrypted (see `@pharmax/crypto`); auto-scoping at the

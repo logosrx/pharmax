@@ -181,6 +181,28 @@ groups:
             tick — they will retry automatically.
           runbook_url: https://github.com/pharmax/pharmax/blob/main/docs/RUNBOOK.md#replaying-a-failed-stripe-webhook
 
+      - alert: PaymentLedgerDriftDetected
+        # The reconciler runs once nightly, so use a 24h increase (a
+        # 5m rate would only be non-zero for one scrape window).
+        expr: |
+          sum by (organization_id, drift_kind) (increase(pharmax_payment_ledger_drift_total[24h])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          domain: billing
+        annotations:
+          summary: Payment ledger drift ({{ $labels.drift_kind }}) for tenant {{ $labels.organization_id }}
+          description: |
+            The nightly reconciler found invoices where the append-only
+            payment ledger disagrees with the invoice projection
+            (amountPaidCents / refund lines). PAYMENT_ROWS_MISSING on a
+            fresh deployment usually means `pnpm payments:backfill` has
+            not been run yet; any other kind means a write-path bug or
+            an out-of-band DB edit and must be treated as a financial
+            data-integrity incident. Search worker logs for
+            `payment_ledger_reconciliation.drift` for per-invoice detail.
+          runbook_url: https://github.com/pharmax/pharmax/blob/main/docs/RUNBOOK.md#payment-ledger-drift
+
   - name: pharmax_platform_health
     rules:
       - alert: HighP99HttpLatency
