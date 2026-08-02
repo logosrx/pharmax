@@ -27,6 +27,7 @@ import { EmptyState, PermissionDenied, Banner } from "../../../src/components/ui
 import { buttonClass } from "../../../src/components/ui/button.js";
 import { Icon } from "../../../src/components/ui/icon.js";
 import { QueueFlash } from "../../../src/components/ops/flash.js";
+import { QueueLiveRefresher } from "../../../src/components/ops/queue-live-refresher.js";
 import { QueueRow } from "../../../src/components/ops/queue-row.js";
 import { ActionForm, SubmitButton } from "../../../src/components/ops/action-form.js";
 import { ReopenForm } from "../../../src/components/ops/reopen-form.js";
@@ -75,6 +76,7 @@ export default async function FillQueuePage({
       />
 
       <QueueFlash params={params} messages={FILL_FLASH} />
+      <QueueLiveRefresher codes={["FILL"]} />
 
       {!queue.bucketExists ? (
         <Banner tone="warning" title="FILL bucket not provisioned">

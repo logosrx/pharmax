@@ -18,12 +18,16 @@ import { useEffect, useState } from "react";
 
 import { cx } from "../ui/cx.js";
 import { Icon, type IconName } from "../ui/icon.js";
+import { sumLiveCounts, useLiveQueueCounts } from "./live-queue-counts.js";
 
 export interface NavLink {
   readonly href: string;
   readonly label: string;
   readonly icon: IconName;
+  /** SSR-computed badge value (first paint / no-stream fallback). */
   readonly count?: number | null;
+  /** Bucket codes whose live sum keeps the badge current (ADR-0034). */
+  readonly countCodes?: ReadonlyArray<string>;
 }
 
 export interface NavGroup {
@@ -45,6 +49,7 @@ function bestMatchHref(pathname: string, hrefs: ReadonlyArray<string>): string |
 
 export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup> }) {
   const pathname = usePathname() ?? "/";
+  const { buckets, live } = useLiveQueueCounts();
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
@@ -105,6 +110,12 @@ export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup
             )}
             {group.items.map((item) => {
               const isActive = active === item.href;
+              // Live badge: once the stream delivers, the SSE sum
+              // supersedes the SSR-computed seed.
+              const count =
+                live && item.countCodes !== undefined
+                  ? (sumLiveCounts(buckets, item.countCodes) ?? item.count)
+                  : item.count;
               return (
                 <Link
                   key={item.href}
@@ -128,7 +139,7 @@ export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup
                     className={isActive ? "text-brand" : "text-subtle group-hover:text-fg"}
                   />
                   {!collapsed ? <span className="flex-1 truncate">{item.label}</span> : null}
-                  {item.count !== undefined && item.count !== null && item.count > 0 ? (
+                  {count !== undefined && count !== null && count > 0 ? (
                     <span
                       className={cx(
                         "tabular-nums",
@@ -137,7 +148,7 @@ export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup
                           : "inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-line bg-surface-2 px-1.5 text-2xs font-semibold text-muted"
                       )}
                     >
-                      {!collapsed ? (item.count > 99 ? "99+" : item.count) : null}
+                      {!collapsed ? (count > 99 ? "99+" : count) : null}
                     </span>
                   ) : null}
                 </Link>
