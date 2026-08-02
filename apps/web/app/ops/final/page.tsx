@@ -25,6 +25,7 @@ import { PageHeader } from "../../../src/components/ui/page.js";
 import { EmptyState, PermissionDenied, Banner } from "../../../src/components/ui/feedback.js";
 import { Field, Select } from "../../../src/components/ui/field.js";
 import { QueueFlash } from "../../../src/components/ops/flash.js";
+import { QueueLiveRefresher } from "../../../src/components/ops/queue-live-refresher.js";
 import { QueueRow } from "../../../src/components/ops/queue-row.js";
 import { ActionForm, SubmitButton } from "../../../src/components/ops/action-form.js";
 
@@ -71,6 +72,7 @@ export default async function FinalQueuePage({
       />
 
       <QueueFlash params={params} messages={FINAL_FLASH} />
+      <QueueLiveRefresher codes={["FINAL"]} />
 
       {!queue.bucketExists ? (
         <Banner tone="warning" title="FINAL bucket not provisioned">
