@@ -33,6 +33,20 @@ function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+// Operator-facing wording for the partial-fill bases. Each label names
+// the paragraph AND its completion deadline, because the deadline is
+// the consequence the tech is actually choosing between: a supply
+// shortfall gives 72 hours, a requested partial fill 30 days, an LTCF
+// or terminal-illness fill 60 days (21 CFR 1306.13).
+const PARTIAL_FILL_BASIS_LABELS: Record<string, string> = {
+  PHARMACIST_SUPPLY_SHORTFALL: "Insufficient stock on hand — remainder due within 72 hours",
+  PATIENT_OR_PRESCRIBER_REQUEST:
+    "Requested by patient or prescriber — remainder due within 30 days of the date written",
+  LTCF_OR_TERMINALLY_ILL:
+    "Long-term care facility resident or terminally ill — valid 60 days from the date written",
+  SCHEDULE_III_TO_V: "Partial fill (Schedule III–V) — within six months of the date written",
+};
+
 export default async function FillWorkbenchPage({
   params,
   searchParams,
@@ -395,6 +409,11 @@ export default async function FillWorkbenchPage({
                         <div className="text-xs text-subtle">
                           Line {idx + 1} · {line.drugName}
                           {isCompoundLine ? " · compounded prep" : ""}
+                          {line.controlledSubstance !== null ? (
+                            <span className="ml-2 rounded bg-warning/15 px-1.5 py-0.5 font-semibold text-warning">
+                              {line.controlledSubstance.schedule}
+                            </span>
+                          ) : null}
                         </div>
                         <input
                           type="hidden"
@@ -431,6 +450,39 @@ export default async function FillWorkbenchPage({
                               placeholder="(scan printed vial label)"
                             />
                           </Field>
+                          {line.controlledSubstance !== null ? (
+                            <Field
+                              label={
+                                line.controlledSubstance.partialFillBasisRequired
+                                  ? "Partial-fill basis (required)"
+                                  : "Partial-fill basis"
+                              }
+                            >
+                              <Select
+                                name={`partialFills[${line.orderLineId}]`}
+                                defaultValue=""
+                                required={line.controlledSubstance.partialFillBasisRequired}
+                              >
+                                <option value="">
+                                  {line.controlledSubstance.partialFillBasisRequired
+                                    ? "— select a basis —"
+                                    : "None — complete fill"}
+                                </option>
+                                {line.controlledSubstance.allowedBases.map((basis) => (
+                                  <option key={basis} value={basis}>
+                                    {PARTIAL_FILL_BASIS_LABELS[basis]}
+                                  </option>
+                                ))}
+                              </Select>
+                              <p className="mt-1 text-xs text-subtle">
+                                Dispensing {line.quantityToFill} of{" "}
+                                {line.controlledSubstance.quantityAuthorized} authorized.
+                                {line.controlledSubstance.partialFillBasisRequired
+                                  ? " A partial fill must state its basis — the basis sets the deadline for supplying the remainder."
+                                  : ""}
+                              </p>
+                            </Field>
+                          ) : null}
                         </div>
                       </div>
                     );

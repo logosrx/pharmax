@@ -92,6 +92,9 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["Payment", { kind: "organizationId" }] as const,
   // Inventory (ADR-0035 slice 3): DSCSA lot-receipt records.
   ["DscsaTransaction", { kind: "organizationId" }] as const,
+  // Controlled substances (ADR-0037): the 21 CFR 1304 dispensing
+  // ledger.
+  ["ControlledSubstanceDispensing", { kind: "organizationId" }] as const,
   // Compounding (ADR-0035): Master Formulation Records + ingredients,
   // and per-preparation compounding records (slice 2).
   ["CompoundFormula", { kind: "organizationId" }] as const,

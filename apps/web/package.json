@@ -15,6 +15,7 @@
     "@pharmax/billing": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/composition": "workspace:*",
+    "@pharmax/controlled-substances": "workspace:*",
     "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/fill": "workspace:*",

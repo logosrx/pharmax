@@ -32,15 +32,35 @@
 
 import "server-only";
 
+import { isControlled, type PartialFillBasis } from "@pharmax/controlled-substances";
 import {
   readInOrgScope,
   CompoundingQualityOutcome,
+  ControlledSubstancePartialFillBasis,
+  ControlledSubstanceSchedule,
   LabelPrinterStatus,
   LotStatus,
   WorkstationStatus,
   type OrderStatus,
   type PrintJobStatus,
 } from "@pharmax/database";
+
+/**
+ * Partial-fill bases lawfully available for a schedule. Schedule II
+ * runs under 21 CFR 1306.13 (three bases, three different completion
+ * windows); Schedules III–V under the single § 1306.23 regime.
+ */
+function allowedPartialFillBases(
+  schedule: ControlledSubstanceSchedule
+): ReadonlyArray<PartialFillBasis> {
+  return schedule === ControlledSubstanceSchedule.CII
+    ? Object.freeze([
+        ControlledSubstancePartialFillBasis.PHARMACIST_SUPPLY_SHORTFALL,
+        ControlledSubstancePartialFillBasis.PATIENT_OR_PRESCRIBER_REQUEST,
+        ControlledSubstancePartialFillBasis.LTCF_OR_TERMINALLY_ILL,
+      ])
+    : Object.freeze([ControlledSubstancePartialFillBasis.SCHEDULE_III_TO_V]);
+}
 
 export interface FillWorkbenchCandidateLot {
   readonly lotId: string;
@@ -71,6 +91,30 @@ export interface FillWorkbenchCompoundPrep {
   readonly budExpired: boolean;
 }
 
+/**
+ * Controlled-substance facts the bench needs (ADR-0037 commitment 1).
+ * Present only for controlled lines, so the ordinary fill screen is
+ * unchanged for the overwhelming majority of orders.
+ */
+export interface FillWorkbenchControlledSubstance {
+  readonly schedule: ControlledSubstanceSchedule;
+  readonly quantityAuthorized: string;
+  /**
+   * True when this line supplies less than the prescription
+   * authorizes. `CompleteFill` will refuse without a stated basis —
+   * the basis fixes the completion window, so it cannot be
+   * reconstructed after the fact.
+   */
+  readonly partialFillBasisRequired: boolean;
+  /**
+   * The bases lawfully available for THIS schedule. Schedule II
+   * partial fills run under 21 CFR 1306.13, Schedules III–V under
+   * § 1306.23; offering both sets would let an operator pick a basis
+   * whose completion window does not apply.
+   */
+  readonly allowedBases: ReadonlyArray<PartialFillBasis>;
+}
+
 export interface FillWorkbenchLine {
   readonly orderLineId: string;
   readonly prescriptionId: string;
@@ -90,6 +134,8 @@ export interface FillWorkbenchLine {
    * scan only, no lot scan.
    */
   readonly compoundPrep: FillWorkbenchCompoundPrep | null;
+  /** Null for non-controlled lines. */
+  readonly controlledSubstance: FillWorkbenchControlledSubstance | null;
   readonly vialLabel: {
     readonly vialLabelId: string;
     readonly barcodeValue: string;
@@ -158,6 +204,8 @@ export async function getFillWorkbench(input: {
                 drugNdc: true,
                 drugName: true,
                 drugStrength: true,
+                controlledSubstanceSchedule: true,
+                quantityAuthorized: true,
               },
             },
           },
@@ -261,6 +309,16 @@ export async function getFillWorkbench(input: {
                 budExpired: line.compoundingRecords[0].budAt.getTime() <= todayUtc.getTime(),
               })
             : null,
+        controlledSubstance: isControlled(line.prescription.controlledSubstanceSchedule)
+          ? Object.freeze({
+              schedule: line.prescription.controlledSubstanceSchedule,
+              quantityAuthorized: String(line.prescription.quantityAuthorized),
+              partialFillBasisRequired: line.quantityToFill.lessThan(
+                line.prescription.quantityAuthorized
+              ),
+              allowedBases: allowedPartialFillBases(line.prescription.controlledSubstanceSchedule),
+            })
+          : null,
         vialLabel:
           line.vialLabel !== null
             ? Object.freeze({

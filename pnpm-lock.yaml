@@ -235,6 +235,9 @@ importers:
       '@pharmax/composition':
         specifier: workspace:*
         version: link:../../packages/composition
+      '@pharmax/controlled-substances':
+        specifier: workspace:*
+        version: link:../../packages/controlled-substances
       '@pharmax/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
@@ -649,6 +652,22 @@ importers:
         specifier: ^5.6.3
         version: 5.9.3
 
+  packages/controlled-substances:
+    dependencies:
+      '@pharmax/database':
+        specifier: workspace:*
+        version: link:../database
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.4
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)(terser@5.49.0)
+
   packages/crypto:
     dependencies:
       '@aws-sdk/client-kms':
@@ -739,6 +758,9 @@ importers:
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../command-bus
+      '@pharmax/controlled-substances':
+        specifier: workspace:*
+        version: link:../controlled-substances
       '@pharmax/database':
         specifier: workspace:*
         version: link:../database

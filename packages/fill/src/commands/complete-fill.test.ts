@@ -44,6 +44,8 @@ const PRINT_JOB_ID = "00000000-0000-4000-8000-0000000000ee";
 const POLICY_ID = "00000000-0000-4000-8000-000000000008";
 const USER_ID = "00000000-0000-4000-8000-000000000009";
 const FINAL_BUCKET_ID = "00000000-0000-4000-8000-0000000000ff";
+const CLINIC_ID = "00000000-0000-4000-8000-000000000011";
+const PRESCRIPTION_ID = "00000000-0000-4000-8000-000000000012";
 
 const fillGrants: ReadonlyArray<ResolvedGrant> = [
   {
@@ -67,6 +69,43 @@ interface FakeCall {
   readonly args: unknown;
 }
 
+/**
+ * Stand-in for Prisma's Decimal. The handler only ever calls
+ * `.toNumber()` on quantity columns, so that is all the fake needs.
+ */
+function dec(value: number): { toNumber: () => number } {
+  return { toNumber: () => value };
+}
+
+const RX_WRITTEN = new Date("2026-01-15T00:00:00.000Z");
+
+/** Prescription facts CompleteFill selects for the Part 1306 rules. */
+interface FakePrescription {
+  controlledSubstanceSchedule: string;
+  originalDateWritten: Date;
+  refillsAuthorized: number;
+  quantityAuthorized: { toNumber: () => number };
+  earliestFillDate: Date | null;
+}
+
+function nonControlledPrescription(overrides: Partial<FakePrescription> = {}): FakePrescription {
+  return {
+    controlledSubstanceSchedule: "NON_CONTROLLED",
+    originalDateWritten: RX_WRITTEN,
+    refillsAuthorized: 0,
+    quantityAuthorized: dec(30),
+    earliestFillDate: null,
+    ...overrides,
+  };
+}
+
+interface FakePriorDispensing {
+  fillNumber: number;
+  quantityDispensed: { toNumber: () => number };
+  partialFillBasis: string | null;
+  dispensedAt: Date;
+}
+
 interface FakeOverrides {
   lockedRow?: { currentStatus: string; version: number } | null;
   assigneeUserId?: string | null;
@@ -75,6 +114,10 @@ interface FakeOverrides {
     id: string;
     lotId: string | null;
     vialLabelId: string | null;
+    clinicId?: string;
+    quantityToFill?: number;
+    prescriptionId?: string;
+    prescription?: FakePrescription;
     lot?: { lotNumber: string; product: { ndc: string } } | null;
     vialLabel?: { activePrintJob: { id: string; status: string } } | null;
     compoundingRecords?: Array<{
@@ -89,6 +132,8 @@ interface FakeOverrides {
   finalBucketFound?: boolean;
   orderUpdateManyCount?: number;
   orderEventHead?: { sequenceNumber: number } | null;
+  /** Existing rows in the 21 CFR 1304 dispensing ledger. */
+  priorDispensings?: FakePriorDispensing[];
 }
 
 function buildPrismaFake(overrides: FakeOverrides = {}): {
@@ -130,7 +175,13 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     // relation as an array; default to "no records" for fixtures
     // that don't care about the compound path.
     compoundingRecords: [],
+    // Part 1306 columns. Default to a non-controlled prescription so
+    // fixtures that predate ADR-0037 keep exercising the plain path.
+    clinicId: CLINIC_ID,
+    prescriptionId: PRESCRIPTION_ID,
     ...line,
+    quantityToFill: dec(line.quantityToFill ?? 30),
+    prescription: line.prescription ?? nonControlledPrescription(),
     vialLabel:
       line.vialLabel !== undefined
         ? line.vialLabel
@@ -176,6 +227,16 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
       findMany: vi.fn(async (args: unknown) => {
         calls.push({ table: "orderLine", op: "findMany", args });
         return linesWithVialLabel;
+      }),
+    },
+    controlledSubstanceDispensing: {
+      findMany: vi.fn(async (args: unknown) => {
+        calls.push({ table: "controlledSubstanceDispensing", op: "findMany", args });
+        return overrides.priorDispensings ?? [];
+      }),
+      createMany: vi.fn(async (args: unknown) => {
+        calls.push({ table: "controlledSubstanceDispensing", op: "createMany", args });
+        return { count: 1 };
       }),
     },
     printJob: {
@@ -736,5 +797,330 @@ describe("CompleteFill — compound-prep lines (no finished-goods lot)", () => {
       )
     );
     expect(out).toMatchObject({ currentStatus: "FILL_COMPLETED_READY_FOR_FINAL" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Controlled substances — 21 CFR part 1306 at the dispensing moment
+// (ADR-0037 commitment 1)
+// ---------------------------------------------------------------------------
+
+describe("CompleteFill — controlled substances (21 CFR 1306)", () => {
+  interface CsFixtureOptions {
+    schedule: string;
+    quantityAuthorized?: number;
+    quantityToFill?: number;
+    refillsAuthorized?: number;
+    earliestFillDate?: Date | null;
+    priorDispensings?: FakePriorDispensing[];
+  }
+
+  function csFake(options: CsFixtureOptions) {
+    return buildPrismaFake({
+      lines: [
+        {
+          id: ORDER_LINE_ID,
+          lotId: LOT_ID,
+          vialLabelId: VIAL_LABEL_ID,
+          lot: { lotNumber: "LOT-A1", product: { ndc: "12345678901" } },
+          quantityToFill: options.quantityToFill ?? 60,
+          prescription: nonControlledPrescription({
+            controlledSubstanceSchedule: options.schedule,
+            quantityAuthorized: dec(options.quantityAuthorized ?? 60),
+            refillsAuthorized: options.refillsAuthorized ?? 0,
+            earliestFillDate: options.earliestFillDate ?? null,
+          }),
+        },
+      ],
+      ...(options.priorDispensings !== undefined
+        ? { priorDispensings: options.priorDispensings }
+        : {}),
+    });
+  }
+
+  function ledgerRows(fake: ReturnType<typeof buildPrismaFake>): Array<Record<string, unknown>> {
+    const call = callsOf(fake.calls, "controlledSubstanceDispensing", "createMany")[0];
+    if (call === undefined) return [];
+    return (call.args as { data: Array<Record<string, unknown>> }).data;
+  }
+
+  function run(idempotencyKey: string, partialFills?: Array<Record<string, unknown>>) {
+    return withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        CompleteFill,
+        {
+          orderId: ORDER_ID,
+          lineScans: defaultLineScans(),
+          ...(partialFills ? { partialFills } : {}),
+        },
+        { idempotencyKey }
+      )
+    );
+  }
+
+  it("writes NO ledger row for a non-controlled fill", async () => {
+    // The ledger's whole value as an audit artifact is that a row's
+    // existence means a controlled substance left the building.
+    const fake = csFake({ schedule: "NON_CONTROLLED" });
+    configureBus(fake.client);
+
+    await run("cs-noncontrolled-1");
+
+    expect(callsOf(fake.calls, "controlledSubstanceDispensing", "createMany")).toHaveLength(0);
+  });
+
+  it("records a Schedule II original fill as fill 1", async () => {
+    const fake = csFake({ schedule: "CII" });
+    configureBus(fake.client);
+
+    await run("cs-cii-first-1");
+
+    expect(ledgerRows(fake)[0]).toMatchObject({
+      organizationId: ORG_ID,
+      clinicId: CLINIC_ID,
+      prescriptionId: PRESCRIPTION_ID,
+      orderLineId: ORDER_LINE_ID,
+      schedule: "CII",
+      fillNumber: 1,
+      partialFillBasis: null,
+      dispensedByUserId: USER_ID,
+    });
+  });
+
+  it("skips duplicates so re-completion after rework cannot fabricate a refill", async () => {
+    const fake = csFake({ schedule: "CII" });
+    configureBus(fake.client);
+
+    await run("cs-cii-skipdup-1");
+
+    const call = callsOf(fake.calls, "controlledSubstanceDispensing", "createMany")[0]!;
+    expect(call.args).toMatchObject({ skipDuplicates: true });
+  });
+
+  it("excludes the line's own ledger row when reading fill history", async () => {
+    // Without the exclusion, re-running CompleteFill on a reworked
+    // order would read the line's own earlier dispensing as a prior
+    // fill and reject a Schedule II re-verification as a refill.
+    const fake = csFake({ schedule: "CII" });
+    configureBus(fake.client);
+
+    await run("cs-cii-selfexclude-1");
+
+    const where = (
+      callsOf(fake.calls, "controlledSubstanceDispensing", "findMany")[0]!.args as {
+        where: Record<string, unknown>;
+      }
+    ).where;
+    expect(where).toMatchObject({
+      organizationId: ORG_ID,
+      prescriptionId: PRESCRIPTION_ID,
+      orderLineId: { not: ORDER_LINE_ID },
+    });
+  });
+
+  it("blocks a second Schedule II fill (1306.12(a))", async () => {
+    const fake = csFake({
+      schedule: "CII",
+      priorDispensings: [
+        {
+          fillNumber: 1,
+          quantityDispensed: dec(60),
+          partialFillBasis: null,
+          dispensedAt: new Date("2026-04-01T10:00:00.000Z"),
+        },
+      ],
+    });
+    configureBus(fake.client);
+
+    await expect(run("cs-cii-refill-1")).rejects.toMatchObject({
+      code: "FILL_CONTROLLED_SUBSTANCE_NOT_PERMITTED",
+      metadata: {
+        violations: [expect.objectContaining({ code: "CS_SCHEDULE_II_REFILL_PROHIBITED" })],
+      },
+    });
+    expect(callsOf(fake.calls, "controlledSubstanceDispensing", "createMany")).toHaveLength(0);
+  });
+
+  it("blocks a fill before the prescriber's do-not-fill-before date (1306.14(e))", async () => {
+    const fake = csFake({
+      schedule: "CII",
+      earliestFillDate: new Date("2026-06-01T00:00:00.000Z"),
+    });
+    configureBus(fake.client);
+
+    await expect(run("cs-cii-earliest-1")).rejects.toMatchObject({
+      code: "FILL_CONTROLLED_SUBSTANCE_NOT_PERMITTED",
+      metadata: {
+        violations: [expect.objectContaining({ code: "CS_EARLIEST_FILL_DATE_NOT_REACHED" })],
+      },
+    });
+  });
+
+  it("requires a stated basis when supplying less than the authorized quantity", async () => {
+    // Short-supplying without declaring why IS an unrecorded partial
+    // fill, and the basis determines the completion window, so it
+    // cannot be reconstructed afterwards.
+    const fake = csFake({ schedule: "CII", quantityAuthorized: 60, quantityToFill: 20 });
+    configureBus(fake.client);
+
+    await expect(run("cs-cii-nobasis-1")).rejects.toMatchObject({
+      code: "FILL_PARTIAL_FILL_BASIS_REQUIRED",
+    });
+  });
+
+  it("records a declared Schedule II partial fill", async () => {
+    const fake = csFake({ schedule: "CII", quantityAuthorized: 60, quantityToFill: 20 });
+    configureBus(fake.client);
+
+    await run("cs-cii-partial-1", [
+      { orderLineId: ORDER_LINE_ID, basis: "PHARMACIST_SUPPLY_SHORTFALL" },
+    ]);
+
+    expect(ledgerRows(fake)[0]).toMatchObject({
+      schedule: "CII",
+      fillNumber: 1,
+      partialFillBasis: "PHARMACIST_SUPPLY_SHORTFALL",
+    });
+  });
+
+  it("keeps a partial-fill continuation on the SAME fill number", async () => {
+    // § 1306.13 continuation, not a § 1306.12(a) refill. If this
+    // advanced the fill ordinal it would be rejected outright.
+    const fake = csFake({
+      schedule: "CII",
+      quantityAuthorized: 60,
+      quantityToFill: 40,
+      priorDispensings: [
+        {
+          fillNumber: 1,
+          quantityDispensed: dec(20),
+          partialFillBasis: "PHARMACIST_SUPPLY_SHORTFALL",
+          dispensedAt: new Date("2026-05-23T08:00:00.000Z"),
+        },
+      ],
+    });
+    configureBus(fake.client);
+
+    await run("cs-cii-continue-1", [
+      { orderLineId: ORDER_LINE_ID, basis: "PHARMACIST_SUPPLY_SHORTFALL" },
+    ]);
+
+    expect(ledgerRows(fake)[0]).toMatchObject({ fillNumber: 1, quantityDispensed: 40 });
+  });
+
+  it("blocks a continuation supplied more than 72 hours after the first partial fill", async () => {
+    const fake = csFake({
+      schedule: "CII",
+      quantityAuthorized: 60,
+      quantityToFill: 40,
+      priorDispensings: [
+        {
+          fillNumber: 1,
+          quantityDispensed: dec(20),
+          partialFillBasis: "PHARMACIST_SUPPLY_SHORTFALL",
+          // Frozen clock is 2026-05-23T14:00Z, so this is 5 days back.
+          dispensedAt: new Date("2026-05-18T14:00:00.000Z"),
+        },
+      ],
+    });
+    configureBus(fake.client);
+
+    await expect(
+      run("cs-cii-72h-1", [{ orderLineId: ORDER_LINE_ID, basis: "PHARMACIST_SUPPLY_SHORTFALL" }])
+    ).rejects.toMatchObject({
+      code: "FILL_CONTROLLED_SUBSTANCE_NOT_PERMITTED",
+      metadata: {
+        violations: [
+          expect.objectContaining({ code: "CS_SCHEDULE_II_PARTIAL_FILL_WINDOW_ELAPSED" }),
+        ],
+      },
+    });
+  });
+
+  it("advances the fill number on a Schedule III refill without charging earlier quantity", async () => {
+    // Regression guard for the per-fill quantity scoping: a CIII for
+    // 60 with refills authorizes 60 EACH TIME, so a refill must not be
+    // read as exceeding the authorized quantity.
+    const fake = csFake({
+      schedule: "CIII",
+      refillsAuthorized: 5,
+      priorDispensings: [
+        {
+          fillNumber: 1,
+          quantityDispensed: dec(60),
+          partialFillBasis: null,
+          dispensedAt: new Date("2026-03-01T10:00:00.000Z"),
+        },
+      ],
+    });
+    configureBus(fake.client);
+
+    await run("cs-ciii-refill-1");
+
+    expect(ledgerRows(fake)[0]).toMatchObject({ schedule: "CIII", fillNumber: 2 });
+  });
+
+  it("blocks a Schedule III refill beyond what the prescription authorized", async () => {
+    const fake = csFake({
+      schedule: "CIII",
+      refillsAuthorized: 1,
+      priorDispensings: [
+        {
+          fillNumber: 1,
+          quantityDispensed: dec(60),
+          partialFillBasis: null,
+          dispensedAt: new Date("2026-02-01T10:00:00.000Z"),
+        },
+        {
+          fillNumber: 2,
+          quantityDispensed: dec(60),
+          partialFillBasis: null,
+          dispensedAt: new Date("2026-03-01T10:00:00.000Z"),
+        },
+      ],
+    });
+    configureBus(fake.client);
+
+    await expect(run("cs-ciii-overrefill-1")).rejects.toMatchObject({
+      code: "FILL_CONTROLLED_SUBSTANCE_NOT_PERMITTED",
+      metadata: {
+        violations: [expect.objectContaining({ code: "CS_REFILL_LIMIT_EXCEEDED" })],
+      },
+    });
+  });
+
+  it("rejects a partial-fill basis declared for a non-controlled line", async () => {
+    const fake = csFake({ schedule: "NON_CONTROLLED" });
+    configureBus(fake.client);
+
+    await expect(
+      run("cs-basis-unexpected-1", [
+        { orderLineId: ORDER_LINE_ID, basis: "PHARMACIST_SUPPLY_SHORTFALL" },
+      ])
+    ).rejects.toMatchObject({ code: "FILL_PARTIAL_FILL_BASIS_UNEXPECTED" });
+  });
+
+  it("records the dispensing in the audit trail (21 CFR 1304)", async () => {
+    const fake = csFake({ schedule: "CII" });
+    configureBus(fake.client);
+
+    await run("cs-cii-audit-1");
+
+    const auditData = (
+      callsOf(fake.calls, "auditLog", "create")[0]!.args as {
+        data: { metadata: Record<string, unknown> };
+      }
+    ).data;
+    expect(auditData.metadata).toMatchObject({
+      controlledSubstanceDispensings: [
+        {
+          orderLineId: ORDER_LINE_ID,
+          prescriptionId: PRESCRIPTION_ID,
+          schedule: "CII",
+          fillNumber: 1,
+          partialFillBasis: null,
+        },
+      ],
+    });
   });
 });

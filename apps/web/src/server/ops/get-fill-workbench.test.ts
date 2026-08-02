@@ -294,3 +294,104 @@ describe("assertWorkstationBelongsToSite", () => {
     );
   });
 });
+
+describe("getFillWorkbench — controlled substances (ADR-0037)", () => {
+  /** Prisma Decimal stand-in; the projection needs `lessThan`. */
+  function dec(value: number): { lessThan: (other: unknown) => boolean; toString: () => string } {
+    return {
+      lessThan: (other: unknown) => value < Number(String(other)),
+      toString: () => String(value),
+    };
+  }
+
+  function csOrderRow(options: {
+    schedule: string;
+    quantityToFill: number;
+    quantityAuthorized: number;
+  }): Record<string, unknown> {
+    return buildOrderRow({
+      orderLines: [
+        {
+          id: "00000000-0000-4000-8000-0000000000c1",
+          quantityToFill: dec(options.quantityToFill),
+          lot: { id: "00000000-0000-4000-8000-0000000000d1", lotNumber: "LOT-C1" },
+          compoundingRecords: [],
+          vialLabel: {
+            id: "00000000-0000-4000-8000-0000000000e1",
+            barcodeValue: "VL1-bc",
+            activePrintJob: { status: "COMPLETED" },
+          },
+          prescription: {
+            id: "00000000-0000-4000-8000-0000000000b1",
+            rxNumber: "RX-100001",
+            drugNdc: "00781111101",
+            drugName: "Oxycodone",
+            drugStrength: "5mg",
+            controlledSubstanceSchedule: options.schedule,
+            quantityAuthorized: dec(options.quantityAuthorized),
+          },
+        },
+      ],
+    });
+  }
+
+  function mockEmptyLookups(): void {
+    prismaMock.lot.findMany.mockResolvedValueOnce([]);
+    prismaMock.labelPrinter.findMany.mockResolvedValueOnce([]);
+    prismaMock.workstation.findMany.mockResolvedValueOnce([]);
+  }
+
+  it("leaves controlledSubstance null for a non-controlled line", async () => {
+    prismaMock.order.findFirst.mockResolvedValueOnce(buildOrderRow());
+    mockEmptyLookups();
+
+    const result = await getFillWorkbench({ organizationId: ORG_ID, orderId: ORDER_ID });
+
+    expect(result?.lines[0]?.controlledSubstance).toBeNull();
+  });
+
+  it("offers only the three Schedule II bases, and requires one when short-supplying", async () => {
+    prismaMock.order.findFirst.mockResolvedValueOnce(
+      csOrderRow({ schedule: "CII", quantityToFill: 20, quantityAuthorized: 60 })
+    );
+    mockEmptyLookups();
+
+    const result = await getFillWorkbench({ organizationId: ORG_ID, orderId: ORDER_ID });
+
+    expect(result?.lines[0]?.controlledSubstance).toMatchObject({
+      schedule: "CII",
+      quantityAuthorized: "60",
+      partialFillBasisRequired: true,
+    });
+    // § 1306.23's basis must not be offered on a Schedule II line: its
+    // completion window does not apply, so picking it would record the
+    // wrong deadline.
+    expect(result?.lines[0]?.controlledSubstance?.allowedBases).toEqual([
+      "PHARMACIST_SUPPLY_SHORTFALL",
+      "PATIENT_OR_PRESCRIBER_REQUEST",
+      "LTCF_OR_TERMINALLY_ILL",
+    ]);
+  });
+
+  it("does not require a basis when the fill supplies the full authorized quantity", async () => {
+    prismaMock.order.findFirst.mockResolvedValueOnce(
+      csOrderRow({ schedule: "CII", quantityToFill: 60, quantityAuthorized: 60 })
+    );
+    mockEmptyLookups();
+
+    const result = await getFillWorkbench({ organizationId: ORG_ID, orderId: ORDER_ID });
+
+    expect(result?.lines[0]?.controlledSubstance?.partialFillBasisRequired).toBe(false);
+  });
+
+  it("offers the single § 1306.23 basis on a Schedule IV line", async () => {
+    prismaMock.order.findFirst.mockResolvedValueOnce(
+      csOrderRow({ schedule: "CIV", quantityToFill: 30, quantityAuthorized: 30 })
+    );
+    mockEmptyLookups();
+
+    const result = await getFillWorkbench({ organizationId: ORG_ID, orderId: ORDER_ID });
+
+    expect(result?.lines[0]?.controlledSubstance?.allowedBases).toEqual(["SCHEDULE_III_TO_V"]);
+  });
+});
