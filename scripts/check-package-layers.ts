@@ -95,6 +95,9 @@ const IGNORED_EDGES: ReadonlyArray<Edge> = [{ from: "@pharmax/tenancy", to: "@ph
 const DOMAIN_PACKAGES: ReadonlySet<string> = new Set([
   "@pharmax/orders",
   "@pharmax/fill",
+  // Inbound edge of the Lot spine (ADR-0035 slice 3): receiving +
+  // DSCSA chain of custody. Fill owns consumption; this owns arrival.
+  "@pharmax/inventory",
   "@pharmax/compounding",
   "@pharmax/verification",
   "@pharmax/shipping",

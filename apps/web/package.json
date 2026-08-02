@@ -18,6 +18,7 @@
     "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/fill": "workspace:*",
+    "@pharmax/inventory": "workspace:*",
     "@pharmax/labels": "workspace:*",
     "@pharmax/orders": "workspace:*",
     "@pharmax/orgs": "workspace:*",

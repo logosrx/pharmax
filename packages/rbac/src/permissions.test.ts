@@ -49,7 +49,7 @@ function extractSeededCodes(source: string): ReadonlyArray<string> {
 
 describe("PERMISSIONS registry", () => {
   it("contains the expected number of codes", () => {
-    expect(ALL_PERMISSION_CODES).toHaveLength(69);
+    expect(ALL_PERMISSION_CODES).toHaveLength(70);
   });
 
   it("has unique codes", () => {
