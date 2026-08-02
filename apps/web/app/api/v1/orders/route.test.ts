@@ -1,8 +1,13 @@
-// Contract tests for GET /api/v1/orders (ADR-0031 amended
-// commitment 7). Pins auth/scope gates, the status-filter contract,
-// cursor pagination, and — security-critical — the PHI-free
-// projection: no patient demographics may ever be selected on v1
-// order reads.
+// Contract tests for /api/v1/orders (ADR-0031 amended commitment 7).
+//
+// GET pins auth/scope gates, the status-filter contract, cursor
+// pagination, and — security-critical — the PHI-free projection: no
+// patient demographics may ever be selected on v1 order reads.
+//
+// POST (intake) pins the orders.create scope gate, the
+// Idempotency-Key requirement, the platform-owned `intakeSourceKind`
+// (a client claim is REJECTED, not coerced), the caller-namespaced
+// idempotency key, and the 201-vs-replay-200 contract.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -59,7 +64,9 @@ vi.mock("@/server/logger", () => {
   return { logger: noop };
 });
 
-import { GET } from "./route.js";
+import { errors } from "@pharmax/platform-core";
+
+import { GET, POST } from "./route.js";
 
 const RESOLVED_KEY = {
   apiKeyId: "key-1",
@@ -89,6 +96,7 @@ beforeEach(() => {
   resolveApiKeyMock.mockReset().mockResolvedValue({ ok: true, key: RESOLVED_KEY });
   rateLimitHitMock.mockReset().mockResolvedValue({ allowed: true });
   readInOrgScopeMock.mockReset();
+  executeCommandDetailedMock.mockReset();
 });
 
 describe("GET /api/v1/orders", () => {
@@ -165,5 +173,152 @@ describe("GET /api/v1/orders", () => {
     const findMany2 = stubOrders([]);
     await GET(request("http://localhost/api/v1/orders?limit=0"));
     expect((findMany2.mock.calls[0]?.[0] as { take: number }).take).toBe(2);
+  });
+});
+
+const INTAKE_KEY = { ...RESOLVED_KEY, scopes: ["orders.create"] } as const;
+
+const INTAKE_BODY = {
+  clinicId: "aaaaaaaa-bbbb-4ccc-addd-eeeeeeee0001",
+  siteId: "aaaaaaaa-bbbb-4ccc-addd-eeeeeeee0002",
+  patientId: "aaaaaaaa-bbbb-4ccc-addd-eeeeeeee0003",
+  lines: [
+    {
+      prescriptionId: "aaaaaaaa-bbbb-4ccc-addd-eeeeeeee0004",
+      quantityToFill: 30,
+      daysSupplyToFill: 30,
+    },
+  ],
+} as const;
+
+const CREATE_OUTPUT = {
+  orderId: "aaaaaaaa-bbbb-4ccc-addd-eeeeeeee0009",
+  orderLineIds: ["aaaaaaaa-bbbb-4ccc-addd-eeeeeeee000a"],
+  currentStatus: "RECEIVED",
+  version: 0,
+} as const;
+
+function postRequest(input: {
+  readonly body?: unknown;
+  readonly rawBody?: string;
+  readonly idempotencyKey?: string;
+  readonly auth?: string | null;
+}): Request {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (input.auth !== null) headers["authorization"] = input.auth ?? "Bearer pxk_test-token";
+  if (input.idempotencyKey !== undefined) headers["idempotency-key"] = input.idempotencyKey;
+  return new Request("http://localhost/api/v1/orders", {
+    method: "POST",
+    headers,
+    body: input.rawBody ?? JSON.stringify(input.body ?? INTAKE_BODY),
+  });
+}
+
+describe("POST /api/v1/orders (intake)", () => {
+  beforeEach(() => {
+    resolveApiKeyMock.mockResolvedValue({ ok: true, key: INTAKE_KEY });
+  });
+
+  it("401s without a bearer token", async () => {
+    const res = await POST(postRequest({ auth: null, idempotencyKey: "intake-1" }));
+    expect(res.status).toBe(401);
+    expect(executeCommandDetailedMock).not.toHaveBeenCalled();
+  });
+
+  it("403s a key without the orders.create scope (orders.read is NOT enough)", async () => {
+    resolveApiKeyMock.mockResolvedValue({
+      ok: true,
+      key: { ...RESOLVED_KEY, scopes: ["orders.read"] },
+    });
+    const res = await POST(postRequest({ idempotencyKey: "intake-1" }));
+    expect(res.status).toBe(403);
+    expect(executeCommandDetailedMock).not.toHaveBeenCalled();
+  });
+
+  it("400s without an Idempotency-Key header", async () => {
+    const res = await POST(postRequest({}));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
+    expect(executeCommandDetailedMock).not.toHaveBeenCalled();
+  });
+
+  it("400s malformed JSON", async () => {
+    const res = await POST(postRequest({ rawBody: "{nope", idempotencyKey: "intake-1" }));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.code).toBe("INVALID_JSON");
+  });
+
+  it("rejects a client-supplied intakeSourceKind instead of coercing it", async () => {
+    const res = await POST(
+      postRequest({
+        body: { ...INTAKE_BODY, intakeSourceKind: "MANUAL" },
+        idempotencyKey: "intake-1",
+      })
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.code).toBe("INTAKE_SOURCE_NOT_SETTABLE");
+    expect(executeCommandDetailedMock).not.toHaveBeenCalled();
+  });
+
+  it("201s: forces intakeSourceKind=API and namespaces the idempotency key per API key", async () => {
+    executeCommandDetailedMock.mockResolvedValue({ output: CREATE_OUTPUT, replayed: false });
+    const res = await POST(postRequest({ idempotencyKey: "intake-1" }));
+    expect(res.status).toBe(201);
+
+    const [, input, options] = executeCommandDetailedMock.mock.calls[0] as [
+      unknown,
+      Record<string, unknown>,
+      { idempotencyKey: string },
+    ];
+    expect(input["intakeSourceKind"]).toBe("API");
+    expect(input["clinicId"]).toBe(INTAKE_BODY.clinicId);
+    expect(input["lines"]).toEqual(INTAKE_BODY.lines);
+    expect(options.idempotencyKey).toBe("partner:key-1:intake-1");
+
+    const body = await res.json();
+    expect(body.data).toEqual(CREATE_OUTPUT);
+    expect(body.meta).toBeUndefined();
+  });
+
+  it("passes optional fields through only when present", async () => {
+    executeCommandDetailedMock.mockResolvedValue({ output: CREATE_OUTPUT, replayed: false });
+    await POST(
+      postRequest({
+        body: { ...INTAKE_BODY, externalOrderNumber: "CL-1001", priority: "RUSH" },
+        idempotencyKey: "intake-2",
+      })
+    );
+    const [, input] = executeCommandDetailedMock.mock.calls[0] as [
+      unknown,
+      Record<string, unknown>,
+    ];
+    expect(input["externalOrderNumber"]).toBe("CL-1001");
+    expect(input["priority"]).toBe("RUSH");
+    expect("intakeSourceRefId" in input).toBe(false);
+  });
+
+  it("replay: 200 with the ORIGINAL order and the replay flag — no duplicate order", async () => {
+    executeCommandDetailedMock.mockResolvedValue({ output: CREATE_OUTPUT, replayed: true });
+    const res = await POST(postRequest({ idempotencyKey: "intake-1" }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data).toEqual(CREATE_OUTPUT);
+    expect(body.meta).toEqual({ idempotentReplay: true });
+  });
+
+  it("422s command-level rejections with their typed code", async () => {
+    executeCommandDetailedMock.mockRejectedValue(
+      new errors.NotFoundError({
+        code: "ORDER_PATIENT_NOT_FOUND",
+        message: "Patient not found in this clinic.",
+      })
+    );
+    const res = await POST(postRequest({ idempotencyKey: "intake-1" }));
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.error.code).toBe("ORDER_PATIENT_NOT_FOUND");
   });
 });

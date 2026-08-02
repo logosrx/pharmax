@@ -1,0 +1,85 @@
+# =============================================================================
+# Pharmax — staging / us-east-1 values.
+#
+# Mirrors prod shape (Multi-AZ, deletion protection, full backup window) at
+# smaller instance sizes so HA bugs surface before they reach prod.
+# =============================================================================
+
+project     = "pharmax"
+environment = "staging"
+region      = "us-east-1"
+
+# ---- Network ----------------------------------------------------------------
+vpc_cidr                     = "10.41.0.0/16"
+availability_zone_count      = 3
+nat_gateway_strategy         = "per_az"
+vpc_flow_logs_retention_days = 90
+
+# ---- ALB --------------------------------------------------------------------
+acm_certificate_domain   = "staging.pharmax.co"
+alb_idle_timeout_seconds = 60
+
+# ---- KMS --------------------------------------------------------------------
+asymm_sign_key_spec = "ECC_NIST_P384"
+
+# ---- Database (Aurora PostgreSQL) -------------------------------------------
+# Staging mirrors prod's shape on a budget: Serverless v2 with ONE reader so
+# the reporting-replica path (REPORTING_DATABASE_URL) is exercised before prod.
+aurora_capacity_mode      = "serverless"
+aurora_serverless_min_acu = 0.5
+aurora_serverless_max_acu = 8
+aurora_reader_count       = 1
+
+rds_engine_version                      = "16.4"
+rds_backup_retention_days               = 35
+rds_deletion_protection                 = true
+rds_performance_insights_retention_days = 7
+
+# Used only if staging switches to provisioned capacity.
+rds_instance_class = "db.r6g.large"
+
+# DEPRECATED (see dev example). Retained so this file stays valid.
+rds_allocated_storage_gb     = 100
+rds_max_allocated_storage_gb = 500
+rds_parameter_group_family   = "postgres16"
+rds_multi_az                 = true
+
+# ---- ECS --------------------------------------------------------------------
+ecs_web_cpu                    = 1024
+ecs_web_memory                 = 2048
+ecs_web_desired_count          = 2
+ecs_web_min_count              = 2
+ecs_web_max_count              = 6
+ecs_worker_cpu                 = 1024
+ecs_worker_memory              = 2048
+ecs_worker_desired_count       = 2
+ecs_print_agent_cpu            = 512
+ecs_print_agent_memory         = 1024
+ecs_print_agent_desired_count  = 1
+ecs_log_retention_days         = 90
+ecs_container_insights_enabled = true
+
+# ---- WAF / Alarms -----------------------------------------------------------
+waf_rate_limit_per_5min = 2000
+# TODO: create the pharmax-staging-alerts SNS topic and set its ARN here.
+# Empty string = alarms are created without a notification action.
+alarm_sns_topic_arn = ""
+
+# ---- Audit archive ----------------------------------------------------------
+audit_archive_retention_years         = 7
+audit_archive_glacier_transition_days = 90
+
+# ---- Terraform-apply role (GitHub Actions OIDC) ------------------------------
+# Role assumed by the approval-gated terraform-apply workflow for the
+# staging-ue1 env-region. The staging account has no cicd-deploy module, so
+# this module owns the account-level OIDC provider (create = true). After
+# apply, read `terraform output terraform_apply_role_arn` and set it as the
+# AWS_APPLY_ROLE_ARN_STAGING repository variable in GitHub.
+enable_terraform_apply_role  = true
+tfapply_github_repository    = "logosrx/pharmax"
+tfapply_github_environments  = ["terraform-apply-staging-ue1"]
+tfapply_create_oidc_provider = true
+
+tags = {
+  CostCenter = "engineering-staging"
+}
