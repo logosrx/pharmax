@@ -1,0 +1,77 @@
+---
+description: Worktree, branch, stash, and PR hygiene for agents working in this repo
+alwaysApply: true
+---
+
+# Agent Workspace Hygiene
+
+Multiple agents work this repo in parallel. Without discipline the
+primary checkout silently becomes a pile of everyone's half-finished
+edits: files that match no branch, stashes nobody can date, and
+duplicate copies left behind by refactors. That state is not just
+untidy — it hides real uncommitted work, and it makes "is my change
+safe?" unanswerable without hashing every file against every branch.
+
+## One task, one worktree
+
+- Do not build a feature in the primary checkout at
+  `/Users/logosrx/Desktop/Pharmax` while another agent may be working.
+  Create a dedicated worktree:
+  `git worktree add ../Pharmax-<task> -b <branch>`
+- Remove the worktree when the branch merges:
+  `git worktree remove ../Pharmax-<task>`
+- Never leave a worktree pointing at a branch that has been merged or
+  deleted. A stale worktree also blocks `git branch -d`.
+
+## Leave the tree the way you found it
+
+- Before ending a task, every file you touched must be either committed
+  and pushed, or deliberately reverted. "Modified but pushed elsewhere"
+  is not a resting state.
+- Run `git status --short` as your last step. If it lists files you
+  created or modified, resolve them before reporting done.
+- Shared merge-point files — `prisma/schema.prisma`,
+  `packages/events/src/registry.ts`, `packages/rbac/src/permissions.ts`,
+  `packages/database/src/index.ts`, `pnpm-lock.yaml` — are touched by
+  almost every feature. Leaving your edit to one of these in the tree
+  silently contaminates the next agent's branch. Commit it to your
+  branch or revert it.
+
+## Stashes are not a filing system
+
+- Do not use `git stash` as a "safety snapshot" before pushing. A stash
+  has no branch, no message discipline, and no owner; three days later
+  nobody can tell whether it holds unique work.
+- If you need a checkpoint, make a commit on a branch and push it. A
+  WIP commit on a throwaway branch is recoverable and attributable; a
+  stash is neither.
+- If you do create a stash, drop it in the same task.
+
+## Moving a file means moving it
+
+- When relocating a module, delete the original in the same step. An
+  untracked byte-identical copy at the old path resolves for nobody,
+  survives every branch, and reads like unfinished work forever.
+- After a move, `rg` for the old import path and confirm zero hits.
+
+## Don't let green fixes rot
+
+- A PR that is green and fixes a repo-wide failure blocks every other
+  PR's signal until it merges. Land it or close it — do not leave it
+  open overnight.
+- Before opening a new PR against a red baseline, check whether the
+  failure is already fixed in an open PR. Duplicating the fix wastes a
+  review; waiting behind it wastes a day.
+
+## Deploys are manual and can silently roll back
+
+- `deploy.yml` is `workflow_dispatch` only. Merging to `main` does not
+  ship. Never assume `main` and production are the same code.
+- The `production` GitHub Environment requires a reviewer. A dispatched
+  deploy sits in `waiting` until a human approves it — check for a
+  stalled run before dispatching another.
+- ECS deployment circuit breaker rolls a service back on boot failure,
+  and the matrix deploys services independently. A partial failure
+  leaves production running **mixed versions**. After any deploy,
+  confirm the running image tag of every service, not just the one you
+  cared about.
