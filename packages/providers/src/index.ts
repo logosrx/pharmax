@@ -133,6 +133,111 @@ export {
   type ProductionDispatchers,
 } from "./npi-sync/dispatch-adapters.js";
 
+// Provider self-serve onboarding (ADR-0033, slice 1). Submit +
+// proofing are machine-dispatched (public apply endpoint / worker
+// drain acting as the per-org ProviderOnboardingService identity);
+// approve + reject are the human review-queue decisions. The pure
+// NPPES match rules (`evaluateProofing`) live beside the commands
+// so the drain and the tests share one PASS bar.
+export {
+  SubmitProviderOnboardingApplication,
+  type SubmitProviderOnboardingApplicationInput,
+  type SubmitProviderOnboardingApplicationOutput,
+} from "./onboarding/submit-application.js";
+export {
+  RecordProviderOnboardingProofing,
+  type RecordProviderOnboardingProofingInput,
+  type RecordProviderOnboardingProofingOutput,
+} from "./onboarding/record-proofing.js";
+export {
+  ApproveProviderOnboardingApplication,
+  type ApproveProviderOnboardingApplicationInput,
+  type ApproveProviderOnboardingApplicationOutput,
+} from "./onboarding/approve-application.js";
+export {
+  RejectProviderOnboardingApplication,
+  type RejectProviderOnboardingApplicationInput,
+  type RejectProviderOnboardingApplicationOutput,
+} from "./onboarding/reject-application.js";
+export {
+  buildProofingSnapshotJson,
+  evaluateProofing,
+  normalizeSurname,
+  type ProofingClaim,
+  type ProofingOutcome,
+} from "./onboarding/proofing.js";
+export {
+  PROVIDER_ONBOARDING_ALREADY_OPEN,
+  PROVIDER_ONBOARDING_APPLICATION_NOT_FOUND,
+  PROVIDER_ONBOARDING_INVALID_STATE,
+  PROVIDER_ONBOARDING_NPI_ALREADY_REGISTERED,
+  PROVIDER_ONBOARDING_POLICY_CODE,
+  PROVIDER_ONBOARDING_POLICY_NOT_FOUND,
+  PROVIDER_ONBOARDING_POLICY_VERSION,
+} from "./onboarding/shared.js";
+
+// Provider portal principals (ADR-0033, slice 2). PortalAccount /
+// PortalSession are a SEPARATE principal pair from the operator
+// User/AuthSession — a portal credential resolves to a Provider,
+// never to a User. Reuses @pharmax/auth primitives (Argon2id hasher,
+// token minting/hashing, password policy, login-attempt ledger).
+export {
+  provisionPortalAccountInTx,
+  type ProvisionPortalAccountResult,
+} from "./portal/provision.js";
+export {
+  IssuePortalSetupToken,
+  issuePortalSetupToken,
+  type IssuePortalSetupTokenInput,
+  type IssuePortalSetupTokenOutput,
+} from "./portal/issue-setup-token.js";
+export {
+  SetupPortalAccount,
+  setupPortalAccount,
+  type SetupPortalAccountInput,
+  type SetupPortalAccountOutput,
+} from "./portal/setup-account.js";
+export {
+  PortalSignIn,
+  type PortalSignInInput,
+  type PortalSignInOutput,
+} from "./portal/sign-in-command.js";
+export {
+  ChangePortalPassword,
+  changePortalPassword,
+  type ChangePortalPasswordInput,
+  type ChangePortalPasswordOutput,
+} from "./portal/change-password.js";
+export { portalSignIn, type PortalSignInResult } from "./portal/sign-in.js";
+export {
+  createPortalSessionInTx,
+  resolvePortalSession,
+  revokePortalSessionByToken,
+  revokeAllPortalAccountSessionsInTx,
+  PORTAL_SESSION_NOT_FOUND,
+  PORTAL_SESSION_REVOKED,
+  PORTAL_SESSION_IDLE_EXPIRED,
+  PORTAL_SESSION_ABSOLUTE_EXPIRED,
+  PORTAL_SESSION_ACCOUNT_DISABLED,
+  type PortalSessionResolution,
+  type PortalSessionFailureReason,
+  type ResolvedPortalSession,
+  type CreatePortalSessionInput,
+  type CreatedPortalSession,
+  type ResolvePortalSessionInput,
+  type PortalSessionRevokeReason,
+} from "./portal/session.js";
+export {
+  NOOP_PORTAL_SETUP_MAILER,
+  PORTAL_ACCOUNT_DISABLED,
+  PORTAL_ACCOUNT_NOT_FOUND,
+  PORTAL_CURRENT_PASSWORD_INVALID,
+  PORTAL_SETUP_TOKEN_INVALID,
+  PORTAL_SETUP_TOKEN_TTL_MS,
+  type PortalSetupDelivery,
+  type PortalSetupMailer,
+} from "./portal/shared.js";
+
 import * as deactivateProviderModule from "./commands/deactivate-provider.js";
 import * as reactivateProviderModule from "./commands/reactivate-provider.js";
 import * as registerProviderModule from "./commands/register-provider.js";

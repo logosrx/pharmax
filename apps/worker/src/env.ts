@@ -148,6 +148,21 @@ const schema = z.object({
   // override without a code change. Defaults to `npi-sync`.
   NPI_SYNC_ACTOR_EMAIL_LOCAL_PART: z.string().min(1).optional(),
 
+  // ---- Provider onboarding NPPES proofing drain (ADR-0033) ----------
+  // Claims SUBMITTED provider_onboarding_application rows, checks the
+  // claim against the public CMS NPPES registry, and dispatches
+  // RecordProviderOnboardingProofing. Shares the process-wide CMS
+  // rate gate with the NPI sync scheduler. `MAX_REGISTRY_ATTEMPTS`
+  // is the fetch-failure ceiling before an application is routed to
+  // review with REGISTRY_UNAVAILABLE instead of retrying forever.
+  PROVIDER_ONBOARDING_PROVER_BATCH_SIZE: z.coerce.number().int().positive().default(10),
+  PROVIDER_ONBOARDING_PROVER_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+  PROVIDER_ONBOARDING_MAX_REGISTRY_ATTEMPTS: z.coerce.number().int().positive().default(5),
+  // Optional override for the per-org service-user local-part
+  // (defaults to `provider-onboarding`); same convention as
+  // NPI_SYNC_ACTOR_EMAIL_LOCAL_PART.
+  PROVIDER_ONBOARDING_ACTOR_EMAIL_LOCAL_PART: z.string().min(1).optional(),
+
   // ---- Workflow + bucket size scraper ------------------------------
   // Cadence at which the worker refreshes the snapshot behind
   // `pharmax_workflow_queue_depth`, `pharmax_workflow_emergency_bucket_size`,
@@ -299,6 +314,12 @@ const schema = z.object({
   // buttons in scheduled-report email bodies. Defaults to
   // localhost for dev.
   OPS_CONSOLE_BASE_URL: z.string().url().default("http://localhost:3000"),
+
+  // Base URL for provider-portal links (the /portal/setup link in
+  // onboarding-approval emails, ADR-0033 slice 2). The portal is
+  // served by the same Next.js app as the console, so this defaults
+  // to OPS_CONSOLE_BASE_URL when unset.
+  PORTAL_BASE_URL: z.string().url().optional(),
 
   // ---- Error tracking (Sentry) ------------------------------------
   // When SENTRY_DSN is unset the SDK no-ops and `Logger.error` only

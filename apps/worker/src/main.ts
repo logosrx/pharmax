@@ -68,6 +68,8 @@ import { createOutboxDrainer } from "./drains/event-outbox-drainer.js";
 import { createFedExTrackingPoller } from "./drains/fedex-tracking-poller.js";
 import { createFedExWebhookDrainer } from "./drains/fedex-webhook-event-drainer.js";
 import { createNpiSyncScheduler } from "./drains/npi-sync-scheduler.js";
+import { createProviderOnboardingProver } from "./drains/provider-onboarding-prover.js";
+import { portalSetupMailer } from "./portal-setup-mailer.js";
 import { createOutboxHandlers, createWebhookFanOutHook } from "./drains/outbox-handlers.js";
 import { createExpiredPackagePhotoUploadTokenReaper } from "./drains/reap-expired-package-photo-upload-tokens.js";
 import { createStaleLabelPurchaseReconciler } from "./drains/reconcile-stale-label-purchases.js";
@@ -367,6 +369,11 @@ async function main(): Promise<void> {
       intervalMs: env.NPI_SYNC_REAPER_INTERVAL_MS,
       runtimeCeilingMs: env.NPI_SYNC_RUNTIME_CEILING_MS,
     },
+    providerOnboardingProver: {
+      batchSize: env.PROVIDER_ONBOARDING_PROVER_BATCH_SIZE,
+      intervalMs: env.PROVIDER_ONBOARDING_PROVER_INTERVAL_MS,
+      maxRegistryAttempts: env.PROVIDER_ONBOARDING_MAX_REGISTRY_ATTEMPTS,
+    },
     packagePhotoTokenReaper: {
       intervalMs: env.PACKAGE_PHOTO_TOKEN_REAPER_INTERVAL_MS,
       batchSize: env.PACKAGE_PHOTO_TOKEN_REAPER_BATCH_SIZE,
@@ -605,6 +612,27 @@ async function main(): Promise<void> {
   const npiSyncReaper = createStuckNpiSyncRunReaper(
     { client: prisma, logger, clock: clock.systemClock },
     { runtimeCeilingMs: env.NPI_SYNC_RUNTIME_CEILING_MS }
+  );
+
+  // Provider-onboarding NPPES proofing drain (ADR-0033). Shares the
+  // process-wide CMS rate gate with the NPI sync scheduler — both
+  // ride `npiSyncCmsClient` so total registry pressure stays at one
+  // client's 8 req/s regardless of which loop is busier.
+  const providerOnboardingProver = createProviderOnboardingProver(
+    {
+      client: prisma,
+      logger,
+      clock: clock.systemClock,
+      cmsClient: npiSyncCmsClient,
+      portalSetupMailer,
+      ...(env.PROVIDER_ONBOARDING_ACTOR_EMAIL_LOCAL_PART !== undefined
+        ? { actorEmailLocalPart: env.PROVIDER_ONBOARDING_ACTOR_EMAIL_LOCAL_PART }
+        : {}),
+    },
+    {
+      batchSize: env.PROVIDER_ONBOARDING_PROVER_BATCH_SIZE,
+      maxRegistryAttempts: env.PROVIDER_ONBOARDING_MAX_REGISTRY_ATTEMPTS,
+    }
   );
 
   // Package-photo upload-token reaper. Sweeps expired
@@ -911,6 +939,15 @@ async function main(): Promise<void> {
     logger,
   });
 
+  const providerOnboardingProverLoop = createPollLoop({
+    name: "provider-onboarding-prover",
+    intervalMs: env.PROVIDER_ONBOARDING_PROVER_INTERVAL_MS,
+    tick: async () => {
+      await providerOnboardingProver.tick();
+    },
+    logger,
+  });
+
   const packagePhotoTokenReaperLoop = createPollLoop({
     name: "package-photo-token-reaper",
     intervalMs: env.PACKAGE_PHOTO_TOKEN_REAPER_INTERVAL_MS,
@@ -971,6 +1008,7 @@ async function main(): Promise<void> {
   slaBreachEvaluatorLoop.start();
   npiSyncSchedulerLoop.start();
   npiSyncReaperLoop.start();
+  providerOnboardingProverLoop.start();
   packagePhotoTokenReaperLoop.start();
   labelPurchaseReconcilerLoop.start();
   if (packagePhotoObjectSweeperLoop !== null) {
@@ -1022,6 +1060,7 @@ async function main(): Promise<void> {
     slaBreachEvaluatorLoop.stop(),
     npiSyncSchedulerLoop.stop(),
     npiSyncReaperLoop.stop(),
+    providerOnboardingProverLoop.stop(),
     packagePhotoTokenReaperLoop.stop(),
     labelPurchaseReconcilerLoop.stop(),
     ...(packagePhotoObjectSweeperLoop !== null ? [packagePhotoObjectSweeperLoop.stop()] : []),

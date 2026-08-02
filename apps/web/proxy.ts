@@ -12,6 +12,15 @@
 //                              (401 without a valid key).
 //       /api/auth/(.*)       — sign-in / sign-out (how a session is
 //                              obtained; gating these would deadlock).
+//       /api/portal/(.*)     — provider portal API (ADR-0033): the
+//                              apply/status endpoints are pre-credential
+//                              by design; the authed portal routes
+//                              validate the PORTAL cookie in-handler
+//                              (the operator cookie is meaningless here).
+//       /portal(/.*)         — provider portal pages. Sign-in/setup/
+//                              status are public; the portal home
+//                              redirects server-side without a valid
+//                              portal session.
 //       /sign-in, /sign-up   — the auth UI surfaces.
 //       /preview             — design-system showcase (mock data).
 //
@@ -44,6 +53,9 @@ function pathIsPublic(pathname: string): boolean {
     pathname.startsWith("/api/webhooks/") ||
     pathname.startsWith("/api/v1/") ||
     pathname.startsWith("/api/auth/") ||
+    pathname.startsWith("/api/portal/") ||
+    pathname === "/portal" ||
+    pathname.startsWith("/portal/") ||
     pathname === "/sign-in" ||
     pathname.startsWith("/sign-in/") ||
     pathname === "/sign-up" ||
