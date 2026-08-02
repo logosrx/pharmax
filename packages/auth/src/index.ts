@@ -21,10 +21,12 @@ export {
   DEFAULT_LOCKOUT_POLICY,
   DEFAULT_SIGN_IN_RATE_LIMIT,
   DEFAULT_RESET_TOKEN_TTL_MS,
+  DEFAULT_WEBAUTHN_CHALLENGE_TTL_MS,
   MFA_REQUIRED_ROLE_CODES,
   type AuthConfiguration,
   type SessionPolicy,
   type MfaPolicy,
+  type WebAuthnPolicy,
   type LockoutPolicy,
   type SignInRateLimitPolicy,
 } from "./configure.js";
@@ -73,6 +75,23 @@ export {
 
 export { generateTotpSecretBase32, buildTotpKeyUri, verifyTotpCode } from "./mfa/totp.js";
 export {
+  createSimpleWebAuthnAdapter,
+  type WebAuthnAdapter,
+  type WebAuthnOptionsJSON,
+  type WebAuthnRegistrationResult,
+  type WebAuthnAuthenticationResult,
+  type GenerateWebAuthnRegistrationInput,
+  type VerifyWebAuthnRegistrationInput,
+  type GenerateWebAuthnAuthenticationInput,
+  type VerifyWebAuthnAuthenticationInput,
+  type GeneratedWebAuthnOptions,
+} from "./mfa/webauthn.js";
+export {
+  mintWebAuthnChallenge,
+  consumeWebAuthnChallenge,
+  type WebAuthnChallengeTx,
+} from "./mfa/webauthn-challenge.js";
+export {
   generateRecoveryCodes,
   normalizeRecoveryCode,
   hashRecoveryCode,
@@ -95,6 +114,23 @@ export {
 } from "./commands/change-password.js";
 export { EnrollMfa, type EnrollMfaInput, type EnrollMfaOutput } from "./commands/enroll-mfa.js";
 export { ConfirmMfa, type ConfirmMfaInput, type ConfirmMfaOutput } from "./commands/confirm-mfa.js";
+export {
+  EnrollWebAuthnCredential,
+  type EnrollWebAuthnCredentialInput,
+  type EnrollWebAuthnCredentialOutput,
+} from "./commands/enroll-webauthn.js";
+export {
+  ConfirmWebAuthnCredential,
+  type ConfirmWebAuthnCredentialInput,
+  type ConfirmWebAuthnCredentialOutput,
+} from "./commands/confirm-webauthn.js";
+export {
+  StartWebAuthnAuthentication,
+  type StartWebAuthnAuthenticationInput,
+  type StartWebAuthnAuthenticationOutput,
+} from "./commands/start-webauthn-authentication.js";
+export { startWebAuthnSignIn } from "./webauthn-sign-in.js";
+export { verifyFirstFactor, type VerifiedFirstFactor } from "./password/verify-first-factor.js";
 export {
   RevokeSessions,
   type RevokeSessionsInput,
@@ -145,6 +181,9 @@ export {
   PASSWORD_POLICY_VIOLATION,
   PASSWORD_REUSED,
   MFA_ALREADY_ENROLLED,
+  WEBAUTHN_CHALLENGE_INVALID,
+  WEBAUTHN_REGISTRATION_FAILED,
+  WEBAUTHN_NOT_ENROLLED,
   AUTH_NOT_CONFIGURED,
   invalidCredentialsError,
   mfaRequiredError,
@@ -154,6 +193,9 @@ export {
   passwordPolicyViolationError,
   passwordReusedError,
   mfaAlreadyEnrolledError,
+  webAuthnChallengeInvalidError,
+  webAuthnRegistrationFailedError,
+  webAuthnNotEnrolledError,
   authNotConfiguredError,
 } from "./errors.js";
 
@@ -165,6 +207,13 @@ import * as sessionModule from "./session/service.js";
 import * as totpModule from "./mfa/totp.js";
 import * as recoveryModule from "./mfa/recovery-codes.js";
 import * as secretSealModule from "./mfa/secret-seal.js";
+import * as webauthnModule from "./mfa/webauthn.js";
+import * as webauthnChallengeModule from "./mfa/webauthn-challenge.js";
+import * as enrollWebauthnModule from "./commands/enroll-webauthn.js";
+import * as confirmWebauthnModule from "./commands/confirm-webauthn.js";
+import * as startWebauthnAuthModule from "./commands/start-webauthn-authentication.js";
+import * as webauthnSignInModule from "./webauthn-sign-in.js";
+import * as verifyFirstFactorModule from "./password/verify-first-factor.js";
 import * as loginAttemptModule from "./login-attempt.js";
 import * as signInCommandModule from "./commands/sign-in.js";
 import * as signInModule from "./sign-in.js";
@@ -193,6 +242,13 @@ export const auth = {
   ...totpModule,
   ...recoveryModule,
   ...secretSealModule,
+  ...webauthnModule,
+  ...webauthnChallengeModule,
+  ...enrollWebauthnModule,
+  ...confirmWebauthnModule,
+  ...startWebauthnAuthModule,
+  ...webauthnSignInModule,
+  ...verifyFirstFactorModule,
   ...loginAttemptModule,
   ...signInCommandModule,
   ...signInModule,

@@ -46,6 +46,12 @@ export const MFA_ALREADY_ENROLLED = "MFA_ALREADY_ENROLLED" as const;
 export const CURRENT_PASSWORD_INVALID = "CURRENT_PASSWORD_INVALID" as const;
 /** ConfirmMfa called with no pending (unverified) enrollment to confirm. */
 export const MFA_NO_PENDING_ENROLLMENT = "MFA_NO_PENDING_ENROLLMENT" as const;
+/** A WebAuthn ceremony referenced an unknown, expired, or consumed challenge. */
+export const WEBAUTHN_CHALLENGE_INVALID = "WEBAUTHN_CHALLENGE_INVALID" as const;
+/** The attestation from the authenticator failed verification. */
+export const WEBAUTHN_REGISTRATION_FAILED = "WEBAUTHN_REGISTRATION_FAILED" as const;
+/** WebAuthn authentication requested for an account with no active credentials. */
+export const WEBAUTHN_NOT_ENROLLED = "WEBAUTHN_NOT_ENROLLED" as const;
 
 // --- Boot / configuration (500) -------------------------------------------
 
@@ -69,11 +75,17 @@ export function invalidCredentialsError(reasonCode: string): errors.Authenticati
 export function mfaRequiredError(detail: {
   readonly userId: string;
   readonly enrolled: boolean;
+  /** Second-factor methods this account can satisfy ("TOTP", "WEBAUTHN"). */
+  readonly methods?: ReadonlyArray<string>;
 }): errors.AuthenticationError {
   return new errors.AuthenticationError({
     code: MFA_REQUIRED,
     message: "Multi-factor authentication is required.",
-    metadata: { userId: detail.userId, enrolled: detail.enrolled },
+    metadata: {
+      userId: detail.userId,
+      enrolled: detail.enrolled,
+      methods: [...(detail.methods ?? [])],
+    },
   });
 }
 
@@ -139,6 +151,32 @@ export function mfaNoPendingEnrollmentError(detail: {
   return new errors.ConflictError({
     code: MFA_NO_PENDING_ENROLLMENT,
     message: "There is no pending authenticator enrollment to confirm.",
+    metadata: { userId: detail.userId },
+  });
+}
+
+export function webAuthnChallengeInvalidError(): errors.ValidationError {
+  return new errors.ValidationError({
+    code: WEBAUTHN_CHALLENGE_INVALID,
+    message: "This security-key challenge is invalid or has expired. Start over.",
+    issues: [{ path: ["challengeId"], message: "unknown, expired, or already used" }],
+  });
+}
+
+export function webAuthnRegistrationFailedError(): errors.ValidationError {
+  return new errors.ValidationError({
+    code: WEBAUTHN_REGISTRATION_FAILED,
+    message: "The security key could not be verified. Try registering it again.",
+    issues: [{ path: ["response"], message: "attestation verification failed" }],
+  });
+}
+
+export function webAuthnNotEnrolledError(detail: {
+  readonly userId: string;
+}): errors.AuthenticationError {
+  return new errors.AuthenticationError({
+    code: WEBAUTHN_NOT_ENROLLED,
+    message: "No security key is registered for this account.",
     metadata: { userId: detail.userId },
   });
 }
