@@ -167,9 +167,22 @@ resource "aws_rds_cluster_parameter_group" "this" {
     value = "1"
   }
 
+  # "1", not "on". RDS reports AllowedValues = "0,1" here and rejects the
+  # Postgres-style boolean, so the declared "on" never landed — and it was
+  # the ONLY one of these seven parameters that didn't. On 2026-08-02
+  # `describe-db-cluster-parameters --source user` returned the other six
+  # and omitted this one, which came back Source = "system": the value in
+  # effect was the engine default, not ours. The write failed silently.
+  #
+  # It also failed loudly in the wrong place. Terraform read back "1" on
+  # every refresh and planned to rewrite it to "on" forever, so every plan
+  # carried a phantom change and terraform-drift.yml reported drift *every
+  # night* — the same cry-wolf pattern that let a month of schema drift go
+  # unnoticed. Declaring the value AWS actually accepts makes the setting
+  # real and silences the false alarm.
   parameter {
     name  = "track_io_timing"
-    value = "on"
+    value = "1"
   }
 
   parameter {
