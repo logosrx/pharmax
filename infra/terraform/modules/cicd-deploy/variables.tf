@@ -71,3 +71,14 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "enable_schema_check_role" {
+  description = <<-EOT
+    Create the read-only schema-drift checker role (see schema-check.tf).
+    Required by .github/workflows/schema-drift.yml, which cannot use the
+    deploy role because that role is gated on an Environment with required
+    reviewers and this job runs unattended on a nightly schedule.
+  EOT
+  type        = bool
+  default     = true
+}
