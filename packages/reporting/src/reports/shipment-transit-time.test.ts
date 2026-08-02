@@ -11,6 +11,9 @@ interface FakeShipment {
   confirmedAt: Date | null;
   lastTrackingEventAt: Date | null;
   estimatedDeliveryAt: Date | null;
+  pickedUpAt: Date | null;
+  deliveredAt: Date | null;
+  transitSeconds: number | null;
 }
 
 function fakeClient(shipments: ReadonlyArray<FakeShipment>) {
@@ -30,7 +33,17 @@ function delivered(input: {
   confirmedAt: string;
   deliveredAt: string;
   estimatedAt?: string | null;
+  /** Persisted pickup→delivery pair (post-migration rows). */
+  transit?: { pickedUpAt: string; deliveredAt: string };
 }): FakeShipment {
+  const transitSeconds =
+    input.transit === undefined
+      ? null
+      : Math.round(
+          (new Date(input.transit.deliveredAt).getTime() -
+            new Date(input.transit.pickedUpAt).getTime()) /
+            1000
+        );
   return {
     carrier: input.carrier ?? ShipmentCarrier.FEDEX,
     serviceLevel: input.serviceLevel ?? "FEDEX_GROUND",
@@ -40,6 +53,9 @@ function delivered(input: {
       input.estimatedAt === undefined || input.estimatedAt === null
         ? null
         : new Date(input.estimatedAt),
+    pickedUpAt: input.transit === undefined ? null : new Date(input.transit.pickedUpAt),
+    deliveredAt: input.transit === undefined ? null : new Date(input.transit.deliveredAt),
+    transitSeconds,
   };
 }
 
@@ -99,6 +115,29 @@ describe("shipmentTransitTimeReport — transit math", () => {
     // Rate over shipments WITH an estimate: 1 of 2 = 5000 bps.
     expect(result.aggregates["onTimeRateBps"]).toBe(5000);
     expect(result.aggregates["totalCount"]).toBe(3);
+  });
+
+  it("prefers the persisted pickup→delivery pair over the handoff fallback", async () => {
+    const client = fakeClient([
+      // Handoff→delivered-scan says 48h, but the persisted scan
+      // endpoints say pickup happened 24h after our handoff stamp —
+      // true carrier transit is 24h and that is what must be
+      // reported.
+      delivered({
+        confirmedAt: "2026-05-01T00:00:00Z",
+        deliveredAt: "2026-05-03T00:00:00Z",
+        transit: {
+          pickedUpAt: "2026-05-02T00:00:00Z",
+          deliveredAt: "2026-05-03T00:00:00Z",
+        },
+      }),
+    ]);
+    const result = await shipmentTransitTimeReport.run(
+      { client: client as never, organizationId: ORG_ID },
+      window
+    );
+
+    expect(result.rows[0]!.avgTransitHours).toBe(24);
   });
 
   it("drops negative-transit rows (clock skew) instead of reporting them", async () => {
