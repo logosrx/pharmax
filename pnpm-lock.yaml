@@ -603,6 +603,37 @@ importers:
         specifier: ^5.6.3
         version: 5.9.3
 
+  packages/compounding:
+    dependencies:
+      '@pharmax/command-bus':
+        specifier: workspace:*
+        version: link:../command-bus
+      '@pharmax/database':
+        specifier: workspace:*
+        version: link:../database
+      '@pharmax/fill':
+        specifier: workspace:*
+        version: link:../fill
+      '@pharmax/platform-core':
+        specifier: workspace:*
+        version: link:../platform-core
+      '@pharmax/rbac':
+        specifier: workspace:*
+        version: link:../rbac
+      '@pharmax/tenancy':
+        specifier: workspace:*
+        version: link:../tenancy
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
   packages/crypto:
     dependencies:
       '@aws-sdk/client-kms':

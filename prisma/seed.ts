@@ -91,6 +91,21 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     description:
       "View the drug product catalog and inventory lots/batches (NDC, name, lot number, expiration, status); read-only",
   },
+  {
+    code: "compounding.read",
+    description:
+      "View compound formulas (Master Formulation Records): codes, versions, ingredients, BUD policy, hazard flags. Recipe/catalog data only — no PHI",
+  },
+  {
+    code: "compounding.formula.manage",
+    description:
+      "Author, publish, and retire compound formulas (ADR-0035). Publishing makes a version immutable and retires its predecessor; retiring requires a reason code. Pharmacist-level authority",
+  },
+  {
+    code: "compounding.prepare",
+    description:
+      "Record a compounding preparation during fill (ADR-0035 slice 2): pins the ACTIVE formula version, consumes ingredient lots into the inventory ledger, computes the beyond-use date, and writes the USP compounding record",
+  },
   { code: "orders.create", description: "Create new orders" },
   { code: "orders.read", description: "View orders within scope" },
   {

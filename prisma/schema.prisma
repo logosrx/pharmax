@@ -568,6 +568,7 @@ enum InventoryTransactionReason {
   LOT_ASSIGNED
   LOT_RELEASED
   ADJUSTMENT
+  COMPOUND_CONSUMED
 }
 
 enum ShipmentCarrier {
@@ -792,9 +793,13 @@ model Organization {
   passwordResetTokens PasswordResetToken[]
 
   // Platform surface (ADR-0032).
-  apiKeys              ApiKey[]
-  webhookSubscriptions WebhookSubscription[]
-  webhookDeliveries    WebhookDelivery[]
+  apiKeys                      ApiKey[]
+  webhookSubscriptions         WebhookSubscription[]
+  webhookDeliveries            WebhookDelivery[]
+  compoundFormulas             CompoundFormula[]
+  compoundFormulaIngredients   CompoundFormulaIngredient[]
+  compoundingRecords           CompoundingRecord[]
+  compoundingRecordIngredients CompoundingRecordIngredient[]
 
   @@map("organization")
 }
@@ -1060,6 +1065,8 @@ model User {
   // Break-glass sessions (@pharmax/security).
   breakGlassSessionsRequested BreakGlassSession[] @relation("BreakGlassSessionRequester")
   breakGlassSessionsApproved  BreakGlassSession[] @relation("BreakGlassSessionApprover")
+  compoundFormulasAuthored    CompoundFormula[]   @relation("CompoundFormulaAuthor")
+  compoundingRecordsPrepared  CompoundingRecord[] @relation("CompoundingRecordPreparer")
 
   @@unique([organizationId, email])
   @@index([organizationId, status])
@@ -1448,6 +1455,7 @@ model WorkflowPolicy {
   orderCorrectionReopens OrderCorrectionReopen[]
   verificationRecords    VerificationRecord[]
   overlays               WorkflowPolicyOverlay[]
+  compoundingRecords     CompoundingRecord[]
 
   @@unique([organizationId, code, version])
   @@index([organizationId, status])
@@ -1597,6 +1605,7 @@ model CommandLog {
   providerSyncChecksDispatched ProviderSyncCheck[]      @relation("ProviderSyncCheckDispatchedCommandLog")
   providerSyncReviewsResolved  ProviderSyncReviewItem[] @relation("ProviderSyncReviewResolvedCommandLog")
   breakGlassActions            BreakGlassAction[]
+  compoundingRecords           CompoundingRecord[]
 
   @@unique([organizationId, commandName, idempotencyKey])
   @@index([organizationId, status])
@@ -2799,6 +2808,8 @@ model Order {
   // The queue-shaped index. Order matters: scanner filters by
   // bucket+status, sorts by priority desc + SLA asc + receivedAt
   // asc. Postgres can serve this from one btree.
+  compoundingRecords CompoundingRecord[]
+
   @@index([organizationId, currentBucketId, currentStatus, priority, slaDeadlineAt, receivedAt])
   // "What is this user currently working on?"
   @@index([organizationId, currentAssigneeUserId, currentStatus])
@@ -2843,8 +2854,9 @@ model OrderLine {
   printJobs             PrintJob[]
   vialLabelRecord       VialLabel?             @relation("VialLabelOrderLine")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  compoundingRecords CompoundingRecord[]
 
   @@index([orderId])
   @@index([prescriptionId])
@@ -3446,8 +3458,9 @@ model Product {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lots         Lot[]
-  pricingRules PricingRule[]
+  lots                       Lot[]
+  pricingRules               PricingRule[]
+  compoundFormulaIngredients CompoundFormulaIngredient[]
 
   @@unique([organizationId, ndc])
   @@index([organizationId, name])
@@ -3472,9 +3485,10 @@ model Lot {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orderLines            OrderLine[]
-  lotAssignments        LotAssignment[]
-  inventoryTransactions InventoryTransaction[]
+  orderLines                   OrderLine[]
+  lotAssignments               LotAssignment[]
+  inventoryTransactions        InventoryTransaction[]
+  compoundingRecordIngredients CompoundingRecordIngredient[]
 
   @@unique([organizationId, siteId, productId, lotNumber])
   @@index([organizationId, siteId, status, expirationDate])
@@ -4193,4 +4207,209 @@ model WebhookDelivery {
   @@index([organizationId, createdAt(sort: Desc)])
   @@index([organizationId, eventType, createdAt(sort: Desc)])
   @@map("webhook_delivery")
+}
+
+enum CompoundFormulaStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum CompoundPreparationKind {
+  NONSTERILE
+  STERILE
+}
+
+enum CompoundBudBasis {
+  USP795_NONAQUEOUS
+  USP795_AQUEOUS_PRESERVED
+  USP795_AQUEOUS_NONPRESERVED
+  USP797_CATEGORY_1
+  USP797_CATEGORY_2
+  USP797_CATEGORY_3
+  STABILITY_STUDY
+}
+
+enum CompoundStorageCondition {
+  ROOM_TEMPERATURE
+  REFRIGERATED
+  FROZEN
+}
+
+enum CompoundFormulaRetireReason {
+  SAFETY
+  FORMULARY_CHANGE
+  INGREDIENT_SOURCING
+  REGULATORY
+  ERROR
+}
+
+enum CompoundingQualityOutcome {
+  PASS
+  FAIL
+}
+
+model CompoundFormula {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  code    String
+  version Int
+  status  CompoundFormulaStatus @default(DRAFT)
+
+  name        String
+  description String?
+
+  preparationKind CompoundPreparationKind
+  // USP <800>: preparation involves a hazardous drug (NIOSH list) and
+  // requires containment/PPE controls, documented on the slice-2
+  // compounding record.
+  hazardous       Boolean                 @default(false)
+
+  // Finished-preparation dosage form / strength (free text like
+  // Product.form/strength; e.g. "suspension", "2 mg/mL").
+  finalForm     String?
+  finalStrength String?
+
+  // Beyond-use date policy: preparedAt + budDays, justified by
+  // budBasis (caps enforced at the command layer per USP <795>).
+  // budReference is required when budBasis = STABILITY_STUDY.
+  budDays          Int
+  budBasis         CompoundBudBasis
+  budReference     String?
+  storageCondition CompoundStorageCondition
+
+  instructions  String
+  qualityChecks String?
+
+  createdByUserId String @db.Uuid
+  createdByUser   User   @relation("CompoundFormulaAuthor", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  publishedAt   DateTime?
+  retiredAt     DateTime?
+  retiredReason CompoundFormulaRetireReason?
+
+  ingredients        CompoundFormulaIngredient[]
+  compoundingRecords CompoundingRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The partial UNIQUE "at most one DRAFT per (organizationId, code)"
+  // lives in the SQL migration (Prisma cannot express the WHERE
+  // clause). It serializes concurrent draft creation for a code.
+  @@unique([organizationId, code, version])
+  @@index([organizationId, status, code])
+  @@map("compound_formula")
+}
+
+model CompoundFormulaIngredient {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  formulaId String          @db.Uuid
+  formula   CompoundFormula @relation(fields: [formulaId], references: [id], onDelete: Restrict)
+
+  productId String?  @db.Uuid
+  product   Product? @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  ingredientName String
+  quantity       Decimal @db.Decimal(18, 4)
+  unit           String
+  sortOrder      Int     @default(0)
+
+  compoundingRecordIngredients CompoundingRecordIngredient[]
+
+  createdAt DateTime @default(now())
+
+  @@index([formulaId])
+  @@index([organizationId, productId])
+  @@map("compound_formula_ingredient")
+}
+
+model CompoundingRecord {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  orderId     String    @db.Uuid
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderLineId String    @db.Uuid
+  orderLine   OrderLine @relation(fields: [orderLineId], references: [id], onDelete: Restrict)
+
+  // Pinned recipe: id + denormalized (code, version) so the record
+  // stays self-describing even in exports that don't join.
+  formulaId      String          @db.Uuid
+  formula        CompoundFormula @relation(fields: [formulaId], references: [id], onDelete: Restrict)
+  formulaCode    String
+  formulaVersion Int
+
+  preparedByUserId String   @db.Uuid
+  preparedByUser   User     @relation("CompoundingRecordPreparer", fields: [preparedByUserId], references: [id], onDelete: Restrict)
+  preparedAt       DateTime
+
+  // Beyond-use date computed at preparation time: preparedAt +
+  // formula.budDays, clamped to the earliest consumed-ingredient
+  // expiration (USP: BUD never exceeds a component's expiration).
+  budAt            DateTime
+  storageCondition CompoundStorageCondition
+
+  // USP <800> snapshot + containment/PPE documentation (required at
+  // the command layer when the formula is hazardous).
+  hazardous     Boolean
+  handlingNotes String?
+
+  qualityOutcome CompoundingQualityOutcome
+  qualityNotes   String?
+
+  // Order-workflow policy pin (house rule: every verification-grade
+  // record stores the policy it was made under).
+  workflowPolicyId      String         @db.Uuid
+  workflowPolicy        WorkflowPolicy @relation(fields: [workflowPolicyId], references: [id], onDelete: Restrict)
+  workflowPolicyVersion Int
+
+  renderedDocument String
+  documentSha256   Bytes
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  ingredients CompoundingRecordIngredient[]
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, orderId])
+  @@index([organizationId, orderLineId])
+  @@index([organizationId, formulaId, preparedAt])
+  @@map("compounding_record")
+}
+
+model CompoundingRecordIngredient {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  recordId String            @db.Uuid
+  record   CompoundingRecord @relation(fields: [recordId], references: [id], onDelete: Restrict)
+
+  formulaIngredientId String                    @db.Uuid
+  formulaIngredient   CompoundFormulaIngredient @relation(fields: [formulaIngredientId], references: [id], onDelete: Restrict)
+  ingredientName      String
+
+  lotId                String?   @db.Uuid
+  lot                  Lot?      @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  manualLotNumber      String?
+  manualExpirationDate DateTime? @db.Date
+
+  quantity  Decimal @db.Decimal(18, 4)
+  unit      String
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([recordId])
+  @@index([organizationId, lotId])
+  @@map("compounding_record_ingredient")
 }

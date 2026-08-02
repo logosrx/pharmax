@@ -136,6 +136,13 @@ export type { ShippingPackagePhotoMatchResolvedV1Payload } from "./events/shippi
 
 export type { FillLotAssignedV1Payload } from "./events/fill/lot-assigned-v1.js";
 
+export type {
+  CompoundingFormulaCreatedV1Payload,
+  CompoundingFormulaPublishedV1Payload,
+  CompoundingFormulaRetiredV1Payload,
+  CompoundingPreparationRecordedV1Payload,
+} from "./events/compounding/index.js";
+
 export type { LabelsVialPrintRequestedV1Payload } from "./events/labels/vial-print-requested-v1.js";
 export type { LabelsVialPrintReprintRequestedV1Payload } from "./events/labels/vial-print-reprint-requested-v1.js";
 export type { LabelsVialPrintCompletedV1Payload } from "./events/labels/vial-print-completed-v1.js";

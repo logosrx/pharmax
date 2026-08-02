@@ -102,6 +102,9 @@ export type EventOwner =
   | "patients"
   | "providers"
   | "orgs"
+  // Compounding (ADR-0035): Master Formulation Records + compounding
+  // records.
+  | "compounding"
   | "notifications"
   | "sla"
   | "security"

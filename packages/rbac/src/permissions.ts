@@ -97,6 +97,13 @@ export const PERMISSIONS = Object.freeze({
   SHIP_ARCHIVE_PACKAGE_PHOTO: "ship.archive_package_photo",
 
   // Billing.
+  // Compounding (ADR-0035): Master Formulation Records. MANAGE covers
+  // author / publish / retire.
+  COMPOUNDING_READ: "compounding.read",
+  COMPOUNDING_FORMULA_MANAGE: "compounding.formula.manage",
+  // Recording a preparation during fill, which also writes
+  // the USP compounding record.
+  COMPOUNDING_PREPARE: "compounding.prepare",
   BILLING_READ: "billing.read",
   BILLING_MANAGE: "billing.manage",
   BILLING_FINALIZE_INVOICE: "billing.finalize_invoice",
@@ -371,6 +378,21 @@ export const PERMISSION_METADATA: Readonly<
     description:
       "Archive a PackagePhoto out of the triage bucket and order timeline with a disposition reason (test capture, duplicate, captured in error, or unresolvable).",
     category: "Shipping",
+  },
+  [PERMISSIONS.COMPOUNDING_READ]: {
+    description:
+      "View compound formulas (Master Formulation Records): codes, versions, ingredients, BUD policy, hazard flags. Recipe/catalog data only — no PHI.",
+    category: "Compounding",
+  },
+  [PERMISSIONS.COMPOUNDING_FORMULA_MANAGE]: {
+    description:
+      "Author, publish, and retire compound formulas (ADR-0035). Publishing makes a version immutable and retires its predecessor; retiring requires a reason code. Pharmacist-level authority.",
+    category: "Compounding",
+  },
+  [PERMISSIONS.COMPOUNDING_PREPARE]: {
+    description:
+      "Record a compounding preparation during fill (ADR-0035 slice 2): pins the ACTIVE formula version, consumes ingredient lots into the inventory ledger, computes the beyond-use date, and writes the USP <795>/<797> compounding record with its rendered document.",
+    category: "Compounding",
   },
   [PERMISSIONS.BILLING_READ]: { description: "View billing data.", category: "Billing" },
   [PERMISSIONS.BILLING_MANAGE]: {
