@@ -113,6 +113,14 @@ import { PatientViewedV1 } from "./events/patient/viewed-v1.js";
 
 // ---- provider ------------------------------------------------------------
 import { ProviderDeactivatedV1 } from "./events/provider/deactivated-v1.js";
+import { ProviderOnboardingApprovedV1 } from "./events/provider/onboarding-approved-v1.js";
+import { ProviderOnboardingRejectedV1 } from "./events/provider/onboarding-rejected-v1.js";
+import { ProviderOnboardingReviewRequiredV1 } from "./events/provider/onboarding-review-required-v1.js";
+import { ProviderOnboardingSubmittedV1 } from "./events/provider/onboarding-submitted-v1.js";
+import { ProviderPortalAccountActivatedV1 } from "./events/provider/portal-account-activated-v1.js";
+import { ProviderPortalAccountPasswordChangedV1 } from "./events/provider/portal-account-password-changed-v1.js";
+import { ProviderPortalAccountProvisionedV1 } from "./events/provider/portal-account-provisioned-v1.js";
+import { ProviderPortalAccountSignedInV1 } from "./events/provider/portal-account-signed-in-v1.js";
 import { ProviderReactivatedV1 } from "./events/provider/reactivated-v1.js";
 import { ProviderRegisteredV1 } from "./events/provider/registered-v1.js";
 import { ProviderUpdatedV1 } from "./events/provider/updated-v1.js";
@@ -233,6 +241,14 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   PatientViewedV1,
   // provider
   ProviderDeactivatedV1,
+  ProviderOnboardingApprovedV1,
+  ProviderOnboardingRejectedV1,
+  ProviderOnboardingReviewRequiredV1,
+  ProviderOnboardingSubmittedV1,
+  ProviderPortalAccountActivatedV1,
+  ProviderPortalAccountPasswordChangedV1,
+  ProviderPortalAccountProvisionedV1,
+  ProviderPortalAccountSignedInV1,
   ProviderReactivatedV1,
   ProviderRegisteredV1,
   ProviderUpdatedV1,

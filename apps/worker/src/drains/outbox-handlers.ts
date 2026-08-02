@@ -38,6 +38,7 @@ import {
 import { createEscalateOnShipmentExceptionHandler } from "./escalate-on-shipment-exception.js";
 import { createMaterializeBillingOnOrderShippedHandler } from "./materialize-billing-on-order-shipped.js";
 import { createNotifyOnOrderEscalatedHandler } from "./notify-on-order-escalated.js";
+import { createNotifyProviderOnOrderShippedHandler } from "./notify-provider-on-order-shipped.js";
 import { createNotifyOnReportRunCompletedHandler } from "./notify-on-report-run-completed.js";
 import { createPushInvoiceToStripeHandler } from "./push-invoice-to-stripe.js";
 import type { ClaimedOutboxEventRow } from "./row-types.js";
@@ -217,6 +218,23 @@ export function createWebhookFanOutHook(
   };
 }
 
+/**
+ * Run several handlers for ONE event type, in order. Used when an
+ * event has more than one load-bearing consumer (e.g.
+ * `order.shipped.v1` → billing materialization + prescriber
+ * notification). A throw from ANY constituent routes the row through
+ * the drainer's FAILED/backoff path and re-runs ALL of them —
+ * every constituent must therefore be idempotent (which the handler
+ * contract already requires).
+ */
+function composeOutboxHandlers(...handlers: ReadonlyArray<OutboxEventHandler>): OutboxEventHandler {
+  return async (row, context) => {
+    for (const handler of handlers) {
+      await handler(row, context);
+    }
+  };
+}
+
 /** Production registry wired from apps/worker main with Prisma + delivery port. */
 export function createOutboxHandlers(deps: OutboxHandlerDeps): OutboxHandlerMap {
   const vialPrintHandler = createVialPrintOutboxHandler({
@@ -234,12 +252,21 @@ export function createOutboxHandlers(deps: OutboxHandlerDeps): OutboxHandlerMap 
     opsConsoleBaseUrl: deps.opsConsoleBaseUrl ?? "http://localhost:3000",
   });
   const escalationNotifyHandler = createNotifyOnOrderEscalatedHandler({ client: deps.prisma });
+  const providerShipNotifyHandler = createNotifyProviderOnOrderShippedHandler({
+    client: deps.prisma,
+  });
   return {
     "organization.created.v1": handleOrganizationCreatedV1,
     "labels.vial_print.requested.v1": vialPrintHandler,
     "labels.vial_print.reprint_requested.v1": vialPrintHandler,
     "shipment.tracking.recorded.v1": escalationHandler,
-    "order.shipped.v1": billingMaterializationHandler,
+    // Billing materialization first (financial truth), then the
+    // prescriber portal notification — composed because both are
+    // load-bearing consumers of the same event.
+    "order.shipped.v1": composeOutboxHandlers(
+      billingMaterializationHandler,
+      providerShipNotifyHandler
+    ),
     "billing.invoice.finalized.v1": stripePushHandler,
     "reporting.run.completed.v1": reportRunNotifyHandler,
     // Emergency-bucket alerts. Both events were previously produced

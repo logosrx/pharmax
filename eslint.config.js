@@ -243,6 +243,20 @@ export default tseslint.config(
     },
   },
 
+  // Override 3c-portal: apps/web/src/server/portal/** is the portal
+  // twin of the auth bridge above (3c) — the portal-cookie →
+  // portal-session → provider-identity hop (ADR-0033 slice 2), plus
+  // the public application-status lookup where the applicant has no
+  // principal at all (the unguessable application id is the
+  // capability). No tenancy frame can exist before these resolutions
+  // by definition. Keep the Prisma ban; drop the system-context ban.
+  {
+    files: ["apps/web/src/server/portal/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
   // Override 3b: apps/worker/src/drains/** are the system-context
   // bridge layer for webhook ingestion. The flow is:
   //   1. Worker claims an inbound row (tenant-less).
@@ -366,6 +380,22 @@ export default tseslint.config(
     },
   },
 
+  // Override 3h-portal: apps/web/app/api/portal/** are the public
+  // provider-portal API routes (ADR-0033) — pre-credential by
+  // definition, the same tenant-less-caller shape as the webhook
+  // receivers above. The apply route resolves (org, machine actor)
+  // from the submitted slug in system context, then dispatches
+  // through the normal bus inside the resolved tenancy; the auth
+  // routes bridge an emailed token / portal cookie to a frame. Any
+  // business state transition still goes through a command handler.
+  // Keep the Prisma ban; drop the system-context ban.
+  {
+    files: ["apps/web/app/api/portal/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
   // Override 3i: packages/auth/** is the in-house identity engine
   // (ADR-0030) — the successor to the Clerk bridge that Override 3c
   // covers in apps/web/src/server/auth/**. Every entry point here is
@@ -447,6 +477,41 @@ export default tseslint.config(
   // drop the system-context ban.
   {
     files: ["packages/security/src/break-glass/prisma-break-glass-client.ts"],
+    rules: {
+      "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
+    },
+  },
+
+  // Override 3n: the provider-portal auth bridge modules (ADR-0033
+  // slice 2) — the portal twin of packages/auth (3i), deliberately
+  // scoped to the four named files rather than the package. Every one
+  // is PRE-TENANT by definition:
+  //   - portal/session.ts turns an opaque portal-token hash into the
+  //     (org, portalAccount, provider) tuple that BECOMES the frame —
+  //     structurally identical to packages/auth session resolution.
+  //   - portal/sign-in.ts orchestrates the PortalSignIn system command
+  //     (rate limits + shared login_attempt lockout ledger) with no
+  //     session yet in hand.
+  //   - portal/setup-account.ts wraps the SetupPortalAccount system
+  //     command — the caller holds only the emailed one-time token.
+  //   - portal/issue-setup-token.ts wraps IssuePortalSetupToken; it
+  //     runs post-commit from approval flows to mint the token whose
+  //     raw value must never ride an event or command log.
+  //   - portal/change-password.ts wraps ChangePortalPassword (slice
+  //     3); the portal principal has no tenant frame — the wrapper is
+  //     the same pre-tenant bridge shape as setup-account.ts.
+  // Everything else in packages/providers (onboarding commands,
+  // portal/provision.ts, portal/sign-in-command.ts, etc.) stays under
+  // the full ban — they run inside the bus. Keep the Prisma ban; drop
+  // the system-context ban.
+  {
+    files: [
+      "packages/providers/src/portal/session.ts",
+      "packages/providers/src/portal/sign-in.ts",
+      "packages/providers/src/portal/setup-account.ts",
+      "packages/providers/src/portal/issue-setup-token.ts",
+      "packages/providers/src/portal/change-password.ts",
+    ],
     rules: {
       "no-restricted-imports": ["error", PRISMA_CLIENT_RESTRICTION],
     },

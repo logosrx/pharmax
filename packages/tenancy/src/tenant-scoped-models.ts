@@ -189,6 +189,27 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["ProviderSyncCheck", { kind: "organizationId" }] as const,
   ["ProviderSyncReviewItem", { kind: "organizationId" }] as const,
 
+  // Provider self-serve onboarding (ADR-0033). NON-NULLABLE
+  // `organizationId` (rule 1). The application row holds a
+  // prescriber's public professional identity claim + the public
+  // NPPES proofing snapshot — no PHI, but cross-tenant reads would
+  // leak which prescribers are joining which pharmacy (business
+  // intelligence). The proofing drain's cross-org claim runs in an
+  // explicit system-context frame, mirroring ProviderSyncRun.
+  ["ProviderOnboardingApplication", { kind: "organizationId" }] as const,
+
+  // Provider portal principals (ADR-0033, slice 2). All three carry
+  // a NON-NULLABLE `organizationId` (rule 1). Portal accounts are
+  // external-principal credentials; sessions and setup tokens are
+  // authentication material — the same leak surface as the operator
+  // auth tables below. Portal session/setup-token resolution by
+  // tokenHash happens PRE-tenant in an explicit system-context frame
+  // (mirrors AuthSession); every other read is org-scoped.
+  ["PortalAccount", { kind: "organizationId" }] as const,
+  ["PortalSession", { kind: "organizationId" }] as const,
+  ["PortalSetupToken", { kind: "organizationId" }] as const,
+  ["PortalPasswordHistory", { kind: "organizationId" }] as const,
+
   // Phase 6 — first-party auth engine. All five carry a
   // NON-NULLABLE `organizationId` (rule 1). Sessions, MFA
   // enrollments, recovery codes, password history, and reset tokens
