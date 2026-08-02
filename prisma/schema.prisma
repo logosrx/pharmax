@@ -731,6 +731,11 @@ model Organization {
   createdAt DateTime           @default(now())
   updatedAt DateTime           @updatedAt
 
+  // ADR-0033: opt-in gate for the public self-serve provider
+  // onboarding endpoint. Off by default; the apply route 404s for
+  // orgs that haven't enabled it (no cross-org discovery surface).
+  providerOnboardingEnabled Boolean @default(false)
+
   sites                  PharmacySite[]
   clinics                Clinic[]
   teams                  Team[]
@@ -752,37 +757,44 @@ model Organization {
   invoiceLines           InvoiceLine[]
   payments               Payment[]
 
-  patients                 Patient[]
-  providers                Provider[]
-  prescriptions            Prescription[]
-  orders                   Order[]
-  orderLines               OrderLine[]
-  orderCancellations       OrderCancellation[]
-  orderHolds               OrderHold[]
-  orderCorrectionReopens   OrderCorrectionReopen[]
-  verificationRecords      VerificationRecord[]
-  products                 Product[]
-  lots                     Lot[]
-  lotAssignments           LotAssignment[]
-  inventoryTransactions    InventoryTransaction[]
-  labelPrinters            LabelPrinter[]
-  printTemplates           PrintTemplate[]
-  printJobs                PrintJob[]
-  vialLabels               VialLabel[]
-  shipments                Shipment[]
-  shipmentTrackingEvents   ShipmentTrackingEvent[]
-  carrierCredentials       CarrierCredential[]
-  orderStageIntervals      OrderStageInterval[]
-  pricingRules             PricingRule[]
-  packagePhotos            PackagePhoto[]
-  packagePhotoUploadTokens PackagePhotoUploadToken[]
-  reportRuns               ReportRun[]
-  reportSchedules          ReportSchedule[]
-  notificationDeliveries   NotificationDelivery[]
-  accessReviewSnapshots    AccessReviewSnapshot[]
-  providerSyncRuns         ProviderSyncRun[]
-  providerSyncChecks       ProviderSyncCheck[]
-  providerSyncReviewItems  ProviderSyncReviewItem[]
+  patients                       Patient[]
+  providers                      Provider[]
+  prescriptions                  Prescription[]
+  orders                         Order[]
+  orderLines                     OrderLine[]
+  orderCancellations             OrderCancellation[]
+  orderHolds                     OrderHold[]
+  orderCorrectionReopens         OrderCorrectionReopen[]
+  verificationRecords            VerificationRecord[]
+  products                       Product[]
+  lots                           Lot[]
+  lotAssignments                 LotAssignment[]
+  inventoryTransactions          InventoryTransaction[]
+  labelPrinters                  LabelPrinter[]
+  printTemplates                 PrintTemplate[]
+  printJobs                      PrintJob[]
+  vialLabels                     VialLabel[]
+  shipments                      Shipment[]
+  shipmentTrackingEvents         ShipmentTrackingEvent[]
+  carrierCredentials             CarrierCredential[]
+  orderStageIntervals            OrderStageInterval[]
+  pricingRules                   PricingRule[]
+  packagePhotos                  PackagePhoto[]
+  packagePhotoUploadTokens       PackagePhotoUploadToken[]
+  reportRuns                     ReportRun[]
+  reportSchedules                ReportSchedule[]
+  notificationDeliveries         NotificationDelivery[]
+  accessReviewSnapshots          AccessReviewSnapshot[]
+  providerSyncRuns               ProviderSyncRun[]
+  providerSyncChecks             ProviderSyncCheck[]
+  providerSyncReviewItems        ProviderSyncReviewItem[]
+  providerOnboardingApplications ProviderOnboardingApplication[]
+
+  // Provider portal principals (ADR-0033, slice 2).
+  portalAccounts        PortalAccount[]
+  portalSessions        PortalSession[]
+  portalSetupTokens     PortalSetupToken[]
+  portalPasswordHistory PortalPasswordHistory[]
 
   // Authentication (ADR-0030, in-house identity engine).
   authSessions        AuthSession[]
@@ -1027,30 +1039,31 @@ model User {
   commandLogs                   CommandLog[]
   orderEvents                   OrderEvent[]
   auditLogs                     AuditLog[]
-  assignedOrders                Order[]                   @relation("OrderAssignee")
-  orderCancellations            OrderCancellation[]       @relation("OrderCancellationActor")
-  orderHoldsPlaced              OrderHold[]               @relation("OrderHoldPlacer")
-  orderHoldsReleased            OrderHold[]               @relation("OrderHoldReleaser")
-  orderCorrectionReopens        OrderCorrectionReopen[]   @relation("OrderCorrectionReopenActor")
-  verificationRecords           VerificationRecord[]      @relation("VerificationRecordActor")
-  lotAssignments                LotAssignment[]           @relation("LotAssignmentActor")
-  printJobsRequested            PrintJob[]                @relation("PrintJobRequester")
-  shipmentsCreated              Shipment[]                @relation("ShipmentCreator")
-  shipmentsConfirmed            Shipment[]                @relation("ShipmentConfirmer")
-  carrierCredentialsCreated     CarrierCredential[]       @relation("CarrierCredentialCreator")
-  apiKeysCreated                ApiKey[]                  @relation("ApiKeyCreator")
-  webhookSubscriptionsCreated   WebhookSubscription[]     @relation("WebhookSubscriptionCreator")
-  pricingRulesCreated           PricingRule[]             @relation("PricingRuleCreator")
-  stageIntervalsActed           OrderStageInterval[]      @relation("StageIntervalActor")
-  packagePhotosCaptured         PackagePhoto[]            @relation("PackagePhotoCapturer")
-  packagePhotosArchived         PackagePhoto[]            @relation("PackagePhotoArchiver")
-  packagePhotoUploadTokens      PackagePhotoUploadToken[] @relation("PackagePhotoUploadTokenUploader")
-  workflowPolicyOverlaysCreated WorkflowPolicyOverlay[]   @relation("WorkflowPolicyOverlayCreator")
-  reportRuns                    ReportRun[]               @relation("ReportRunActor")
-  reportSchedulesCreated        ReportSchedule[]          @relation("ReportScheduleCreator")
-  accessReviewSnapshotsRecorded AccessReviewSnapshot[]    @relation("AccessReviewSnapshotRecordedBy")
-  providerSyncRunsTriggered     ProviderSyncRun[]         @relation("ProviderSyncRunTriggeredBy")
-  providerSyncReviewsResolved   ProviderSyncReviewItem[]  @relation("ProviderSyncReviewResolvedBy")
+  assignedOrders                Order[]                         @relation("OrderAssignee")
+  orderCancellations            OrderCancellation[]             @relation("OrderCancellationActor")
+  orderHoldsPlaced              OrderHold[]                     @relation("OrderHoldPlacer")
+  orderHoldsReleased            OrderHold[]                     @relation("OrderHoldReleaser")
+  orderCorrectionReopens        OrderCorrectionReopen[]         @relation("OrderCorrectionReopenActor")
+  verificationRecords           VerificationRecord[]            @relation("VerificationRecordActor")
+  lotAssignments                LotAssignment[]                 @relation("LotAssignmentActor")
+  printJobsRequested            PrintJob[]                      @relation("PrintJobRequester")
+  shipmentsCreated              Shipment[]                      @relation("ShipmentCreator")
+  shipmentsConfirmed            Shipment[]                      @relation("ShipmentConfirmer")
+  carrierCredentialsCreated     CarrierCredential[]             @relation("CarrierCredentialCreator")
+  apiKeysCreated                ApiKey[]                        @relation("ApiKeyCreator")
+  webhookSubscriptionsCreated   WebhookSubscription[]           @relation("WebhookSubscriptionCreator")
+  pricingRulesCreated           PricingRule[]                   @relation("PricingRuleCreator")
+  stageIntervalsActed           OrderStageInterval[]            @relation("StageIntervalActor")
+  packagePhotosCaptured         PackagePhoto[]                  @relation("PackagePhotoCapturer")
+  packagePhotosArchived         PackagePhoto[]                  @relation("PackagePhotoArchiver")
+  packagePhotoUploadTokens      PackagePhotoUploadToken[]       @relation("PackagePhotoUploadTokenUploader")
+  workflowPolicyOverlaysCreated WorkflowPolicyOverlay[]         @relation("WorkflowPolicyOverlayCreator")
+  reportRuns                    ReportRun[]                     @relation("ReportRunActor")
+  reportSchedulesCreated        ReportSchedule[]                @relation("ReportScheduleCreator")
+  accessReviewSnapshotsRecorded AccessReviewSnapshot[]          @relation("AccessReviewSnapshotRecordedBy")
+  providerSyncRunsTriggered     ProviderSyncRun[]               @relation("ProviderSyncRunTriggeredBy")
+  providerSyncReviewsResolved   ProviderSyncReviewItem[]        @relation("ProviderSyncReviewResolvedBy")
+  providerOnboardingDecisions   ProviderOnboardingApplication[] @relation("ProviderOnboardingDecidedBy")
 
   // Authentication (ADR-0030, in-house identity engine).
   authSessions        AuthSession[]
@@ -1521,12 +1534,13 @@ model WorkflowPolicy {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orders                 Order[]
-  orderCancellations     OrderCancellation[]
-  orderHolds             OrderHold[]
-  orderCorrectionReopens OrderCorrectionReopen[]
-  verificationRecords    VerificationRecord[]
-  overlays               WorkflowPolicyOverlay[]
+  orders                         Order[]
+  orderCancellations             OrderCancellation[]
+  orderHolds                     OrderHold[]
+  orderCorrectionReopens         OrderCorrectionReopen[]
+  verificationRecords            VerificationRecord[]
+  overlays                       WorkflowPolicyOverlay[]
+  providerOnboardingApplications ProviderOnboardingApplication[]
 
   @@unique([organizationId, code, version])
   @@index([organizationId, status])
@@ -2516,9 +2530,11 @@ model Provider {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  prescriptions   Prescription[]
-  syncChecks      ProviderSyncCheck[]
-  syncReviewItems ProviderSyncReviewItem[]
+  prescriptions          Prescription[]
+  syncChecks             ProviderSyncCheck[]
+  syncReviewItems        ProviderSyncReviewItem[]
+  onboardingApplications ProviderOnboardingApplication[]
+  portalAccount          PortalAccount?
 
   // NPI is globally unique by definition; but a provider can appear
   // in multiple orgs (each gets its own row). The unique key is
@@ -2715,6 +2731,237 @@ model ProviderSyncReviewItem {
   // per (provider, kind)" — the worker's re-emit guard rides on top
   // of it.
   @@map("provider_sync_review_item")
+}
+
+// -----------------------------------------------------------------------
+// Provider self-serve onboarding (ADR-0033)
+// -----------------------------------------------------------------------
+
+enum ProviderOnboardingStatus {
+  SUBMITTED
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
+}
+
+// Outcome of the automated NPPES identity-proofing pass. Only PASS
+// auto-approves; every other outcome routes the application to the
+// ops review queue (the system never hard-rejects on registry data).
+enum ProviderOnboardingProofingOutcome {
+  PASS
+  NOT_FOUND
+  NOT_INDIVIDUAL
+  DEACTIVATED
+  NAME_MISMATCH
+  ALREADY_REGISTERED
+  REGISTRY_UNAVAILABLE
+}
+
+// A prescriber's self-serve application to join an org's roster
+// (ADR-0033). Workflow-governed: every row pins the
+// `provider.onboarding` policy id + version it was created under,
+// and every status transition goes through a command.
+//
+// PHI: none. The claim is the prescriber's own professional
+// identity (NPI is a public CMS identifier; the contact fields are
+// the prescriber's office contact). `proofingSnapshot` holds the
+// public NPPES record subset that drove the automated decision.
+model ProviderOnboardingApplication {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // Identity claim, as submitted by the applicant.
+  npi        String // 10 digits
+  firstName  String
+  lastName   String
+  credential String?
+  email      String
+  phone      String?
+
+  status ProviderOnboardingStatus @default(SUBMITTED)
+
+  // Pinned workflow policy (ADR-0033: first non-order policy).
+  workflowPolicyId      String         @db.Uuid
+  workflowPolicy        WorkflowPolicy @relation(fields: [workflowPolicyId], references: [id], onDelete: Restrict)
+  workflowPolicyVersion Int
+
+  // Automated proofing evidence. `proofingSnapshot` is the
+  // normalized public NPPES record (PHI-free by construction);
+  // null when the registry had no record or was unreachable.
+  proofingOutcome  ProviderOnboardingProofingOutcome?
+  proofingSnapshot Json?
+  proofedAt        DateTime?
+  // Registry-fetch attempts by the proofing drain. Bookkeeping
+  // only (not workflow state); after the ceiling the drain routes
+  // the application to review with REGISTRY_UNAVAILABLE.
+  proofingAttempts Int                                @default(0)
+
+  // Terminal decision. `decidedByUserId` is null for automated
+  // (proofing PASS) approvals; set for human review decisions.
+  providerId         String?   @db.Uuid
+  provider           Provider? @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  decidedByUserId    String?   @db.Uuid
+  decidedByUser      User?     @relation("ProviderOnboardingDecidedBy", fields: [decidedByUserId], references: [id], onDelete: Restrict)
+  decidedAt          DateTime?
+  decisionReasonCode String?
+
+  // The portal account provisioned at approval (ADR-0033 slice 2).
+  portalAccounts PortalAccount[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The partial UNIQUE on (organizationId, npi) WHERE status IN
+  // ('SUBMITTED','NEEDS_REVIEW') is defined in the SQL migration
+  // (Prisma cannot express the WHERE clause). It enforces "at most
+  // one open application per prescriber per org"; rejected
+  // applicants may reapply.
+  // The two long index names carry explicit `map:`s pinned to what the
+  // migration actually created — it truncated to 62 chars where Prisma's
+  // default truncation is 63, and renaming a live index isn't worth it.
+  @@index([organizationId, status, createdAt(sort: Desc)], map: "provider_onboarding_application_organizationId_status_crea_idx")
+  @@index([organizationId, npi])
+  @@index([status, proofingAttempts, createdAt], map: "provider_onboarding_application_status_proofingAttempts_cr_idx")
+  @@map("provider_onboarding_application")
+}
+
+// ---------------------------------------------------------------------------
+// Provider portal principals (ADR-0033, slice 2)
+// ---------------------------------------------------------------------------
+
+enum PortalAccountStatus {
+  // Provisioned at approval; no credential yet. Activated by the
+  // one-time setup link (SetupPortalAccount).
+  PENDING_SETUP
+  ACTIVE
+  DISABLED
+}
+
+// A prescriber's portal credential. DELIBERATELY a separate principal
+// model from `User` (ADR-0033 §4): a portal credential resolves to a
+// `Provider`, never to a `User`, so a portal-account compromise is
+// structurally outside the ops console — no role can be granted to it,
+// no operator session can be minted from it.
+//
+// Provisioned by the onboarding approval commands (auto or human) in
+// the same transaction as the roster row; activated via a one-time
+// setup token (accept-invite pattern). Argon2id hash + pepper, same
+// hasher configuration as operator credentials.
+model PortalAccount {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // 1:1 with the roster row — a prescriber has at most one portal
+  // credential per org.
+  providerId String   @unique @db.Uuid
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+
+  // Provenance: the approved onboarding application (null for a
+  // future ops-initiated provisioning path).
+  applicationId String?                        @db.Uuid
+  application   ProviderOnboardingApplication? @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+
+  // Sign-in identifier (lowercased). Office contact — not PHI.
+  email String
+
+  // NULL until the setup link is consumed (PENDING_SETUP).
+  hashedPassword String?
+
+  status PortalAccountStatus @default(PENDING_SETUP)
+
+  lastLoginAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions        PortalSession[]
+  setupTokens     PortalSetupToken[]
+  passwordHistory PortalPasswordHistory[]
+
+  // Sign-in is (org, email) — same shape as operator sign-in.
+  @@unique([organizationId, email])
+  @@index([organizationId, status])
+  @@map("portal_account")
+}
+
+// Stateful opaque portal session — the PortalAccount twin of
+// `auth_session` (same token hashing, same sliding-idle + absolute
+// expiry semantics, same immediate-revocation property). A separate
+// table (not a discriminator column on auth_session) so the operator
+// session engine can never resolve a portal token and vice versa.
+model PortalSession {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  portalAccountId String        @db.Uuid
+  portalAccount   PortalAccount @relation(fields: [portalAccountId], references: [id], onDelete: Cascade)
+
+  // SHA-256 (hex) of the opaque session token.
+  tokenHash String @unique
+
+  // Request metadata for audit. Not PHI.
+  ipAddress String?
+  userAgent String?
+
+  createdAt         DateTime                 @default(now())
+  lastActivityAt    DateTime                 @default(now())
+  idleExpiresAt     DateTime
+  absoluteExpiresAt DateTime
+  revokedAt         DateTime?
+  revokedReason     AuthSessionRevokeReason?
+
+  @@index([portalAccountId, revokedAt])
+  @@index([organizationId, createdAt])
+  @@index([absoluteExpiresAt])
+  @@map("portal_session")
+}
+
+// Short-lived, single-use portal credential-setup token (the
+// `password_reset_token` twin for portal accounts). Only the SHA-256
+// hash is stored; the raw token lives only in the emailed setup link.
+model PortalSetupToken {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  portalAccountId String        @db.Uuid
+  portalAccount   PortalAccount @relation(fields: [portalAccountId], references: [id], onDelete: Cascade)
+
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([portalAccountId])
+  // Planner-friendly index for the RLS `organizationId = guc` filter
+  // (R3 in check-prisma-schema).
+  @@index([organizationId])
+  @@map("portal_setup_token")
+}
+
+// Anti-reuse window for portal credentials — the `password_history`
+// twin for `portal_account` (ADR-0033 slice 3). Appended/pruned by
+// `ChangePortalPassword` with the same policy depth operators use.
+model PortalPasswordHistory {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  portalAccountId String        @db.Uuid
+  portalAccount   PortalAccount @relation(fields: [portalAccountId], references: [id], onDelete: Cascade)
+
+  hashedPassword String
+  createdAt      DateTime @default(now())
+
+  @@index([portalAccountId, createdAt])
+  // Planner-friendly index for the RLS `organizationId = guc` filter
+  // (R3 in check-prisma-schema).
+  @@index([organizationId])
+  @@map("portal_password_history")
 }
 
 // A signed prescription written by a provider for a patient. One

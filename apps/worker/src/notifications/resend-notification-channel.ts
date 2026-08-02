@@ -49,6 +49,10 @@ import {
   type ComplianceNoticeRenderInput,
 } from "./render-compliance-notice-email.js";
 import {
+  renderPortalOrderShippedEmail,
+  type PortalOrderShippedRenderInput,
+} from "./render-portal-order-shipped-email.js";
+import {
   renderReportCompletedEmail,
   type ReportCompletedRenderInput,
 } from "./render-report-completed-email.js";
@@ -222,6 +226,10 @@ function renderTemplate(
       const narrowed = coerceComplianceNoticeContext(context);
       return renderComplianceNoticeEmail(narrowed);
     }
+    case "PORTAL_ORDER_SHIPPED_V1": {
+      const narrowed = coercePortalOrderShippedContext(context);
+      return renderPortalOrderShippedEmail(narrowed);
+    }
     default:
       // Defensive: the channel guards have already validated that
       // the recipient kind matches the template's channelKinds,
@@ -315,6 +323,22 @@ function coerceComplianceNoticeContext(
     body: String(ctx["body"]),
     severity,
     ...(typeof ctx["evidenceUri"] === "string" ? { evidenceUri: ctx["evidenceUri"] } : {}),
+  };
+}
+
+/**
+ * Narrow the raw notification context into the typed renderer input
+ * for PORTAL_ORDER_SHIPPED_V1. Required keys are already confirmed
+ * present by the channel gate; `trackingNumber` is optional.
+ */
+function coercePortalOrderShippedContext(
+  ctx: Readonly<Record<string, unknown>>
+): PortalOrderShippedRenderInput {
+  return {
+    orderExternalNumber: String(ctx["orderExternalNumber"]),
+    rxNumbers: String(ctx["rxNumbers"]),
+    shippedAtIso: String(ctx["shippedAtIso"]),
+    ...(typeof ctx["trackingNumber"] === "string" ? { trackingNumber: ctx["trackingNumber"] } : {}),
   };
 }
 

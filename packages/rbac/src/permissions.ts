@@ -42,6 +42,12 @@ export const PERMISSIONS = Object.freeze({
   PROVIDERS_UPDATE: "providers.update",
   PROVIDERS_DEACTIVATE: "providers.deactivate",
   PROVIDERS_REACTIVATE: "providers.reactivate",
+  // Self-serve onboarding (ADR-0033). SUBMIT is machine-only (the
+  // per-org ProviderOnboardingService identity behind the public
+  // apply endpoint + the proofing drain); REVIEW is the human ops
+  // decision on the NEEDS_REVIEW queue.
+  PROVIDERS_ONBOARDING_SUBMIT: "providers.onboarding.submit",
+  PROVIDERS_ONBOARDING_REVIEW: "providers.onboarding.review",
 
   // Clinic (practice) directory.
   CLINICS_READ: "clinics.read",
@@ -240,6 +246,16 @@ export const PERMISSION_METADATA: Readonly<
   [PERMISSIONS.PROVIDERS_REACTIVATE]: {
     description:
       "Reactivate a provider (status: INACTIVE \u2192 ACTIVE) with a reason code (license restored, sanction lifted, erroneous deactivation, etc.). Re-enables new orders against the prescriber. Distinct from PROVIDERS_DEACTIVATE so the audit and approval surfaces stay separable.",
+    category: "Providers",
+  },
+  [PERMISSIONS.PROVIDERS_ONBOARDING_SUBMIT]: {
+    description:
+      "Submit a provider self-serve onboarding application and record its automated NPPES proofing outcome (ADR-0033). Machine permission — granted only to the per-org ProviderOnboardingService identity that fronts the public apply endpoint and the proofing drain.",
+    category: "Providers",
+  },
+  [PERMISSIONS.PROVIDERS_ONBOARDING_REVIEW]: {
+    description:
+      "Decide a NEEDS_REVIEW provider onboarding application (approve creates the roster row; reject requires a reason code). Human review permission for the ops onboarding queue.",
     category: "Providers",
   },
   [PERMISSIONS.CLINICS_READ]: {
