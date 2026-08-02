@@ -41,6 +41,10 @@ yarn-debug.log*
 playwright-report/
 test-results/
 
+# Lockfile copies written by a merge/stash recovery. Operator-local
+# debris — the real lockfile is pnpm-lock.yaml.
+.lockfile-recovery/
+
 # Terraform — never commit state, .tfvars, or filled backend configs.
 # Only the *.example templates are checked in. Patterns cover both the
 # top-level `terraform/` tree (the canonical IaC location) and the
