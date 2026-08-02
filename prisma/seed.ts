@@ -82,6 +82,16 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
       "Reactivate a provider (INACTIVE -> ACTIVE) with a reason code. Re-enables new orders against the prescriber",
   },
   {
+    code: "providers.onboarding.submit",
+    description:
+      "Submit a prescriber self-serve onboarding application on behalf of the public apply endpoint; held only by the ProviderOnboardingService machine identity (ADR-0033)",
+  },
+  {
+    code: "providers.onboarding.review",
+    description:
+      "Approve or reject prescriber onboarding applications in the NEEDS_REVIEW queue; human reviewer permission, MFA-gated in the ops console (ADR-0033)",
+  },
+  {
     code: "clinics.read",
     description:
       "View the clinic (practice) directory: codes, names, statuses, and pharmacy-site links; no PHI",
