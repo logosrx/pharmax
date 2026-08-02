@@ -156,6 +156,12 @@ const NAV: ReadonlyArray<GroupSpec> = [
         requires: PERMISSIONS.CLINICS_READ,
       },
       {
+        href: "/ops/admin/provider-onboarding",
+        label: "Provider Onboarding",
+        icon: "providers",
+        requires: PERMISSIONS.PROVIDERS_ONBOARDING_REVIEW,
+      },
+      {
         href: "/ops/admin/providers",
         label: "Providers",
         icon: "providers",
