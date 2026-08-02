@@ -21,6 +21,7 @@ import { PageHeader } from "../../../src/components/ui/page.js";
 import { EmptyState, PermissionDenied, Banner } from "../../../src/components/ui/feedback.js";
 import { Badge } from "../../../src/components/ui/badge.js";
 import { Field, Select, Input } from "../../../src/components/ui/field.js";
+import { QueueLiveRefresher } from "../../../src/components/ops/queue-live-refresher.js";
 import { QueueRow } from "../../../src/components/ops/queue-row.js";
 import { ActionForm, SubmitButton } from "../../../src/components/ops/action-form.js";
 
@@ -67,6 +68,7 @@ export default async function EmergencyQueuePage({
         title="Emergency queue"
         description="Orders escalated to the emergency bucket. Disposition each to return it to a workflow bucket or acknowledge ongoing triage."
       />
+      <QueueLiveRefresher codes={["EMERGENCY"]} />
 
       {resolved !== null ? (
         <Banner tone="success">
