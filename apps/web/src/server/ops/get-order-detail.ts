@@ -38,6 +38,9 @@ import {
   readInOrgScope,
   type OrderPriority,
   type OrderStatus,
+  type ShipmentCarrier,
+  type ShipmentStatus,
+  type ShipmentTrackingEventKind,
 } from "@pharmax/database";
 
 interface RawPhiEnvelope {
@@ -116,6 +119,29 @@ export interface OrderDetailPackagePhoto {
   readonly sha256: string;
 }
 
+/**
+ * The order's shipment (at most one in v1) with the carrier-truth
+ * delivery timeline: handoff, pickup scan, delivered scan, persisted
+ * pickup-to-delivery transit, and the carrier's estimate. Non-PHI —
+ * tracking number and timestamps are carrier artifacts.
+ */
+export interface OrderDetailShipment {
+  readonly shipmentId: string;
+  readonly status: ShipmentStatus;
+  readonly carrier: ShipmentCarrier;
+  readonly serviceLevel: string;
+  readonly trackingNumber: string;
+  readonly confirmedAt: Date | null;
+  readonly estimatedDeliveryAt: Date | null;
+  readonly pickedUpAt: Date | null;
+  readonly deliveredAt: Date | null;
+  readonly transitSeconds: number | null;
+  readonly lastTrackingEventAt: Date | null;
+  readonly lastTrackingEventKind: ShipmentTrackingEventKind | null;
+  /** Signature requirement the label was purchased with; null = carrier default. */
+  readonly signatureOption: string | null;
+}
+
 export interface OrderDetail {
   readonly orderId: string;
   readonly externalOrderNumber: string | null;
@@ -133,6 +159,7 @@ export interface OrderDetail {
   readonly lines: ReadonlyArray<OrderDetailPrescriptionLine>;
   readonly events: ReadonlyArray<OrderDetailEvent>;
   readonly packagePhotos: ReadonlyArray<OrderDetailPackagePhoto>;
+  readonly shipment: OrderDetailShipment | null;
   /**
    * True when ANY PHI field failed to decrypt. The page renders a
    * red banner so the operator doesn't make a clinical decision on
@@ -267,6 +294,28 @@ export async function getOrderDetail(input: {
           },
           orderBy: { capturedAt: "desc" },
           take: PACKAGE_PHOTO_LIMIT,
+        },
+        // The order's shipment (at most one in v1; newest-first is
+        // defense against historical drift). Carries the persisted
+        // pickup-to-delivery transit columns.
+        shipments: {
+          select: {
+            id: true,
+            status: true,
+            carrier: true,
+            serviceLevel: true,
+            trackingNumber: true,
+            confirmedAt: true,
+            estimatedDeliveryAt: true,
+            pickedUpAt: true,
+            deliveredAt: true,
+            transitSeconds: true,
+            lastTrackingEventAt: true,
+            lastTrackingEventKind: true,
+            signatureOption: true,
+          },
+          orderBy: { createdAt: "desc" },
+          take: 1,
         },
       },
     })
@@ -426,6 +475,24 @@ export async function getOrderDetail(input: {
         sha256: p.sha256,
       })
     ),
+    shipment:
+      order.shipments[0] === undefined
+        ? null
+        : Object.freeze({
+            shipmentId: order.shipments[0].id,
+            status: order.shipments[0].status,
+            carrier: order.shipments[0].carrier,
+            serviceLevel: order.shipments[0].serviceLevel,
+            trackingNumber: order.shipments[0].trackingNumber,
+            confirmedAt: order.shipments[0].confirmedAt,
+            estimatedDeliveryAt: order.shipments[0].estimatedDeliveryAt,
+            pickedUpAt: order.shipments[0].pickedUpAt,
+            deliveredAt: order.shipments[0].deliveredAt,
+            transitSeconds: order.shipments[0].transitSeconds,
+            lastTrackingEventAt: order.shipments[0].lastTrackingEventAt,
+            lastTrackingEventKind: order.shipments[0].lastTrackingEventKind,
+            signatureOption: order.shipments[0].signatureOption,
+          }),
     phiDecryptErrors,
   });
 }

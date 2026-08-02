@@ -16,6 +16,34 @@ overrides:
   # re-resolve (i.e. every Dependabot bump) could trigger that, so the root
   # spec is pinned exactly and referenced here as the single source of truth.
   "@types/node": "$@types/node"
+  # GHSA-v2hh-gcrm-f6hx + GHSA-4c8g-83qw-93j6: fast-uri parses a literal
+  # backslash, and a failed IDN canonicalization, as an authority
+  # delimiter — so a crafted URI can be read as pointing at one host by
+  # the validator and another by the fetcher. Reached only through
+  # ajv/schema-utils inside the @sentry/nextjs build plugin and the
+  # Prisma CLI, neither of which validates attacker-supplied URIs, so
+  # this is hygiene rather than an exploitable path here. Patch-level
+  # bump inside 3.x.
+  "fast-uri@<3.1.4": "^3.1.4"
+  # GHSA-6g55-p6wh-862q + the sourceMappingURL path-traversal advisory:
+  # postcss auto-loads a previous source map from a `sourceMappingURL`
+  # comment, so CSS from an untrusted source can read an arbitrary .map
+  # file off disk. next pins postcss to an exact 8.4.31, which is what
+  # drags the vulnerable copy in; the fix is a minor bump inside the
+  # same major. next's own CSS pipeline uses its vendored copy under
+  # next/dist/compiled, so this override only affects the postcss that
+  # loads OUR postcss.config — see the build verification in the PR.
+  # Range-scoped to 8.x so a hypothetical postcss 7 is left alone.
+  "postcss@>=8.0.0 <8.5.18": "^8.5.18"
+  # GHSA-f88m-g3jw-g9cj: sharp <0.35.0 ships a libvips with four CVEs
+  # (CVE-2026-33327/33328/35590/35591) reachable by decoding a malicious
+  # image. next declares sharp as an OPTIONAL dependency at ^0.34.5 and
+  # uses it for on-demand image optimization, so the decode path is
+  # reachable from any remote image the app is configured to optimize.
+  # Deliberately crossing next's declared range: 0.34 -> 0.35 is a minor
+  # bump with no API change we use, and leaving it pinned means shipping
+  # the vulnerable libvips.
+  "sharp@<0.35.0": "^0.35.0"
 
 allowBuilds:
   esbuild: true
