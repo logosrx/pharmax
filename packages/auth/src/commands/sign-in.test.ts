@@ -49,10 +49,29 @@ interface SeedUser {
   readonly mfaEnrolled?: boolean;
 }
 
+interface SeedWebAuthnCredential {
+  readonly id: string;
+  readonly credentialId: string;
+  readonly publicKey: string;
+  readonly counter: bigint;
+  readonly transports: ReadonlyArray<string>;
+}
+
+interface SeedWebAuthnChallenge {
+  readonly id: string;
+  readonly userId: string;
+  readonly purpose: "REGISTRATION" | "AUTHENTICATION";
+  readonly challenge: string;
+  readonly expiresAt: Date;
+  readonly consumedAt: Date | null;
+}
+
 function buildFake(opts: {
   user?: SeedUser | null;
   roleCodes?: ReadonlyArray<string>;
   enrollment?: { id: string; secretCiphertext: string } | null;
+  webauthnCredentials?: ReadonlyArray<SeedWebAuthnCredential>;
+  webauthnChallenge?: SeedWebAuthnChallenge | null;
 }) {
   const calls: Array<{ table: string; op: string; args: unknown }> = [];
   const record = (table: string, op: string, args?: unknown) => calls.push({ table, op, args });
@@ -96,6 +115,30 @@ function buildFake(opts: {
     recoveryCode: {
       findMany: vi.fn(async () => []),
       update: vi.fn(async () => ({})),
+    },
+    webAuthnCredential: {
+      findMany: vi.fn(async (args: unknown) => {
+        record("webAuthnCredential", "findMany", args);
+        return (opts.webauthnCredentials ?? []).map((c) => ({
+          ...c,
+          transports: [...c.transports],
+        }));
+      }),
+      update: vi.fn(async (args: unknown) => {
+        record("webAuthnCredential", "update", args);
+        return {};
+      }),
+    },
+    webAuthnChallenge: {
+      findUnique: vi.fn(async (args: unknown) => {
+        record("webAuthnChallenge", "findUnique", args);
+        return opts.webauthnChallenge ?? null;
+      }),
+      update: vi.fn(async (args: unknown) => {
+        record("webAuthnChallenge", "update", args);
+        return {};
+      }),
+      deleteMany: vi.fn(async () => ({ count: 0 })),
     },
     authSession: {
       create: vi.fn(async (args: unknown) => {
@@ -204,6 +247,171 @@ describe("SignIn — credential rejection (generic, no enumeration)", () => {
     await expect(
       run(fake.client, { email: "invited@example.com", password: "whatever" })
     ).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+  });
+});
+
+describe("SignIn — WebAuthn second factor (ADR-0036)", () => {
+  const CHALLENGE_ID = "00000000-0000-4000-8000-0000000000c1";
+  const CRED_ROW_ID = "00000000-0000-4000-8000-0000000000d1";
+  const NOW = new Date("2026-07-13T12:00:00.000Z");
+
+  const seededCredential: SeedWebAuthnCredential = {
+    id: CRED_ROW_ID,
+    credentialId: "cred-abc",
+    publicKey: "cGs",
+    counter: 4n,
+    transports: ["usb"],
+  };
+
+  function seededChallenge(overrides: Partial<SeedWebAuthnChallenge> = {}): SeedWebAuthnChallenge {
+    return {
+      id: CHALLENGE_ID,
+      userId: USER_ID,
+      purpose: "AUTHENTICATION",
+      challenge: "chal-base64url",
+      expiresAt: new Date(NOW.getTime() + 60_000),
+      consumedAt: null,
+      ...overrides,
+    };
+  }
+
+  function configureAuthWithAdapter(verified: boolean, newCounter = 5n): void {
+    resetAuthConfigurationForTests();
+    configureAuth(
+      buildAuthConfiguration({
+        clock: clock.createFrozenClock(NOW),
+        hasher: fakeHasher,
+        webauthn: {
+          adapter: {
+            generateRegistrationOptions: vi.fn(),
+            verifyRegistration: vi.fn(),
+            generateAuthenticationOptions: vi.fn(),
+            verifyAuthentication: vi.fn(async () =>
+              verified ? { verified: true as const, newCounter } : { verified: false as const }
+            ),
+          },
+        },
+      })
+    );
+  }
+
+  function webauthnInput() {
+    return {
+      email: "op@example.com",
+      password: "correct-password",
+      webauthn: {
+        challengeId: CHALLENGE_ID,
+        rpId: "pharmax.test",
+        origin: "https://acme.pharmax.test",
+        response: { id: "cred-abc", type: "public-key" },
+      },
+    };
+  }
+
+  it("mints a session on a verified assertion and advances the counter", async () => {
+    configureAuthWithAdapter(true, 9n);
+    const fake = buildFake({
+      user: { mfaEnrolled: true },
+      webauthnCredentials: [seededCredential],
+      webauthnChallenge: seededChallenge(),
+    });
+    configureBus(fake.client);
+
+    const out = await run(fake.client, webauthnInput());
+
+    expect(out.mfaSatisfied).toBe(true);
+    expect(fake.tx.authSession.create).toHaveBeenCalledTimes(1);
+    // Challenge consumed BEFORE verification, in the same tx.
+    expect(fake.tx.webAuthnChallenge.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: CHALLENGE_ID } })
+    );
+    // Signature counter advanced + lastUsedAt stamped.
+    expect(fake.tx.webAuthnCredential.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: CRED_ROW_ID },
+        data: expect.objectContaining({ counter: 9n }),
+      })
+    );
+  });
+
+  it("rejects with MFA_INVALID when the adapter refuses the assertion", async () => {
+    configureAuthWithAdapter(false);
+    const fake = buildFake({
+      user: { mfaEnrolled: true },
+      webauthnCredentials: [seededCredential],
+      webauthnChallenge: seededChallenge(),
+    });
+    configureBus(fake.client);
+
+    await expect(run(fake.client, webauthnInput())).rejects.toMatchObject({
+      code: "MFA_INVALID",
+    });
+    expect(fake.tx.authSession.create).not.toHaveBeenCalled();
+    expect(fake.tx.webAuthnCredential.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects a consumed challenge before any cryptographic work", async () => {
+    configureAuthWithAdapter(true);
+    const fake = buildFake({
+      user: { mfaEnrolled: true },
+      webauthnCredentials: [seededCredential],
+      webauthnChallenge: seededChallenge({ consumedAt: new Date(NOW.getTime() - 1000) }),
+    });
+    configureBus(fake.client);
+
+    await expect(run(fake.client, webauthnInput())).rejects.toMatchObject({
+      code: "WEBAUTHN_CHALLENGE_INVALID",
+    });
+    expect(fake.tx.authSession.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects an expired challenge", async () => {
+    configureAuthWithAdapter(true);
+    const fake = buildFake({
+      user: { mfaEnrolled: true },
+      webauthnCredentials: [seededCredential],
+      webauthnChallenge: seededChallenge({ expiresAt: new Date(NOW.getTime() - 1) }),
+    });
+    configureBus(fake.client);
+
+    await expect(run(fake.client, webauthnInput())).rejects.toMatchObject({
+      code: "WEBAUTHN_CHALLENGE_INVALID",
+    });
+  });
+
+  it("rejects an assertion naming a credential the user does not own", async () => {
+    configureAuthWithAdapter(true);
+    const fake = buildFake({
+      user: { mfaEnrolled: true },
+      webauthnCredentials: [seededCredential],
+      webauthnChallenge: seededChallenge(),
+    });
+    configureBus(fake.client);
+
+    const input = webauthnInput();
+    await expect(
+      run(fake.client, {
+        ...input,
+        webauthn: { ...input.webauthn, response: { id: "someone-elses-cred" } },
+      })
+    ).rejects.toMatchObject({ code: "MFA_INVALID" });
+  });
+
+  it("advertises available methods on MFA_REQUIRED", async () => {
+    configureAuthWithAdapter(true);
+    const fake = buildFake({
+      user: { mfaEnrolled: true },
+      enrollment: { id: "enr-1", secretCiphertext: "{}" },
+      webauthnCredentials: [seededCredential],
+    });
+    configureBus(fake.client);
+
+    await expect(
+      run(fake.client, { email: "op@example.com", password: "correct-password" })
+    ).rejects.toMatchObject({
+      code: "MFA_REQUIRED",
+      metadata: expect.objectContaining({ methods: ["TOTP", "WEBAUTHN"] }),
+    });
   });
 });
 
