@@ -14,12 +14,25 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 
 import { resolveOrganizationIdFromHost } from "@/server/auth/resolve-org-from-host";
+import { resolveWebAuthnRp } from "@/server/auth/webauthn-rp";
 import { setSessionCookie } from "@/server/auth/session-cookie";
 
 const bodySchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
   mfaCode: z.string().min(1).max(64).optional(),
+  /**
+   * WebAuthn assertion (ADR-0036): the challenge minted by
+   * /api/auth/webauthn/authenticate/options plus the browser's
+   * `startAuthentication()` response. rpId/origin are derived
+   * server-side from the trusted host — never from this body.
+   */
+  webauthn: z
+    .object({
+      challengeId: z.string().uuid(),
+      response: z.unknown(),
+    })
+    .optional(),
 });
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -38,12 +51,27 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
+  const rp = resolveWebAuthnRp(request);
+  if (parsed.data.webauthn !== undefined && rp === null) {
+    return NextResponse.json({ error: "Invalid request." }, { status: 400 });
+  }
+
   try {
     const result = await signIn({
       organizationId,
       email: parsed.data.email,
       password: parsed.data.password,
       ...(parsed.data.mfaCode !== undefined ? { mfaCode: parsed.data.mfaCode } : {}),
+      ...(parsed.data.webauthn !== undefined && rp !== null
+        ? {
+            webauthn: {
+              challengeId: parsed.data.webauthn.challengeId,
+              rpId: rp.rpId,
+              origin: rp.origin,
+              response: parsed.data.webauthn.response,
+            },
+          }
+        : {}),
       ipAddress: request.headers.get("x-forwarded-for") ?? undefined,
       userAgent: request.headers.get("user-agent") ?? undefined,
     });
@@ -53,9 +81,16 @@ export async function POST(request: NextRequest): Promise<Response> {
   } catch (cause) {
     if (errors.isPharmaxError(cause)) {
       // `code` lets the form route the UI (MFA_REQUIRED → prompt for a
-      // code; INVALID_CREDENTIALS → generic error).
+      // code or security key; INVALID_CREDENTIALS → generic error).
+      // `methods` is only present AFTER the password verified, so it
+      // discloses nothing to an unauthenticated caller.
+      const methods = cause.code === "MFA_REQUIRED" ? cause.metadata["methods"] : undefined;
       return NextResponse.json(
-        { error: cause.message, code: cause.code },
+        {
+          error: cause.message,
+          code: cause.code,
+          ...(Array.isArray(methods) ? { methods } : {}),
+        },
         { status: cause.httpStatus }
       );
     }
