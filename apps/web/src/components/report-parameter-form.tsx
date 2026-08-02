@@ -50,10 +50,29 @@ export function ReportParameterForm({ reportId, fields, values, now }: ReportPar
           The download streams immediately on success. A <code>report_run</code> row is persisted
           with these parameters, row count, and aggregates for SOC-2 audit.
         </p>
-        <button type="submit" className={buttonClass({ variant: "primary" })}>
-          <Icon name="reports" size={16} />
-          Run + download CSV
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Printable artifact for sharing outside Pharmax (e.g.
+              carrier service-failure reviews). Same run, same audit
+              row — only the serialization differs. */}
+          <button
+            type="submit"
+            name="format"
+            value="pdf"
+            className={buttonClass({ variant: "secondary" })}
+          >
+            <Icon name="print" size={16} />
+            Run + download PDF
+          </button>
+          <button
+            type="submit"
+            name="format"
+            value="csv"
+            className={buttonClass({ variant: "primary" })}
+          >
+            <Icon name="reports" size={16} />
+            Run + download CSV
+          </button>
+        </div>
       </div>
     </form>
   );
