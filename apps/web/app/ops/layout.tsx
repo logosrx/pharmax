@@ -6,7 +6,9 @@
 //
 //   - Nav items are role-gated against the operator's permission set;
 //     empty groups disappear.
-//   - Queue-depth badges come from a single cheap COUNT batch.
+//   - Queue-depth badges come from a single cheap COUNT batch for
+//     the first paint, then stay live over the ops SSE stream
+//     (LiveQueueCountsProvider → /api/ops/queue/stream, ADR-0034).
 //   - An unauthenticated visitor never reaches here (bounced by
 //     `proxy.ts`); the not-provisioned / inactive states render a
 //     calm, branded message instead of throwing.
@@ -27,6 +29,7 @@ import {
   resolveOperatorTenancyContext,
 } from "../../src/server/auth/resolve-tenancy.js";
 import { getQueueCounts } from "../../src/server/ops/get-queue-counts.js";
+import { LiveQueueCountsProvider } from "../../src/components/shell/live-queue-counts.js";
 import { SidebarNav, type NavGroup, type NavLink } from "../../src/components/shell/sidebar-nav.js";
 import { OrderSearch } from "../../src/components/shell/order-search.js";
 import { ThemeToggle } from "../../src/components/shell/theme-toggle.js";
@@ -290,38 +293,46 @@ export default async function OpsLayout({ children }: Readonly<{ children: React
       .map((it) => {
         const count = sumCounts(it.countCodes);
         const link: NavLink = { href: it.href, label: it.label, icon: it.icon };
-        return count === null ? link : { ...link, count };
+        return count === null
+          ? link
+          : {
+              ...link,
+              count,
+              ...(it.countCodes !== undefined ? { countCodes: it.countCodes } : {}),
+            };
       });
     return { label: group.label, items };
   }).filter((g) => g.items.length > 0);
 
   return (
-    <div className="flex min-h-screen bg-canvas text-fg">
-      <SidebarNav groups={groups} />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur-md sm:px-6">
-          <div className="flex items-center gap-2 sm:hidden">
-            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-brand text-brand-fg">
-              <Icon name="pill" size={18} />
-            </span>
-          </div>
-          <OrderSearch />
-          <div className="ml-auto flex items-center gap-3">
-            <div className="hidden text-right leading-tight sm:block">
-              <div className="text-sm font-medium text-fg">{result.operator.displayName}</div>
-              <div className="text-2xs text-subtle">{result.operator.email}</div>
+    <LiveQueueCountsProvider initialCounts={counts}>
+      <div className="flex min-h-screen bg-canvas text-fg">
+        <SidebarNav groups={groups} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur-md sm:px-6">
+            <div className="flex items-center gap-2 sm:hidden">
+              <span className="flex h-8 w-8 items-center justify-center rounded-md bg-brand text-brand-fg">
+                <Icon name="pill" size={18} />
+              </span>
             </div>
-            <ThemeToggle />
-            <SignOutButton />
-          </div>
-        </header>
-        {/* The content pane is a container-query root: page grids size
-            against the pane (which the sidebar eats into), not the
-            viewport, via @sm/@3xl/… variants. */}
-        <main className="@container mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
-          {children}
-        </main>
+            <OrderSearch />
+            <div className="ml-auto flex items-center gap-3">
+              <div className="hidden text-right leading-tight sm:block">
+                <div className="text-sm font-medium text-fg">{result.operator.displayName}</div>
+                <div className="text-2xs text-subtle">{result.operator.email}</div>
+              </div>
+              <ThemeToggle />
+              <SignOutButton />
+            </div>
+          </header>
+          {/* The content pane is a container-query root: page grids size
+              against the pane (which the sidebar eats into), not the
+              viewport, via @sm/@3xl/… variants. */}
+          <main className="@container mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </LiveQueueCountsProvider>
   );
 }

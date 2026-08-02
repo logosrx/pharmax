@@ -35,6 +35,7 @@ import { Banner, EmptyState, PermissionDenied } from "../../../src/components/ui
 import { Field, Input, Select } from "../../../src/components/ui/field.js";
 import { Icon } from "../../../src/components/ui/icon.js";
 import { QueueFlash } from "../../../src/components/ops/flash.js";
+import { QueueLiveRefresher } from "../../../src/components/ops/queue-live-refresher.js";
 import { QueueRow, formatAge } from "../../../src/components/ops/queue-row.js";
 import { ActionForm, SubmitButton } from "../../../src/components/ops/action-form.js";
 
@@ -367,6 +368,7 @@ export default async function ShippingQueuePage({
       />
 
       <QueueFlash params={params} messages={SHIPPING_FLASH} />
+      <QueueLiveRefresher codes={["SHIPPING"]} />
 
       <Section title="Needs action" count={active.length}>
         {!queue.bucketExists ? (
