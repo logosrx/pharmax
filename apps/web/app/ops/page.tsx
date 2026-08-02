@@ -28,6 +28,7 @@ import { buttonClass } from "../../src/components/ui/button.js";
 import { Icon, type IconName } from "../../src/components/ui/icon.js";
 import { priorityMeta, statusMeta } from "../../src/components/ui/workflow.js";
 import { SlaBadge, slaStatusFor } from "../../src/components/sla-badge.js";
+import { QueueLiveRefresher } from "../../src/components/ops/queue-live-refresher.js";
 import { cx } from "../../src/components/ui/cx.js";
 
 function ageLabel(from: Date, now: number): string {
@@ -131,6 +132,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-8 animate-fade-in">
+      <QueueLiveRefresher codes={["INBOX", "TYPING", "PV1", "FILL", "FINAL", "EMERGENCY"]} />
       <PageHeader
         eyebrow={today}
         title={`${greeting}, ${session.operator.displayName.split(" ")[0] ?? session.operator.displayName}`}
