@@ -18,6 +18,9 @@
 #          pharmax ECS services on the pharmax cluster
 #        - iam:PassRole ONLY the task execution + three task roles, and only
 #          to ecs-tasks.amazonaws.com
+#        - DESCRIBE (never read) this stack's Secrets Manager entries, so the
+#          deploy can verify each referenced secret has an AWSCURRENT value
+#          before rollout
 #
 # It deliberately holds NO Create*/Delete* infrastructure permissions — image
 # rollout only. Infra changes stay operator-driven through a separate role
@@ -48,6 +51,12 @@ locals {
 
   cluster_name  = "${var.name_prefix}-cluster"
   service_names = ["web", "worker", "print-agent"]
+
+  # Secrets Manager appends a random 6-character suffix to every secret
+  # ARN, so a prefix wildcard is the only way to express "the secrets
+  # belonging to this stack" without threading the ARNs in from the
+  # secrets module.
+  secret_arn_pattern = "arn:aws:secretsmanager:${var.region}:${var.aws_account_id}:secret:${var.name_prefix}/*"
 
   service_arns = [
     for s in local.service_names :
@@ -150,6 +159,22 @@ data "aws_iam_policy_document" "deploy" {
       "ecs:UpdateService",
     ]
     resources = local.service_arns
+  }
+
+  # Lets deploy.yml assert that every secret a task definition references
+  # actually has an AWSCURRENT version before it calls UpdateService.
+  # Terraform creates secrets as empty containers and operators populate
+  # them out-of-band, so "ARN resolves, value absent" is a reachable state
+  # — and one ECS only reports as an opaque circuit-breaker rollback.
+  #
+  # DescribeSecret is METADATA ONLY: version ids and their staging labels,
+  # never `SecretString`. GetSecretValue is deliberately absent so CI can
+  # never read a production database credential or KMS seed.
+  statement {
+    sid       = "SecretsPreflightDescribeOnly"
+    effect    = "Allow"
+    actions   = ["secretsmanager:DescribeSecret"]
+    resources = [local.secret_arn_pattern]
   }
 
   # The deploy role registers task definitions that reference the task
