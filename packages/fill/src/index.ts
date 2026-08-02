@@ -41,9 +41,16 @@ export {
   type CompleteFillOutput,
   FILL_LOT_NOT_ASSIGNED,
   FILL_LABEL_PRINT_NOT_COMPLETE,
+  FILL_COMPOUND_QUALITY_FAILED,
+  FILL_COMPOUND_BUD_EXPIRED,
+  FILL_CONTROLLED_SUBSTANCE_NOT_PERMITTED,
+  FILL_PARTIAL_FILL_BASIS_REQUIRED,
+  FILL_PARTIAL_FILL_BASIS_UNEXPECTED,
+  FILL_SCAN_COMPOUND_LOT_UNEXPECTED,
   FILL_SCAN_DUPLICATE_LINE,
   FILL_SCAN_LINE_COUNT_MISMATCH,
   FILL_SCAN_LOT_MISMATCH,
+  FILL_SCAN_LOT_SCAN_REQUIRED,
   FILL_SCAN_NDC_MISMATCH,
   FILL_SCAN_PARSE_FAILED,
   FILL_SCAN_UNKNOWN_LINE,
@@ -57,6 +64,10 @@ export {
   FILL_ORDER_TERMINAL,
   FILL_NOT_ASSIGNED_TO_ACTOR,
   FILL_WRONG_STATUS,
+  // Stage/assignee guards, reused by @pharmax/compounding (preparation
+  // is a FILL-stage activity) so both reject with identical codes.
+  assertFillAssignee,
+  assertFillInProgressWithAssignee,
 } from "./fill-guards.js";
 
 import * as assignLotModule from "./commands/assign-lot.js";

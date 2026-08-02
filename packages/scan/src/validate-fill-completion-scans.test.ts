@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import { buildVialBarcodeValue } from "@pharmax/labels";
 
 import {
+  FILL_SCAN_COMPOUND_LOT_UNEXPECTED,
   FILL_SCAN_LINE_COUNT_MISMATCH,
   FILL_SCAN_LOT_MISMATCH,
+  FILL_SCAN_LOT_SCAN_REQUIRED,
   FILL_SCAN_NDC_MISMATCH,
   FILL_SCAN_VIAL_LABEL_MISMATCH,
   validateFillCompletionScans,
@@ -17,6 +19,7 @@ const EXPECTED_LOT = "LOT-A1";
 const expectations = [
   {
     orderLineId: ORDER_LINE_ID,
+    kind: "STOCK" as const,
     expectedLotNumber: EXPECTED_LOT,
     expectedNdc: EXPECTED_NDC,
   },
@@ -42,6 +45,7 @@ describe("validateFillCompletionScans", () => {
       expectations: [
         {
           orderLineId: ORDER_LINE_ID,
+          kind: "STOCK" as const,
           expectedLotNumber: EXPECTED_LOT,
           expectedNdc: "03681409867",
         },
@@ -117,5 +121,98 @@ describe("validateFillCompletionScans", () => {
       result: "HARD_STOP",
       code: FILL_SCAN_LINE_COUNT_MISMATCH,
     });
+  });
+
+  it("rejects a stock line whose lot scan is missing", () => {
+    const outcome = validateFillCompletionScans({
+      expectations,
+      lineScans: [
+        {
+          orderLineId: ORDER_LINE_ID,
+          vialLabelScan: buildVialBarcodeValue(ORDER_LINE_ID),
+        },
+      ],
+    });
+    expect(outcome).toMatchObject({
+      result: "HARD_STOP",
+      code: FILL_SCAN_LOT_SCAN_REQUIRED,
+    });
+  });
+});
+
+describe("validateFillCompletionScans — compound lines (ADR-0035 slice 4)", () => {
+  const compoundExpectations = [{ orderLineId: ORDER_LINE_ID, kind: "COMPOUND" as const }];
+
+  it("accepts a vial-label-only scan for a compound line", () => {
+    const outcome = validateFillCompletionScans({
+      expectations: compoundExpectations,
+      lineScans: [
+        {
+          orderLineId: ORDER_LINE_ID,
+          vialLabelScan: buildVialBarcodeValue(ORDER_LINE_ID),
+        },
+      ],
+    });
+    expect(outcome.result).toBe("SUCCESS");
+  });
+
+  it("hard-stops when a lot barcode is scanned for a compound line", () => {
+    const outcome = validateFillCompletionScans({
+      expectations: compoundExpectations,
+      lineScans: [
+        {
+          orderLineId: ORDER_LINE_ID,
+          lotScan: `(10)${EXPECTED_LOT}`,
+          vialLabelScan: buildVialBarcodeValue(ORDER_LINE_ID),
+        },
+      ],
+    });
+    expect(outcome).toMatchObject({
+      result: "HARD_STOP",
+      code: FILL_SCAN_COMPOUND_LOT_UNEXPECTED,
+    });
+  });
+
+  it("still validates the vial label on a compound line", () => {
+    const outcome = validateFillCompletionScans({
+      expectations: compoundExpectations,
+      lineScans: [
+        {
+          orderLineId: ORDER_LINE_ID,
+          vialLabelScan: "PX:00000000-0000-4000-8000-000000000099",
+        },
+      ],
+    });
+    expect(outcome).toMatchObject({
+      result: "HARD_STOP",
+      code: FILL_SCAN_VIAL_LABEL_MISMATCH,
+    });
+  });
+
+  it("validates mixed stock + compound orders line by line", () => {
+    const stockLineId = "00000000-0000-4000-8000-0000000000cc";
+    const outcome = validateFillCompletionScans({
+      expectations: [
+        ...compoundExpectations,
+        {
+          orderLineId: stockLineId,
+          kind: "STOCK" as const,
+          expectedLotNumber: EXPECTED_LOT,
+          expectedNdc: EXPECTED_NDC,
+        },
+      ],
+      lineScans: [
+        {
+          orderLineId: ORDER_LINE_ID,
+          vialLabelScan: buildVialBarcodeValue(ORDER_LINE_ID),
+        },
+        {
+          orderLineId: stockLineId,
+          lotScan: `(10)${EXPECTED_LOT}`,
+          vialLabelScan: buildVialBarcodeValue(stockLineId),
+        },
+      ],
+    });
+    expect(outcome.result).toBe("SUCCESS");
   });
 });

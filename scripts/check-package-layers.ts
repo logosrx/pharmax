@@ -95,6 +95,10 @@ const IGNORED_EDGES: ReadonlyArray<Edge> = [{ from: "@pharmax/tenancy", to: "@ph
 const DOMAIN_PACKAGES: ReadonlySet<string> = new Set([
   "@pharmax/orders",
   "@pharmax/fill",
+  // Inbound edge of the Lot spine (ADR-0035 slice 3): receiving +
+  // DSCSA chain of custody. Fill owns consumption; this owns arrival.
+  "@pharmax/inventory",
+  "@pharmax/compounding",
   "@pharmax/verification",
   "@pharmax/shipping",
   "@pharmax/billing",
@@ -119,6 +123,9 @@ const ALLOWED_DOMAIN_EDGES: ReadonlySet<string> = new Set([
   // fill validates barcode scans (drug/lot) during filling.
   "@pharmax/fill -> @pharmax/scan",
   // scan validates a scanned barcode against the label's encoded content.
+  // compounding preparation is a FILL-stage activity; it reuses fill's
+  // stage/assignee guards so both stages reject with identical codes.
+  "@pharmax/compounding -> @pharmax/fill",
   "@pharmax/scan -> @pharmax/labels",
 ]);
 

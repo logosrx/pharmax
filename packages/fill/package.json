@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@pharmax/command-bus": "workspace:*",
+    "@pharmax/controlled-substances": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/labels": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
