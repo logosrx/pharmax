@@ -206,6 +206,25 @@ resource "aws_ecs_task_definition" "web" {
         # verify-full TLS to RDS (force_ssl=1) succeeds (see Dockerfile).
         { name = "NODE_EXTRA_CA_CERTS", value = "/etc/pki/rds/global-bundle.pem" },
         { name = "PORT", value = tostring(var.web_container_port) },
+        # Next.js standalone binds to `process.env.HOSTNAME`. The Dockerfile
+        # sets HOSTNAME=0.0.0.0, but ECS injects the task's own hostname
+        # (ip-10-x-x-x.ec2.internal) at runtime and that overrides the image
+        # ENV — so the server bound to the ENI address alone and refused
+        # loopback. /proc/net/tcp on a prod task showed a single listener on
+        # 10.42.16.148:3000 with no 0.0.0.0:3000, and `wget
+        # http://127.0.0.1:3000/api/health` returned "Connection refused".
+        #
+        # The container health check below dials localhost, so it could never
+        # pass: every web task ran permanently UNHEALTHY, every rollout tripped
+        # the circuit breaker ("tasks failed to start") even though the app was
+        # serving fine, and ECS lost its ability to replace a genuinely wedged
+        # task. It stayed invisible because the ALB dials the ENI address and
+        # reported healthy, and `wait services-stable` does not require
+        # healthStatus HEALTHY — so CI called the deploy a success.
+        #
+        # Setting it here (task-definition env beats image ENV) restores the
+        # bind to all interfaces.
+        { name = "HOSTNAME", value = "0.0.0.0" },
         { name = "PHARMAX_REGION", value = var.aws_region },
         { name = "AWS_REGION", value = var.aws_region },
         # Legacy alias — keep until packages/crypto/aws-kms-adapter.ts swaps to
