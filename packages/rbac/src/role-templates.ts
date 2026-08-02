@@ -49,6 +49,13 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       // order came from. Neither grant exposes PHI or a mutation path.
       PERMISSIONS.CLINICS_READ,
       PERMISSIONS.INVENTORY_READ,
+      // Compounding formula authority (ADR-0035): the Master
+      // Formulation Record is a pharmacist-owned document per
+      // USP <795>/<797> — authoring/publish/retire sits here, not
+      // with technicians.
+      PERMISSIONS.COMPOUNDING_READ,
+      PERMISSIONS.COMPOUNDING_FORMULA_MANAGE,
+      PERMISSIONS.COMPOUNDING_PREPARE,
       PERMISSIONS.ORDERS_READ,
       PERMISSIONS.ORDERS_CANCEL,
       PERMISSIONS.ORDERS_PLACE_HOLD,
@@ -80,6 +87,9 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       // read-only directory tabs are their reference surfaces.
       PERMISSIONS.CLINICS_READ,
       PERMISSIONS.INVENTORY_READ,
+      // Techs prepare from ACTIVE formulas; they do not author them.
+      PERMISSIONS.COMPOUNDING_READ,
+      PERMISSIONS.COMPOUNDING_PREPARE,
       PERMISSIONS.ORDERS_CREATE,
       PERMISSIONS.ORDERS_READ,
       PERMISSIONS.ORDERS_ADD_PRESCRIPTION,

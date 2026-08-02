@@ -57,6 +57,10 @@ export {
   FILL_ORDER_TERMINAL,
   FILL_NOT_ASSIGNED_TO_ACTOR,
   FILL_WRONG_STATUS,
+  // Stage/assignee guards, reused by @pharmax/compounding (preparation
+  // is a FILL-stage activity) so both reject with identical codes.
+  assertFillAssignee,
+  assertFillInProgressWithAssignee,
 } from "./fill-guards.js";
 
 import * as assignLotModule from "./commands/assign-lot.js";

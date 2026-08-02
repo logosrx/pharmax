@@ -55,6 +55,16 @@ export const PERMISSIONS = Object.freeze({
   // Inventory catalog: drug products + lots/batches.
   INVENTORY_READ: "inventory.read",
 
+  // Compounding (ADR-0035): Master Formulation Records. MANAGE covers
+  // the whole formula lifecycle (author/publish/retire) — pharmacist-
+  // level authority; READ lets preparers work from ACTIVE formulas.
+  COMPOUNDING_READ: "compounding.read",
+  COMPOUNDING_FORMULA_MANAGE: "compounding.formula.manage",
+  // Record a preparation against an ACTIVE formula during fill
+  // (slice 2): consumes ingredient lots, computes the BUD, and writes
+  // the USP compounding record.
+  COMPOUNDING_PREPARE: "compounding.prepare",
+
   // Order lifecycle.
   ORDERS_CREATE: "orders.create",
   ORDERS_READ: "orders.read",
@@ -267,6 +277,21 @@ export const PERMISSION_METADATA: Readonly<
     description:
       "View the drug product catalog and inventory lots/batches (NDC, name, lot number, expiration, status). Read-only; lot assignment stays behind fill.assign_lot.",
     category: "Inventory",
+  },
+  [PERMISSIONS.COMPOUNDING_READ]: {
+    description:
+      "View compound formulas (Master Formulation Records): codes, versions, ingredients, BUD policy, hazard flags. Recipe/catalog data only — no PHI.",
+    category: "Compounding",
+  },
+  [PERMISSIONS.COMPOUNDING_FORMULA_MANAGE]: {
+    description:
+      "Author, publish, and retire compound formulas (ADR-0035). Publishing makes a version immutable and retires its predecessor; retiring requires a reason code. Pharmacist-level authority.",
+    category: "Compounding",
+  },
+  [PERMISSIONS.COMPOUNDING_PREPARE]: {
+    description:
+      "Record a compounding preparation during fill (ADR-0035 slice 2): pins the ACTIVE formula version, consumes ingredient lots into the inventory ledger, computes the beyond-use date, and writes the USP <795>/<797> compounding record with its rendered document.",
+    category: "Compounding",
   },
   [PERMISSIONS.ORDERS_CREATE]: { description: "Create new orders.", category: "Orders" },
   [PERMISSIONS.ORDERS_READ]: {

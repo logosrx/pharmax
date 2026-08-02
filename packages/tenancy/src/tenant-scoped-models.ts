@@ -90,6 +90,12 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // tenancy and read by finance reports — auto-scoping closes the
   // cross-tenant leak surface for both paths.
   ["Payment", { kind: "organizationId" }] as const,
+  // Compounding (ADR-0035): Master Formulation Records + ingredients,
+  // and per-preparation compounding records (slice 2).
+  ["CompoundFormula", { kind: "organizationId" }] as const,
+  ["CompoundFormulaIngredient", { kind: "organizationId" }] as const,
+  ["CompoundingRecord", { kind: "organizationId" }] as const,
+  ["CompoundingRecordIngredient", { kind: "organizationId" }] as const,
 
   // Phase 2 — PHI domain entities. PHI columns themselves are
   // envelope-encrypted (see `@pharmax/crypto`); auto-scoping at the
