@@ -102,6 +102,8 @@ export type EventOwner =
   | "patients"
   | "providers"
   | "orgs"
+  // Inventory (ADR-0035 slice 3): lot receiving + DSCSA custody.
+  | "inventory"
   // Compounding (ADR-0035): Master Formulation Records + compounding
   // records.
   | "compounding"

@@ -92,6 +92,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
       "View the drug product catalog and inventory lots/batches (NDC, name, lot number, expiration, status); read-only",
   },
   {
+    code: "inventory.receive",
+    description:
+      "Receive an inbound lot shipment (ADR-0035 slice 3): creates or extends the Lot, credits the inventory ledger, and stores the DSCSA transaction record (TI snapshot + Transaction Statement gate)",
+  },
+  {
     code: "compounding.read",
     description:
       "View compound formulas (Master Formulation Records): codes, versions, ingredients, BUD policy, hazard flags. Recipe/catalog data only — no PHI",

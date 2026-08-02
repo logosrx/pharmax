@@ -46,6 +46,7 @@ import { CompoundingFormulaCreatedV1 } from "./events/compounding/formula-create
 import { CompoundingFormulaPublishedV1 } from "./events/compounding/formula-published-v1.js";
 import { CompoundingFormulaRetiredV1 } from "./events/compounding/formula-retired-v1.js";
 import { CompoundingPreparationRecordedV1 } from "./events/compounding/preparation-recorded-v1.js";
+import { InventoryLotReceivedV1 } from "./events/inventory/lot-received-v1.js";
 
 // ---- fill ----------------------------------------------------------------
 import { FillLotAssignedV1 } from "./events/fill/lot-assigned-v1.js";
@@ -172,6 +173,7 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   CompoundingFormulaPublishedV1,
   CompoundingFormulaRetiredV1,
   CompoundingPreparationRecordedV1,
+  InventoryLotReceivedV1,
   // fill
   FillLotAssignedV1,
   // labels

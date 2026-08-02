@@ -568,7 +568,13 @@ enum InventoryTransactionReason {
   LOT_ASSIGNED
   LOT_RELEASED
   ADJUSTMENT
+  // Ingredient lot consumed by a compounding preparation (ADR-0035
+  // slice 2). Distinct from LOT_ASSIGNED, which means "dispensed lot
+  // bound to an order line".
   COMPOUND_CONSUMED
+  // Inbound receipt credit written by ReceiveLot (ADR-0035 slice 3);
+  // paired 1:1 with a dscsa_transaction row.
+  LOT_RECEIVED
 }
 
 enum ShipmentCarrier {
@@ -800,6 +806,7 @@ model Organization {
   compoundFormulaIngredients   CompoundFormulaIngredient[]
   compoundingRecords           CompoundingRecord[]
   compoundingRecordIngredients CompoundingRecordIngredient[]
+  dscsaTransactions            DscsaTransaction[]
 
   @@map("organization")
 }
@@ -1067,6 +1074,7 @@ model User {
   breakGlassSessionsApproved  BreakGlassSession[] @relation("BreakGlassSessionApprover")
   compoundFormulasAuthored    CompoundFormula[]   @relation("CompoundFormulaAuthor")
   compoundingRecordsPrepared  CompoundingRecord[] @relation("CompoundingRecordPreparer")
+  dscsaTransactionsReceived   DscsaTransaction[]  @relation("DscsaTransactionReceiver")
 
   @@unique([organizationId, email])
   @@index([organizationId, status])
@@ -1606,6 +1614,7 @@ model CommandLog {
   providerSyncReviewsResolved  ProviderSyncReviewItem[] @relation("ProviderSyncReviewResolvedCommandLog")
   breakGlassActions            BreakGlassAction[]
   compoundingRecords           CompoundingRecord[]
+  dscsaTransactions            DscsaTransaction[]
 
   @@unique([organizationId, commandName, idempotencyKey])
   @@index([organizationId, status])
@@ -3489,10 +3498,68 @@ model Lot {
   lotAssignments               LotAssignment[]
   inventoryTransactions        InventoryTransaction[]
   compoundingRecordIngredients CompoundingRecordIngredient[]
+  dscsaTransactions            DscsaTransaction[]
 
   @@unique([organizationId, siteId, productId, lotNumber])
   @@index([organizationId, siteId, status, expirationDate])
   @@map("lot")
+}
+
+// DSCSA transaction record for an inbound lot receipt (ADR-0035
+// slice 3; 21 USC 360eee). One row PER RECEIPT — a lot can arrive
+// across multiple shipments. Post-2023 enhanced-security exchange:
+// structured Transaction Information snapshot + the seller's
+// Transaction Statement attestation gate; Transaction History is no
+// longer exchanged. Supply-chain data only, no PHI. Statutory
+// retention 6 years — append-only, never deleted or updated.
+model DscsaTransaction {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  lotId String @db.Uuid
+  lot   Lot    @relation(fields: [lotId], references: [id], onDelete: Restrict)
+
+  // Transaction Information (360eee(26)) — denormalized snapshot so
+  // the record stays complete even if the catalog row changes.
+  productName     String
+  strength        String
+  dosageForm      String
+  ndc             String
+  containerSize   String
+  containerCount  Int
+  lotNumber       String
+  quantity        Decimal   @db.Decimal(18, 4)
+  transactionDate DateTime  @db.Date
+  // Only when it differs from the transaction date, per the statute.
+  shipmentDate    DateTime? @db.Date
+
+  sellerName    String
+  sellerAddress String
+  buyerName     String
+  buyerAddress  String
+
+  // The seller's Transaction Statement (360eee(27)) accompanied the
+  // shipment. ReceiveLot refuses receipt when false — accepting
+  // product without TI+TS is the statutory violation this gate
+  // prevents.
+  transactionStatementReceived Boolean
+
+  // Where the electronic TI/TS lives (EPCIS event/file id, ASN or
+  // invoice reference from the trading partner).
+  sourceDocumentRef String?
+
+  receivedByUserId String @db.Uuid
+  receivedByUser   User   @relation("DscsaTransactionReceiver", fields: [receivedByUserId], references: [id], onDelete: Restrict)
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, lotId])
+  @@index([organizationId, transactionDate])
+  @@map("dscsa_transaction")
 }
 
 // Structured record of a lot scan + assignment during fill.

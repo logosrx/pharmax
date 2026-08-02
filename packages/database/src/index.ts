@@ -121,6 +121,7 @@ export type {
   CompoundFormulaIngredient,
   CompoundingRecord,
   CompoundingRecordIngredient,
+  DscsaTransaction,
   EventOutbox,
   IdempotencyKey,
   InventoryTransaction,
