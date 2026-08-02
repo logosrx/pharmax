@@ -119,11 +119,16 @@ export const shipmentTransitTimeReport: ReportDefinition<
     const window: DateRangeParams = { from: params.from, to: params.to };
 
     // Delivered-in-window shipments with a real carrier handoff.
-    // `lastTrackingEventAt` on a DELIVERED shipment is the delivered
-    // scan's occurredAt (RecordShipmentTrackingEvent advances the
-    // cache only on strictly-newer events, and DELIVERED is
-    // status-terminal). Bounded by the window; the report reads two
-    // timestamps + two dimensions per row.
+    // Transit source, in preference order:
+    //   1. Persisted scan endpoints — `pickedUpAt` → `deliveredAt`
+    //      (carrier-truth pickup-to-delivery, maintained by
+    //      RecordShipmentTrackingEvent since the transit-timestamps
+    //      migration).
+    //   2. Fallback for older rows — `confirmedAt` (our handoff
+    //      stamp) → `lastTrackingEventAt` (delivered scan while
+    //      DELIVERED is the newest event).
+    // Bounded by the window; the report reads timestamps + two
+    // dimensions per row.
     const shipments = await ctx.client.shipment.findMany({
       where: {
         organizationId: ctx.organizationId,
@@ -143,14 +148,24 @@ export const shipmentTransitTimeReport: ReportDefinition<
         confirmedAt: true,
         lastTrackingEventAt: true,
         estimatedDeliveryAt: true,
+        pickedUpAt: true,
+        deliveredAt: true,
+        transitSeconds: true,
       },
     });
 
     const groups = new Map<string, GroupAccumulator>();
     for (const s of shipments) {
-      // Both guaranteed non-null by the where clause; narrow for TS.
-      if (s.confirmedAt === null || s.lastTrackingEventAt === null) continue;
-      const transitMs = s.lastTrackingEventAt.getTime() - s.confirmedAt.getTime();
+      // Prefer the persisted pickup→delivery pair; fall back to
+      // handoff→delivered-scan for rows predating the columns.
+      let transitMs: number;
+      if (s.transitSeconds !== null) {
+        transitMs = s.transitSeconds * 1000;
+      } else {
+        // Both guaranteed non-null by the where clause; narrow for TS.
+        if (s.confirmedAt === null || s.lastTrackingEventAt === null) continue;
+        transitMs = s.lastTrackingEventAt.getTime() - s.confirmedAt.getTime();
+      }
       if (transitMs < 0) continue; // clock skew guard — never report negative transit
 
       const key = `${s.carrier}\u0000${s.serviceLevel}`;
@@ -167,9 +182,15 @@ export const shipmentTransitTimeReport: ReportDefinition<
         groups.set(key, group);
       }
       group.transitHours.push(transitMs / 3_600_000);
+      // On-time comparison uses the physical delivery moment when
+      // persisted; `lastTrackingEventAt` otherwise.
+      const deliveredMoment = s.deliveredAt ?? s.lastTrackingEventAt;
       if (s.estimatedDeliveryAt === null) {
         group.noEstimateCount += 1;
-      } else if (s.lastTrackingEventAt.getTime() <= s.estimatedDeliveryAt.getTime()) {
+      } else if (
+        deliveredMoment !== null &&
+        deliveredMoment.getTime() <= s.estimatedDeliveryAt.getTime()
+      ) {
         group.onTimeCount += 1;
       } else {
         group.lateCount += 1;

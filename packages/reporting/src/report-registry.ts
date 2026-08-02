@@ -17,11 +17,13 @@ import type { ZodTypeAny } from "zod";
 
 import { billingSummaryByClinicReport } from "./reports/billing-summary-by-clinic.js";
 import { invoiceAgingReport } from "./reports/invoice-aging.js";
+import { lateDeliveriesReport } from "./reports/late-deliveries.js";
 import { lotExpiryWarningsReport } from "./reports/lot-expiry-warnings.js";
 import { orderVolumeByStageReport } from "./reports/order-volume-by-stage.js";
 import { shipmentExceptionBreakdownReport } from "./reports/shipment-exception-breakdown.js";
 import { shipmentTransitTimeReport } from "./reports/shipment-transit-time.js";
 import { shipmentsInFlightReport } from "./reports/shipments-in-flight.js";
+import { shippingCostSummaryReport } from "./reports/shipping-cost-summary.js";
 import { slaBreachReport } from "./reports/sla-breach-report.js";
 import { userProductivityByStageReport } from "./reports/user-productivity-by-stage.js";
 import { verificationRejectionRateReport } from "./reports/verification-rejection-rate.js";
@@ -47,6 +49,8 @@ export const REPORT_REGISTRY: Readonly<Record<string, ReportDefinitionAny>> = Ob
     shipmentExceptionBreakdownReport as unknown as ReportDefinitionAny,
   [shipmentTransitTimeReport.id]: shipmentTransitTimeReport as unknown as ReportDefinitionAny,
   [shipmentsInFlightReport.id]: shipmentsInFlightReport as unknown as ReportDefinitionAny,
+  [lateDeliveriesReport.id]: lateDeliveriesReport as unknown as ReportDefinitionAny,
+  [shippingCostSummaryReport.id]: shippingCostSummaryReport as unknown as ReportDefinitionAny,
   [lotExpiryWarningsReport.id]: lotExpiryWarningsReport as unknown as ReportDefinitionAny,
   [billingSummaryByClinicReport.id]: billingSummaryByClinicReport as unknown as ReportDefinitionAny,
   [invoiceAgingReport.id]: invoiceAgingReport as unknown as ReportDefinitionAny,

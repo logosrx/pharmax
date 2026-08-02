@@ -41,6 +41,19 @@ export {
 } from "./reports/shipments-in-flight.js";
 
 export {
+  lateDeliveriesReport,
+  type LateDeliveriesParams,
+  type LateDeliveryRow,
+  type LateDeliveryOutcome,
+} from "./reports/late-deliveries.js";
+
+export {
+  shippingCostSummaryReport,
+  type ShippingCostSummaryParams,
+  type ShippingCostSummaryRow,
+} from "./reports/shipping-cost-summary.js";
+
+export {
   lotExpiryWarningsReport,
   type LotExpiryWarningsParams,
   type LotExpiryWarningRow,
