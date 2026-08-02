@@ -326,6 +326,40 @@ If the print-agent itself is offline (workstation power-cycled, network outage):
 - The `SENT` rows remain claimable. When the agent reconnects, it picks up where it left off.
 - The agent's poll loop has an error-backoff (`errorBackoffMs`) so a transient outage doesn't tight-loop.
 
+### The print-agent is currently not deployed
+
+As of 2026-08-02 the rollout is disabled and `ecs_print_agent_desired_count`
+is `0` in prod. The agent resolves a specific organization, workstation, and
+actor from the database at boot, and in `tcp` mode needs a network path to a
+physical Zebra printer. A task in a private Fargate subnet has neither, so it
+booted against the local seed fixture (`acme` / `WS-01`), crash-looped, and
+made every deploy report a false failure. `SENT` print jobs therefore
+accumulate rather than printing — expected, not a defect.
+
+To turn it back on, all four of these must be true:
+
+1. A real site exists with an `ACTIVE` organization, `ACTIVE` workstation, and
+   an actor user, and `PRINT_AGENT_ORG_SLUG` / `PRINT_AGENT_WORKSTATION_CODE`
+   / `PRINT_AGENT_ACTOR_EMAIL` are injected into the task definition. The
+   production boot guard in `apps/print-agent/src/env.ts` refuses to start on
+   the fixture defaults, so a miss here fails loudly at startup.
+2. `PRINT_AGENT_ZPL_MODE=tcp` and `PRINT_AGENT_PRINTER_HOST` points at the
+   printer. The guard also rejects `file` mode in production, because it would
+   record labels as printed while writing ZPL to `/tmp`.
+3. The agent runs somewhere with a route to that printer — which for most
+   sites means on-prem or behind a tunnel, not a private Fargate subnet.
+4. Set the repo variable `DEPLOY_PRINT_AGENT=true` to re-enable the rollout,
+   and scale the service up (`ignore_changes = [desired_count]` means
+   Terraform will not do it for you):
+
+```bash
+aws ecs update-service --cluster pharmax-prod-ue1-cluster \
+  --service pharmax-prod-ue1-print-agent --desired-count 1
+```
+
+Its image is still built and pushed on every deploy, so re-enabling needs no
+image backfill.
+
 ---
 
 ## Audit chain integrity check

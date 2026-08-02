@@ -44,17 +44,24 @@ rds_parameter_group_family   = "postgres16"
 rds_multi_az                 = true
 
 # ---- ECS --------------------------------------------------------------------
-ecs_web_cpu                    = 1024
-ecs_web_memory                 = 2048
-ecs_web_desired_count          = 3
-ecs_web_min_count              = 3
-ecs_web_max_count              = 20
-ecs_worker_cpu                 = 1024
-ecs_worker_memory              = 2048
-ecs_worker_desired_count       = 3
-ecs_print_agent_cpu            = 512
-ecs_print_agent_memory         = 1024
-ecs_print_agent_desired_count  = 1
+ecs_web_cpu              = 1024
+ecs_web_memory           = 2048
+ecs_web_desired_count    = 3
+ecs_web_min_count        = 3
+ecs_web_max_count        = 20
+ecs_worker_cpu           = 1024
+ecs_worker_memory        = 2048
+ecs_worker_desired_count = 3
+ecs_print_agent_cpu      = 512
+ecs_print_agent_memory   = 1024
+# 0 until a real pharmacy site exists. The agent resolves a specific
+# workstation from the database at boot and needs a network path to a
+# physical Zebra printer; a task in a private Fargate subnet has neither, so
+# it crash-loops (2026-08-02). NOTE: the ECS service sets
+# `ignore_changes = [desired_count]` so autoscaling and manual scaling can
+# move it freely — meaning this value governs INITIAL creation only, and the
+# running count must be changed with `aws ecs update-service`.
+ecs_print_agent_desired_count  = 0
 ecs_log_retention_days         = 365
 ecs_container_insights_enabled = true
 

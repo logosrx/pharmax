@@ -83,6 +83,7 @@ jobs:
       image_tag: ${{ steps.tag.outputs.image_tag }}
       name_prefix: ${{ vars.ECS_NAME_PREFIX }}
       region: ${{ steps.check.outputs.region }}
+      deploy_services: ${{ steps.services.outputs.deploy_services }}
     steps:
       - uses: actions/checkout@v4
 
@@ -108,6 +109,29 @@ jobs:
           fi
           echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Image tag: $tag"
+
+      # Which services actually get rolled out. Images are still BUILT for
+      # all three (see the build job) so nothing silently rots and turning a
+      # service back on needs no image backfill — this gates the rollout only.
+      #
+      # print-agent is opt-in because it cannot run unattended in the cloud:
+      # it resolves a specific pharmacy workstation from the database at boot
+      # and, in tcp mode, needs a network path to a physical Zebra printer.
+      # Neither exists for a task in a private Fargate subnet, so deploying it
+      # produced a service that could never stabilize and a deploy that always
+      # reported failure (2026-08-02). Set DEPLOY_PRINT_AGENT=true once a real
+      # site, workstation, and reachable printer exist.
+      - id: services
+        run: |
+          services='["web","worker"]'
+          if [ "${{ vars.DEPLOY_PRINT_AGENT }}" = "true" ]; then
+            services='["web","worker","print-agent"]'
+          else
+            echo "::notice::print-agent rollout is disabled (DEPLOY_PRINT_AGENT is not 'true')."
+            echo "::notice::Its image is still built and pushed; only the ECS rollout is skipped."
+          fi
+          echo "deploy_services=$services" >> "$GITHUB_OUTPUT"
+          echo "Services to roll out: $services"
 
   build:
     name: Build + push (${{ matrix.service }})
@@ -339,7 +363,7 @@ jobs:
       # an already-healthy web rollout.
       fail-fast: false
       matrix:
-        service: [web, worker, print-agent]
+        service: ${{ fromJSON(needs.preflight.outputs.deploy_services) }}
     steps:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
