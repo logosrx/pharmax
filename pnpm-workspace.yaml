@@ -2,6 +2,32 @@ packages:
   - "apps/*"
   - "packages/*"
 
+# Runtime settings, migrated out of .npmrc. pnpm 11 reads ONLY auth and
+# registry settings from .npmrc — every other key there is silently
+# ignored, with no warning. All four settings below lived in .npmrc and
+# were therefore inert.
+#
+# Two of them were load-bearing, and their silence broke the commit
+# path: with verify-deps-before-run ignored, `pnpm run <script>` ran a
+# dependency-state check and tried to reinstall; with
+# confirm-modules-purge ignored, that reinstall stopped to ask before
+# removing node_modules. husky gives a hook no TTY, so the prompt could
+# never be answered and the pre-commit hook died on
+# ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY.
+#
+# Installing is an explicit step. A script run — especially one inside a
+# git hook or a CI job — must not mutate node_modules as a side effect,
+# and must never block on a prompt nobody can see.
+verifyDepsBeforeRun: false
+confirmModulesPurge: false
+
+# The other two match pnpm 11's own defaults (verified: pre/post scripts
+# fire and peers auto-install with no config present), so these are
+# declarations of intent rather than behaviour changes. Stated here so a
+# future default flip is a visible diff instead of a silent one.
+autoInstallPeers: true
+enablePrePostScripts: true
+
 # Dependency version overrides. pnpm 10+/11 reads these from the workspace
 # file (not package.json `pnpm.overrides`).
 overrides:
