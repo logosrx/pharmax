@@ -24,9 +24,13 @@ import { buildVialBarcodeValue } from "@pharmax/labels";
 
 import {
   CompleteFill,
+  FILL_COMPOUND_BUD_EXPIRED,
+  FILL_COMPOUND_QUALITY_FAILED,
   FILL_LABEL_PRINT_NOT_COMPLETE,
   FILL_LOT_NOT_ASSIGNED,
+  FILL_SCAN_COMPOUND_LOT_UNEXPECTED,
   FILL_SCAN_LOT_MISMATCH,
+  FILL_SCAN_LOT_SCAN_REQUIRED,
 } from "./complete-fill.js";
 import { FILL_WRONG_STATUS } from "../fill-guards.js";
 
@@ -73,6 +77,13 @@ interface FakeOverrides {
     vialLabelId: string | null;
     lot?: { lotNumber: string; product: { ndc: string } } | null;
     vialLabel?: { activePrintJob: { id: string; status: string } } | null;
+    compoundingRecords?: Array<{
+      id: string;
+      qualityOutcome: string;
+      budAt: Date;
+      formulaCode: string;
+      formulaVersion: number;
+    }>;
   }>;
   completedPrintForLine?: boolean;
   finalBucketFound?: boolean;
@@ -115,6 +126,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
   // job whose status follows `completedPrintForLine`; label-less
   // lines get null (matches what Prisma returns).
   const linesWithVialLabel = lines.map((line) => ({
+    // Real Prisma always returns the selected `compoundingRecords`
+    // relation as an array; default to "no records" for fixtures
+    // that don't care about the compound path.
+    compoundingRecords: [],
     ...line,
     vialLabel:
       line.vialLabel !== undefined
@@ -515,5 +530,211 @@ describe("CompleteFill — prerequisites", () => {
       ).rejects.toMatchObject({ code: FINAL_BUCKET_NOT_CONFIGURED });
     });
     expect(callsOf(fake.calls, "order", "update")).toHaveLength(0);
+  });
+});
+
+// ADR-0035 slice 4: patient-specific compounded preps have no
+// finished-goods lot — the latest compounding record for the line is
+// the physical-verification anchor.
+describe("CompleteFill — compound-prep lines (no finished-goods lot)", () => {
+  const CR_ID = "00000000-0000-4000-8000-00000000c001";
+  const FUTURE_BUD = new Date("2099-01-01T00:00:00.000Z");
+  const PAST_BUD = new Date("2020-01-01T00:00:00.000Z");
+
+  function compoundLine(
+    overrides: {
+      qualityOutcome?: string;
+      budAt?: Date;
+      records?: Array<{
+        id: string;
+        qualityOutcome: string;
+        budAt: Date;
+        formulaCode: string;
+        formulaVersion: number;
+      }>;
+    } = {}
+  ) {
+    return {
+      id: ORDER_LINE_ID,
+      lotId: null,
+      vialLabelId: VIAL_LABEL_ID,
+      lot: null,
+      compoundingRecords: overrides.records ?? [
+        {
+          id: CR_ID,
+          qualityOutcome: overrides.qualityOutcome ?? "PASS",
+          budAt: overrides.budAt ?? FUTURE_BUD,
+          formulaCode: "MAGIC-MOUTHWASH",
+          formulaVersion: 2,
+        },
+      ],
+    };
+  }
+
+  function compoundScans(): Array<{ orderLineId: string; vialLabelScan: string }> {
+    return [
+      {
+        orderLineId: ORDER_LINE_ID,
+        vialLabelScan: buildVialBarcodeValue(ORDER_LINE_ID),
+      },
+    ];
+  }
+
+  it("completes with a vial-label-only scan when the latest record is PASS", async () => {
+    const fake = buildPrismaFake({ lines: [compoundLine()] });
+    configureBus(fake.client);
+
+    const out = await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        CompleteFill,
+        { orderId: ORDER_ID, lineScans: compoundScans() },
+        { idempotencyKey: "compound-complete-1" }
+      )
+    );
+
+    expect(out).toMatchObject({ currentStatus: "FILL_COMPLETED_READY_FOR_FINAL" });
+
+    const auditData = (
+      callsOf(fake.calls, "auditLog", "create")[0]!.args as {
+        data: { metadata: Record<string, unknown> };
+      }
+    ).data;
+    expect(auditData.metadata).toMatchObject({ compoundLineCount: 1 });
+  });
+
+  it("rejects when the latest record is a quality FAIL", async () => {
+    const fake = buildPrismaFake({
+      lines: [compoundLine({ qualityOutcome: "FAIL" })],
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(
+          CompleteFill,
+          { orderId: ORDER_ID, lineScans: compoundScans() },
+          { idempotencyKey: "k" }
+        )
+      ).rejects.toMatchObject({ code: FILL_COMPOUND_QUALITY_FAILED });
+    });
+    expect(callsOf(fake.calls, "order", "update")).toHaveLength(0);
+  });
+
+  it("rejects when the preparation is past its beyond-use date", async () => {
+    const fake = buildPrismaFake({ lines: [compoundLine({ budAt: PAST_BUD })] });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(
+          CompleteFill,
+          { orderId: ORDER_ID, lineScans: compoundScans() },
+          { idempotencyKey: "k" }
+        )
+      ).rejects.toMatchObject({ code: FILL_COMPOUND_BUD_EXPIRED });
+    });
+  });
+
+  it("hard-stops when a lot barcode is scanned for a compound line", async () => {
+    const fake = buildPrismaFake({ lines: [compoundLine()] });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(
+          CompleteFill,
+          {
+            orderId: ORDER_ID,
+            lineScans: [
+              {
+                orderLineId: ORDER_LINE_ID,
+                lotScan: "(10)LOT-A1",
+                vialLabelScan: buildVialBarcodeValue(ORDER_LINE_ID),
+              },
+            ],
+          },
+          { idempotencyKey: "k" }
+        )
+      ).rejects.toMatchObject({ code: FILL_SCAN_COMPOUND_LOT_UNEXPECTED });
+    });
+  });
+
+  it("rejects a stock line whose lot scan is missing", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(
+          CompleteFill,
+          {
+            orderId: ORDER_ID,
+            lineScans: [
+              {
+                orderLineId: ORDER_LINE_ID,
+                vialLabelScan: buildVialBarcodeValue(ORDER_LINE_ID),
+              },
+            ],
+          },
+          { idempotencyKey: "k" }
+        )
+      ).rejects.toMatchObject({ code: FILL_SCAN_LOT_SCAN_REQUIRED });
+    });
+  });
+
+  it("a line with neither lot nor record still fails with FILL_LOT_NOT_ASSIGNED", async () => {
+    const fake = buildPrismaFake({
+      lines: [
+        {
+          id: ORDER_LINE_ID,
+          lotId: null,
+          vialLabelId: VIAL_LABEL_ID,
+          lot: null,
+          compoundingRecords: [],
+        },
+      ],
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(
+          CompleteFill,
+          { orderId: ORDER_ID, lineScans: compoundScans() },
+          { idempotencyKey: "k" }
+        )
+      ).rejects.toMatchObject({ code: FILL_LOT_NOT_ASSIGNED });
+    });
+  });
+
+  it("FAIL followed by a re-prep PASS completes (latest record wins)", async () => {
+    const fake = buildPrismaFake({
+      lines: [
+        compoundLine({
+          // The handler takes the latest record (query orders by
+          // preparedAt desc, take 1) — the fake returns exactly what
+          // the query would: the newest row only.
+          records: [
+            {
+              id: CR_ID,
+              qualityOutcome: "PASS",
+              budAt: FUTURE_BUD,
+              formulaCode: "MAGIC-MOUTHWASH",
+              formulaVersion: 3,
+            },
+          ],
+        }),
+      ],
+    });
+    configureBus(fake.client);
+
+    const out = await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        CompleteFill,
+        { orderId: ORDER_ID, lineScans: compoundScans() },
+        { idempotencyKey: "compound-reprep-1" }
+      )
+    );
+    expect(out).toMatchObject({ currentStatus: "FILL_COMPLETED_READY_FOR_FINAL" });
   });
 });

@@ -1,14 +1,17 @@
 import { defineCommand, ORDER_VERSION_MISMATCH } from "@pharmax/command-bus";
-import { OrderStatus, PrintJobStatus } from "@pharmax/database";
+import { CompoundingQualityOutcome, OrderStatus, PrintJobStatus } from "@pharmax/database";
 import {
+  FILL_SCAN_COMPOUND_LOT_UNEXPECTED,
   FILL_SCAN_DUPLICATE_LINE,
   FILL_SCAN_LINE_COUNT_MISMATCH,
   FILL_SCAN_LOT_MISMATCH,
+  FILL_SCAN_LOT_SCAN_REQUIRED,
   FILL_SCAN_NDC_MISMATCH,
   FILL_SCAN_PARSE_FAILED,
   FILL_SCAN_UNKNOWN_LINE,
   FILL_SCAN_VIAL_LABEL_MISMATCH,
   validateFillCompletionScans,
+  type FillLineScanExpectation,
 } from "@pharmax/scan";
 import { FINAL_BUCKET_NOT_CONFIGURED } from "@pharmax/verification";
 import { errors } from "@pharmax/platform-core";
@@ -37,11 +40,18 @@ import {
 
 export const FILL_LOT_NOT_ASSIGNED = "FILL_LOT_NOT_ASSIGNED";
 export const FILL_LABEL_PRINT_NOT_COMPLETE = "FILL_LABEL_PRINT_NOT_COMPLETE";
+// Compound-line guards (ADR-0035 slice 4): a patient-specific prep
+// has no finished-goods lot — the latest compounding record for the
+// line is its physical-verification anchor.
+export const FILL_COMPOUND_QUALITY_FAILED = "FILL_COMPOUND_QUALITY_FAILED";
+export const FILL_COMPOUND_BUD_EXPIRED = "FILL_COMPOUND_BUD_EXPIRED";
 
 export {
+  FILL_SCAN_COMPOUND_LOT_UNEXPECTED,
   FILL_SCAN_DUPLICATE_LINE,
   FILL_SCAN_LINE_COUNT_MISMATCH,
   FILL_SCAN_LOT_MISMATCH,
+  FILL_SCAN_LOT_SCAN_REQUIRED,
   FILL_SCAN_NDC_MISMATCH,
   FILL_SCAN_PARSE_FAILED,
   FILL_SCAN_UNKNOWN_LINE,
@@ -51,7 +61,10 @@ export {
 const lineScanSchema = z
   .object({
     orderLineId: z.uuid(),
-    lotScan: z.string().trim().min(1).max(500),
+    // Required for stock lines, forbidden for compound-prep lines —
+    // enforced against the loaded lines in the handler, where the
+    // line kind is known.
+    lotScan: z.string().trim().min(1).max(500).optional(),
     vialLabelScan: z.string().trim().min(1).max(500),
   })
   .strict();
@@ -131,24 +144,87 @@ export const CompleteFill = defineCommand<CompleteFillInput, CompleteFillOutput>
             product: { select: { ndc: true } },
           },
         },
+        // The LATEST compounding record for the line (ADR-0035
+        // slice 4). When no lot is assigned, this record is the
+        // line's physical-verification anchor: latest wins, so a
+        // FAIL → re-prep PASS completes and a PASS → FAIL re-check
+        // blocks.
+        compoundingRecords: {
+          orderBy: { preparedAt: "desc" },
+          take: 1,
+          select: {
+            id: true,
+            qualityOutcome: true,
+            budAt: true,
+            formulaCode: true,
+            formulaVersion: true,
+          },
+        },
       },
     });
 
-    const scanValidation = validateFillCompletionScans({
-      expectations: lines.map((line) => {
-        if (line.lot === null) {
-          throw new errors.ConflictError({
-            code: FILL_LOT_NOT_ASSIGNED,
-            message: "Every order line must have an assigned lot before completing fill.",
-            metadata: { orderId: target.id, orderLineId: line.id },
-          });
-        }
+    const now = clock.now();
+
+    // ---- Per-line kind resolution + compound-prep guards ----------
+    //
+    // A line with an assigned lot always follows the stock rules —
+    // batch-prepared compounds keep their finished-goods lot path.
+    // A line without a lot is a compound-prep line only when a
+    // compounding record exists; otherwise the classic "assign a lot
+    // first" conflict stands.
+    const expectations: FillLineScanExpectation[] = lines.map((line) => {
+      if (line.lot !== null) {
         return {
           orderLineId: line.id,
+          kind: "STOCK" as const,
           expectedLotNumber: line.lot.lotNumber,
           expectedNdc: line.lot.product.ndc,
         };
-      }),
+      }
+
+      const latestRecord = line.compoundingRecords[0];
+      if (latestRecord === undefined) {
+        throw new errors.ConflictError({
+          code: FILL_LOT_NOT_ASSIGNED,
+          message:
+            "Every order line must have an assigned lot — or a recorded compounding preparation — before completing fill.",
+          metadata: { orderId: target.id, orderLineId: line.id },
+        });
+      }
+      if (latestRecord.qualityOutcome !== CompoundingQualityOutcome.PASS) {
+        throw new errors.ConflictError({
+          code: FILL_COMPOUND_QUALITY_FAILED,
+          message:
+            "The latest compounding record for this line is a quality FAIL. Re-prepare and record a passing preparation before completing fill.",
+          metadata: {
+            orderId: target.id,
+            orderLineId: line.id,
+            compoundingRecordId: latestRecord.id,
+            formulaCode: latestRecord.formulaCode,
+            formulaVersion: latestRecord.formulaVersion,
+          },
+        });
+      }
+      // The prep-side mirror of "no expired lot assignment": a
+      // preparation past its beyond-use date cannot ship.
+      if (latestRecord.budAt.getTime() <= now.getTime()) {
+        throw new errors.ConflictError({
+          code: FILL_COMPOUND_BUD_EXPIRED,
+          message:
+            "The compounded preparation for this line is past its beyond-use date. Re-prepare before completing fill.",
+          metadata: {
+            orderId: target.id,
+            orderLineId: line.id,
+            compoundingRecordId: latestRecord.id,
+            budAt: latestRecord.budAt.toISOString(),
+          },
+        });
+      }
+      return { orderLineId: line.id, kind: "COMPOUND" as const };
+    });
+
+    const scanValidation = validateFillCompletionScans({
+      expectations,
       lineScans: input.lineScans,
     });
 
@@ -161,13 +237,6 @@ export const CompleteFill = defineCommand<CompleteFillInput, CompleteFillOutput>
     }
 
     for (const line of lines) {
-      if (line.lotId === null) {
-        throw new errors.ConflictError({
-          code: FILL_LOT_NOT_ASSIGNED,
-          message: "Every order line must have an assigned lot before completing fill.",
-          metadata: { orderId: target.id, orderLineId: line.id },
-        });
-      }
       if (line.vialLabelId === null || line.vialLabel === null) {
         throw new errors.ConflictError({
           code: FILL_LABEL_PRINT_NOT_COMPLETE,
@@ -256,8 +325,6 @@ export const CompleteFill = defineCommand<CompleteFillInput, CompleteFillOutput>
       },
     });
 
-    const now = clock.now();
-
     await applyCommandStageIntervalTransition({
       commandName: "CompleteFill",
       tx,
@@ -294,6 +361,7 @@ export const CompleteFill = defineCommand<CompleteFillInput, CompleteFillOutput>
           fillTechUserId: ctx.actor.userId,
           lineCount: lines.length,
           scannedLineCount: input.lineScans.length,
+          compoundLineCount: expectations.filter((e) => e.kind === "COMPOUND").length,
           commandLogId,
         },
       },

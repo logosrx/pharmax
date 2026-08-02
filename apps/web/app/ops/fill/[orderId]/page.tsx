@@ -197,6 +197,15 @@ export default async function FillWorkbenchPage({
           {workbench.lines.map((line, idx) => {
             const hasLot = line.assignedLot !== null;
             const hasLabel = line.vialLabel !== null;
+            // Compound-prep path (ADR-0035 slice 4): no finished-goods
+            // lot; the latest passing, unexpired compounding record is
+            // the line's dispensing anchor.
+            const compoundReady =
+              !hasLot &&
+              line.compoundPrep !== null &&
+              line.compoundPrep.qualityOutcome === "PASS" &&
+              !line.compoundPrep.budExpired;
+            const compoundBlocked = !hasLot && line.compoundPrep !== null && !compoundReady;
             return (
               <Card key={line.orderLineId}>
                 <CardHeader>
@@ -212,9 +221,17 @@ export default async function FillWorkbenchPage({
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge tone={hasLot ? "success" : "neutral"}>
-                      {hasLot ? "lot ✓" : "no lot"}
-                    </Badge>
+                    {compoundReady ? (
+                      <Badge tone="success">compound ✓</Badge>
+                    ) : compoundBlocked ? (
+                      <Badge tone="danger">
+                        {line.compoundPrep!.budExpired ? "BUD expired" : "prep FAIL"}
+                      </Badge>
+                    ) : (
+                      <Badge tone={hasLot ? "success" : "neutral"}>
+                        {hasLot ? "lot ✓" : "no lot"}
+                      </Badge>
+                    )}
                     <Badge tone={hasLabel ? "success" : "neutral"}>
                       {hasLabel ? "label ✓" : "no label"}
                     </Badge>
@@ -224,12 +241,48 @@ export default async function FillWorkbenchPage({
                   <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
                     <div className="space-y-2">
                       <div className="text-xs font-medium uppercase tracking-wide text-subtle">
-                        Lot
+                        {line.compoundPrep !== null && !hasLot ? "Compounded preparation" : "Lot"}
                       </div>
                       {hasLot ? (
                         <div className="text-sm text-fg">
                           Assigned ·{" "}
                           <span className="font-mono">{line.assignedLot!.lotNumber}</span>
+                        </div>
+                      ) : line.compoundPrep !== null ? (
+                        <div className="space-y-1 text-sm">
+                          <div className="text-fg">
+                            <span className="font-mono">{line.compoundPrep.formulaCode}</span> v
+                            {line.compoundPrep.formulaVersion} ·{" "}
+                            <span
+                              className={
+                                line.compoundPrep.qualityOutcome === "PASS"
+                                  ? "text-tone-success"
+                                  : "text-tone-danger"
+                              }
+                            >
+                              {line.compoundPrep.qualityOutcome}
+                            </span>
+                          </div>
+                          <div
+                            className={
+                              line.compoundPrep.budExpired
+                                ? "font-mono text-xs text-tone-danger"
+                                : "font-mono text-xs text-muted"
+                            }
+                          >
+                            BUD {formatDate(line.compoundPrep.budAt)}
+                            {line.compoundPrep.budExpired ? " — expired, re-prepare" : ""}
+                          </div>
+                          {compoundBlocked ? (
+                            <p className="text-xs text-tone-danger">
+                              Record a passing preparation before this line can complete.
+                            </p>
+                          ) : (
+                            <p className="text-xs text-subtle">
+                              Patient-specific prep — no stock lot; the vial label scan is the
+                              physical check.
+                            </p>
+                          )}
                         </div>
                       ) : isMine && canAssign && inProgress ? (
                         line.candidateLots.length === 0 ? (
@@ -272,8 +325,10 @@ export default async function FillWorkbenchPage({
                           </code>
                         </div>
                       ) : isMine && canPrint && inProgress ? (
-                        !hasLot ? (
-                          <p className="text-sm text-subtle">Assign a lot first.</p>
+                        !hasLot && !compoundReady ? (
+                          <p className="text-sm text-subtle">
+                            Assign a lot — or record a passing compounding preparation — first.
+                          </p>
                         ) : workbench.availablePrinters.length === 0 ? (
                           <p className="text-sm text-tone-warning">
                             No active label printers at this site.
@@ -320,8 +375,8 @@ export default async function FillWorkbenchPage({
         <Section title="Scan to complete">
           {!workbench.readyForCompletionScans ? (
             <Banner tone="neutral">
-              Every line needs an assigned lot AND a printed vial label before you can scan to
-              complete.
+              Every line needs an assigned lot (or a passing compounded preparation) AND a printed
+              vial label before you can scan to complete.
             </Banner>
           ) : (
             <Card>
@@ -330,43 +385,56 @@ export default async function FillWorkbenchPage({
                   action={`/api/ops/orders/${workbench.orderId}/complete-fill`}
                   className="space-y-4"
                 >
-                  {workbench.lines.map((line, idx) => (
-                    <div
-                      key={line.orderLineId}
-                      className="space-y-2 border-b border-line pb-4 last:border-b-0 last:pb-0"
-                    >
-                      <div className="text-xs text-subtle">
-                        Line {idx + 1} · {line.drugName}
+                  {workbench.lines.map((line, idx) => {
+                    const isCompoundLine = line.assignedLot === null;
+                    return (
+                      <div
+                        key={line.orderLineId}
+                        className="space-y-2 border-b border-line pb-4 last:border-b-0 last:pb-0"
+                      >
+                        <div className="text-xs text-subtle">
+                          Line {idx + 1} · {line.drugName}
+                          {isCompoundLine ? " · compounded prep" : ""}
+                        </div>
+                        <input
+                          type="hidden"
+                          name={`lineScans[${idx}][orderLineId]`}
+                          value={line.orderLineId}
+                        />
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          {isCompoundLine ? (
+                            <Field label="Lot scan">
+                              <p className="text-sm text-subtle">
+                                None — patient-specific prep has no stock lot. The vial label is the
+                                physical check.
+                              </p>
+                            </Field>
+                          ) : (
+                            <Field label="Lot scan">
+                              <Input
+                                type="text"
+                                name={`lineScans[${idx}][lotScan]`}
+                                autoComplete="off"
+                                required
+                                className="font-mono"
+                                placeholder="(scan lot barcode)"
+                              />
+                            </Field>
+                          )}
+                          <Field label="Vial label scan">
+                            <Input
+                              type="text"
+                              name={`lineScans[${idx}][vialLabelScan]`}
+                              autoComplete="off"
+                              required
+                              className="font-mono"
+                              placeholder="(scan printed vial label)"
+                            />
+                          </Field>
+                        </div>
                       </div>
-                      <input
-                        type="hidden"
-                        name={`lineScans[${idx}][orderLineId]`}
-                        value={line.orderLineId}
-                      />
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <Field label="Lot scan">
-                          <Input
-                            type="text"
-                            name={`lineScans[${idx}][lotScan]`}
-                            autoComplete="off"
-                            required
-                            className="font-mono"
-                            placeholder="(scan lot barcode)"
-                          />
-                        </Field>
-                        <Field label="Vial label scan">
-                          <Input
-                            type="text"
-                            name={`lineScans[${idx}][vialLabelScan]`}
-                            autoComplete="off"
-                            required
-                            className="font-mono"
-                            placeholder="(scan printed vial label)"
-                          />
-                        </Field>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   <SubmitButton variant="go" icon="check">
                     Complete fill · scan-validate all lines
                   </SubmitButton>

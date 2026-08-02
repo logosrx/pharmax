@@ -34,6 +34,7 @@ import "server-only";
 
 import {
   readInOrgScope,
+  CompoundingQualityOutcome,
   LabelPrinterStatus,
   LotStatus,
   WorkstationStatus,
@@ -60,6 +61,16 @@ export interface FillWorkbenchWorkstation {
   readonly name: string;
 }
 
+export interface FillWorkbenchCompoundPrep {
+  readonly compoundingRecordId: string;
+  readonly formulaCode: string;
+  readonly formulaVersion: number;
+  readonly qualityOutcome: CompoundingQualityOutcome;
+  readonly budAt: Date;
+  /** True when the beyond-use date is already past (completion-blocked). */
+  readonly budExpired: boolean;
+}
+
 export interface FillWorkbenchLine {
   readonly orderLineId: string;
   readonly prescriptionId: string;
@@ -72,6 +83,13 @@ export interface FillWorkbenchLine {
     readonly lotId: string;
     readonly lotNumber: string;
   } | null;
+  /**
+   * Latest compounding record for the line (ADR-0035 slice 4). When
+   * no lot is assigned and this is a passing, unexpired record, the
+   * line completes as a patient-specific compound prep — vial-label
+   * scan only, no lot scan.
+   */
+  readonly compoundPrep: FillWorkbenchCompoundPrep | null;
   readonly vialLabel: {
     readonly vialLabelId: string;
     readonly barcodeValue: string;
@@ -115,6 +133,17 @@ export async function getFillWorkbench(input: {
             id: true,
             quantityToFill: true,
             lot: { select: { id: true, lotNumber: true } },
+            compoundingRecords: {
+              orderBy: { preparedAt: "desc" },
+              take: 1,
+              select: {
+                id: true,
+                formulaCode: true,
+                formulaVersion: true,
+                qualityOutcome: true,
+                budAt: true,
+              },
+            },
             vialLabel: {
               select: {
                 id: true,
@@ -221,6 +250,17 @@ export async function getFillWorkbench(input: {
           line.lot !== null
             ? Object.freeze({ lotId: line.lot.id, lotNumber: line.lot.lotNumber })
             : null,
+        compoundPrep:
+          line.compoundingRecords[0] !== undefined
+            ? Object.freeze({
+                compoundingRecordId: line.compoundingRecords[0].id,
+                formulaCode: line.compoundingRecords[0].formulaCode,
+                formulaVersion: line.compoundingRecords[0].formulaVersion,
+                qualityOutcome: line.compoundingRecords[0].qualityOutcome,
+                budAt: line.compoundingRecords[0].budAt,
+                budExpired: line.compoundingRecords[0].budAt.getTime() <= todayUtc.getTime(),
+              })
+            : null,
         vialLabel:
           line.vialLabel !== null
             ? Object.freeze({
@@ -233,9 +273,19 @@ export async function getFillWorkbench(input: {
       })
     );
 
+    // A line is dispensable when it has an assigned lot (stock path)
+    // OR a passing, unexpired compounding record (compound path,
+    // ADR-0035 slice 4). Both paths still need a printed vial label.
     const readyForCompletionScans =
       lines.length > 0 &&
-      lines.every((line) => line.assignedLot !== null && line.vialLabel !== null);
+      lines.every(
+        (line) =>
+          (line.assignedLot !== null ||
+            (line.compoundPrep !== null &&
+              line.compoundPrep.qualityOutcome === CompoundingQualityOutcome.PASS &&
+              !line.compoundPrep.budExpired)) &&
+          line.vialLabel !== null
+      );
 
     return Object.freeze({
       orderId: order.id,

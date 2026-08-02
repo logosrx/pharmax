@@ -32,7 +32,8 @@ interface RouteParams {
 
 interface ParsedLineScan {
   readonly orderLineId: string;
-  readonly lotScan: string;
+  /** Absent for compound-prep lines (no finished-goods lot to scan). */
+  readonly lotScan?: string;
   readonly vialLabelScan: string;
 }
 
@@ -71,19 +72,18 @@ function parseLineScans(
   const out: ParsedLineScan[] = [];
   for (const idx of indices) {
     const bucket = buckets.get(idx)!;
-    if (
-      bucket.orderLineId === undefined ||
-      bucket.lotScan === undefined ||
-      bucket.vialLabelScan === undefined
-    ) {
+    // lotScan is intentionally optional: compound-prep lines (ADR-0035
+    // slice 4) have no finished-goods lot — the command enforces
+    // required/forbidden per line kind.
+    if (bucket.orderLineId === undefined || bucket.vialLabelScan === undefined) {
       return {
-        error: `Line ${idx + 1}: orderLineId, lotScan, and vialLabelScan are all required.`,
+        error: `Line ${idx + 1}: orderLineId and vialLabelScan are required.`,
       };
     }
     out.push(
       Object.freeze({
         orderLineId: bucket.orderLineId,
-        lotScan: bucket.lotScan,
+        ...(bucket.lotScan !== undefined ? { lotScan: bucket.lotScan } : {}),
         vialLabelScan: bucket.vialLabelScan,
       })
     );
