@@ -822,6 +822,8 @@ model Organization {
   compoundingRecordIngredients CompoundingRecordIngredient[]
   dscsaTransactions            DscsaTransaction[]
 
+  controlledSubstanceDispensings ControlledSubstanceDispensing[]
+
   @@map("organization")
 }
 
@@ -885,18 +887,20 @@ model Clinic {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  siteLinks                ClinicSite[]
-  buckets                  Bucket[]
-  userRoles                UserRole[]
-  stripeCustomer           StripeCustomer?
-  invoices                 Invoice[]
-  invoiceLines             InvoiceLine[]
-  pricingRules             PricingRule[]
-  payments                 Payment[]
-  patients                 Patient[]
-  prescriptions            Prescription[]
-  orders                   Order[]
-  orderLines               OrderLine[]
+  siteLinks                      ClinicSite[]
+  buckets                        Bucket[]
+  userRoles                      UserRole[]
+  stripeCustomer                 StripeCustomer?
+  invoices                       Invoice[]
+  invoiceLines                   InvoiceLine[]
+  pricingRules                   PricingRule[]
+  payments                       Payment[]
+  patients                       Patient[]
+  prescriptions                  Prescription[]
+  orders                         Order[]
+  orderLines                     OrderLine[]
+  controlledSubstanceDispensings ControlledSubstanceDispensing[]
+
   packagePhotos            PackagePhoto[]
   packagePhotoUploadTokens PackagePhotoUploadToken[]
   workflowPolicyOverlays   WorkflowPolicyOverlay[]
@@ -1092,6 +1096,8 @@ model User {
   compoundFormulasAuthored    CompoundFormula[]   @relation("CompoundFormulaAuthor")
   compoundingRecordsPrepared  CompoundingRecord[] @relation("CompoundingRecordPreparer")
   dscsaTransactionsReceived   DscsaTransaction[]  @relation("DscsaTransactionReceiver")
+
+  controlledSubstancesDispensed ControlledSubstanceDispensing[]
 
   @@unique([organizationId, email])
   @@index([organizationId, status])
@@ -1708,6 +1714,8 @@ model CommandLog {
   breakGlassActions            BreakGlassAction[]
   compoundingRecords           CompoundingRecord[]
   dscsaTransactions            DscsaTransaction[]
+
+  controlledSubstanceDispensings ControlledSubstanceDispensing[]
 
   @@unique([organizationId, commandName, idempotencyKey])
   @@index([organizationId, status])
@@ -3029,6 +3037,23 @@ model Prescription {
   // Dispense As Written code (0–9; 0 = generic OK).
   daw                 Int      @default(0)
 
+  // --- Controlled substances (ADR-0037 commitment 1) ---
+
+  // Snapshot of the drug's DEA schedule AS OF issuance, copied from
+  // `product.controlledSubstanceSchedule`. Denormalized deliberately:
+  // rescheduling a substance must not retroactively change the rules
+  // that governed an already-written prescription, and the Part 1306
+  // evaluators must never need a join to decide whether a fill is
+  // lawful.
+  controlledSubstanceSchedule ControlledSubstanceSchedule @default(NON_CONTROLLED)
+
+  // Earliest date a pharmacy may fill, per the prescriber's written
+  // instruction on a multiple-prescription Schedule II sequence
+  // (21 CFR 1306.12(b)(1)(ii)). 21 CFR 1306.14(e) makes this a hard
+  // bar: "no pharmacist may fill the prescription before that date."
+  // NULL = fillable immediately.
+  earliestFillDate DateTime? @db.Date
+
   // --- Encrypted PHI ---
   sigEnc              Json
   noteToPharmacistEnc Json?
@@ -3040,7 +3065,8 @@ model Prescription {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orderLines OrderLine[]
+  orderLines                     OrderLine[]
+  controlledSubstanceDispensings ControlledSubstanceDispensing[]
 
   @@unique([organizationId, clinicId, rxNumber])
   @@index([organizationId, patientId])
@@ -3048,6 +3074,9 @@ model Prescription {
   @@index([organizationId, rxNumberBi])
   @@index([organizationId, drugNdc])
   @@index([organizationId, status, expiresAt])
+  // Controlled-substance recordkeeping and reporting (21 CFR 1304):
+  // "every CS prescription in this org, by schedule, over a period".
+  @@index([organizationId, controlledSubstanceSchedule, originalDateWritten])
   @@map("prescription")
 }
 
@@ -3143,7 +3172,8 @@ model Order {
   // The queue-shaped index. Order matters: scanner filters by
   // bucket+status, sorts by priority desc + SLA asc + receivedAt
   // asc. Postgres can serve this from one btree.
-  compoundingRecords CompoundingRecord[]
+  compoundingRecords             CompoundingRecord[]
+  controlledSubstanceDispensings ControlledSubstanceDispensing[]
 
   @@index([organizationId, currentBucketId, currentStatus, priority, slaDeadlineAt, receivedAt])
   // "What is this user currently working on?"
@@ -3189,9 +3219,10 @@ model OrderLine {
   printJobs             PrintJob[]
   vialLabelRecord       VialLabel?             @relation("VialLabelOrderLine")
 
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-  compoundingRecords CompoundingRecord[]
+  createdAt                     DateTime                       @default(now())
+  updatedAt                     DateTime                       @updatedAt
+  compoundingRecords            CompoundingRecord[]
+  controlledSubstanceDispensing ControlledSubstanceDispensing?
 
   @@index([orderId])
   @@index([prescriptionId])
@@ -3789,6 +3820,14 @@ model Product {
   name     String
   strength String?
   form     String?
+
+  // DEA schedule for this NDC (21 CFR part 1308). The catalog is the
+  // source of truth; `prescription.controlledSubstanceSchedule` is a
+  // point-in-time SNAPSHOT taken at prescription creation, because a
+  // substance can be rescheduled and an already-written prescription
+  // must continue to be governed by the schedule in force when it was
+  // issued.
+  controlledSubstanceSchedule ControlledSubstanceSchedule @default(NON_CONTROLLED)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4600,6 +4639,82 @@ model WebhookDelivery {
   @@index([organizationId, createdAt(sort: Desc)])
   @@index([organizationId, eventType, createdAt(sort: Desc)])
   @@map("webhook_delivery")
+}
+
+// DEA controlled-substance schedule (ADR-0037 commitment 1; 21 CFR
+// part 1308). Drives the Part 1306 dispensing rules in
+// `@pharmax/controlled-substances`.
+//
+// Schedule I is deliberately ABSENT. Schedule I substances have no
+// accepted medical use and cannot be the subject of a prescription
+// (21 CFR 1308.11), so a dispensable Pharmax record can never carry
+// that value. Modelling it would create a state the workflow must
+// then defend against everywhere for no legitimate case.
+enum ControlledSubstanceSchedule {
+  NON_CONTROLLED
+  CII
+  CIII
+  CIV
+  CV
+}
+
+// Basis on which a controlled substance was partially dispensed.
+// Mirrors `PartialFillBasis` in `@pharmax/controlled-substances`; the
+// Schedule II bases are distinct members rather than one PARTIAL flag
+// because each carries a DIFFERENT completion window (72 hours /
+// 30 days / 60 days — 21 CFR 1306.13(a), (b)(2), (c)).
+enum ControlledSubstancePartialFillBasis {
+  PHARMACIST_SUPPLY_SHORTFALL
+  PATIENT_OR_PRESCRIBER_REQUEST
+  LTCF_OR_TERMINALLY_ILL
+  SCHEDULE_III_TO_V
+}
+
+// No PHI: ids, quantities, dates, and the schedule only. Patient
+// identity is reachable by join under RLS, never stored in the row.
+model ControlledSubstanceDispensing {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  clinicId       String       @db.Uuid
+  clinic         Clinic       @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  prescriptionId String       @db.Uuid
+  prescription   Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Restrict)
+  orderId        String       @db.Uuid
+  order          Order        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  // One dispensing per order line. The unique is the structural guard
+  // against double-counting: if an order is reworked and `CompleteFill`
+  // runs again on the same line, the drug was still only dispensed
+  // once, and a second row would fabricate a refill that never
+  // happened.
+  orderLineId String    @unique @db.Uuid
+  orderLine   OrderLine @relation(fields: [orderLineId], references: [id], onDelete: Restrict)
+
+  // Snapshot of the prescription's schedule at the moment of
+  // dispensing, so a later rescheduling cannot rewrite history.
+  schedule          ControlledSubstanceSchedule
+  fillNumber        Int
+  quantityDispensed Decimal                              @db.Decimal(18, 4)
+  partialFillBasis  ControlledSubstancePartialFillBasis?
+
+  dispensedAt       DateTime
+  dispensedByUserId String   @db.Uuid
+  dispensedBy       User     @relation(fields: [dispensedByUserId], references: [id], onDelete: Restrict)
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  // The evaluator's read path: "this prescription's fill history, in
+  // fill order".
+  @@index([organizationId, prescriptionId, fillNumber])
+  // 21 CFR 1304 reporting: "controlled substances dispensed by this
+  // org, by schedule, over a period".
+  @@index([organizationId, schedule, dispensedAt])
+  @@map("controlled_substance_dispensing")
 }
 
 enum CompoundFormulaStatus {
