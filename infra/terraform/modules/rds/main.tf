@@ -180,9 +180,25 @@ resource "aws_rds_cluster_parameter_group" "this" {
   # night* — the same cry-wolf pattern that let a month of schema drift go
   # unnoticed. Declaring the value AWS actually accepts makes the setting
   # real and silences the false alarm.
+  # apply_method is pinned because RDS *ignores a write that sets a parameter
+  # to its own engine default*, and 1 is the default here. The 2026-08-02
+  # apply went through cleanly and the parameter still came back
+  # Source = "system", ApplyMethod = "pending-reboot" — AWS had dropped it.
+  # Every other parameter in this group differs from its default
+  # (rds.force_ssl 1 vs 0, log_statement ddl vs none, statement_timeout 30000
+  # vs 0) which is exactly why all six are stored as Source = "user".
+  #
+  # Left unpinned, Terraform defaults this to "immediate", never matches the
+  # "pending-reboot" AWS reports for a default-sourced parameter, and plans
+  # the same one-line change forever. Pinning it makes the plan honest: this
+  # block asserts the default rather than overriding it. If AWS ever changes
+  # the default, the value will then differ, the write will stick, and it will
+  # be stored with the pending-reboot we ask for here — still no perpetual
+  # diff.
   parameter {
-    name  = "track_io_timing"
-    value = "1"
+    name         = "track_io_timing"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   parameter {
