@@ -3,12 +3,15 @@
 // Asserts:
 //   - The expected billing.* names are registered.
 //   - Every billing.* event is owned by `billing`.
-//   - Every billing.* event aggregates over `Invoice` or
-//     `PricingRule` (the only billing aggregates in scope).
+//   - Every billing.* event aggregates over `Invoice`, `PricingRule`,
+//     or `Clinic` (clinic credit ledger) — the only billing
+//     aggregates in scope.
 
 import { describe, expect, it } from "vitest";
 
 import {
+  BillingClinicCreditRecordedV1,
+  BillingInvoiceApprovedV1,
   BillingInvoiceCreditedV1,
   BillingInvoiceFinalizedV1,
   BillingInvoiceLineCreatedV1,
@@ -23,6 +26,8 @@ import {
 } from "./index.js";
 
 const ALL = [
+  BillingClinicCreditRecordedV1,
+  BillingInvoiceApprovedV1,
   BillingInvoiceCreditedV1,
   BillingInvoiceFinalizedV1,
   BillingInvoiceLineCreatedV1,
@@ -43,8 +48,8 @@ describe("billing domain barrel", () => {
     }
   });
 
-  it("every billing.* event uses Invoice or PricingRule aggregate", () => {
-    const valid = new Set(["Invoice", "PricingRule"]);
+  it("every billing.* event uses Invoice, PricingRule, or Clinic aggregate", () => {
+    const valid = new Set(["Invoice", "PricingRule", "Clinic"]);
     for (const def of ALL) {
       expect(valid.has(def.aggregateType), `${def.fullName} aggregateType`).toBe(true);
     }

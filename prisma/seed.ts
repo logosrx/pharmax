@@ -207,6 +207,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
   },
   { code: "billing.read", description: "View billing data" },
   {
+    code: "billing.approve_invoice",
+    description:
+      "Approve a reviewed DRAFT invoice, stamping the revision that FinalizeInvoice requires. Lines appended after approval invalidate it (re-review required)",
+  },
+  {
     code: "billing.finalize_invoice",
     description:
       "Finalize a DRAFT invoice (DRAFT → OPEN), locking it for further line appends and triggering downstream Stripe push",
@@ -225,6 +230,16 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     code: "billing.issue_refund",
     description:
       "Issue a Stripe refund against a paid invoice; writes the corresponding negative-amount line on the Pharmax ledger",
+  },
+  {
+    code: "billing.record_manual_payment",
+    description:
+      "Record a settled out-of-band payment (check / ACH / wire / cash) against an OPEN invoice; appends the payment-ledger row and flips the invoice to PAID when fully collected",
+  },
+  {
+    code: "billing.manage_clinic_credit",
+    description:
+      "Grant clinic credit (overpayment excess, goodwill) and apply stored credit to OPEN invoices via the clinic credit ledger",
   },
   { code: "billing.manage", description: "Manage invoices and pricing" },
   { code: "audit.read", description: "Read audit log" },

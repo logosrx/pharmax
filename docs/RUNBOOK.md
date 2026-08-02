@@ -15,17 +15,18 @@ Operational procedures for common incidents and routine maintenance. Each sectio
 7. [Quarterly KMS rotation drill](#quarterly-kms-rotation-drill)
 8. [Rotating a carrier credential](#rotating-a-carrier-credential)
 9. [Replaying a failed Stripe webhook](#replaying-a-failed-stripe-webhook)
-10. [Resending a failed print job](#resending-a-failed-print-job)
-11. [Audit chain integrity check](#audit-chain-integrity-check)
-12. [Outbox drain stuck or backed up](#outbox-drain-stuck-or-backed-up)
-13. [SLA breach storm — emergency bucket walkthrough](#sla-breach-storm--emergency-bucket-walkthrough)
-14. [Migrations: rules of the road](#migrations-rules-of-the-road)
-15. [Re-running a missed Merkle manifest](#re-running-a-missed-merkle-manifest)
-16. [Verifying a Merkle manifest from S3](#verifying-a-merkle-manifest-from-s3)
-17. [Verifying every chain + manifest in a run](#verifying-every-chain--manifest-in-a-run)
-18. [Rotating the Merkle signing key](#rotating-the-merkle-signing-key)
-19. [Object Lock retention extension](#object-lock-retention-extension)
-20. [RLS role cutover](#rls-role-cutover)
+10. [Payment ledger drift](#payment-ledger-drift)
+11. [Resending a failed print job](#resending-a-failed-print-job)
+12. [Audit chain integrity check](#audit-chain-integrity-check)
+13. [Outbox drain stuck or backed up](#outbox-drain-stuck-or-backed-up)
+14. [SLA breach storm — emergency bucket walkthrough](#sla-breach-storm--emergency-bucket-walkthrough)
+15. [Migrations: rules of the road](#migrations-rules-of-the-road)
+16. [Re-running a missed Merkle manifest](#re-running-a-missed-merkle-manifest)
+17. [Verifying a Merkle manifest from S3](#verifying-a-merkle-manifest-from-s3)
+18. [Verifying every chain + manifest in a run](#verifying-every-chain--manifest-in-a-run)
+19. [Rotating the Merkle signing key](#rotating-the-merkle-signing-key)
+20. [Object Lock retention extension](#object-lock-retention-extension)
+21. [RLS role cutover](#rls-role-cutover)
 
 ---
 
@@ -240,6 +241,71 @@ The `stripe_webhook_event` table has columns `status`, `attempts`, `lastError`. 
 4. If the same row fails again, the dispatcher / handler has a real bug. File a ticket and fix forward.
 
 **Never** craft a fake Stripe event and POST it to `/api/webhooks/stripe` — the signature check will reject it, which is the correct behavior. The replay path is via the DB row.
+
+---
+
+## Payment ledger drift
+
+**When:** the `PaymentLedgerDriftDetected` alert fires, or the nightly `payment_ledger_reconciliation.run.complete` log line shows `driftCount > 0`.
+
+The worker's nightly reconciler (03:30 UTC) cross-checks the append-only `payment` ledger against the invoice projection. It is **read-only** — it never repairs anything. The drift kind tells you the remediation path:
+
+| Drift kind                    | Meaning                                                                      | Remediation                                                                                                                                                                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PAYMENT_ROWS_MISSING`        | OPEN or PAID invoice with `amountPaidCents > 0` and zero PAYMENT ledger rows | Expected on invoices paid before the ledger existed. Run `pnpm payments:backfill` (dry-run first, then `--yes`). If the invoice was paid **after** the ledger shipped, treat as a write-path bug.                                      |
+| `PAYMENT_SUM_MISMATCH`        | PAYMENT rows exist but their sum ≠ `amountPaidCents`                         | Write-path bug or out-of-band edit. Financial data-integrity incident — investigate before touching data.                                                                                                                              |
+| `REFUND_LEDGER_EXCEEDS_LINES` | REFUND ledger sum exceeds the `stripe-refund:*` CREDIT-line total            | Should be impossible (every ledger writer also writes the line). Same incident treatment.                                                                                                                                              |
+| `PAYMENT_ON_UNPAID_INVOICE`   | Ledger row references a DRAFT / VOID / UNCOLLECTIBLE invoice                 | Every ledger writer commits its row in the same transaction as a balance mutation on an OPEN or PAID invoice (partial manual payments legitimately leave the invoice OPEN), so this means out-of-band writes. Same incident treatment. |
+
+**Steps:**
+
+1. Get the per-invoice detail. Each drifted invoice is logged individually (capped per org):
+
+   ```
+   # worker logs
+   payment_ledger_reconciliation.drift  { invoiceId, invoiceNumber, driftKind, expectedCents, actualCents }
+   ```
+
+2. Reproduce the figure by hand before concluding anything:
+
+   ```sql
+   SET LOCAL pharmax.system_context = 'on';
+   SELECT i.id, i."invoiceNumber", i.status, i."amountPaidCents",
+          COALESCE(SUM(p."amountCents") FILTER (WHERE p.kind = 'PAYMENT'), 0) AS ledger_paid,
+          COALESCE(SUM(p."amountCents") FILTER (WHERE p.kind = 'REFUND'), 0)  AS ledger_refunded
+   FROM invoice i LEFT JOIN payment p ON p."invoiceId" = i.id
+   WHERE i.id = '...'
+   GROUP BY i.id;
+   ```
+
+3. For `PAYMENT_ROWS_MISSING` on pre-ledger invoices: run the backfill and confirm the next nightly run reports the org clean.
+
+4. For everything else: do **not** hand-edit `payment` or `invoice` rows. The ledger is append-only by design — corrections, if any, are new offsetting rows issued through a command after the root cause is understood. Record the incident per [`INCIDENT_RESPONSE.md`](INCIDENT_RESPONSE.md).
+
+5. `unsettledRefundCents` in the run summary is **not** drift — it is refunds still pending at Stripe (line written, ledger row deferred to settlement). If the same figure persists for days, check for a lost `charge.refunded` webhook (see [Replaying a failed Stripe webhook](#replaying-a-failed-stripe-webhook)).
+
+---
+
+## Invoice auto-finalize (period-boundary cron)
+
+**When:** an invoice didn't finalize after its billing period ended, the `invoice_auto_finalize.awaiting_review_backlog` warning is firing, or you need to explain why a draft went OPEN "on its own".
+
+The worker's daily loop (04:10 UTC, after the 03:30 payment-ledger reconciler) scans each org for **DRAFT invoices whose `billingPeriodEnd` has passed** and dispatches `AutoFinalizeDueInvoice` for each one carrying a **fresh approval** (`approvedAt` set and `approvedVersion = version`). It runs the same core + guards as the operator's FinalizeInvoice and emits the same `billing.invoice.finalized.v1` event, so the Stripe push follows automatically. Auto-finalized invoices are audit-logged as `billing.invoice.auto_finalized` with `trigger: period-boundary-cron` plus the approval snapshot (who reviewed, which revision).
+
+**The cron never forces an unreviewed invoice.** Period-ended drafts it deliberately leaves alone are tallied in `pharmax_billing_auto_finalize_skips_total` by reason:
+
+| Skip reason       | Meaning                                                       | What to do                                                                                             |
+| ----------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `awaiting_review` | Period closed but the draft was never approved                | This is a **human bottleneck**, not a system fault. Chase the reviewer; the org's money sits unbilled. |
+| `stale_approval`  | Approved, but lines landed after the review (`version` moved) | Re-approve on `/ops/billing/<invoiceId>`; the next daily run finalizes it.                             |
+| `empty_draft`     | Period closed with zero lines                                 | Nothing to bill. Left alone indefinitely; investigate only if lines were expected.                     |
+
+**Common questions:**
+
+1. _"Why did invoice X not auto-finalize last night?"_ — grep the worker logs for `invoice_auto_finalize` with the invoiceId. Either it was skipped (reason above), its dispatch failed (`invoice_auto_finalize.dispatch_failed` carries the typed error code; it retries the next night), or the org's whole scan failed (`invoice_auto_finalize.run.org.failed`).
+2. _"Can we turn it off?"_ — yes: `BILLING_AUTO_FINALIZE_ENABLED=false`. Fully-manual finalization is a supported configuration; the operator flow is unchanged.
+3. _"Payment terms?"_ — auto-finalized invoices get `dueAt = issuedAt + BILLING_AUTO_FINALIZE_DAYS_UNTIL_DUE` (default 30), matching the operator-path default.
+4. _"It finalized while an operator was editing"_ — it can't: the command re-validates approval freshness against the row inside its own transaction, and the version CAS rejects any concurrent write. A line appended after the approval makes the approval stale, which blocks the cron until re-approval.
 
 ---
 

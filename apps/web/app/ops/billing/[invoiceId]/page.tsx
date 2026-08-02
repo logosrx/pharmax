@@ -2,7 +2,8 @@
 //
 // Renders the invoice + lines, then surfaces the action forms
 // available given the invoice's status and the operator's
-// permissions (finalize / credit / refund).
+// permissions (approve / finalize / credit / refund). Finalize only
+// appears once the current revision carries a fresh approval.
 
 import Link from "next/link";
 
@@ -34,6 +35,7 @@ const REFUND_REASONS = [
 ];
 
 const FLASH_MESSAGES: Readonly<Record<string, string>> = {
+  approved: "Invoice approved — this revision is cleared for finalization.",
   finalized: "Invoice finalized (DRAFT → OPEN).",
   credited: "Credit line applied.",
   refunded: "Refund issued via Stripe.",
@@ -100,8 +102,17 @@ export default async function InvoiceDetailPage({
     );
   }
 
+  // Approval freshness: the stamp is anchored to a revision; a line
+  // appended after the review bumps `version` and stales it.
+  const approvalFresh = invoice.approvedAt !== null && invoice.approvedVersion === invoice.version;
+  const approvalStale = invoice.approvedAt !== null && !approvalFresh;
+  const canApprove =
+    invoice.status === "DRAFT" &&
+    !approvalFresh &&
+    hasOperatorPermission(permissions, PERMISSIONS.BILLING_APPROVE_INVOICE);
   const canFinalize =
     invoice.status === "DRAFT" &&
+    approvalFresh &&
     hasOperatorPermission(permissions, PERMISSIONS.BILLING_FINALIZE_INVOICE);
   const canCredit =
     invoice.status !== "VOID" &&
@@ -200,7 +211,7 @@ export default async function InvoiceDetailPage({
       </Section>
 
       <Section title="Actions">
-        {!canFinalize && !canCredit && !canRefund ? (
+        {!canApprove && !canFinalize && !canCredit && !canRefund ? (
           <EmptyState
             icon="shield"
             title="No actions available"
@@ -208,12 +219,54 @@ export default async function InvoiceDetailPage({
           />
         ) : (
           <div className="space-y-3">
+            {canApprove ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>
+                    {approvalStale
+                      ? "Re-approve · review changed lines"
+                      : "Approve · review before finalize"}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {approvalStale ? (
+                    <p className="text-xs text-subtle">
+                      Lines changed since the last approval (reviewed at revision{" "}
+                      <code>{invoice.approvedVersion}</code>, now <code>{invoice.version}</code>) —
+                      re-review the totals before finalizing.
+                    </p>
+                  ) : null}
+                  <ActionForm
+                    action={`/api/ops/billing/invoices/${invoice.invoiceId}/approve`}
+                    className="flex flex-wrap items-end gap-2"
+                  >
+                    <Field label="Reviewer note" className="grow">
+                      <Input
+                        type="text"
+                        name="approvalNote"
+                        maxLength={2000}
+                        placeholder="optional"
+                      />
+                    </Field>
+                    <SubmitButton icon="check">Approve</SubmitButton>
+                  </ActionForm>
+                </CardContent>
+              </Card>
+            ) : null}
+
             {canFinalize ? (
               <Card>
                 <CardHeader>
                   <CardTitle>Finalize · DRAFT → OPEN</CardTitle>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="space-y-2">
+                  <p className="text-xs text-subtle">
+                    Approved at revision <code>{invoice.approvedVersion}</code>
+                    {invoice.approvedAt !== null
+                      ? ` on ${invoice.approvedAt.toISOString().slice(0, 10)}`
+                      : null}
+                    .
+                  </p>
                   <ActionForm
                     action={`/api/ops/billing/invoices/${invoice.invoiceId}/finalize`}
                     className="flex flex-wrap items-end gap-2"

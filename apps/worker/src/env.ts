@@ -473,6 +473,50 @@ const schema = z.object({
   DAILY_AUDIT_CHAIN_VERIFIER_ENABLED: z.coerce.boolean().default(true),
   DAILY_AUDIT_CHAIN_VERIFIER_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(1),
   DAILY_AUDIT_CHAIN_VERIFIER_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(30),
+
+  // ---- Nightly payment-ledger reconciliation (flagship billing) ---
+  // Per-org cross-check of the append-only `payment` ledger against
+  // the invoice projection: OPEN/PAID invoices must have PAYMENT rows
+  // summing to `amountPaidCents` (OPEN covers partial manual
+  // payments), REFUND rows must never exceed the stripe-refund
+  // CREDIT-line total, and no ledger row may reference a
+  // DRAFT/VOID/UNCOLLECTIBLE invoice. READ-ONLY — drift is logged + counted via
+  // `pharmax_payment_ledger_drift_total` (PaymentLedgerDriftDetected
+  // alert); remediation is `pnpm payments:backfill` for missing
+  // historical rows or the incident process for anything else.
+  //
+  // Schedule: 03:30 UTC, after the 01:30–03:00 UTC security jobs so
+  // the nightly full-table scans don't stack on each other.
+  PAYMENT_LEDGER_RECONCILER_ENABLED: z.coerce.boolean().default(true),
+  PAYMENT_LEDGER_RECONCILER_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(3),
+  PAYMENT_LEDGER_RECONCILER_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(30),
+  // PAID invoices fetched per page during the scan.
+  PAYMENT_LEDGER_RECONCILER_PAGE_SIZE: z.coerce.number().int().min(1).max(5_000).default(500),
+
+  // ---- Daily period-boundary invoice auto-finalize (flagship billing) ----
+  // Once a day, per org: DRAFT invoices whose `billingPeriodEnd` has
+  // passed AND that carry a FRESH approval (approvedVersion ===
+  // version) are finalized via the AutoFinalizeDueInvoice system
+  // command — same core, guards, and `billing.invoice.finalized.v1`
+  // event as the operator's FinalizeInvoice, so the Stripe push
+  // follows automatically. Unapproved / stale-approved drafts are
+  // NEVER forced: they're surfaced as an awaiting-review backlog
+  // (log warn + pharmax_billing_auto_finalize_skips_total).
+  //
+  // Set BILLING_AUTO_FINALIZE_ENABLED=false for fully-manual
+  // finalization; the operator flow is unchanged either way.
+  //
+  // Schedule: 04:10 UTC, after the payment-ledger reconciler (03:30)
+  // so nightly billing scans don't stack and reconciliation sees the
+  // prior day's finalizations settled.
+  BILLING_AUTO_FINALIZE_ENABLED: z.coerce.boolean().default(true),
+  BILLING_AUTO_FINALIZE_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(4),
+  BILLING_AUTO_FINALIZE_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(10),
+  // Period-ended DRAFT invoices fetched per page during the scan.
+  BILLING_AUTO_FINALIZE_PAGE_SIZE: z.coerce.number().int().min(1).max(5_000).default(200),
+  // Payment terms stamped on auto-finalized invoices (dueAt =
+  // issuedAt + N days). Matches the operator-path default of 30.
+  BILLING_AUTO_FINALIZE_DAYS_UNTIL_DUE: z.coerce.number().int().min(0).max(365).default(30),
 });
 
 export const env = envNs.defineEnv(schema, {

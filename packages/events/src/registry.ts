@@ -26,6 +26,8 @@
 import { type EventDefinition, EVENT_NAME_REGEX } from "./define-event.js";
 
 // ---- billing -------------------------------------------------------------
+import { BillingClinicCreditRecordedV1 } from "./events/billing/clinic-credit-recorded-v1.js";
+import { BillingInvoiceApprovedV1 } from "./events/billing/invoice-approved-v1.js";
 import { BillingInvoiceCreditedV1 } from "./events/billing/invoice-credited-v1.js";
 import { BillingInvoiceFinalizedV1 } from "./events/billing/invoice-finalized-v1.js";
 import { BillingInvoiceLineCreatedV1 } from "./events/billing/invoice-line-created-v1.js";
@@ -166,6 +168,8 @@ import { WorkflowOverlayUpsertedV1 } from "./events/workflow/overlay-upserted-v1
  */
 const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> = Object.freeze([
   // billing
+  BillingClinicCreditRecordedV1,
+  BillingInvoiceApprovedV1,
   BillingInvoiceCreditedV1,
   BillingInvoiceFinalizedV1,
   BillingInvoiceLineCreatedV1,

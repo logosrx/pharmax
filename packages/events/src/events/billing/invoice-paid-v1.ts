@@ -1,7 +1,10 @@
-// billing.invoice.paid.v1 — invoice was paid in Stripe.
+// billing.invoice.paid.v1 — invoice reached PAID.
 //
-// Producer: `MarkInvoicePaid` system command (`@pharmax/billing`),
-//   driven by the `invoice.paid` Stripe webhook.
+// Producers:
+//   - `MarkInvoicePaid` system command (`@pharmax/billing`), driven
+//     by the `invoice.paid` Stripe webhook.
+//   - `RecordManualPayment` tenant command, when an out-of-band
+//     payment (check / ACH / wire / cash) collects the full balance.
 // Consumers: ops dashboard / clinic-portal payment status; future
 //   accounting export.
 
@@ -15,8 +18,9 @@ const payloadSchema = z
     clinicId: z.uuid(),
     invoiceId: z.uuid(),
     invoiceNumber: z.string().min(1).max(64),
-    stripeInvoiceId: z.string().min(1).max(64),
-    /** Nullable: Stripe may pay an invoice from a credit balance without a charge. */
+    /** Nullable: manual (check/ACH/wire) settles have no Stripe invoice. */
+    stripeInvoiceId: z.string().min(1).max(64).nullable(),
+    /** Nullable: Stripe may pay an invoice from a credit balance without a charge; always null for manual settles. */
     stripeChargeId: z.string().min(1).max(64).nullable(),
     amountPaidCents: z.number().int().min(0),
     totalCents: z.number().int().min(0),
@@ -36,7 +40,7 @@ export const BillingInvoicePaidV1 = defineEvent({
   phiSafe: true,
   routingKey: "billing.invoice",
   description:
-    "Emitted by MarkInvoicePaid when the Stripe invoice.paid webhook fires. Drives clinic-portal status, aging exit, and downstream accounting projections.",
+    "Emitted when an invoice reaches PAID — by MarkInvoicePaid (Stripe invoice.paid webhook) or RecordManualPayment (out-of-band check/ACH/wire settle). Drives clinic-portal status, aging exit, and downstream accounting projections.",
 });
 
 export type BillingInvoicePaidV1Payload = z.infer<typeof payloadSchema>;

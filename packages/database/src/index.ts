@@ -78,6 +78,8 @@ export {
   CompoundStorageCondition,
   ControlledSubstancePartialFillBasis,
   ControlledSubstanceSchedule,
+  ClinicCreditEntryKind,
+  ClinicCreditSource,
   PaymentMethod,
   PortalAccountStatus,
   PrescriptionStatus,

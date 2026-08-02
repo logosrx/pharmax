@@ -119,10 +119,13 @@ export const PERMISSIONS = Object.freeze({
   // Billing.
   BILLING_READ: "billing.read",
   BILLING_MANAGE: "billing.manage",
+  BILLING_APPROVE_INVOICE: "billing.approve_invoice",
   BILLING_FINALIZE_INVOICE: "billing.finalize_invoice",
   BILLING_MANAGE_PRICING: "billing.manage_pricing",
   BILLING_CREDIT_INVOICE: "billing.credit_invoice",
   BILLING_ISSUE_REFUND: "billing.issue_refund",
+  BILLING_RECORD_MANUAL_PAYMENT: "billing.record_manual_payment",
+  BILLING_MANAGE_CLINIC_CREDIT: "billing.manage_clinic_credit",
 
   // Audit.
   AUDIT_READ: "audit.read",
@@ -427,6 +430,11 @@ export const PERMISSION_METADATA: Readonly<
     description: "Manage invoices and pricing.",
     category: "Billing",
   },
+  [PERMISSIONS.BILLING_APPROVE_INVOICE]: {
+    description:
+      "Approve a reviewed DRAFT invoice, stamping the revision that FinalizeInvoice requires. Lines appended after approval invalidate it (re-review required).",
+    category: "Billing",
+  },
   [PERMISSIONS.BILLING_FINALIZE_INVOICE]: {
     description:
       "Finalize a DRAFT invoice (DRAFT → OPEN), locking it for further line appends and triggering downstream Stripe push.",
@@ -445,6 +453,16 @@ export const PERMISSION_METADATA: Readonly<
   [PERMISSIONS.BILLING_ISSUE_REFUND]: {
     description:
       "Issue a Stripe refund against a paid invoice; writes the corresponding negative-amount line on the Pharmax ledger.",
+    category: "Billing",
+  },
+  [PERMISSIONS.BILLING_RECORD_MANUAL_PAYMENT]: {
+    description:
+      "Record a settled out-of-band payment (check / ACH / wire / cash) against an OPEN invoice; appends the payment-ledger row and flips the invoice to PAID when fully collected.",
+    category: "Billing",
+  },
+  [PERMISSIONS.BILLING_MANAGE_CLINIC_CREDIT]: {
+    description:
+      "Grant clinic credit (overpayment excess, goodwill) and apply stored credit to OPEN invoices via the clinic credit ledger.",
     category: "Billing",
   },
   [PERMISSIONS.AUDIT_READ]: { description: "Read audit log.", category: "Audit" },

@@ -3,6 +3,8 @@
 // New billing events MUST land here so they're picked up by the
 // top-level `events/index.ts` barrel + the parity guard.
 
+export { BillingClinicCreditRecordedV1 } from "./clinic-credit-recorded-v1.js";
+export { BillingInvoiceApprovedV1 } from "./invoice-approved-v1.js";
 export { BillingInvoiceCreditedV1 } from "./invoice-credited-v1.js";
 export { BillingInvoiceFinalizedV1 } from "./invoice-finalized-v1.js";
 export { BillingInvoiceLineCreatedV1 } from "./invoice-line-created-v1.js";
