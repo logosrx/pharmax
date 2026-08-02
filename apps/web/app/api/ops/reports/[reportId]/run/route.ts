@@ -21,6 +21,7 @@ import {
   REPORT_REGISTRY,
   RunReport,
   toCsv,
+  toPdf,
 } from "@pharmax/reporting";
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
 import { NextResponse } from "next/server";
@@ -63,11 +64,22 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
   }
   const fields = definition.parameterFields ?? dateRangeFields();
 
-  // Parse form body.
+  // Parse form body. The `format` key selects the download
+  // serialization (csv default | pdf) and is read OUTSIDE
+  // `parseReportParameters` — it is transport chrome, not a report
+  // parameter, so it never reaches the report's Zod schema.
   const contentType = request.headers.get("content-type") ?? "";
-  const source = contentType.includes("application/json")
-    ? paramSourceFromRecord((await request.json().catch(() => ({}))) as Record<string, unknown>)
-    : paramSourceFromFormData(await request.formData());
+  let format: "csv" | "pdf" = "csv";
+  let source;
+  if (contentType.includes("application/json")) {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    if (body["format"] === "pdf") format = "pdf";
+    source = paramSourceFromRecord(body);
+  } else {
+    const formData = await request.formData();
+    if (formData.get("format") === "pdf") format = "pdf";
+    source = paramSourceFromFormData(formData);
+  }
 
   const parsed = parseReportParameters(fields, source);
   if (!parsed.ok) {
@@ -112,32 +124,60 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
           )
         );
 
-        // Stream the result as CSV. We serialize from
-        // `output.rows` directly — the command returned the
-        // post-run row set + the report_run id was persisted
-        // server-side. Headers:
-        //   - text/csv content-type so browsers render-as-download
+        // Stream the result in the requested serialization. We
+        // serialize from `output.rows` directly — the command
+        // returned the post-run row set + the report_run id was
+        // persisted server-side. Headers:
+        //   - format-appropriate content-type so browsers
+        //     render-as-download
         //   - attachment disposition with a stable filename
         //     including the reportId + the windowFrom date so
         //     repeated downloads sort sensibly.
         //   - X-Pharmax-Report-Run-Id surfaces the audit row id
         //     in the response for support tickets / log
         //     correlation.
-        const csv = toCsv(output.rows as ReadonlyArray<Record<string, unknown>>);
-        const filename = `${output.reportId}__${output.windowFrom.slice(0, 10)}_to_${output.windowTo.slice(0, 10)}.csv`;
+        const filenameBase = `${output.reportId}__${output.windowFrom.slice(0, 10)}_to_${output.windowTo.slice(0, 10)}`;
         logger.info("ops.reports.run.applied", {
           operatorUserId: session.operator.userId,
           reportId: output.reportId,
           reportRunId: output.reportRunId,
           rowCount: output.rowCount,
+          format,
         });
+        const commonHeaders = {
+          "x-pharmax-report-run-id": output.reportRunId,
+          "cache-control": "private, no-store",
+        };
+        if (format === "pdf") {
+          // Printable / carrier-shareable artifact (e.g. the
+          // late-deliveries evidence pack an operator sends to
+          // FedEx). Same rows as the CSV path, same audit row.
+          const pdf = toPdf({
+            title: definition.title,
+            subtitle: definition.description,
+            windowFrom: new Date(output.windowFrom),
+            windowTo: new Date(output.windowTo),
+            generatedAt: new Date(output.generatedAt),
+            aggregates: output.aggregates,
+            rows: output.rows as ReadonlyArray<Record<string, unknown>>,
+            footerNote: `Pharmax report run ${output.reportRunId}`,
+          });
+          return new Response(Buffer.from(pdf), {
+            status: 200,
+            headers: {
+              ...commonHeaders,
+              "content-type": "application/pdf",
+              "content-disposition": `attachment; filename="${filenameBase}.pdf"`,
+            },
+          });
+        }
+        const csv = toCsv(output.rows as ReadonlyArray<Record<string, unknown>>);
         return new Response(csv, {
           status: 200,
           headers: {
+            ...commonHeaders,
             "content-type": "text/csv; charset=utf-8",
-            "content-disposition": `attachment; filename="${filename}"`,
-            "x-pharmax-report-run-id": output.reportRunId,
-            "cache-control": "private, no-store",
+            "content-disposition": `attachment; filename="${filenameBase}.csv"`,
           },
         });
       } catch (cause) {
