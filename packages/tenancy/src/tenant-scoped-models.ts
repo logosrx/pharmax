@@ -90,6 +90,8 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // tenancy and read by finance reports — auto-scoping closes the
   // cross-tenant leak surface for both paths.
   ["Payment", { kind: "organizationId" }] as const,
+  // Inventory (ADR-0035 slice 3): DSCSA lot-receipt records.
+  ["DscsaTransaction", { kind: "organizationId" }] as const,
   // Compounding (ADR-0035): Master Formulation Records + ingredients,
   // and per-preparation compounding records (slice 2).
   ["CompoundFormula", { kind: "organizationId" }] as const,

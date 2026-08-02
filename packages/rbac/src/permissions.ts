@@ -54,6 +54,10 @@ export const PERMISSIONS = Object.freeze({
 
   // Inventory catalog: drug products + lots/batches.
   INVENTORY_READ: "inventory.read",
+  // Receive an inbound lot shipment (ADR-0035 slice 3): creates or
+  // extends the Lot, credits the inventory ledger, and stores the
+  // DSCSA transaction record.
+  INVENTORY_RECEIVE: "inventory.receive",
 
   // Compounding (ADR-0035): Master Formulation Records. MANAGE covers
   // the whole formula lifecycle (author/publish/retire) — pharmacist-
@@ -276,6 +280,11 @@ export const PERMISSION_METADATA: Readonly<
   [PERMISSIONS.INVENTORY_READ]: {
     description:
       "View the drug product catalog and inventory lots/batches (NDC, name, lot number, expiration, status). Read-only; lot assignment stays behind fill.assign_lot.",
+    category: "Inventory",
+  },
+  [PERMISSIONS.INVENTORY_RECEIVE]: {
+    description:
+      "Receive an inbound lot shipment (ADR-0035 slice 3): creates or extends the Lot, credits the inventory ledger with LOT_RECEIVED, and stores the DSCSA transaction record (TI snapshot + Transaction Statement gate). Refuses expired stock and shipments without the seller's TS.",
     category: "Inventory",
   },
   [PERMISSIONS.COMPOUNDING_READ]: {
