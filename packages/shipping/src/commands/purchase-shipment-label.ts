@@ -53,6 +53,7 @@ import {
 import { SHIPMENT_ALREADY_EXISTS } from "./create-shipment.js";
 
 export const PURCHASE_LABEL_ADAPTER_FAILED = "PURCHASE_LABEL_ADAPTER_FAILED";
+export const SHIPPING_ADDRESS_UNDELIVERABLE = "SHIPPING_ADDRESS_UNDELIVERABLE";
 
 const addressSchema = z
   .object({
@@ -110,6 +111,10 @@ const inputSchema = z
     fromAddress: addressSchema,
     toAddress: addressSchema,
     parcel: parcelSchema,
+    // Delivery signature requirement. Omitted → carrier service
+    // default. Adapters that cannot honor a requested option throw
+    // SIGNATURE_OPTION_UNSUPPORTED (no silent compliance downgrade).
+    signatureOption: z.enum(["NO_SIGNATURE_REQUIRED", "INDIRECT", "DIRECT", "ADULT"]).optional(),
   })
   .strict();
 
@@ -177,6 +182,61 @@ export const PurchaseShipmentLabel = defineCommand<
       provider: input.provider,
     });
 
+    // ---- Pre-flight address validation (providers that support it).
+    //
+    // Policy, in order of failure-mode severity:
+    //   - Carrier says INVALID (address does not resolve at all):
+    //     BLOCK before money is spent on a label. The operator fixes
+    //     the address on the patient record, or falls back to the
+    //     manual CreateShipment path as the deliberate override.
+    //   - Carrier says UNCONFIRMED (resolves, delivery point not
+    //     confirmed): PROCEED. Blocking here would false-positive on
+    //     new construction, rural routes, and suite addresses —
+    //     worse for therapy continuity than an occasional carrier
+    //     correction.
+    //   - Validation API itself unavailable: FAIL OPEN and proceed
+    //     unvalidated. Shipping medication cannot depend on the
+    //     availability of an auxiliary validation endpoint. The
+    //     shipment row records that validation did not run
+    //     (NULL columns), so fail-open events are queryable.
+    //
+    // PHI: the verdict (deliverability + classification) is recorded;
+    // the address itself never lands in errors, audit, or outbox.
+    let addressValidation: {
+      deliverability: string;
+      classification: string | null;
+      validatedAt: Date;
+    } | null = null;
+    if (adapter.validateAddress !== undefined) {
+      try {
+        const verdict = await adapter.validateAddress(normalizeAddress(input.toAddress));
+        addressValidation = {
+          deliverability: verdict.deliverability,
+          classification: verdict.classification,
+          validatedAt: clock.now(),
+        };
+      } catch (cause) {
+        logger.warn("address validation unavailable — proceeding unvalidated (fail open)", {
+          orderId: target.id,
+          provider: input.provider,
+          errorMessage: cause instanceof Error ? cause.message : "unknown",
+        });
+      }
+      if (addressValidation !== null && addressValidation.deliverability === "INVALID") {
+        throw new errors.ValidationError({
+          code: SHIPPING_ADDRESS_UNDELIVERABLE,
+          message:
+            "The carrier could not resolve the destination address. Correct the ship-to address and retry, or record a manual shipment to override.",
+          metadata: {
+            orderId: target.id,
+            provider: input.provider,
+            deliverability: addressValidation.deliverability,
+            classification: addressValidation.classification,
+          },
+        });
+      }
+    }
+
     let purchased;
     try {
       purchased = await adapter.purchaseLabel({
@@ -185,6 +245,7 @@ export const PurchaseShipmentLabel = defineCommand<
         parcel: input.parcel,
         carrier: input.carrier,
         serviceLevel: input.serviceLevel,
+        ...(input.signatureOption !== undefined ? { signatureOption: input.signatureOption } : {}),
       });
     } catch (cause) {
       // Adapter errors are already InternalError instances from the
@@ -248,6 +309,17 @@ export const PurchaseShipmentLabel = defineCommand<
         // the label was unrecoverable after this response.
         labelUrl: purchased.labelUrl,
         labelPdfBase64: purchased.labelPdfBase64,
+        // ... and what it cost. Already in audit/outbox; the column
+        // is what makes shipping-spend reporting queryable.
+        postageRateCents: purchased.postageRateCents,
+        // Address-validation verdict (never the address). NULL when
+        // validation didn't run (no provider support / fail-open).
+        addressDeliverability: addressValidation?.deliverability ?? null,
+        addressClassification: addressValidation?.classification ?? null,
+        addressValidatedAt: addressValidation?.validatedAt ?? null,
+        // Signature requirement the label was purchased with — the
+        // compliance record for "was adult signature requested".
+        signatureOption: input.signatureOption ?? null,
         createdByUserId: ctx.actor.userId,
         createCommandLogId: commandLogId,
       },
@@ -288,6 +360,10 @@ export const PurchaseShipmentLabel = defineCommand<
           hasExternalTrackerId: purchased.externalTrackerId !== null,
           hasLabelUrl: purchased.labelUrl !== null,
           postageRateCents: purchased.postageRateCents,
+          // Verdict only — never the address.
+          addressDeliverability: addressValidation?.deliverability ?? null,
+          addressClassification: addressValidation?.classification ?? null,
+          signatureOption: input.signatureOption ?? null,
           commandLogId,
         },
       },

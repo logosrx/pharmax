@@ -51,6 +51,12 @@ export interface ShippingQueueShipment {
   readonly lastTrackingEventKind: string | null;
   readonly createdAt: Date;
   readonly confirmedAt: Date | null;
+  /** Carrier's current delivery estimate (ETA chrome + late flag). */
+  readonly estimatedDeliveryAt: Date | null;
+  /** Delivered-scan moment; null until delivered. */
+  readonly deliveredAt: Date | null;
+  /** Persisted pickup→delivery transit; null until delivered. */
+  readonly transitSeconds: number | null;
 }
 
 export interface ShippingQueueRow {
@@ -159,6 +165,9 @@ export async function listShippingQueue(input: {
         lastTrackingEventKind: true,
         createdAt: true,
         confirmedAt: true,
+        estimatedDeliveryAt: true,
+        deliveredAt: true,
+        transitSeconds: true,
       },
       orderBy: { createdAt: "desc" },
     });
@@ -179,6 +188,9 @@ export async function listShippingQueue(input: {
           lastTrackingEventKind: s.lastTrackingEventKind,
           createdAt: s.createdAt,
           confirmedAt: s.confirmedAt,
+          estimatedDeliveryAt: s.estimatedDeliveryAt,
+          deliveredAt: s.deliveredAt,
+          transitSeconds: s.transitSeconds,
         })
       );
     }

@@ -116,6 +116,20 @@ export class EasyPostShippingAdapter implements ShippingAdapter {
   public constructor(private readonly options: EasyPostShippingAdapterOptions) {}
 
   public async purchaseLabel(input: PurchaseLabelInput): Promise<PurchasedLabel> {
+    // Signature options are not wired for the EasyPost path yet
+    // (EasyPost supports delivery confirmation via shipment options;
+    // our client does not send them). Loud failure, never a silent
+    // downgrade — a controlled-substance shipment that quietly loses
+    // its adult-signature requirement is a compliance incident.
+    if (input.signatureOption !== undefined) {
+      throw new errors.ValidationError({
+        code: "SIGNATURE_OPTION_UNSUPPORTED",
+        message:
+          "Signature options are not supported on the EasyPost provider yet. Use the FedEx provider or purchase without a signature requirement.",
+        metadata: { provider: "easypost", signatureOption: input.signatureOption },
+      });
+    }
+
     let created: EasyPostShipment;
     try {
       created = await this.options.client.createShipment({

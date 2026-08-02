@@ -1,0 +1,22 @@
+-- migration: 20260731000000_shipment_postage_cost
+--
+-- Persist the postage cost of adapter-purchased labels on the
+-- shipment row. All three carrier adapters already return
+-- `postageRateCents` and the value already flows into the audit log
+-- and the label-purchased outbox event — but it was never stored as
+-- a queryable column, so shipping-spend reporting (cost by carrier /
+-- service level / clinic, cost-vs-billed reconciliation) was
+-- impossible without replaying audit metadata. Same failure mode the
+-- label artifacts had before 20260710010000_shipment_label_artifacts.
+--
+-- Nullable: manual BYO-tracking-number shipments have no purchase
+-- cost, and carriers occasionally omit rating from a ship response
+-- (rows before this migration are also NULL — reports must treat
+-- NULL as "cost unknown", never as zero).
+--
+-- Cents (integer) in USD, matching the adapter contract and the
+-- billing domain's integer-cents convention. No RLS change needed:
+-- shipment already carries ENABLE + FORCE row level security; new
+-- columns inherit the table's policies.
+
+ALTER TABLE "shipment" ADD COLUMN "postageRateCents" INTEGER;

@@ -2,7 +2,7 @@ import { ShipmentCarrier } from "@pharmax/database";
 import { describe, expect, it, vi } from "vitest";
 
 import { FedExClient } from "./fedex-client.js";
-import { FedExShippingAdapter } from "./fedex-adapter.js";
+import { deriveFedExDeliverability, FedExShippingAdapter } from "./fedex-adapter.js";
 import type { PurchaseLabelInput } from "./shipping-adapter.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -221,5 +221,232 @@ describe("FedExShippingAdapter.cancelLabel", () => {
     await expect(adapter.cancelLabel!({ trackingNumber: "794665654567" })).rejects.toMatchObject({
       code: "FEDEX_CANCEL_FAILED",
     });
+  });
+});
+
+describe("deriveFedExDeliverability", () => {
+  it("maps DPV=true to CONFIRMED with classification", () => {
+    expect(
+      deriveFedExDeliverability({
+        classification: "RESIDENTIAL",
+        attributes: { DPV: "true", Resolved: "true", Matched: "true" },
+      })
+    ).toEqual({ deliverability: "CONFIRMED", classification: "RESIDENTIAL" });
+  });
+
+  it("maps Resolved-without-DPV to UNCONFIRMED (proceed, don't block)", () => {
+    expect(
+      deriveFedExDeliverability({
+        classification: "UNKNOWN",
+        attributes: { DPV: "false", Resolved: "true" },
+      })
+    ).toEqual({ deliverability: "UNCONFIRMED", classification: "UNKNOWN" });
+  });
+
+  it("maps unresolved / missing entries to INVALID", () => {
+    expect(deriveFedExDeliverability({ attributes: { Resolved: "false" } })).toEqual({
+      deliverability: "INVALID",
+      classification: null,
+    });
+    expect(deriveFedExDeliverability(undefined)).toEqual({
+      deliverability: "INVALID",
+      classification: null,
+    });
+  });
+});
+
+describe("FedExShippingAdapter.validateAddress", () => {
+  it("posts the address to /address/v1/addresses/resolve and normalizes the verdict", async () => {
+    const captured: Array<{ url: string; body: unknown }> = [];
+    const client = fedexClient((url, init) => {
+      if (url.endsWith("/oauth/token")) return jsonResponse(TOKEN_RESPONSE);
+      if (url.endsWith("/address/v1/addresses/resolve")) {
+        captured.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
+        return jsonResponse({
+          output: {
+            resolvedAddresses: [
+              {
+                classification: "BUSINESS",
+                attributes: { DPV: "true", Resolved: "true" },
+              },
+            ],
+          },
+        });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    const adapter = new FedExShippingAdapter({ client });
+
+    const result = await adapter.validateAddress!(VALID_INPUT.toAddress);
+    expect(result).toEqual({ deliverability: "CONFIRMED", classification: "BUSINESS" });
+
+    const body = captured[0]!.body as {
+      addressesToValidate: Array<{ address: Record<string, unknown> }>;
+    };
+    expect(body.addressesToValidate).toHaveLength(1);
+    expect(body.addressesToValidate[0]!.address).toEqual({
+      streetLines: ["100 Sample St"],
+      city: "Brooklyn",
+      stateOrProvinceCode: "NY",
+      postalCode: "11201",
+      countryCode: "US",
+    });
+  });
+
+  it("wraps transport failures as FEDEX_ADDRESS_VALIDATION_FAILED (caller owns fail-open)", async () => {
+    const client = fedexClient((url) => {
+      if (url.endsWith("/oauth/token")) return jsonResponse(TOKEN_RESPONSE);
+      return jsonResponse({ errors: [{ code: "SERVICE.UNAVAILABLE", message: "down" }] }, 503);
+    });
+    const adapter = new FedExShippingAdapter({ client });
+    await expect(adapter.validateAddress!(VALID_INPUT.toAddress)).rejects.toMatchObject({
+      code: "FEDEX_ADDRESS_VALIDATION_FAILED",
+    });
+  });
+});
+
+describe("FedExShippingAdapter — signature options", () => {
+  function shipResponse() {
+    return jsonResponse({
+      output: {
+        transactionShipments: [
+          {
+            masterTrackingNumber: "794665654567",
+            serviceType: "FEDEX_GROUND",
+            pieceResponses: [{ trackingNumber: "794665654567" }],
+          },
+        ],
+      },
+    });
+  }
+
+  it("maps signatureOption onto packageSpecialServices.signatureOptionType", async () => {
+    const captured: Array<{ body: unknown }> = [];
+    const client = fedexClient((url, init) => {
+      if (url.endsWith("/oauth/token")) return jsonResponse(TOKEN_RESPONSE);
+      if (url.endsWith("/ship/v1/shipments")) {
+        captured.push({ body: init.body ? JSON.parse(String(init.body)) : null });
+        return shipResponse();
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    const adapter = new FedExShippingAdapter({ client });
+
+    await adapter.purchaseLabel({ ...VALID_INPUT, signatureOption: "ADULT" });
+
+    const body = captured[0]!.body as {
+      requestedShipment: {
+        requestedPackageLineItems: Array<{
+          packageSpecialServices?: { signatureOptionType?: string };
+        }>;
+      };
+    };
+    expect(body.requestedShipment.requestedPackageLineItems[0]!.packageSpecialServices).toEqual({
+      signatureOptionType: "ADULT",
+    });
+  });
+
+  it("omits packageSpecialServices entirely when no option is requested (carrier default)", async () => {
+    const captured: Array<{ body: unknown }> = [];
+    const client = fedexClient((url, init) => {
+      if (url.endsWith("/oauth/token")) return jsonResponse(TOKEN_RESPONSE);
+      if (url.endsWith("/ship/v1/shipments")) {
+        captured.push({ body: init.body ? JSON.parse(String(init.body)) : null });
+        return shipResponse();
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    const adapter = new FedExShippingAdapter({ client });
+
+    await adapter.purchaseLabel(VALID_INPUT);
+
+    const body = captured[0]!.body as {
+      requestedShipment: {
+        requestedPackageLineItems: Array<Record<string, unknown>>;
+      };
+    };
+    expect("packageSpecialServices" in body.requestedShipment.requestedPackageLineItems[0]!).toBe(
+      false
+    );
+  });
+});
+
+describe("FedExShippingAdapter.getRates", () => {
+  it("quotes all account services, drops chargeless entries, sorts cheapest first", async () => {
+    const captured: Array<{ body: unknown }> = [];
+    const client = fedexClient((url, init) => {
+      if (url.endsWith("/oauth/token")) return jsonResponse(TOKEN_RESPONSE);
+      if (url.endsWith("/rate/v1/rates/quotes")) {
+        captured.push({ body: init.body ? JSON.parse(String(init.body)) : null });
+        return jsonResponse({
+          output: {
+            rateReplyDetails: [
+              {
+                serviceType: "PRIORITY_OVERNIGHT",
+                serviceName: "FedEx Priority Overnight",
+                ratedShipmentDetails: [{ totalNetCharge: 42.15, currency: "USD" }],
+              },
+              {
+                serviceType: "FEDEX_GROUND",
+                serviceName: "FedEx Ground",
+                ratedShipmentDetails: [{ totalNetCharge: 9.4, currency: "USD" }],
+              },
+              {
+                // No usable charge → dropped.
+                serviceType: "FEDEX_2_DAY",
+                serviceName: "FedEx 2Day",
+                ratedShipmentDetails: [],
+              },
+            ],
+          },
+        });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    const adapter = new FedExShippingAdapter({ client });
+
+    const rates = await adapter.getRates({
+      fromAddress: VALID_INPUT.fromAddress,
+      toAddress: VALID_INPUT.toAddress,
+      parcel: VALID_INPUT.parcel,
+    });
+
+    expect(rates).toEqual([
+      {
+        carrier: ShipmentCarrier.FEDEX,
+        serviceLevel: "FEDEX_GROUND",
+        serviceName: "FedEx Ground",
+        rateCents: 940,
+      },
+      {
+        carrier: ShipmentCarrier.FEDEX,
+        serviceLevel: "PRIORITY_OVERNIGHT",
+        serviceName: "FedEx Priority Overnight",
+        rateCents: 4215,
+      },
+    ]);
+
+    // No serviceType in the request → FedEx returns every service;
+    // ACCOUNT rate type → the org's negotiated prices.
+    const body = captured[0]!.body as {
+      requestedShipment: Record<string, unknown>;
+    };
+    expect("serviceType" in body.requestedShipment).toBe(false);
+    expect(body.requestedShipment["rateRequestType"]).toEqual(["ACCOUNT"]);
+  });
+
+  it("wraps rating API failures as FEDEX_RATE_QUOTE_FAILED", async () => {
+    const client = fedexClient((url) => {
+      if (url.endsWith("/oauth/token")) return jsonResponse(TOKEN_RESPONSE);
+      return jsonResponse({ errors: [{ code: "RATE.ERROR", message: "no rates" }] }, 500);
+    });
+    const adapter = new FedExShippingAdapter({ client });
+    await expect(
+      adapter.getRates({
+        fromAddress: VALID_INPUT.fromAddress,
+        toAddress: VALID_INPUT.toAddress,
+        parcel: VALID_INPUT.parcel,
+      })
+    ).rejects.toMatchObject({ code: "FEDEX_RATE_QUOTE_FAILED" });
   });
 });

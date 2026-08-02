@@ -30,6 +30,7 @@ export {
   type PurchaseShipmentLabelInput,
   type PurchaseShipmentLabelOutput,
   PURCHASE_LABEL_ADAPTER_FAILED,
+  SHIPPING_ADDRESS_UNDELIVERABLE,
 } from "./commands/purchase-shipment-label.js";
 
 export {
@@ -111,6 +112,9 @@ export {
   FedExClient,
   FedExApiError,
   type FedExCancelShipmentRequest,
+  type FedExAddressValidationRequest,
+  type FedExAddressValidationResponse,
+  type FedExResolvedAddress,
   type FedExCancelShipmentResponse,
   type FedExClientOptions,
   type FedExRateQuoteRequest,
@@ -131,7 +135,7 @@ export {
   pickOccurredAt,
   type NormalizedFedExTrackingEvent,
 } from "./carriers/fedex-track-normalization.js";
-export { FedExShippingAdapter } from "./carriers/fedex-adapter.js";
+export { FedExShippingAdapter, deriveFedExDeliverability } from "./carriers/fedex-adapter.js";
 export { createFedExFactory, type CreateFedExFactoryOptions } from "./carriers/fedex-factory.js";
 export {
   FEDEX_SERVICE_TYPES,
@@ -162,12 +166,17 @@ export { createUpsFactory, type CreateUpsFactoryOptions } from "./carriers/ups-f
 export { normalizeUpsStatus, isUpsTrackingNumber } from "./carriers/ups-status.js";
 
 export type {
+  AddressDeliverability,
+  AddressValidationResult,
   CancelLabelResult,
+  GetRatesInput,
   PurchaseLabelInput,
   PurchasedLabel,
+  RateQuoteOption,
   ShippingAdapter,
   ShippingAddress,
   ShippingParcel,
+  SignatureOption,
 } from "./carriers/shipping-adapter.js";
 
 export {

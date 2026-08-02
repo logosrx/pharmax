@@ -36,7 +36,11 @@ import {
   type ShippingAdapterFactory,
 } from "../configure.js";
 
-import { PurchaseShipmentLabel, PURCHASE_LABEL_ADAPTER_FAILED } from "./purchase-shipment-label.js";
+import {
+  PurchaseShipmentLabel,
+  PURCHASE_LABEL_ADAPTER_FAILED,
+  SHIPPING_ADDRESS_UNDELIVERABLE,
+} from "./purchase-shipment-label.js";
 import { SHIPMENT_ALREADY_EXISTS } from "./create-shipment.js";
 import { SHIP_NOT_ASSIGNED_TO_ACTOR, SHIP_WRONG_STATUS } from "../shipping-guards.js";
 
@@ -399,6 +403,9 @@ describe("PurchaseShipmentLabel — happy path", () => {
       trackingNumber: "9400111899223344556677",
       externalShipmentId: "shp_demo",
       externalTrackerId: "trk_demo",
+      // The price the org paid must land as a queryable column —
+      // shipping-spend reporting reads shipment.postageRateCents.
+      postageRateCents: 940,
     });
 
     const outboxRows = (
@@ -511,5 +518,168 @@ describe("PurchaseShipmentLabel — credential missing", () => {
       ).rejects.toMatchObject({ code: "SHIPPING_CREDENTIAL_NOT_FOUND" });
     });
     expect(callsOf(fake.calls, "shipment", "create")).toHaveLength(0);
+  });
+});
+
+describe("PurchaseShipmentLabel — pre-flight address validation", () => {
+  function adapterWithValidation(
+    verdict:
+      | { deliverability: "CONFIRMED" | "UNCONFIRMED" | "INVALID"; classification: string | null }
+      | Error
+  ): StubFactoryAdapter & { validateAddress: ReturnType<typeof vi.fn> } {
+    const base = fakeAdapter();
+    const validateAddress = vi.fn(async () => {
+      if (verdict instanceof Error) throw verdict;
+      return verdict;
+    });
+    return Object.assign(base, { validateAddress });
+  }
+
+  it("blocks the purchase when the carrier says INVALID — no label bought, no shipment row", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+    const adapter = adapterWithValidation({ deliverability: "INVALID", classification: null });
+    configureShippingWithFakeAdapter(adapter);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(PurchaseShipmentLabel, validInput(), { idempotencyKey: "av-invalid" })
+      ).rejects.toMatchObject({ code: SHIPPING_ADDRESS_UNDELIVERABLE });
+    });
+
+    expect(adapter.validateAddress).toHaveBeenCalledTimes(1);
+    expect(adapter.purchaseLabel).not.toHaveBeenCalled();
+    expect(callsOf(fake.calls, "shipment", "create")).toHaveLength(0);
+  });
+
+  it("proceeds on CONFIRMED and persists the verdict columns (never the address)", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+    const adapter = adapterWithValidation({
+      deliverability: "CONFIRMED",
+      classification: "RESIDENTIAL",
+    });
+    configureShippingWithFakeAdapter(adapter);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(PurchaseShipmentLabel, validInput(), { idempotencyKey: "av-ok" })
+    );
+
+    expect(adapter.purchaseLabel).toHaveBeenCalledTimes(1);
+    const createArgs = (
+      callsOf(fake.calls, "shipment", "create")[0]!.args as { data: Record<string, unknown> }
+    ).data;
+    expect(createArgs["addressDeliverability"]).toBe("CONFIRMED");
+    expect(createArgs["addressClassification"]).toBe("RESIDENTIAL");
+    expect(createArgs["addressValidatedAt"]).toBeInstanceOf(Date);
+
+    // Verdict (not address) reaches the audit metadata.
+    const auditCreate = callsOf(fake.calls, "auditLog", "create")[0]!.args as {
+      data: { metadata: Record<string, unknown> };
+    };
+    expect(auditCreate.data.metadata["addressDeliverability"]).toBe("CONFIRMED");
+  });
+
+  it("proceeds on UNCONFIRMED — resolvable-but-unconfirmed must not block therapy", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+    const adapter = adapterWithValidation({
+      deliverability: "UNCONFIRMED",
+      classification: "UNKNOWN",
+    });
+    configureShippingWithFakeAdapter(adapter);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(PurchaseShipmentLabel, validInput(), { idempotencyKey: "av-unconfirmed" })
+    );
+
+    expect(adapter.purchaseLabel).toHaveBeenCalledTimes(1);
+    const createArgs = (
+      callsOf(fake.calls, "shipment", "create")[0]!.args as { data: Record<string, unknown> }
+    ).data;
+    expect(createArgs["addressDeliverability"]).toBe("UNCONFIRMED");
+  });
+
+  it("fails OPEN when the validation API is down — purchase proceeds, columns stay NULL", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+    const adapter = adapterWithValidation(new Error("validation service 503"));
+    configureShippingWithFakeAdapter(adapter);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(PurchaseShipmentLabel, validInput(), { idempotencyKey: "av-outage" })
+    );
+
+    expect(adapter.purchaseLabel).toHaveBeenCalledTimes(1);
+    const createArgs = (
+      callsOf(fake.calls, "shipment", "create")[0]!.args as { data: Record<string, unknown> }
+    ).data;
+    expect(createArgs["addressDeliverability"]).toBeNull();
+    expect(createArgs["addressValidatedAt"]).toBeNull();
+  });
+
+  it("skips validation entirely for providers without validateAddress", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+    const adapter = fakeAdapter(); // no validateAddress on the stub
+    configureShippingWithFakeAdapter(adapter);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(PurchaseShipmentLabel, validInput(), { idempotencyKey: "av-none" })
+    );
+
+    expect(adapter.purchaseLabel).toHaveBeenCalledTimes(1);
+    const createArgs = (
+      callsOf(fake.calls, "shipment", "create")[0]!.args as { data: Record<string, unknown> }
+    ).data;
+    expect(createArgs["addressDeliverability"]).toBeNull();
+  });
+});
+
+describe("PurchaseShipmentLabel — signature options", () => {
+  it("passes signatureOption to the adapter and persists it on the shipment + audit", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+    const adapter = fakeAdapter();
+    configureShippingWithFakeAdapter(adapter);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        PurchaseShipmentLabel,
+        { ...validInput(), signatureOption: "ADULT" },
+        { idempotencyKey: "sig-adult" }
+      )
+    );
+
+    expect(adapter.purchaseLabel).toHaveBeenCalledWith(
+      expect.objectContaining({ signatureOption: "ADULT" })
+    );
+    const createArgs = (
+      callsOf(fake.calls, "shipment", "create")[0]!.args as { data: Record<string, unknown> }
+    ).data;
+    expect(createArgs["signatureOption"]).toBe("ADULT");
+
+    const auditCreate = callsOf(fake.calls, "auditLog", "create")[0]!.args as {
+      data: { metadata: Record<string, unknown> };
+    };
+    expect(auditCreate.data.metadata["signatureOption"]).toBe("ADULT");
+  });
+
+  it("omits signatureOption from the adapter call and stores NULL when not requested", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+    const adapter = fakeAdapter();
+    configureShippingWithFakeAdapter(adapter);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(PurchaseShipmentLabel, validInput(), { idempotencyKey: "sig-none" })
+    );
+
+    const adapterInput = adapter.purchaseLabel.mock.calls[0]![0] as Record<string, unknown>;
+    expect("signatureOption" in adapterInput).toBe(false);
+    const createArgs = (
+      callsOf(fake.calls, "shipment", "create")[0]!.args as { data: Record<string, unknown> }
+    ).data;
+    expect(createArgs["signatureOption"]).toBeNull();
   });
 });

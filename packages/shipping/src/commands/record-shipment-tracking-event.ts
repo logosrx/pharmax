@@ -119,6 +119,8 @@ export const RecordShipmentTrackingEvent: Command<
         status: true,
         lastTrackingEventAt: true,
         lastTrackingEventKind: true,
+        pickedUpAt: true,
+        deliveredAt: true,
       },
     });
     if (shipment === null) {
@@ -183,6 +185,47 @@ export const RecordShipmentTrackingEvent: Command<
         ? { estimatedDeliveryAt: new Date(input.estimatedDeliveryAt) }
         : {};
 
+    // Pickup / delivery endpoints use MIN semantics, deliberately
+    // independent of the strictly-newer cache guard: a backfilled
+    // EARLIER movement scan must pull `pickedUpAt` back even though
+    // it is older than the cached last event. `pickedUpAt` is the
+    // earliest movement scan (IN_TRANSIT / OUT_FOR_DELIVERY);
+    // `deliveredAt` is the earliest DELIVERED scan — the physical
+    // delivery moment, unlike `lastTrackingEventAt`, which
+    // post-delivery events (e.g. proof-of-delivery updates) can
+    // advance past it.
+    const isMovementKind =
+      input.kind === ShipmentTrackingEventKind.IN_TRANSIT ||
+      input.kind === ShipmentTrackingEventKind.OUT_FOR_DELIVERY;
+    const newPickedUpAt =
+      isMovementKind &&
+      (shipment.pickedUpAt === null || occurredAt.getTime() < shipment.pickedUpAt.getTime())
+        ? occurredAt
+        : shipment.pickedUpAt;
+    const newDeliveredAt =
+      input.kind === ShipmentTrackingEventKind.DELIVERED &&
+      (shipment.deliveredAt === null || occurredAt.getTime() < shipment.deliveredAt.getTime())
+        ? occurredAt
+        : shipment.deliveredAt;
+
+    const transitEndpointsChanged =
+      newPickedUpAt !== shipment.pickedUpAt || newDeliveredAt !== shipment.deliveredAt;
+    const transitUpdate = transitEndpointsChanged
+      ? {
+          pickedUpAt: newPickedUpAt,
+          deliveredAt: newDeliveredAt,
+          // Recompute whenever an endpoint moves. Negative pairs
+          // (clock skew across scans) stay NULL rather than
+          // reporting impossible transit.
+          transitSeconds:
+            newPickedUpAt !== null &&
+            newDeliveredAt !== null &&
+            newDeliveredAt.getTime() >= newPickedUpAt.getTime()
+              ? Math.round((newDeliveredAt.getTime() - newPickedUpAt.getTime()) / 1000)
+              : null,
+        }
+      : {};
+
     if (shouldAdvanceCache) {
       await tx.shipment.update({
         where: { id: shipment.id },
@@ -191,6 +234,7 @@ export const RecordShipmentTrackingEvent: Command<
           lastTrackingEventAt: occurredAt,
           lastTrackingEventKind: input.kind,
           ...estimatedDeliveryUpdate,
+          ...transitUpdate,
         },
       });
     } else if (isStrictlyNewer) {
@@ -203,7 +247,16 @@ export const RecordShipmentTrackingEvent: Command<
           lastTrackingEventAt: occurredAt,
           lastTrackingEventKind: input.kind,
           ...estimatedDeliveryUpdate,
+          ...transitUpdate,
         },
+      });
+    } else if (transitEndpointsChanged) {
+      // Out-of-order backfill that moved a transit endpoint but is
+      // NOT the newest event: persist the endpoint change alone,
+      // leaving status + heartbeat untouched.
+      await tx.shipment.update({
+        where: { id: shipment.id },
+        data: transitUpdate,
       });
     }
 

@@ -121,3 +121,15 @@ describe("UpsShippingAdapter.purchaseLabel", () => {
     ).rejects.toMatchObject({ code: "UPS_CARRIER_MISMATCH" });
   });
 });
+
+describe("UpsShippingAdapter — signature options", () => {
+  it("rejects a signatureOption loudly instead of silently downgrading", async () => {
+    const client = upsClient(() => {
+      throw new Error("HTTP must not be reached when the option is unsupported");
+    });
+    const adapter = new UpsShippingAdapter({ client });
+    await expect(
+      adapter.purchaseLabel({ ...VALID_INPUT, signatureOption: "ADULT" })
+    ).rejects.toMatchObject({ code: "SIGNATURE_OPTION_UNSUPPORTED" });
+  });
+});

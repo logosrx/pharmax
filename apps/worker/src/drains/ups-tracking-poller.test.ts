@@ -62,6 +62,8 @@ function buildPrismaFake(input: BuildClientInput) {
     status: "CREATED",
     lastTrackingEventAt: null,
     lastTrackingEventKind: null,
+    pickedUpAt: null,
+    deliveredAt: null,
   }));
 
   const tx = {
