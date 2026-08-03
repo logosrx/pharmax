@@ -12,12 +12,14 @@
     "@pharmax/auth": "workspace:*",
     "@pharmax/billing": "workspace:*",
     "@pharmax/cache": "workspace:*",
+    "@pharmax/clinical-screening": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",
     "@pharmax/shipping": "workspace:*",
+    "@pharmax/verification": "workspace:*",
     "ioredis": "^5.11.1"
   },
   "devDependencies": {

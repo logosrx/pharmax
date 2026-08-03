@@ -775,6 +775,8 @@ model Organization {
   orderHolds                     OrderHold[]
   orderCorrectionReopens         OrderCorrectionReopen[]
   verificationRecords            VerificationRecord[]
+  screeningFindings              OrderScreeningFinding[]
+  screeningAcknowledgements      OrderScreeningAcknowledgement[]
   products                       Product[]
   lots                           Lot[]
   lotAssignments                 LotAssignment[]
@@ -1065,6 +1067,8 @@ model User {
   orderHoldsReleased            OrderHold[]                     @relation("OrderHoldReleaser")
   orderCorrectionReopens        OrderCorrectionReopen[]         @relation("OrderCorrectionReopenActor")
   verificationRecords           VerificationRecord[]            @relation("VerificationRecordActor")
+  screeningFindings             OrderScreeningFinding[]         @relation("OrderScreeningFindingActor")
+  screeningAcknowledgements     OrderScreeningAcknowledgement[] @relation("OrderScreeningAcknowledgementActor")
   lotAssignments                LotAssignment[]                 @relation("LotAssignmentActor")
   printJobsRequested            PrintJob[]                      @relation("PrintJobRequester")
   shipmentsCreated              Shipment[]                      @relation("ShipmentCreator")
@@ -1565,6 +1569,8 @@ model WorkflowPolicy {
   orderHolds                     OrderHold[]
   orderCorrectionReopens         OrderCorrectionReopen[]
   verificationRecords            VerificationRecord[]
+  screeningFindings              OrderScreeningFinding[]
+  screeningAcknowledgements      OrderScreeningAcknowledgement[]
   overlays                       WorkflowPolicyOverlay[]
   providerOnboardingApplications ProviderOnboardingApplication[]
   compoundingRecords             CompoundingRecord[]
@@ -1694,28 +1700,30 @@ model CommandLog {
 
   orderEvents                  OrderEvent[]
   orderCancellations           OrderCancellation[]
-  orderHoldsPlaced             OrderHold[]              @relation("OrderHoldPlaceCommand")
-  orderHoldsReleased           OrderHold[]              @relation("OrderHoldReleaseCommand")
-  orderCorrectionReopens       OrderCorrectionReopen[]  @relation("OrderCorrectionReopenCommand")
+  orderHoldsPlaced             OrderHold[]                     @relation("OrderHoldPlaceCommand")
+  orderHoldsReleased           OrderHold[]                     @relation("OrderHoldReleaseCommand")
+  orderCorrectionReopens       OrderCorrectionReopen[]         @relation("OrderCorrectionReopenCommand")
   verificationRecords          VerificationRecord[]
+  screeningFindings            OrderScreeningFinding[]
+  screeningAcknowledgements    OrderScreeningAcknowledgement[]
   lotAssignments               LotAssignment[]
   inventoryTransactions        InventoryTransaction[]
   printJobs                    PrintJob[]
-  shipmentsCreated             Shipment[]               @relation("ShipmentCreateCommand")
-  shipmentsConfirmed           Shipment[]               @relation("ShipmentConfirmCommand")
-  shipmentTrackingEvents       ShipmentTrackingEvent[]  @relation("ShipmentTrackingEventCommand")
-  carrierCredentialsCreated    CarrierCredential[]      @relation("CarrierCredentialCreateCommand")
-  apiKeysCreated               ApiKey[]                 @relation("ApiKeyCreateCommand")
-  webhookSubscriptionsCreated  WebhookSubscription[]    @relation("WebhookSubscriptionCreateCommand")
-  pricingRulesCreated          PricingRule[]            @relation("PricingRuleCreateCommandLog")
-  stageIntervalsOpened         OrderStageInterval[]     @relation("StageIntervalOpenCommand")
-  stageIntervalsClosed         OrderStageInterval[]     @relation("StageIntervalCloseCommand")
-  packagePhotos                PackagePhoto[]           @relation("PackagePhotoCaptureCommand")
-  reportRuns                   ReportRun[]              @relation("ReportRunCommand")
-  reportSchedulesCreated       ReportSchedule[]         @relation("ReportScheduleCreateCommand")
-  accessReviewSnapshots        AccessReviewSnapshot[]   @relation("AccessReviewSnapshotCommand")
-  providerSyncChecksDispatched ProviderSyncCheck[]      @relation("ProviderSyncCheckDispatchedCommandLog")
-  providerSyncReviewsResolved  ProviderSyncReviewItem[] @relation("ProviderSyncReviewResolvedCommandLog")
+  shipmentsCreated             Shipment[]                      @relation("ShipmentCreateCommand")
+  shipmentsConfirmed           Shipment[]                      @relation("ShipmentConfirmCommand")
+  shipmentTrackingEvents       ShipmentTrackingEvent[]         @relation("ShipmentTrackingEventCommand")
+  carrierCredentialsCreated    CarrierCredential[]             @relation("CarrierCredentialCreateCommand")
+  apiKeysCreated               ApiKey[]                        @relation("ApiKeyCreateCommand")
+  webhookSubscriptionsCreated  WebhookSubscription[]           @relation("WebhookSubscriptionCreateCommand")
+  pricingRulesCreated          PricingRule[]                   @relation("PricingRuleCreateCommandLog")
+  stageIntervalsOpened         OrderStageInterval[]            @relation("StageIntervalOpenCommand")
+  stageIntervalsClosed         OrderStageInterval[]            @relation("StageIntervalCloseCommand")
+  packagePhotos                PackagePhoto[]                  @relation("PackagePhotoCaptureCommand")
+  reportRuns                   ReportRun[]                     @relation("ReportRunCommand")
+  reportSchedulesCreated       ReportSchedule[]                @relation("ReportScheduleCreateCommand")
+  accessReviewSnapshots        AccessReviewSnapshot[]          @relation("AccessReviewSnapshotCommand")
+  providerSyncChecksDispatched ProviderSyncCheck[]             @relation("ProviderSyncCheckDispatchedCommandLog")
+  providerSyncReviewsResolved  ProviderSyncReviewItem[]        @relation("ProviderSyncReviewResolvedCommandLog")
   breakGlassActions            BreakGlassAction[]
   compoundingRecords           CompoundingRecord[]
   dscsaTransactions            DscsaTransaction[]
@@ -3216,20 +3224,22 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orderLines          OrderLine[]
-  orderEvents         OrderEvent[]
-  commandLogs         CommandLog[]
-  invoiceLines        InvoiceLine[]
-  cancellation        OrderCancellation?
-  holds               OrderHold[]
-  correctionReopens   OrderCorrectionReopen[]
-  verificationRecords VerificationRecord[]
-  lotAssignments      LotAssignment[]
-  printJobs           PrintJob[]
-  vialLabels          VialLabel[]
-  shipments           Shipment[]
-  stageIntervals      OrderStageInterval[]
-  packagePhotos       PackagePhoto[]          @relation("PackagePhotoMatchedOrder")
+  orderLines                OrderLine[]
+  orderEvents               OrderEvent[]
+  commandLogs               CommandLog[]
+  invoiceLines              InvoiceLine[]
+  cancellation              OrderCancellation?
+  holds                     OrderHold[]
+  correctionReopens         OrderCorrectionReopen[]
+  verificationRecords       VerificationRecord[]
+  screeningFindings         OrderScreeningFinding[]
+  screeningAcknowledgements OrderScreeningAcknowledgement[]
+  lotAssignments            LotAssignment[]
+  printJobs                 PrintJob[]
+  vialLabels                VialLabel[]
+  shipments                 Shipment[]
+  stageIntervals            OrderStageInterval[]
+  packagePhotos             PackagePhoto[]                  @relation("PackagePhotoMatchedOrder")
 
   // The queue-shaped index. Order matters: scanner filters by
   // bucket+status, sorts by priority desc + SLA asc + receivedAt
@@ -3590,6 +3600,157 @@ model VerificationRecord {
   // reporting view materializes off this index.
   @@index([organizationId, stage, decision, occurredAt])
   @@map("verification_record")
+}
+
+// Which PV1 command produced a screening pass.
+//
+// PV1_START is the snapshot the pharmacist's console renders when
+// they open the review. PV1_APPROVE is the re-screen taken at
+// sign-off — the one the approval was actually gated on. Both are
+// kept: the pair is the evidence that the profile did (or did not)
+// move underneath the review.
+enum ScreeningPhase {
+  PV1_START
+  PV1_APPROVE
+}
+
+// One clinical-screening finding, as produced by
+// `@pharmax/clinical-screening` during a PV1 screening pass.
+//
+// PHI INVARIANT — the reason this table can exist at all. A finding
+// carries NO patient identifier, NO drug name, and NO caller free
+// text. `reason` is templated from codes BY THE ENGINE (see the
+// header of `packages/clinical-screening/src/findings.ts`), and the
+// only identifiers that reach `triggers` are the opaque record ids
+// the command handed in (prescription ids). Rendering a code as a
+// drug name is the operator console's job, inside an authorized
+// session — not this row's.
+//
+// Append-only, like `verification_record`: what the engine told a
+// pharmacist on a given day cannot be edited afterwards, because the
+// whole point of storing it is to be able to answer "what did they
+// see when they signed?" years later. `workflowPolicyId` +
+// `workflowPolicyVersion` and `minimumReportedSeverity` are stamped
+// on every row for the same reason — the reporting floor is bound to
+// the policy version, and a later version raising it must not make an
+// old screen look like it reported everything.
+model OrderScreeningFinding {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  phase ScreeningPhase
+
+  screenedForUserId String @db.Uuid
+  screenedForUser   User   @relation("OrderScreeningFindingActor", fields: [screenedForUserId], references: [id], onDelete: Restrict)
+
+  // Finding vocabulary, owned by @pharmax/clinical-screening. Stored
+  // as TEXT rather than DB enums for the same reason
+  // `verification_record.rejectionReasonCode` is: the code list is
+  // designed to GROW (a code may be added, never renamed), and a new
+  // finding kind must not require a schema migration. `disposition`
+  // is the exception — it is the workflow contract, structurally
+  // closed, and carries a CHECK constraint in the migration.
+  code        String
+  kind        String
+  severity    String
+  certainty   String
+  disposition String
+
+  // Stable identity of the clinical situation. An acknowledgement
+  // matches a finding on this value; see `fingerprintOf`.
+  fingerprint String
+
+  // Operator-facing explanation, templated from codes by the engine.
+  reason String
+
+  // The inputs that set the finding off: `[{ source, recordId, code }]`.
+  triggers Json
+
+  // Provenance supplied by the knowledge source, when one exists.
+  citation String?
+
+  // Replay-correctness anchor. `minimumReportedSeverity` is the
+  // screening floor that was in force, which is a property of the
+  // workflow policy VERSION (see `OrderWorkflowPolicy.screening`) —
+  // stamped here so a screen is reproducible without re-deriving the
+  // policy that governed it.
+  workflowPolicyId        String         @db.Uuid
+  workflowPolicy          WorkflowPolicy @relation(fields: [workflowPolicyId], references: [id], onDelete: Restrict)
+  workflowPolicyVersion   Int
+  minimumReportedSeverity String
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  // "What did the last screen on this order say?" — the console's
+  // read path, and the lookup AcknowledgePV1ScreeningFinding uses to
+  // prove a fingerprint was actually shown before it is acknowledged.
+  @@index([organizationId, orderId, phase, occurredAt])
+  // "How often does this finding code fire, and at what grade?" —
+  // alert-fatigue reporting, which is the metric that decides whether
+  // the screening tiers are set correctly.
+  @@index([organizationId, code, severity, occurredAt])
+  @@map("order_screening_finding")
+}
+
+// A pharmacist's recorded judgement on one screening finding.
+//
+// Scoped to (order, pharmacist, fingerprint) on purpose. An
+// acknowledgement is a professional judgement attached to a PERSON:
+// ApprovePV1 requires one from the pharmacist who is signing, not
+// from whoever happened to look at the order first. Inheriting a
+// colleague's acknowledgement is exactly how a clinical check
+// degrades into a checkbox.
+//
+// The unique constraint makes a double-acknowledgement structurally
+// impossible rather than merely unlikely, and gives the command a
+// cheap "already recorded" read.
+//
+// PHI invariant: same as the finding table — codes and ids only.
+model OrderScreeningAcknowledgement {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  // The finding this settles. Copied from the persisted finding row
+  // rather than taken from the caller, so an acknowledgement can
+  // never claim a grading the engine did not produce.
+  fingerprint String
+  findingCode String
+  severity    String
+  certainty   String
+
+  pharmacistUserId String @db.Uuid
+  pharmacistUser   User   @relation("OrderScreeningAcknowledgementActor", fields: [pharmacistUserId], references: [id], onDelete: Restrict)
+
+  workflowPolicyId      String         @db.Uuid
+  workflowPolicy        WorkflowPolicy @relation(fields: [workflowPolicyId], references: [id], onDelete: Restrict)
+  workflowPolicyVersion Int
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  acknowledgedAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, orderId, pharmacistUserId, fingerprint])
+  // The gate's read path: "which fingerprints has THIS pharmacist
+  // settled on THIS order?" — evaluated on every ApprovePV1.
+  @@index([organizationId, orderId, pharmacistUserId])
+  // "What has this pharmacist acknowledged, and when?" — override-rate
+  // reporting per pharmacist.
+  @@index([organizationId, pharmacistUserId, acknowledgedAt])
+  @@map("order_screening_acknowledgement")
 }
 
 // Status of a scheduled-report row.

@@ -50,6 +50,20 @@ describe("mergePolicyWithOverlay — identity", () => {
     expect(merged.states).toBe(BASE.states);
     expect(merged.terminalStates).toBe(BASE.terminalStates);
   });
+
+  it("carries the base's clinical-screening floor through unchanged", () => {
+    // An overlay is per-tenant configuration and may TIGHTEN the
+    // state machine. It must not be able to reach the screening
+    // floor: lowering the number of findings a pharmacist is shown is
+    // exactly the change that has to be versioned and reviewed, and
+    // an overlay is neither. There is no overlay field for it today —
+    // this test is what fails if someone adds one.
+    const merged = mergePolicyWithOverlay(BASE, {
+      forbidTransitionsFromStates: { REOPEN_FOR_CORRECTION: ["PV1_REJECTED"] },
+    });
+    expect(merged.screening).toBe(BASE.screening);
+    expect(merged.screening.minimumReportedSeverity).toBe("MINOR");
+  });
 });
 
 describe("mergePolicyWithOverlay — tightening (forbidTransitionsFromStates)", () => {

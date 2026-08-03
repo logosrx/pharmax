@@ -60,6 +60,8 @@ import {
   resolveTelemetryConfigFromEnv,
   type TelemetryHandle,
 } from "@pharmax/telemetry";
+import { createInMemoryDrugKnowledgeSource } from "@pharmax/clinical-screening";
+import { configureClinicalScreening } from "@pharmax/verification";
 
 import { env } from "./env.js";
 import { logger } from "./logger.js";
@@ -479,6 +481,32 @@ async function doBootstrap(): Promise<void> {
     prisma,
     clock: clock.systemClock,
     logger: logger.child({ component: "command-bus" }),
+  });
+
+  // 5.1 @pharmax/verification — the PV1 clinical-screening knowledge
+  // source.
+  //
+  // Pharmax ships NO drug data. Interaction tables, cross-sensitivity
+  // groupings and severity gradings are licensed proprietary content,
+  // and embedding any of them here is a clean-room incident
+  // regardless of provenance (see
+  // docs/governance/public-sources-reference.md). A deployment whose
+  // customer holds a licence wires an adapter over that database
+  // here; this one wires the empty source.
+  //
+  // What that means operationally, stated loudly because it is a
+  // patient-safety fact and not a TODO: with no knowledge source, the
+  // screening engine can answer none of its questions and reports
+  // `SCR_KNOWLEDGE_UNAVAILABLE` on EVERY prescription. That finding
+  // requires a pharmacist acknowledgement, so PV1 approvals still
+  // work — but each one is a pharmacist explicitly recording that
+  // this prescription was not screened. The system says what it did
+  // not do; it does not pretend it screened and found nothing.
+  configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+  logger.warn("apps/web booted without a licensed drug knowledge source", {
+    event: "clinical_screening.knowledge_source.absent",
+    reason:
+      "PV1 screening will report SCR_KNOWLEDGE_UNAVAILABLE on every prescription; each approval requires a pharmacist to acknowledge that the screen could not run.",
   });
 
   // 6. @pharmax/auth — the in-house identity engine (ADR-0030).

@@ -146,6 +146,22 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // is enforced at the command-handler layer by stamping those
   // columns from the loaded policy.
   ["VerificationRecord", { kind: "organizationId" }] as const,
+  // PV1 clinical screening (pv1_clinical_screening migration).
+  //
+  // OrderScreeningFinding is what the screening engine told a
+  // pharmacist during a PV1 pass; OrderScreeningAcknowledgement is
+  // that pharmacist's recorded judgement on one finding. Both carry a
+  // NON-NULLABLE organizationId (rule 1) and both are append-only at
+  // the DB layer (SELECT + INSERT grants, no UPDATE/DELETE policy) —
+  // same posture as VerificationRecord.
+  //
+  // Auto-scoping matters more than usual for the acknowledgement
+  // table: ApprovePV1's gate is a READ ("which fingerprints has this
+  // pharmacist settled on this order?"), and an unscoped read there
+  // would let one tenant's acknowledgement satisfy another tenant's
+  // approval gate. Neither table stores PHI.
+  ["OrderScreeningFinding", { kind: "organizationId" }] as const,
+  ["OrderScreeningAcknowledgement", { kind: "organizationId" }] as const,
   ["Product", { kind: "organizationId" }] as const,
   ["Lot", { kind: "organizationId" }] as const,
   ["LotAssignment", { kind: "organizationId" }] as const,

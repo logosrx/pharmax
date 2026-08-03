@@ -42,6 +42,12 @@ import {
 } from "@pharmax/rbac";
 import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
+import {
+  createScreeningStubs,
+  type ScreeningStubOptions,
+  type ScreeningStubs,
+} from "../screening/test-support.js";
+
 import { ApprovePV1 } from "./approve-pv1.js";
 
 // ---------------------------------------------------------------------------
@@ -57,6 +63,53 @@ const PHARMACIST_ID = "00000000-0000-4000-8000-000000000099";
 const TYPIST_ID = "00000000-0000-4000-8000-000000000088";
 const FILL_BUCKET_ID = "00000000-0000-4000-8000-0000000000cc";
 const VERIFICATION_RECORD_ID = "00000000-0000-4000-8000-0000000000ff";
+const PATIENT_ID = "00000000-0000-4000-8000-0000000000d1";
+const RX_ID = "00000000-0000-4000-8000-0000000000e1";
+
+/**
+ * The fingerprint the empty knowledge source produces for a single
+ * unknown candidate drug: code + grading + the trigger code (the
+ * NDC) + the scope qualifier. Written out rather than imported so the
+ * suite fails loudly if `fingerprintOf` ever changes shape — an
+ * acknowledgement matches on this string and nothing else, so a
+ * silent change to it would silently orphan every acknowledgement
+ * ever recorded.
+ */
+const KNOWLEDGE_GAP_FINGERPRINT =
+  "SCR_KNOWLEDGE_UNAVAILABLE|MODERATE/DEFINITE|00000-0000-01|scope=CANDIDATE_DRUG";
+
+/**
+ * One prescription on the order, nothing else on the profile. Against
+ * the empty knowledge source — the only source this repository ships
+ * — that is exactly one finding: `SCR_KNOWLEDGE_UNAVAILABLE`,
+ * disposition REQUIRES_ACKNOWLEDGEMENT. So the DEFAULT state of these
+ * tests is an approval that is BLOCKED until the pharmacist
+ * acknowledges that the screen could not run, which is the honest
+ * behaviour and worth having as the default rather than the
+ * exception.
+ */
+const DEFAULT_SCREENING_STUBS: ScreeningStubOptions = {
+  patientId: PATIENT_ID,
+  orderLinePrescriptionIds: [RX_ID],
+  prescriptions: [{ id: RX_ID, patientId: PATIENT_ID, drugNdc: "00000-0000-01", status: "ACTIVE" }],
+};
+
+/** Default inputs plus this pharmacist's acknowledgement of the gap. */
+function screeningStubsWithGapAcknowledged(
+  pharmacistUserId: string = PHARMACIST_ID
+): ScreeningStubOptions {
+  return {
+    ...DEFAULT_SCREENING_STUBS,
+    acknowledgements: [
+      {
+        id: "ack-existing",
+        orderId: ORDER_ID,
+        pharmacistUserId,
+        fingerprint: KNOWLEDGE_GAP_FINGERPRINT,
+      },
+    ],
+  };
+}
 
 const orgWidePV1ApproveGrants: ReadonlyArray<ResolvedGrant> = [
   {
@@ -128,6 +181,12 @@ interface FakeOverrides {
    * id-shape change or a custom row.
    */
   verificationRecordCreate?: { id: string };
+  /**
+   * Clinical-screening inputs. Defaults to the gap-acknowledged
+   * fixture so the pre-existing happy-path assertions still exercise
+   * a successful approval — the screening gate is proved separately.
+   */
+  screening?: ScreeningStubOptions;
 }
 
 const DEFAULT_HEALTHY_HISTORY: ReadonlyArray<FakeHistoryRow> = [
@@ -140,8 +199,13 @@ const DEFAULT_HEALTHY_HISTORY: ReadonlyArray<FakeHistoryRow> = [
 function buildPrismaFake(overrides: FakeOverrides = {}): {
   client: unknown;
   calls: FakeCall[];
+  screening: ScreeningStubs;
 } {
   const calls: FakeCall[] = [];
+  const screening = createScreeningStubs(
+    (table, op, args) => calls.push({ table, op, args }),
+    overrides.screening ?? screeningStubsWithGapAcknowledged()
+  );
 
   const lockedRow =
     overrides.lockedRow === undefined
@@ -172,6 +236,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
       }),
     },
     order: {
+      ...screening.order,
       update: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "update", args });
         return { id: ORDER_ID };
@@ -181,6 +246,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return { count: orderUpdateManyCount };
       }),
     },
+    orderLine: screening.orderLine,
+    prescription: screening.prescription,
+    orderScreeningFinding: screening.orderScreeningFinding,
+    orderScreeningAcknowledgement: screening.orderScreeningAcknowledgement,
     bucket: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "bucket", op: "findFirst", args });
@@ -321,7 +390,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     $transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
   };
 
-  return { client, calls };
+  return { client, calls, screening };
 }
 
 function callsOf(calls: FakeCall[], table: string, op: string): FakeCall[] {
@@ -459,15 +528,23 @@ describe("ApprovePV1 — happy path", () => {
     expect(casArgs.where).toEqual({ id: ORDER_ID, organizationId: ORG_ID, version: 3 });
     expect(casArgs.data).toEqual({ version: 4 });
 
-    // order_event written with seq = head+1 = 5.
+    // Two order_event rows: the approval (seq = head+1 = 5) and the
+    // re-screen this approval was gated on (seq 6). Both belong on the
+    // timeline — "approved" without "screened against what" is the
+    // record that cannot answer the question that matters later.
     const oeCreate = callsOf(fake.calls, "orderEvent", "create");
-    expect(oeCreate).toHaveLength(1);
+    expect(oeCreate).toHaveLength(2);
     const oeData = (oeCreate[0]!.args as { data: Record<string, unknown> }).data;
     expect(oeData).toMatchObject({
       organizationId: ORG_ID,
       orderId: ORDER_ID,
       eventType: "order.pv1.approved.v1",
       sequenceNumber: 5,
+      actorUserId: PHARMACIST_ID,
+    });
+    expect((oeCreate[1]!.args as { data: Record<string, unknown> }).data).toMatchObject({
+      eventType: "order.pv1.screening.recorded.v1",
+      sequenceNumber: 6,
       actorUserId: PHARMACIST_ID,
     });
 
@@ -502,7 +579,7 @@ describe("ApprovePV1 — happy path", () => {
 
     const outboxCall = callsOf(fake.calls, "eventOutbox", "createMany")[0];
     const rows = (outboxCall!.args as { data: Array<Record<string, unknown>> }).data;
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
       organizationId: ORG_ID,
       eventType: "order.pv1.approved.v1",
@@ -682,7 +759,8 @@ describe("ApprovePV1 — Separation of Duties (sod.typing-pv1-same-actor)", () =
     // Happy-path mutations all happened (proving SoD did NOT fire).
     expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(1);
     expect(callsOf(fake.calls, "order", "update")).toHaveLength(1);
-    expect(callsOf(fake.calls, "orderEvent", "create")).toHaveLength(1);
+    // Two: the approval and the screening record it was gated on.
+    expect(callsOf(fake.calls, "orderEvent", "create")).toHaveLength(2);
     expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(1);
     expect(callsOf(fake.calls, "eventOutbox", "createMany")).toHaveLength(1);
   });
