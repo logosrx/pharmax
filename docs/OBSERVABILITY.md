@@ -4,21 +4,24 @@ Where everything goes when something goes wrong, and how to find it.
 
 ## TL;DR
 
-| Signal                        | Where it lives                                                              | How to query                         |
-| ----------------------------- | --------------------------------------------------------------------------- | ------------------------------------ |
-| Application logs (structured) | `stdout` of each process → log aggregator (TBD per deploy)                  | `correlationId` filter               |
-| Distributed traces (OTel)     | OTLP collector → tracing backend (per deploy)                               | `trace_id`; see § Distributed traces |
-| Captured exceptions           | Sentry, project: `pharmacy-os` / `pharmacy-worker` / `pharmacy-print-agent` | `organization.id:<org-uuid>`         |
-| Domain audit events           | `audit_log` table, hash-linked                                              | SQL on `audit_log.organizationId`    |
-| Workflow events               | `order_event` table                                                         | SQL on `order_event.orderId`         |
-| Outbound side effects         | `event_outbox` table                                                        | SQL on outbox status / attempts      |
-| Stripe webhook events         | `stripe_webhook_event` table                                                | SQL on `stripeEventId`               |
-| EasyPost webhook events       | `easypost_webhook_event` table                                              | SQL on `easyPostEventId`             |
-| Command execution             | `command_log` table                                                         | SQL on `commandLogId`                |
-| SLA intervals                 | `order_stage_interval` table                                                | SQL on `(orderId, kind)`             |
-| Idempotency replays           | `idempotency_key` table                                                     | SQL on `(organizationId, key)`       |
+| Signal                        | Where it lives                                                              | How to query                                   |
+| ----------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------- |
+| Application logs (structured) | `stdout` of each process → log aggregator (TBD per deploy)                  | `correlationId` filter                         |
+| Distributed traces (OTel)     | OTLP collector → tracing backend (per deploy)                               | `trace_id`; see § Distributed traces           |
+| Captured exceptions           | Sentry, project: `pharmacy-os` / `pharmacy-worker` / `pharmacy-print-agent` | `organization.id:<org-uuid>`                   |
+| Domain audit events           | `audit_log` table, hash-linked                                              | SQL on `audit_log.organizationId`              |
+| Workflow events               | `order_event` table                                                         | SQL on `order_event.orderId`                   |
+| Outbound side effects         | `event_outbox` table                                                        | SQL on outbox status / attempts                |
+| Stripe webhook events         | `stripe_webhook_event` table                                                | SQL on `stripeEventId`                         |
+| EasyPost webhook events       | `easypost_webhook_event` table                                              | SQL on `easyPostEventId`                       |
+| Command execution             | `command_log` table                                                         | SQL on `commandLogId`                          |
+| SLA intervals                 | `order_stage_interval` table                                                | SQL on `(orderId, kind)`                       |
+| Idempotency replays           | `idempotency_key` table                                                     | SQL on `(organizationId, key)`                 |
+| Infrastructure alarms         | CloudWatch → two SNS topics (critical / warning)                            | [`runbooks/alerting.md`](runbooks/alerting.md) |
 
 The first three layers (logs, Sentry, audit) are the ones an operator reaches for during an incident. The SQL tables are for forensic / compliance investigations.
+
+Everything above is what you read once you know something is wrong. What tells you in the first place is the CloudWatch alarm set: [`runbooks/alerting.md`](runbooks/alerting.md) lists every alarm, which tier it pages, and the first diagnostic step for each.
 
 ## The four layers of observability
 

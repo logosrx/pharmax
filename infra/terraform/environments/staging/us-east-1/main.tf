@@ -53,6 +53,12 @@ module "stack" {
   waf_rate_limit_per_5min = var.waf_rate_limit_per_5min
   alarm_sns_topic_arn     = var.alarm_sns_topic_arn
 
+  enable_alerting                       = var.enable_alerting
+  alerting_critical_email_subscriptions = var.alerting_critical_email_subscriptions
+  alerting_warning_email_subscriptions  = var.alerting_warning_email_subscriptions
+  alerting_critical_https_subscriptions = var.alerting_critical_https_subscriptions
+  alerting_warning_https_subscriptions  = var.alerting_warning_https_subscriptions
+
   audit_archive_retention_years         = var.audit_archive_retention_years
   audit_archive_glacier_transition_days = var.audit_archive_glacier_transition_days
 

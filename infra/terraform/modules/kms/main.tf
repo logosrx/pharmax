@@ -1,7 +1,7 @@
 # =============================================================================
-# KMS module — eight customer-managed keys.
+# KMS module — nine customer-managed keys.
 #
-# Why eight separate keys (not one):
+# Why nine separate keys (not one):
 #   - Blast radius. Compromise of (say) the logs key does not leak PHI.
 #   - Auditability. CloudTrail "Decrypt" entries on the data key SHOULD only
 #     appear for ECS task roles doing PHI work; mixing with logs traffic
@@ -12,10 +12,20 @@
 #     key — the symmetric data key (ENCRYPT_DECRYPT), the HMAC search key
 #     (GENERATE_VERIFY_MAC), and the asymmetric audit-signing key (SIGN_VERIFY)
 #     MUST be distinct keys.
+#   - Service-principal surface. A key is only as narrow as the widest
+#     principal in its policy. The alerts key (#9) must be usable by the
+#     `cloudwatch.amazonaws.com` service principal so an alarm can publish to
+#     an SSE-KMS SNS topic. That grant does not belong on any key that wraps
+#     PHI, and it cannot be folded into the logs key either: the logs key
+#     conditions its grant on `kms:EncryptionContext:aws:logs:arn`, an
+#     encryption context SNS publishes never carry, so re-using it would mean
+#     deleting that condition and widening a key only CloudWatch Logs can use
+#     today.
 #
 # All keys have an alias and a tight resource policy that grants account
 # root the ability to administer (so the operator can manage the key) and
-# explicit service principals where required (CloudWatch Logs, S3, RDS).
+# explicit service principals where required (CloudWatch Logs, CloudWatch
+# alarms, S3, RDS).
 # Application-level grants (kms:GenerateDataKey / Decrypt / GenerateMac /
 # Sign) are attached separately by the iam module via aws_iam_role_policy
 # resources, NOT via the key resource policy — this keeps the key policies
@@ -24,7 +34,7 @@
 #
 # Rotation:
 #   - Symmetric ENCRYPT_DECRYPT keys (rds, secrets, data, audit_archive,
-#     documents, logs): annual automatic rotation.
+#     documents, logs, alerts): annual automatic rotation.
 #   - HMAC keys (search): NOT auto-rotatable by AWS; app-level re-key.
 #   - Asymmetric SIGN_VERIFY keys (asymm_sign): NOT rotatable by AWS;
 #     application-level rotation procedure documented in the runbook.
@@ -100,6 +110,43 @@ data "aws_iam_policy_document" "key_admin_with_s3_audit" {
     actions = [
       "kms:Decrypt",
       "kms:GenerateDataKey",
+    ]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [var.aws_account_id]
+    }
+  }
+}
+
+# Alerts key: CloudWatch alarms encrypt the notifications they publish to the
+# SSE-KMS SNS topics in `modules/alerting`. AWS requires the publishing service
+# principal — here `cloudwatch.amazonaws.com` — to hold GenerateDataKey* +
+# Decrypt on the topic's CMK; without it every alarm transition fails at
+# publish time and the alarm looks healthy while nobody is notified.
+#
+# The two conditions keep the grant from being a standing permission for any
+# CloudWatch alarm anywhere: `aws:SourceAccount` pins it to this account, and
+# a caller from another account cannot satisfy it. Adding a second publisher
+# (EventBridge, AWS Config, Application Auto Scaling) means adding its
+# principal here deliberately — the widening is visible in the diff.
+data "aws_iam_policy_document" "key_admin_with_cloudwatch_alarms" {
+  source_policy_documents = [data.aws_iam_policy_document.key_admin.json]
+
+  statement {
+    sid    = "AllowCloudWatchAlarmsEncryptForSns"
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["cloudwatch.amazonaws.com"]
+    }
+
+    actions = [
+      "kms:Decrypt",
+      "kms:GenerateDataKey*",
     ]
     resources = ["*"]
 
@@ -322,4 +369,35 @@ resource "aws_kms_key" "logs" {
 resource "aws_kms_alias" "logs" {
   name          = "alias/${var.name_prefix}-logs"
   target_key_id = aws_kms_key.logs.id
+}
+
+# ---- 9. Alerting (SNS topic) key ---------------------------------------------
+#
+# Encrypts the critical + warning SNS topics in `modules/alerting`, which carry
+# CloudWatch alarm notifications to the on-call human.
+#
+# Alarm notifications are not PHI: the payload is an alarm name, a metric, a
+# threshold, and a state transition. They are still worth encrypting — an
+# alarm stream is a map of which subsystem is fragile and when, which is
+# reconnaissance — and SOC 2 CC6.7 expects at-rest encryption on the topic
+# regardless of payload sensitivity.
+#
+# Why not the logs key (#8): see the module header. Its policy is conditioned
+# on the CloudWatch Logs encryption context; SNS publishes carry no such
+# context, so sharing the key would require deleting that condition.
+
+resource "aws_kms_key" "alerts" {
+  description             = "Pharmax alerting SNS topics (${var.name_prefix}) — CloudWatch alarm notifications"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+  policy                  = data.aws_iam_policy_document.key_admin_with_cloudwatch_alarms.json
+
+  tags = merge(var.tags, {
+    Purpose = "sns-alerting"
+  })
+}
+
+resource "aws_kms_alias" "alerts" {
+  name          = "alias/${var.name_prefix}-alerts"
+  target_key_id = aws_kms_key.alerts.id
 }

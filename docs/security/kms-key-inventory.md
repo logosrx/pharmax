@@ -7,7 +7,7 @@
 | Effective date | 2026-05-28                                  |
 | Last reviewed  | 2026-05-28                                  |
 | Next review    | 2026-08-28 (quarterly)                      |
-| Version        | 1.1                                         |
+| Version        | 1.3                                         |
 | Distribution   | Internal — All engineering, audit observers |
 
 ## 1. Purpose
@@ -23,7 +23,7 @@ engineers, and operators read this page to answer:
 - Where is the rotation procedure?
 - What breaks if it goes away?
 
-For the architectural decisions behind the inventory (why eight, why this
+For the architectural decisions behind the inventory (why nine, why this
 split, why these key specs) see ADR-0023, ADR-0024, and ADR-0028. For
 operational procedures, see [`../RUNBOOK.md`](../RUNBOOK.md). For the
 underlying IaC, see
@@ -50,13 +50,13 @@ Out of scope (referenced for completeness, NOT enumerated here):
   dev-only credential bound to `LocalKmsAdapter`; production cannot
   resolve it (bootstrap hard-fails — see ADR-0023).
 
-## 3. The eight production keys
+## 3. The nine production keys
 
 The keys exist once per `<environment, region>` tuple. Naming follows
 the Terraform `name_prefix` convention: `pharmax-<env>-<region>-`. Example
 production us-east-1 aliases shown below.
 
-> All eight keys have `deletion_window_in_days = 30` (the maximum AWS
+> All nine keys have `deletion_window_in_days = 30` (the maximum AWS
 > KMS allows). This is the standard safety net against operator error;
 > never reduce it. See `infra/terraform/modules/kms/main.tf`.
 
@@ -72,6 +72,7 @@ production us-east-1 aliases shown below.
 | 6   | `aws_kms_key.search`        | `alias/<prefix>-search`                           | `GENERATE_VERIFY_MAC` | `HMAC_256`                              | **No** (AWS KMS does not auto-rotate HMAC keys)       | Security | `apps/web`, `apps/worker` (blind-index HMAC)             | [RUNBOOK § Rotating the KMS search-key (HMAC) key](../RUNBOOK.md#rotating-the-kms-search-key-hmac-key) |
 | 7   | `aws_kms_key.asymm_sign`    | `alias/<prefix>-asymm-sign`                       | `SIGN_VERIFY`         | `ECC_NIST_P256` (default; configurable) | **No** (AWS KMS does not auto-rotate asymmetric keys) | Security | `apps/worker` (Merkle root signing)                      | [RUNBOOK § Rotating the Merkle signing key](../RUNBOOK.md#rotating-the-merkle-signing-key)             |
 | 8   | `aws_kms_key.logs`          | `alias/<prefix>-logs`                             | `ENCRYPT_DECRYPT`     | `SYMMETRIC_DEFAULT`                     | Yes (annual)                                          | Platform | CloudWatch Logs                                          | n/a (CloudWatch-managed access pattern; CMK swap follows §5.1)                                         |
+| 9   | `aws_kms_key.alerts`        | `alias/<prefix>-alerts`                           | `ENCRYPT_DECRYPT`     | `SYMMETRIC_DEFAULT`                     | Yes (annual)                                          | Platform | CloudWatch alarms → SNS alerting topics                  | [Alerting runbook](../runbooks/alerting.md#no-alert-arrived-at-all)                                    |
 
 ### 3.2 Per-key detail
 
@@ -262,6 +263,39 @@ if compromised**.
   `02-security-compliance.mdc`), so the realistic exposure is
   application metadata only. SEV2.
 
+#### 3.2.9 Alerting SNS key (#9)
+
+- **What.** Envelope-encrypts the two alerting SNS topics
+  (`<prefix>-alerts-critical`, `<prefix>-alerts-warning`) that
+  `infra/terraform/modules/alerting` provisions. Every CloudWatch
+  alarm notification passes through one of them.
+- **Why distinct.** A KMS key is only as narrow as the widest
+  principal in its policy, and this one has to name
+  `cloudwatch.amazonaws.com` (AWS requires the publishing service
+  principal to hold `kms:GenerateDataKey*` + `kms:Decrypt` on an
+  SSE-KMS topic's CMK). That principal has no business on a key that
+  wraps PHI. It also cannot share the logs key (#8): that policy
+  conditions its grant on `kms:EncryptionContext:aws:logs:arn`, an
+  encryption context SNS publishes never carry, so re-use would mean
+  deleting the condition and widening a key that today only
+  CloudWatch Logs can touch.
+- **Who calls it.** The CloudWatch alarm service principal, gated by
+  `aws:SourceAccount` = this account. No application principal, no
+  human principal beyond account-root administration.
+- **Env var.** None.
+- **Rotation.** Annual auto-rotation. Nothing caches ciphertext from
+  this key (notifications are transient), so rotation is invisible.
+- **Compromise blast radius.** An attacker who could decrypt topic
+  traffic would learn which subsystems alarm and when — useful
+  reconnaissance for timing an attack around a known-noisy window,
+  but no PHI: alarm payloads carry an alarm name, a metric, a
+  threshold, and a state transition. SEV3. The more consequential
+  failure mode for this key is availability, not confidentiality: if
+  the key is disabled or its policy loses the CloudWatch grant, every
+  publish fails and the alarms go silent while still looking healthy
+  in the console. See the
+  [alerting runbook](../runbooks/alerting.md#no-alert-arrived-at-all).
+
 ## 4. Cross-key invariants
 
 These invariants apply across the inventory; if any one breaks, the
@@ -271,7 +305,8 @@ is managed.
 1. **No key has `Principal: *` in its policy.** All grants are
    explicit. The Terraform `key_admin` document grants only
    `arn:aws:iam::<account>:root`; service principals (CloudWatch
-   Logs, S3) are added where required with strict `Condition` blocks.
+   Logs, CloudWatch alarms, S3) are added where required with strict
+   `Condition` blocks.
 2. **Application-level grants live in IAM, not key policy.** Task
    roles receive `kms:GenerateDataKey` / `kms:Decrypt` /
    `kms:GenerateMac` / `kms:Sign` via `aws_iam_role_policy`
@@ -299,13 +334,13 @@ is managed.
 
 ### 5.1 Cadence summary
 
-| Trigger                                    | Cadence       | Procedure                                                                                                                     |
-| ------------------------------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Automatic key-material rotation (#1–6, #8) | Annual        | None — AWS handles transparently; observe in CloudTrail.                                                                      |
-| Manual CMK identity rotation (#1–6, #8)    | On compromise | Per-key runbook entry (see §3.1 table).                                                                                       |
-| Asymmetric signing-key rotation (#7)       | On compromise | [RUNBOOK § Rotating the Merkle signing key](../RUNBOOK.md#rotating-the-merkle-signing-key).                                   |
-| Rotation-drill rehearsal                   | Quarterly     | [RUNBOOK § Quarterly KMS rotation drill](../RUNBOOK.md#quarterly-kms-rotation-drill).                                         |
-| Post-rotation evidence capture             | Per rotation  | Capture CloudTrail `Encrypt` / `Decrypt` events showing the new key in use; attach to the SOC 2 evidence pack for the period. |
+| Trigger                                      | Cadence       | Procedure                                                                                                                     |
+| -------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Automatic key-material rotation (#1–6, #8–9) | Annual        | None — AWS handles transparently; observe in CloudTrail.                                                                      |
+| Manual CMK identity rotation (#1–6, #8–9)    | On compromise | Per-key runbook entry (see §3.1 table).                                                                                       |
+| Asymmetric signing-key rotation (#7)         | On compromise | [RUNBOOK § Rotating the Merkle signing key](../RUNBOOK.md#rotating-the-merkle-signing-key).                                   |
+| Rotation-drill rehearsal                     | Quarterly     | [RUNBOOK § Quarterly KMS rotation drill](../RUNBOOK.md#quarterly-kms-rotation-drill).                                         |
+| Post-rotation evidence capture               | Per rotation  | Capture CloudTrail `Encrypt` / `Decrypt` events showing the new key in use; attach to the SOC 2 evidence pack for the period. |
 
 ### 5.2 What counts as "rotation"
 
@@ -388,4 +423,5 @@ finding; the reconciliation path is to edit Terraform and
 | ------- | ---------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 1.0     | 2026-05-28 | Platform team | Initial inventory; eight production keys.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 1.1     | 2026-05-28 | Platform team | Closed `kms3`: shipped `scripts/check-kms-inventory.ts` + `pnpm check:kms-inventory` (wired into the `safety-linters` CI job and `pnpm verify`); 44 unit tests. The first end-to-end run surfaced one piece of latent drift — `aws_kms_alias.documents_legacy_s3` (`alias/<prefix>-s3`) was in the Terraform module but undocumented in the inventory; the row for `aws_kms_key.documents` (§3.1 summary table + §3.2.2 per-key detail) was updated to record the legacy alias inline using the same `(+ -<suffix> legacy alias)` convention the `aws_kms_key.data` row already used for `app-phi`. §6 ("Drift between this inventory and reality") was rewritten to describe the now-automated enforcement instead of the "review checklist is the gate" prior posture.                                                                                                                                                                                                                                                                                                             |
+| 1.3     | 2026-08-03 | Platform team | Added key #9 (`aws_kms_key.alerts`, `alias/<prefix>-alerts`): the CMK behind the two SNS alerting topics introduced with `infra/terraform/modules/alerting`, so production CloudWatch alarms can reach a human. Documented in §3.1 and §3.2.9. It is a ninth key rather than a re-use of the CloudWatch Logs key (#8) because SSE-KMS on SNS requires the `cloudwatch.amazonaws.com` service principal to hold `kms:GenerateDataKey*` + `kms:Decrypt`, and the logs key conditions its grant on `kms:EncryptionContext:aws:logs:arn` — an encryption context SNS publishes never carry. Sharing would have meant deleting that condition and widening a key only CloudWatch Logs can use today. §4 invariant 1 and the §5.1 cadence table now include #9. The document-header Version cell also caught up with the revision history (it still read 1.1 after the 1.2 entry landed).                                                                                                                                                                                                  |
 | 1.2     | 2026-06-02 | Security team | Closed `kms2` (the last open follow-up in this inventory). Shipped `AwsKmsAdapterOptions.previousDataKeyKeyIds` — a frozen array of historical CMK ARNs/aliases threaded through the new `AWS_KMS_PREVIOUS_DATA_KEY_IDS` env var on both `apps/web` and `apps/worker` so manual CMK identity rotation no longer leaves historical envelopes unreadable during the bake-in window. Behavior: current-key Decrypt first (defense-in-depth `KeyId` pin preserved); on failure, walks the historical chain in declared order; first success returns the DEK and increments `pharmax_kms_decrypt_historical_key_hits_total{key_position="<n>"}`. Boot-time `validate()` now `DescribeKey`-checks every historical key (Enabled + ENCRYPT_DECRYPT + SYMMETRIC_DEFAULT). §3.2.5 was rewritten to remove the "Known caveat" callout and document the new historical-key chain. §4 invariant #5 was updated to point at the new env var. §7 marks `kms2` CLOSED — every tracked follow-up in this inventory is now resolved. 14 new unit tests added (68 total in `aws-kms-adapter.test.ts`). |

@@ -165,6 +165,12 @@ jobs:
     #     against infra/terraform/modules/kms/main.tf so the auditor-
     #     facing inventory cannot silently drift from the IaC truth
     #     (closes the `kms3` follow-up).
+    #   - check:alarm-actions asserts that a production CloudWatch
+    #     alarm cannot be declared with an empty action list: every
+    #     alarm routes to a severity topic, documents which tier and
+    #     why, and every prod env-region enables alerting. Prevents a
+    #     repeat of the 16 alarms that evaluated correctly and
+    #     notified nobody.
     #   - check:raw-prisma bans importing the raw, unscoped
     #     `systemPrisma` client outside the reviewed allowlist, so the
     #     tenancy-enforced `prisma` stays the only client app code uses.
@@ -196,6 +202,7 @@ jobs:
       - run: pnpm check:schema
       - run: pnpm check:commands
       - run: pnpm check:kms-inventory
+      - run: pnpm check:alarm-actions
       - run: pnpm check:raw-prisma
       - run: pnpm check:raw-sql
       - run: pnpm check:terraform-apply-workflow

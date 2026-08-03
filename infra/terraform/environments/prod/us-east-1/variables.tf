@@ -87,6 +87,35 @@ variable "alarm_sns_topic_arn" {
   default = ""
 }
 
+# ---- Alerting ---------------------------------------------------------------
+#
+# Subscription endpoints are supplied as `TF_VAR_alerting_*` at apply time from
+# the CI secret store (or a var-file kept outside the repository). They are
+# never written into terraform.tfvars: an on-call address is personal data and
+# a paging webhook URL is a bearer credential. See
+# `docs/runbooks/alerting.md` § "Changing who gets paged".
+
+variable "enable_alerting" {
+  type    = bool
+  default = false
+}
+variable "alerting_critical_email_subscriptions" {
+  type    = list(string)
+  default = []
+}
+variable "alerting_warning_email_subscriptions" {
+  type    = list(string)
+  default = []
+}
+variable "alerting_critical_https_subscriptions" {
+  type    = list(string)
+  default = []
+}
+variable "alerting_warning_https_subscriptions" {
+  type    = list(string)
+  default = []
+}
+
 variable "audit_archive_retention_years" {
   type    = number
   default = 7

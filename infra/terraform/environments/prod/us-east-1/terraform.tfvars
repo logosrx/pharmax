@@ -67,9 +67,27 @@ ecs_container_insights_enabled = true
 
 # ---- WAF / Alarms -----------------------------------------------------------
 waf_rate_limit_per_5min = 2000
-# Empty = alarms still fire but take no SNS action. Set to a real topic ARN
-# once a pharmax-prod-alerts SNS topic + on-call subscription exist.
+
+# Alerting. `enable_alerting = true` provisions the severity-split SNS topics
+# (`pharmax-prod-ue1-alerts-critical` / `-alerts-warning`) and routes every
+# alarm to one of them. This MUST stay true in production: with it off, all 15
+# alarms evaluate correctly, transition to ALARM correctly, and notify nobody —
+# which is what this stack shipped with until 2026-08-03.
+# `pnpm check:alarm-actions` fails the build if it is turned off here.
+enable_alerting = true
+
+# The legacy single-topic override stays empty: the per-severity topics above
+# supersede it. Setting it here would route every alarm — warning tier included
+# — to whatever topic it names.
 alarm_sns_topic_arn = ""
+
+# Subscription endpoints are NOT set here, deliberately. They arrive as
+# TF_VAR_alerting_critical_https_subscriptions (etc.) from the production
+# GitHub Environment secrets at apply time; a paging webhook URL is a bearer
+# credential and an on-call address is personal data. Neither belongs in git.
+# After an apply, `terraform output alerting_critical_subscription_count`
+# answers "would an alarm actually reach anyone?" — see
+# docs/runbooks/alerting.md.
 
 # ---- Audit archive ----------------------------------------------------------
 audit_archive_retention_years         = 7
