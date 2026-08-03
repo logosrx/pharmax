@@ -51,9 +51,15 @@ export const accessReviewFreshnessCheck = defineCheck({
                 "of any periodic access review for this tenant.",
             },
           ],
+          // Same key set as the branch below, with null where there is
+          // no snapshot to describe. A details payload whose shape
+          // shifts with the outcome cannot be compared run over run.
           details: {
             organizationSlug: org.slug,
-            snapshotCount: 0,
+            newestSnapshotId: null,
+            newestGeneratedAt: null,
+            newestPeriodEnd: null,
+            ageDays: null,
             maxAgeDays: ACCESS_REVIEW_MAX_AGE_DAYS,
           },
         };

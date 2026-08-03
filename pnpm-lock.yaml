@@ -235,6 +235,9 @@ importers:
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../../packages/command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:../../packages/compliance
       '@pharmax/composition':
         specifier: workspace:*
         version: link:../../packages/composition

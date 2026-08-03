@@ -53,12 +53,25 @@ export const auditChainHeadConsistencyCheck = defineCheck({
       const logCount = aggregate._count._all;
       const maxSeq = aggregate._max.seq;
 
+      // Every branch below emits the SAME `details` key set, with
+      // null where a value does not apply. A payload whose shape
+      // changes with the outcome cannot be diffed across runs — the
+      // reader cannot tell "the head is gone" from "this run didn't
+      // report a head" — and it types as a union of optionals that no
+      // longer satisfies the JSON-value contract.
       if (logCount === 0 && chainState === null) {
         return {
           outcome: "NOT_APPLICABLE" as const,
           summary: `${org.slug}: no audit entries yet; nothing to reconcile.`,
           findings: [],
-          details: { organizationSlug: org.slug, auditLogCount: 0, chainStatePresent: false },
+          details: {
+            organizationSlug: org.slug,
+            auditLogCount: 0,
+            chainStatePresent: false,
+            chainHeadSeq: null,
+            auditLogTipSeq: null,
+            seqGap: null,
+          },
         };
       }
 
@@ -79,10 +92,12 @@ export const auditChainHeadConsistencyCheck = defineCheck({
             organizationSlug: org.slug,
             auditLogCount: logCount,
             chainStatePresent: false,
+            chainHeadSeq: null,
             // BigInt is not JSON-serializable and would break the
             // canonical digest, so seq values cross into `details` as
             // decimal strings.
-            maxAuditLogSeq: maxSeq === null ? null : maxSeq.toString(),
+            auditLogTipSeq: maxSeq === null ? null : maxSeq.toString(),
+            seqGap: null,
           },
         };
       }

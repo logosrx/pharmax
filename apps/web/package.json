@@ -14,6 +14,7 @@
     "resend": "^4.0.0",
     "@pharmax/billing": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
+    "@pharmax/compliance": "workspace:*",
     "@pharmax/composition": "workspace:*",
     "@pharmax/controlled-substances": "workspace:*",
     "@pharmax/crypto": "workspace:*",
