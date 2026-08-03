@@ -55,6 +55,18 @@ describe("validateCron — guards", () => {
     });
     expect(r.ok).toBe(false);
   });
+
+  it("accepts the expressions a caller is most likely to schedule", () => {
+    // A smoke row per shape CreateReportSchedule actually sees. The
+    // 4.x -> 5.x rename broke every one of these identically, and
+    // nothing here asserted that a VALID expression still parses
+    // against the real library — only that invalid ones fail, which
+    // stayed true while the wrapper was entirely broken.
+    for (const expression of ["0 9 * * 1", "*/15 * * * *", "0 0 1 * *", "@daily"]) {
+      const r = validateCron({ expression, timezone: "UTC", from: NOW });
+      expect(r.ok, expression).toBe(true);
+    }
+  });
 });
 
 describe("computeNextRun", () => {
