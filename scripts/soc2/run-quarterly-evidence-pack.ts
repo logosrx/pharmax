@@ -24,7 +24,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -137,26 +137,29 @@ interface ArtifactEntry {
 }
 
 function listArtifacts(dir: string): ReadonlyArray<ArtifactEntry> {
-  let entries: ReadonlyArray<string>;
+  let entries: ReadonlyArray<Dirent>;
   try {
-    entries = readdirSync(dir);
+    // The listing itself reports the entry type. Stat-then-read would
+    // be a check-then-use race, and this manifest is the integrity
+    // record for the pack — the bytes we hash MUST be the bytes we
+    // decided to include. Symlinks stay eligible; `readFileSync`
+    // follows them, as the old `statSync` check did.
+    entries = readdirSync(dir, { withFileTypes: true });
   } catch {
     return [];
   }
   const out: ArtifactEntry[] = [];
   for (const e of entries) {
-    if (e === "manifest.json") continue;
-    const full = join(dir, e);
-    let st;
+    if (e.name === "manifest.json") continue;
+    if (!e.isFile() && !e.isSymbolicLink()) continue;
+    let buf: Buffer;
     try {
-      st = statSync(full);
+      buf = readFileSync(join(dir, e.name));
     } catch {
       continue;
     }
-    if (!st.isFile()) continue;
-    const buf = readFileSync(full);
     const sha256 = createHash("sha256").update(buf).digest("hex");
-    out.push({ name: e, sizeBytes: buf.byteLength, sha256 });
+    out.push({ name: e.name, sizeBytes: buf.byteLength, sha256 });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
