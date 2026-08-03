@@ -67,26 +67,42 @@ const PATIENT_ID = "00000000-0000-4000-8000-0000000000d1";
 const RX_ID = "00000000-0000-4000-8000-0000000000e1";
 
 /**
- * The fingerprint the empty knowledge source produces for a single
- * unknown candidate drug: code + grading + the trigger code (the
- * NDC) + the scope qualifier. Written out rather than imported so the
- * suite fails loudly if `fingerprintOf` ever changes shape — an
- * acknowledgement matches on this string and nothing else, so a
- * silent change to it would silently orphan every acknowledgement
- * ever recorded.
+ * Every fingerprint a default screen produces here, written out
+ * rather than imported.
+ *
+ * An acknowledgement matches a finding on this string and nothing
+ * else, so a silent change to `fingerprintOf` would silently orphan
+ * every acknowledgement ever recorded. Spelling them out means that
+ * change fails here instead.
+ *
+ * Note what the two input gaps do NOT contain: the drug code. "This
+ * platform cannot screen allergies" is the same fact on every line of
+ * every order, so one acknowledgement settles it — unlike the
+ * knowledge gap, which is about one unrecognised NDC.
  */
 const KNOWLEDGE_GAP_FINGERPRINT =
   "SCR_KNOWLEDGE_UNAVAILABLE|MODERATE/DEFINITE|00000-0000-01|scope=CANDIDATE_DRUG";
+const ALLERGY_INPUT_GAP_FINGERPRINT =
+  "SCR_ALLERGY_INPUT_UNAVAILABLE|MODERATE/DEFINITE|DRUG_ALLERGY";
+const DOSE_INPUT_GAP_FINGERPRINT = "SCR_DOSE_INPUT_UNAVAILABLE|MODERATE/DEFINITE|DOSE_RANGE";
+
+const DEFAULT_GAP_FINGERPRINTS: ReadonlyArray<string> = [
+  KNOWLEDGE_GAP_FINGERPRINT,
+  ALLERGY_INPUT_GAP_FINGERPRINT,
+  DOSE_INPUT_GAP_FINGERPRINT,
+];
 
 /**
- * One prescription on the order, nothing else on the profile. Against
- * the empty knowledge source — the only source this repository ships
- * — that is exactly one finding: `SCR_KNOWLEDGE_UNAVAILABLE`,
- * disposition REQUIRES_ACKNOWLEDGEMENT. So the DEFAULT state of these
- * tests is an approval that is BLOCKED until the pharmacist
- * acknowledges that the screen could not run, which is the honest
- * behaviour and worth having as the default rather than the
- * exception.
+ * One prescription on the order, nothing else on the profile.
+ *
+ * Against the empty knowledge source — the only source this
+ * repository ships — that is three findings, all of them gaps and all
+ * requiring acknowledgement: the knowledge source does not recognise
+ * the NDC, and this platform can supply neither an allergy list nor a
+ * structured dose. So the DEFAULT state of these tests is an approval
+ * that is BLOCKED until the pharmacist acknowledges each thing that
+ * could not be checked, which is the honest behaviour and worth
+ * having as the default rather than the exception.
  */
 const DEFAULT_SCREENING_STUBS: ScreeningStubOptions = {
   patientId: PATIENT_ID,
@@ -94,20 +110,18 @@ const DEFAULT_SCREENING_STUBS: ScreeningStubOptions = {
   prescriptions: [{ id: RX_ID, patientId: PATIENT_ID, drugNdc: "00000-0000-01", status: "ACTIVE" }],
 };
 
-/** Default inputs plus this pharmacist's acknowledgement of the gap. */
-function screeningStubsWithGapAcknowledged(
+/** Default inputs plus this pharmacist's acknowledgement of every gap. */
+function screeningStubsWithGapsAcknowledged(
   pharmacistUserId: string = PHARMACIST_ID
 ): ScreeningStubOptions {
   return {
     ...DEFAULT_SCREENING_STUBS,
-    acknowledgements: [
-      {
-        id: "ack-existing",
-        orderId: ORDER_ID,
-        pharmacistUserId,
-        fingerprint: KNOWLEDGE_GAP_FINGERPRINT,
-      },
-    ],
+    acknowledgements: DEFAULT_GAP_FINGERPRINTS.map((fingerprint, index) => ({
+      id: `ack-existing-${index}`,
+      orderId: ORDER_ID,
+      pharmacistUserId,
+      fingerprint,
+    })),
   };
 }
 
@@ -204,7 +218,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
   const calls: FakeCall[] = [];
   const screening = createScreeningStubs(
     (table, op, args) => calls.push({ table, op, args }),
-    overrides.screening ?? screeningStubsWithGapAcknowledged()
+    overrides.screening ?? screeningStubsWithGapsAcknowledged()
   );
 
   const lockedRow =

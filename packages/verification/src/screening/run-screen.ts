@@ -9,30 +9,41 @@
 // What this can and cannot feed the engine today
 // ---------------------------------------------------------------------
 //
-// The engine screens four axes. Two of them have inputs here and two
-// do not, and pretending otherwise is the failure this whole feature
-// exists to avoid — so it is written down rather than left to be
-// discovered:
+// The engine screens four axes. This platform can supply two of them,
+// and `INPUT_AVAILABILITY` below DECLARES the other two unavailable —
+// which makes the engine report each as a `SCREENING_GAP` the
+// approving pharmacist has to acknowledge. The list is therefore a
+// statement of what is enforced, not a warning somebody has to read:
 //
-//   - DRUG-DRUG INTERACTION and THERAPEUTIC DUPLICATION: fed. The
-//     candidate is the prescription on each order line; the profile is
-//     the patient's other ACTIVE prescriptions.
-//   - DOSE RANGE: NOT fed. `prescription.sigEnc` is encrypted free
-//     text, and there is no structured (amount, unit, frequency) on
-//     the row, so `dose` is null and the engine skips dose checks. A
-//     structured sig is a transcription-side change, not a screening-
-//     side one.
-//   - DRUG ALLERGY: NOT fed. Pharmax has no allergy capture — there is
-//     no `patient_allergy` table to read. `allergies` is therefore
-//     empty on every screen.
+//   - DRUG-DRUG INTERACTION and THERAPEUTIC DUPLICATION: supplied.
+//     The candidate is the prescription on each order line; the
+//     profile is the patient's other ACTIVE prescriptions.
+//   - DRUG ALLERGY: NOT supplied. Pharmax has no allergy capture —
+//     there is no `patient_allergy` table to read.
+//   - DOSE RANGE: NOT supplied. `prescription.sigEnc` is encrypted
+//     free text with no structured (amount, unit, frequency) beside
+//     it, so there is no dose to compare against a range.
 //
-// The allergy gap is the dangerous one, and it is dangerous only in a
-// specific future: TODAY the knowledge source ships empty, so every
-// prescription already produces `SCR_KNOWLEDGE_UNAVAILABLE` and no
-// screen can read as clear. The moment a licensed adapter is wired,
-// that universal gap disappears and a prescription for a known drug
-// will screen CLEAR on an allergy axis that was never evaluated. Do
-// not wire a licensed knowledge source before allergy capture lands.
+// Why this is a declaration and not a comment. An empty `allergies`
+// array makes the engine's allergy loop iterate zero times and
+// contribute nothing, and nothing is indistinguishable from clean.
+// Today that is masked: with no licensed knowledge source every
+// prescription raises `SCR_KNOWLEDGE_UNAVAILABLE`, so no screen reads
+// as clear anyway. The mask is the hazard. The day an adapter is
+// wired, that universal gap stops firing, interactions and
+// duplication start screening for real, and a prescription for a
+// patient with documented anaphylaxis would come back CLEAR having
+// never been compared to an allergy list that does not exist —
+// against the one axis that can produce a hard stop at all.
+//
+// SELF-HEALING, which is the property to preserve when editing this.
+// Nothing here has to be deleted at the right moment. When allergy
+// capture lands, pass the records and flip DRUG_ALLERGY to
+// "AVAILABLE"; the gap stops being emitted because the declaration
+// changed, not because someone remembered a note. Same for DOSE_RANGE
+// when a structured sig lands. Leaving a declaration at "UNAVAILABLE"
+// after the input exists costs a spurious acknowledgement, which is
+// loud; the reverse is impossible without editing this constant.
 //
 // ---------------------------------------------------------------------
 // Why acknowledged fingerprints are NOT passed to the engine
@@ -62,6 +73,8 @@ import {
   type PrescribedDrug,
   type ScreeningEvaluation,
   type ScreeningFinding,
+  type ScreeningInputAvailability,
+  type ScreeningInputAxis,
   type ScreeningPolicy,
 } from "@pharmax/clinical-screening";
 import { PrescriptionStatus, type Prisma, type ScreeningPhase } from "@pharmax/database";
@@ -82,6 +95,27 @@ import { PV1_SCREENING_NOT_PERFORMED, PV1_SCREENING_PROFILE_TOO_LARGE } from "./
  * would produce a confident, wrong answer.
  */
 export const MAX_PROFILE_MEDICATIONS = 500;
+
+/**
+ * Which clinical axes this platform can currently supply facts for.
+ *
+ * Written as a literal rather than derived, so adding a fifth axis to
+ * the engine fails to compile here until somebody decides what
+ * Pharmax can say about it. See the module header for what each entry
+ * means and how it self-heals.
+ */
+const INPUT_AVAILABILITY: Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>> =
+  Object.freeze({
+    // Both fed from the patient's other ACTIVE prescriptions.
+    DRUG_DRUG_INTERACTION: "AVAILABLE",
+    THERAPEUTIC_DUPLICATION: "AVAILABLE",
+    // No allergy capture exists in this platform yet. Flip to
+    // "AVAILABLE" and pass the records when it lands.
+    DRUG_ALLERGY: "UNAVAILABLE",
+    // `prescription.sigEnc` is encrypted free text; there is no
+    // structured dose to compare. Flip when a structured sig lands.
+    DOSE_RANGE: "UNAVAILABLE",
+  });
 
 export interface RunScreenInput {
   readonly tx: Prisma.TransactionClient;
@@ -144,8 +178,11 @@ export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResul
   for (const candidate of candidates) {
     const evaluation: ScreeningEvaluation = screenPrescription({
       candidate,
+      inputAvailability: INPUT_AVAILABILITY,
       activeMedications,
-      // See the header: no allergy capture exists to read from yet.
+      // Empty because DRUG_ALLERGY is declared UNAVAILABLE above, and
+      // the engine ignores the inputs for an axis it is told we
+      // cannot answer. It is not "this patient has no allergies".
       allergies: [],
       knowledge,
       // Deliberately empty. See the header.
@@ -261,9 +298,10 @@ function toPrescribedDrug(row: { readonly id: string; readonly drugNdc: string }
     // and a name in a persisted finding would put a drug name into an
     // append-only table and every event payload derived from it.
     drugCode: row.drugNdc,
-    // No structured dose exists on `prescription` (the sig is
-    // encrypted free text), so dose-range checks do not run. See the
-    // module header.
+    // Not "this prescription has no dose" — this platform cannot read
+    // one. That claim is made once, structurally, by declaring
+    // DOSE_RANGE unavailable in `INPUT_AVAILABILITY`; the engine then
+    // gaps the axis and never reaches this field.
     dose: null,
   };
 }

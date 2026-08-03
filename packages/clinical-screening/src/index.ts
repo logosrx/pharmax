@@ -14,6 +14,12 @@
 // licensed commercial database satisfies behind a customer-licensed
 // adapter. See `knowledge-source.ts` for the clean-room reasoning.
 //
+// A caller does not get to screen a subset of the axes by accident:
+// `ScreeningRequest.inputAvailability` is required and exhaustive
+// over `CLINICAL_SCREENING_AXES`, and any axis declared UNAVAILABLE
+// comes back as a `SCREENING_GAP` the pharmacist has to acknowledge.
+// An axis that contributes nothing in silence is not expressible.
+//
 // Because it sits below the domain tier and imports nothing, any
 // domain package may depend on it freely; it is deliberately absent
 // from `DOMAIN_PACKAGES` in `scripts/check-package-layers.ts`.
@@ -26,12 +32,15 @@ export {
   severityRank,
   suggestedPv1RejectionReason,
   toFhirDetectedIssueSeverity,
+  CLINICAL_SCREENING_AXES,
   FHIR_DETECTED_ISSUE_SEVERITIES,
+  INPUT_UNAVAILABLE_CODE_FOR_AXIS,
   SUGGESTED_PV1_REJECTION_REASONS,
   SCREENING_CERTAINTIES,
   SCREENING_DISPOSITIONS,
   SCREENING_FINDING_CODES,
   SCREENING_FINDING_KINDS,
+  SCREENING_INPUT_AVAILABILITIES,
   SCREENING_SEVERITIES,
   SCREENING_TRIGGER_SOURCES,
 } from "./findings.js";
@@ -44,6 +53,8 @@ export type {
   ScreeningFinding,
   ScreeningFindingCode,
   ScreeningFindingKind,
+  ScreeningInputAvailability,
+  ScreeningInputAxis,
   ScreeningSeverity,
   ScreeningTrigger,
   ScreeningTriggerSource,

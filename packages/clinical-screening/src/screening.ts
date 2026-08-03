@@ -51,14 +51,28 @@
 //      suppresses the class-level duplication it necessarily implies;
 //      identical findings from several profile rows merge into one
 //      with the union of their triggers.
-//   5. WHAT WE COULD NOT SCREEN IS ITSELF REPORTED. An unknown drug
-//      produces a `SCREENING_GAP`, because otherwise "no findings"
-//      reads as "clinically clear" when it means "never checked" —
-//      and that is the single most dangerous sentence this engine
-//      could say. The corollary is that gaps must be rare and
-//      specific, so allergies that a drug knowledge base could never
-//      answer (food, environmental) are excluded from screening
-//      entirely rather than reported as gaps on every prescription.
+//   5. WHAT WE COULD NOT SCREEN IS ITSELF REPORTED, AND THAT IS A
+//      GUARANTEE THIS FILE ENFORCES RATHER THAN A HABIT IT ASKS FOR.
+//      Every axis in `CLINICAL_SCREENING_AXES` either runs or
+//      produces a `SCREENING_GAP` naming itself; there is no third
+//      outcome, because a caller cannot build a `ScreeningRequest`
+//      without declaring each axis AVAILABLE or UNAVAILABLE, and an
+//      UNAVAILABLE declaration is what emits the gap. Two situations
+//      reach it: a drug the knowledge source does not recognise
+//      (`SCR_KNOWLEDGE_UNAVAILABLE`), and an input the caller could
+//      not supply at all (`SCR_*_INPUT_UNAVAILABLE`). Without both,
+//      "no findings" is ambiguous between "screened and clear" and
+//      "never checked", and a pharmacist reads the safer meaning into
+//      the more dangerous state.
+//
+//      The corollary is that gaps must be rare and SPECIFIC, so they
+//      are bounded on both sides. Allergies a drug knowledge base
+//      could never answer (food, environmental) are excluded from
+//      screening rather than gapped on every prescription; and
+//      unavailability is DECLARED, never inferred from an empty
+//      array, so a patient with genuinely no recorded allergies
+//      screens clear on that axis instead of meeting a permanent
+//      alert that teaches them to dismiss it.
 //
 // The vocabulary for allergy records follows HL7 FHIR R4
 // `AllergyIntolerance` — `category`, `type`, `criticality`,
@@ -71,6 +85,8 @@ import type {
   ScreeningFinding,
   ScreeningFindingCode,
   ScreeningFindingKind,
+  ScreeningInputAvailability,
+  ScreeningInputAxis,
   ScreeningSeverity,
   ScreeningTrigger,
 } from "./findings.js";
@@ -80,6 +96,8 @@ import {
   isAtLeastAsSevere,
   leastSevere,
   severityRank,
+  CLINICAL_SCREENING_AXES,
+  INPUT_UNAVAILABLE_CODE_FOR_AXIS,
 } from "./findings.js";
 import type {
   AllergenCode,
@@ -114,6 +132,13 @@ export interface DoseStatement {
 export interface PrescribedDrug {
   readonly recordId: string;
   readonly drugCode: DrugCode;
+  /**
+   * `null` means this prescription carries no dose to compare — not
+   * that the caller could not work one out. A caller that cannot
+   * parse a dose declares DOSE_RANGE unavailable on the request
+   * instead, which is reported as a gap; overloading `null` with both
+   * meanings is what let dose screening silently never run.
+   */
   readonly dose: DoseStatement | null;
 }
 
@@ -191,11 +216,35 @@ export interface ScreeningRequest {
   /** The prescription line being screened. */
   readonly candidate: PrescribedDrug;
   /**
+   * Which axes the caller was able to supply facts for.
+   *
+   * REQUIRED AND EXHAUSTIVE, for the same reason `qualifiers` is
+   * required on a finding draft: the default answer is the unsafe
+   * one. An optional field, or a list of unavailable axes, would let
+   * a fifth axis land with every existing call site silently
+   * asserting it screens something it has no data for. Spelled out as
+   * a total map, the compiler stops the build at each call site
+   * instead.
+   *
+   * `UNAVAILABLE` means "I cannot answer this question", not "the
+   * answer is empty" — see `ScreeningInputAvailability`. Declaring an
+   * axis unavailable makes the engine skip it and report a gap; the
+   * inputs for it, if any were passed, are ignored, because a caller
+   * that has data has no reason to say it does not.
+   */
+  readonly inputAvailability: Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>>;
+  /**
    * The patient's other active medications. If the candidate's own
    * line appears here (a refill re-screened against a profile that
    * already contains it), it is skipped by `recordId` — screening a
    * drug against itself would report every combination product as
    * duplicating itself.
+   *
+   * Feeds two axes, DRUG_DRUG_INTERACTION and
+   * THERAPEUTIC_DUPLICATION, which are declared independently: a
+   * caller can hold a medication list good enough to detect a
+   * duplicate ingredient and still lack whatever an interaction check
+   * needs.
    */
   readonly activeMedications: ReadonlyArray<PrescribedDrug>;
   readonly allergies: ReadonlyArray<RecordedAllergy>;
@@ -259,14 +308,41 @@ export function findingsRequiringAcknowledgement(
  */
 export function screenPrescription(request: ScreeningRequest): ScreeningEvaluation {
   const raw: ScreeningFinding[] = [];
+
+  // Unsupplied inputs first, and unconditionally — including when the
+  // candidate drug itself is unknown.
+  //
+  // The temptation is to suppress these when nothing could be
+  // screened anyway, since "no drug knowledge for this drug" already
+  // says the screen did not run. Resist it: the two say different
+  // things to different people. An unknown drug is one row missing
+  // from a licensed database and it resolves when that vendor ships
+  // an update; an unsupplied axis is a capability this platform does
+  // not have, and it resolves when someone builds it. Folding the
+  // second into the first lets a permanent product gap hide behind a
+  // transient data gap — and it would hide it precisely while the
+  // knowledge source is empty, which is exactly when nobody would
+  // notice.
+  //
+  // The cost is honest and temporary: a deployment missing both sees
+  // several "could not check" findings per order, and each one is a
+  // true statement that a pharmacist is right to have to acknowledge.
+  // They disappear one at a time as the inputs land, without anyone
+  // editing this file.
+  collectInputUnavailabilityFindings(request, raw);
+
   const candidateKnowledge = request.knowledge.describeDrug(request.candidate.drugCode);
 
   if (candidateKnowledge === null) {
     // Nothing downstream can run without the candidate's ingredients,
-    // so this is the whole screen: one unmistakable gap rather than a
-    // silent pass.
+    // so this is the rest of the screen: one unmistakable gap rather
+    // than a silent pass.
     raw.push(knowledgeGapFinding("CANDIDATE_DRUG", request.candidate));
   } else {
+    // Each collector returns immediately when its own axis was
+    // declared unavailable — one rule, applied in one place per axis,
+    // rather than a gate here that a new collector could be added
+    // without.
     collectAllergyFindings(request, candidateKnowledge, raw);
     collectProfileFindings(request, candidateKnowledge, raw);
     collectDoseFindings(request, candidateKnowledge, raw);
@@ -289,6 +365,59 @@ export function screenPrescription(request: ScreeningRequest): ScreeningEvaluati
 }
 
 // ---------------------------------------------------------------------------
+// Unsupplied inputs
+// ---------------------------------------------------------------------------
+
+function isAvailable(request: ScreeningRequest, axis: ScreeningInputAxis): boolean {
+  return request.inputAvailability[axis] === "AVAILABLE";
+}
+
+/**
+ * One gap per axis the caller declared it could not supply.
+ *
+ * Iterates `CLINICAL_SCREENING_AXES` rather than naming the four
+ * axes, so this is the half of the guarantee that self-maintains: a
+ * fifth finding kind becomes a fifth axis, the compiler forces a code
+ * for it and a declaration at every call site, and this loop emits
+ * its gap without being told.
+ */
+function collectInputUnavailabilityFindings(
+  request: ScreeningRequest,
+  out: ScreeningFinding[]
+): void {
+  for (const axis of CLINICAL_SCREENING_AXES) {
+    if (isAvailable(request, axis)) continue;
+    out.push(
+      finding({
+        code: INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis],
+        kind: "SCREENING_GAP",
+        // Graded exactly like `SCR_KNOWLEDGE_UNAVAILABLE`, and capped
+        // for the same reason: high enough that a pharmacist has to
+        // say they know the check did not run, never high enough to
+        // block. Refusing to dispense because our platform cannot
+        // hold an allergy list would make our missing capability the
+        // patient's problem.
+        severity: "MODERATE",
+        certainty: "DEFINITE",
+        reason: `No ${axis} input was available to this screen; that check was not performed.`,
+        // The axis is the trigger code — see `ScreeningTrigger.code`.
+        // It keeps the fingerprint identical across drugs and lines,
+        // so a pharmacist acknowledges "we cannot screen allergies"
+        // once for the order rather than once per prescription.
+        triggers: [trigger("CANDIDATE_DRUG", request.candidate.recordId, axis)],
+        // Empty on purpose. The only value `reason` interpolates is
+        // the axis, and the axis is already a trigger code, so the
+        // fingerprint distinguishes these findings without help. See
+        // `fingerprintOf` for what a missing qualifier costs when
+        // that is NOT true.
+        qualifiers: [],
+        citation: null,
+      })
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Allergy screening
 // ---------------------------------------------------------------------------
 
@@ -297,6 +426,11 @@ function collectAllergyFindings(
   candidateKnowledge: DrugKnowledge,
   out: ScreeningFinding[]
 ): void {
+  // The caller cannot tell us about this patient's allergies, so
+  // `request.allergies` says nothing and iterating it would report a
+  // clean allergy screen that never happened. The gap is already out.
+  if (!isAvailable(request, "DRUG_ALLERGY")) return;
+
   for (const allergy of request.allergies) {
     if (!isScreenableCategory(allergy.category)) continue;
     if (!isScreenableVerificationStatus(allergy.verificationStatus)) continue;
@@ -466,6 +600,14 @@ function collectProfileFindings(
   candidateKnowledge: DrugKnowledge,
   out: ScreeningFinding[]
 ): void {
+  const screensInteractions = isAvailable(request, "DRUG_DRUG_INTERACTION");
+  const screensDuplication = isAvailable(request, "THERAPEUTIC_DUPLICATION");
+  // Neither axis is being screened, so the profile is not being read
+  // at all. Reporting an unscreenable profile ENTRY here would claim
+  // we got as far as looking at it; the two axis gaps already say we
+  // did not.
+  if (!screensInteractions && !screensDuplication) return;
+
   for (const med of request.activeMedications) {
     if (med.recordId === request.candidate.recordId) continue;
 
@@ -479,8 +621,12 @@ function collectProfileFindings(
       continue;
     }
 
-    collectInteractions(request, candidateKnowledge, med, medKnowledge, out);
-    collectDuplication(request, candidateKnowledge, med, medKnowledge, out);
+    if (screensInteractions) {
+      collectInteractions(request, candidateKnowledge, med, medKnowledge, out);
+    }
+    if (screensDuplication) {
+      collectDuplication(request, candidateKnowledge, med, medKnowledge, out);
+    }
   }
 }
 
@@ -618,8 +764,18 @@ function collectDoseFindings(
   candidateKnowledge: DrugKnowledge,
   out: ScreeningFinding[]
 ): void {
+  if (!isAvailable(request, "DOSE_RANGE")) return;
+
   const range = candidateKnowledge.doseRange;
   const dose = request.candidate.dose;
+  // Reached only when the caller declared DOSE_RANGE available, so
+  // neither null here means "we could not read the dose" — that case
+  // is a gap and never gets this far. `range === null` is the
+  // knowledge source answering "no published envelope for this drug",
+  // the same class of answer as having no cross-sensitivity data for
+  // a substance, and gapping on it would fire on every drug a
+  // database chooses not to grade. `dose === null` is the caller
+  // stating this prescription carries no dose to compare.
   if (range === null || dose === null) return;
 
   if (range.unit !== dose.unit) {
