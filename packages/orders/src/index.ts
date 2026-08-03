@@ -33,6 +33,38 @@ export {
 } from "./commands/create-order.js";
 
 export {
+  CreatePrescription,
+  type CreatePrescriptionInput,
+  type CreatePrescriptionOutput,
+  RX_CLINIC_NOT_FOUND,
+  RX_PATIENT_NOT_FOUND,
+  RX_PATIENT_CLINIC_MISMATCH,
+  RX_PATIENT_NOT_ACTIVE,
+  RX_PROVIDER_NOT_FOUND,
+  RX_PROVIDER_INACTIVE,
+  RX_PROVIDER_DEA_REQUIRED,
+  RX_NDC_INVALID,
+  RX_SCHEDULE_REQUIRED_FOR_UNKNOWN_NDC,
+  RX_SCHEDULE_CATALOG_MISMATCH,
+  RX_CONTROLLED_AUTHORIZATION_INVALID,
+  RX_DATE_WRITTEN_IN_FUTURE,
+  RX_EXPIRES_NOT_AFTER_WRITTEN,
+  RX_EXPIRY_EXCEEDS_FEDERAL_HORIZON,
+  RX_EARLIEST_FILL_BEFORE_WRITTEN,
+  RX_BI_REQUIRED_NULL,
+  RX_NUMBER_COLLISION,
+} from "./commands/create-prescription.js";
+
+export {
+  allocateRxNumber,
+  formatRxNumber,
+  RX_NUMBER_ALLOCATION_FAILED,
+  RX_NUMBER_PAD_WIDTH,
+} from "./rx-number.js";
+
+export { PRESCRIPTION_BLIND_INDEX } from "./blind-indexes.js";
+
+export {
   ADDABLE_STATES,
   AddPrescription,
   type AddPrescriptionInput,
@@ -105,6 +137,7 @@ export {
 
 export { ORDER_EVENT_TYPE_TO_PERMISSION, orderEventTypeToPermission } from "./events.js";
 
+import * as createPrescriptionModule from "./commands/create-prescription.js";
 import * as createOrderModule from "./commands/create-order.js";
 import * as addPrescriptionModule from "./commands/add-prescription.js";
 import * as cancelOrderModule from "./commands/cancel-order.js";
@@ -115,6 +148,7 @@ import * as escalateForSlaBreachModule from "./commands/escalate-order-for-sla-b
 
 export const orders = {
   commands: {
+    CreatePrescription: createPrescriptionModule.CreatePrescription,
     CreateOrder: createOrderModule.CreateOrder,
     AddPrescription: addPrescriptionModule.AddPrescription,
     CancelOrder: cancelOrderModule.CancelOrder,

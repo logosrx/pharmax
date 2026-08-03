@@ -114,6 +114,9 @@ import { PatientRegisteredV1 } from "./events/patient/registered-v1.js";
 import { PatientUpdatedV1 } from "./events/patient/updated-v1.js";
 import { PatientViewedV1 } from "./events/patient/viewed-v1.js";
 
+// ---- prescription --------------------------------------------------------
+import { PrescriptionCreatedV1 } from "./events/prescription/created-v1.js";
+
 // ---- provider ------------------------------------------------------------
 import { ProviderDeactivatedV1 } from "./events/provider/deactivated-v1.js";
 import { ProviderOnboardingApprovedV1 } from "./events/provider/onboarding-approved-v1.js";
@@ -245,6 +248,8 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   PatientRegisteredV1,
   PatientUpdatedV1,
   PatientViewedV1,
+  // prescription
+  PrescriptionCreatedV1,
   // provider
   ProviderDeactivatedV1,
   ProviderOnboardingApprovedV1,

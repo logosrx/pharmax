@@ -1,4 +1,4 @@
-import { normalizeNdc } from "./normalize-ndc.js";
+import { normalizeNdc } from "@pharmax/drug-identity";
 import { parseGs1, type ParsedGs1 } from "./parse-gs1.js";
 
 export type ScannedValueKind = "GS1" | "NDC" | "VIAL_LABEL" | "LOT" | "UNKNOWN";
