@@ -1112,6 +1112,12 @@ model User {
   complianceExceptionsRevoked  ComplianceCheckException[] @relation("ComplianceExceptionRevokedBy")
   complianceTasksAssigned      ComplianceTask[]           @relation("ComplianceTaskAssignee")
   complianceTasksCompleted     ComplianceTask[]           @relation("ComplianceTaskCompletedBy")
+  // Who asked a model for a draft, and who reviewed it. Both are
+  // Restrict FKs for the same reason as the rest: "a model wrote
+  // this and a person approved it" is only an answer if the person
+  // cannot later be deleted out of the record.
+  complianceAiDraftsRequested  ComplianceAiDraft[]        @relation("ComplianceAiDraftRequestedBy")
+  complianceAiDraftsReviewed   ComplianceAiDraft[]        @relation("ComplianceAiDraftReviewedBy")
 
   @@unique([organizationId, email])
   @@index([organizationId, status])
@@ -5177,6 +5183,139 @@ enum ComplianceTaskStatus {
   CANCELLED
 }
 
+/// What a model was asked to draft.
+///
+/// The list is closed on purpose. Each kind has a prompt builder, a
+/// Zod schema its output must satisfy, and a defined apply-step that
+/// runs when a human accepts it. An open-ended "ask the model
+/// anything about compliance" kind would have none of those, and its
+/// output would land in the same table that an auditor reads as
+/// though it did.
+enum ComplianceAiDraftKind {
+  /// Longer prose for ComplianceControl.description, given the
+  /// control's title, owner, and implementation refs.
+  CONTROL_DESCRIPTION
+  /// Proposed control ⇄ criterion crosswalk entries.
+  CRITERION_MAPPING
+  /// Remediation steps for a failing check, written onto a task.
+  REMEDIATION_PLAN
+}
+
+/// Draft lifecycle. A draft is inert in every state except ACCEPTED,
+/// and reaching ACCEPTED requires a human command.
+enum ComplianceAiDraftStatus {
+  /// Awaiting human review. Has no effect on anything.
+  PENDING
+  /// A human applied it. The apply-step has run.
+  ACCEPTED
+  /// A human declined it, with a reason.
+  REJECTED
+  /// A newer draft for the same subject and kind replaced it.
+  SUPERSEDED
+  /// Sat unreviewed past the acceptance window. Cannot be accepted:
+  /// the state it was drafted against has moved on, and accepting a
+  /// months-old proposal about a control that has since changed is
+  /// how stale text gets laundered into the record.
+  EXPIRED
+}
+
+/// One model-generated proposal, and everything needed to audit it.
+///
+/// The reason this table exists rather than the model writing
+/// directly into `compliance_control` and friends: an auditor is
+/// entitled to ask "which of this text did a machine write, and who
+/// approved it?". Without a durable draft record the honest answer
+/// is "we don't know". With one, the answer is a row naming the
+/// model, the prompt version, the requester, the reviewer, and the
+/// timestamp of each.
+///
+/// PHI: none, and structurally so. Prompt inputs are assembled from
+/// the compliance tables and docs/ only — never from an order, a
+/// patient, or a prescription — and every prompt passes the PHI
+/// tripwire in @pharmax/compliance-ai before egress. The model is a
+/// third party without a BAA covering patient data; this table
+/// existing does not change that, so nothing PHI-adjacent may reach
+/// it.
+model ComplianceAiDraft {
+  id String @id @default(uuid()) @db.Uuid
+
+  kind   ComplianceAiDraftKind
+  status ComplianceAiDraftStatus @default(PENDING)
+
+  /// Subject of the draft. Which one is set depends on `kind`; the
+  /// command validates the combination. Restrict rather than
+  /// Cascade: deleting a control should not silently erase the
+  /// record that a model once proposed its wording.
+  controlId String?            @db.Uuid
+  control   ComplianceControl? @relation(fields: [controlId], references: [id], onDelete: Restrict)
+
+  checkId String?          @db.Uuid
+  check   ComplianceCheck? @relation(fields: [checkId], references: [id], onDelete: Restrict)
+
+  taskId String?         @db.Uuid
+  task   ComplianceTask? @relation(fields: [taskId], references: [id], onDelete: Restrict)
+
+  /// Provider identifier ("bedrock") and the exact model id
+  /// ("anthropic.claude-3-5-sonnet-20241022-v2:0"). Stored verbatim
+  /// because "which model wrote this" is unanswerable a year later
+  /// from anything else, and model behaviour changes between
+  /// versions.
+  provider String
+  modelId  String
+
+  /// Version of the prompt template used. Bumped whenever the
+  /// template changes, so output can be attributed to the exact
+  /// instructions that produced it.
+  promptVersion Int
+
+  /// SHA-256 over the canonicalized prompt input. Lets a reviewer
+  /// confirm that two drafts were generated from identical inputs
+  /// without storing the full prompt for every row.
+  inputDigestSha256 String @db.Char(64)
+
+  /// Human-readable one-liner describing what was fed in ("control
+  /// CC6.1-2 title, owner, implementation refs"). PHI-free.
+  inputSummary String
+
+  /// The model's output, already validated against the Zod schema
+  /// for `kind`. Stored as JSON rather than text so the apply-step
+  /// reads structured fields instead of re-parsing prose.
+  output Json
+
+  /// Model self-reported confidence, when the prompt asks for it.
+  /// Advisory only — it is a token prediction, not a measurement,
+  /// and no code branches on it. Present so a reviewer can triage.
+  selfReportedConfidence String?
+
+  inputTokens  Int?
+  outputTokens Int?
+  latencyMs    Int?
+
+  requestedByUserId String @db.Uuid
+  requestedByUser   User   @relation("ComplianceAiDraftRequestedBy", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+
+  /// Hard deadline for review. Past it the draft EXPIRES rather than
+  /// remaining acceptable forever.
+  expiresAt DateTime
+
+  reviewedByUserId String?   @db.Uuid
+  reviewedByUser   User?     @relation("ComplianceAiDraftReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
+  reviewedAt       DateTime?
+
+  /// Required by the reject command. Why a human said no is the most
+  /// useful signal for whether the prompt needs work.
+  rejectionReasonCode String?
+  reviewNotes         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, kind])
+  @@index([controlId, kind])
+  @@index([requestedByUserId])
+  @@map("compliance_ai_draft")
+}
+
 /// One requirement from a published framework — e.g. (SOC2_TSC,
 /// "CC6.1") or (HIPAA_SECURITY, "164.312(a)(2)(iv)").
 ///
@@ -5281,6 +5420,7 @@ model ComplianceControl {
   criteria ComplianceControlCriterion[]
   checks   ComplianceCheckControl[]
   tasks    ComplianceTask[]
+  aiDrafts ComplianceAiDraft[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -5374,6 +5514,7 @@ model ComplianceCheck {
   runs       ComplianceCheckRun[]
   exceptions ComplianceCheckException[]
   tasks      ComplianceTask[]
+  aiDrafts   ComplianceAiDraft[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -5563,6 +5704,8 @@ model ComplianceTask {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  aiDrafts ComplianceAiDraft[]
 
   @@index([status, dueAt])
   @@index([assignedToUserId, status])

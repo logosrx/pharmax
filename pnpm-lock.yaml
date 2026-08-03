@@ -624,6 +624,40 @@ importers:
         specifier: ^2.1.4
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)(terser@5.49.0)
 
+  packages/compliance-ai:
+    dependencies:
+      '@pharmax/command-bus':
+        specifier: workspace:*
+        version: link:../command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:../compliance
+      '@pharmax/database':
+        specifier: workspace:*
+        version: link:../database
+      '@pharmax/platform-core':
+        specifier: workspace:*
+        version: link:../platform-core
+      '@pharmax/rbac':
+        specifier: workspace:*
+        version: link:../rbac
+      '@pharmax/tenancy':
+        specifier: workspace:*
+        version: link:../tenancy
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.4
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)(terser@5.49.0)
+
   packages/composition:
     dependencies:
       '@pharmax/auth':

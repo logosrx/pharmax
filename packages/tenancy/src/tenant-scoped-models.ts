@@ -338,6 +338,9 @@ export const TENANT_EXCLUDED_MODELS: ReadonlySet<string> = new Set([
   "ComplianceCheckRun",
   "ComplianceCheckException",
   "ComplianceTask",
+  // Same plane: a model-drafted proposal about the platform's own
+  // control program has no tenant to belong to either.
+  "ComplianceAiDraft",
 ]);
 
 /**

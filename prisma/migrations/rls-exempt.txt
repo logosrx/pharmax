@@ -120,3 +120,9 @@ compliance_check_control
 compliance_check_run
 compliance_check_exception
 compliance_task
+# Same plane, same reasoning: a draft proposes wording for a control
+# in the platform's own program, so it has no tenant either. Its
+# actor stamps (requestedBy / reviewedBy) are real FKs, because
+# "a model wrote this and a person approved it" is only an answer if
+# the person cannot be deleted out of the record.
+compliance_ai_draft
