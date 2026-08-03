@@ -69,7 +69,19 @@ export const AREA_COUNT_THRESHOLD = 4;
  * asserts the two stay in sync; if you change a threshold here, change
  * it there.
  */
-const SOURCE_EXTENSIONS: ReadonlyArray<string> = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".prisma"];
+const SOURCE_EXTENSIONS: ReadonlyArray<string> = [
+  ".ts",
+  ".tsx",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".prisma",
+  // Shell scripts count. The omission was found by dogfooding: the
+  // untracked scripts/session-new.sh did not trip this signal, and a
+  // build/ops script going missing in a split is no less damaging than
+  // a TypeScript module going missing.
+  ".sh",
+];
 
 /** One line of `git status --porcelain` output, already parsed. */
 export interface StatusEntry {

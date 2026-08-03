@@ -36,6 +36,7 @@
     "check:layers": "tsx scripts/check-package-layers.ts",
     "check:seed": "tsx scripts/check-seed-fixtures.ts",
     "check:wip": "tsx scripts/check-wip.ts",
+    "session:new": "sh scripts/session-new.sh",
     "check:terraform-apply-workflow": "tsx scripts/check-terraform-apply-workflow.ts",
     "events:validate": "tsx scripts/events/validate-registry.ts",
     "events:migrate-check": "tsx scripts/events/migrate-allowlist.ts",

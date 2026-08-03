@@ -105,6 +105,14 @@ describe("evaluateWorkingTree", () => {
     expect(findings[0]?.message).toMatch(/^1 new source file/);
   });
 
+  it("counts a new shell script as source", () => {
+    const findings = evaluateWorkingTree({
+      branch: "chore/tooling",
+      entries: [untracked("scripts/session-new.sh")],
+    });
+    expect(signalsOf(findings)).toEqual(["untracked-source"]);
+  });
+
   it("reproduces the 2026-08-02 pile: trunk, fan-out and lost new files", () => {
     const entries = [
       modified("apps/web/app/ops/page.tsx"),
@@ -160,5 +168,18 @@ describe("the shell fast path", () => {
 
   it("uses the same area-count threshold as the checker", () => {
     expect(literalOf("AREA_COUNT_THRESHOLD")).toBe(AREA_COUNT_THRESHOLD);
+  });
+});
+
+describe("the Cursor hook wiring", () => {
+  // A reporter nobody runs is worse than no reporter, because the
+  // silence reads as "nothing to report". Assert the events stay wired.
+  const hooks = JSON.parse(readFileSync(".cursor/hooks.json", "utf8")) as {
+    hooks: Record<string, ReadonlyArray<{ command: string }>>;
+  };
+
+  it.each(["sessionStart", "stop"])("runs the reporter on %s", (event) => {
+    const commands = (hooks.hooks[event] ?? []).map((h) => h.command);
+    expect(commands).toContain("sh scripts/wip-report.sh");
   });
 });
