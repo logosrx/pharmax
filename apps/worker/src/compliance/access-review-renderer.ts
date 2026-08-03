@@ -201,5 +201,12 @@ export function renderAccessReviewMarkdown(input: AccessReviewMarkdownInput): st
 }
 
 function escapeTableCell(s: string): string {
-  return s.replace(/\|/g, "\\|").replace(/\n/g, " ");
+  // Backslashes go first. Escaping `|` introduces backslashes, so doing
+  // it the other way round lets a literal `\` in the input pair up with
+  // the backslash we just added — the reader then sees an escaped
+  // backslash followed by a live column separator, and the row splits.
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/[\r\n]+/g, " ");
 }

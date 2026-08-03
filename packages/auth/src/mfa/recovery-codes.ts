@@ -15,6 +15,13 @@ const ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ";
 const GROUP_LEN = 5;
 const GROUPS = 2; // e.g. "A2C4E-9GHJK"
 
+// A byte holds 256 values but the alphabet has 30 characters, so the
+// range does not divide evenly. These two constants carve out the part
+// that does: BYTES_PER_CHAR (8) byte values map to each character, and
+// any byte at or above UNBIASED_BYTE_LIMIT (240) is discarded.
+const BYTES_PER_CHAR = Math.floor(256 / ALPHABET.length);
+const UNBIASED_BYTE_LIMIT = BYTES_PER_CHAR * ALPHABET.length;
+
 /** Generate `count` display codes like "A2C4E-9GHJK". */
 export function generateRecoveryCodes(count: number): string[] {
   const codes: string[] = [];
@@ -51,14 +58,23 @@ export async function verifyRecoveryCode(
 }
 
 function randomGroup(): string {
-  // Rejection-free mapping: use a byte per char, modulo the alphabet.
-  // The tiny modulo bias over a 30-char alphabet is irrelevant for a
-  // one-time recovery code whose entropy comes from length, not from
-  // perfect uniformity.
-  const bytes = randomBytes(GROUP_LEN);
+  // Rejection sampling, so every character is exactly equally likely.
+  // Folding a whole byte into the alphabet with `% 30` would make the
+  // first 16 characters ~17% more likely than the last 14; integer
+  // division of an accepted byte cannot skew the distribution.
   let out = "";
-  for (let i = 0; i < GROUP_LEN; i += 1) {
-    out += ALPHABET[bytes[i]! % ALPHABET.length];
+  while (out.length < GROUP_LEN) {
+    // Draw a group's worth of bytes at a time — rejections are rare
+    // (16 of 256 values), so this almost always needs one draw.
+    for (const byte of randomBytes(GROUP_LEN)) {
+      if (byte >= UNBIASED_BYTE_LIMIT) {
+        continue;
+      }
+      out += ALPHABET[Math.floor(byte / BYTES_PER_CHAR)]!;
+      if (out.length === GROUP_LEN) {
+        break;
+      }
+    }
   }
   return out;
 }
