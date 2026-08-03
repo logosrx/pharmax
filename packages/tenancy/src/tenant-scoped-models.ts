@@ -318,6 +318,26 @@ export const TENANT_EXCLUDED_MODELS: ReadonlySet<string> = new Set([
   // the phase5_break_glass_session migration.
   "BreakGlassSession",
   "BreakGlassAction",
+  // Compliance control plane (@pharmax/compliance). The control
+  // program being evidenced is Pharmax-the-operator's, not any one
+  // tenant's: a probe asking "is RLS still enabled on every tenant
+  // table" or "does branch protection still require CodeQL" has no
+  // organizationId to belong to, and the per-org probes (audit-chain
+  // verification) span ALL tenants in a single run. Follows the
+  // break-glass precedent rather than inventing a synthetic platform
+  // org — the tables ARE the append-only evidence ledger, with
+  // UPDATE/DELETE revoked at the grant layer. Where a run or
+  // exception names the tenant it examined, it does so through an
+  // unlinked `subjectOrganizationId` uuid, deliberately not a FK, so
+  // evidence outlives tenant offboarding.
+  "ComplianceCriterion",
+  "ComplianceControl",
+  "ComplianceControlCriterion",
+  "ComplianceCheck",
+  "ComplianceCheckControl",
+  "ComplianceCheckRun",
+  "ComplianceCheckException",
+  "ComplianceTask",
 ]);
 
 /**
