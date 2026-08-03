@@ -386,10 +386,11 @@ const schema = z.object({
   // so a job that runs late on Apr 2 still has a full Q1 window.
   //
   // `EVIDENCE_ROOT` controls where the FilesystemEvidencePublisher
-  // writes — must be a path the worker process can write to, and
-  // in production should be on a volume backed by a daily snapshot
-  // (until the S3 Object-Lock publisher lands as part of the
-  // Terraform slice).
+  // writes and applies to dev/test only. Production publishes into the
+  // audit-archive Object Lock bucket via `AUDIT_ARCHIVE_S3_BUCKET`;
+  // when the job is enabled in production and that bucket is unset the
+  // worker refuses to boot rather than write evidence to container-
+  // local storage. See `compliance/build-evidence-publisher.ts`.
   QUARTERLY_ACCESS_REVIEW_ENABLED: z.coerce.boolean().default(true),
   QUARTERLY_ACCESS_REVIEW_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(3),
   QUARTERLY_ACCESS_REVIEW_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(0),
