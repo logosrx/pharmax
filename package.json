@@ -77,7 +77,7 @@
     "@aws-sdk/client-kms": "^3.1097.0",
     "@aws-sdk/client-rds": "^3.1097.0",
     "@aws-sdk/client-s3": "^3.1097.0",
-    "@eslint/js": "^9.13.0",
+    "@eslint/js": "^10.0.1",
     "@pharmax/audit": "workspace:*",
     "@pharmax/billing": "workspace:*",
     "@pharmax/clinical-screening": "workspace:*",
