@@ -72,6 +72,7 @@ import { OrderFinalStartedV1 } from "./events/order/final-started-v1.js";
 import { OrderHeldV1 } from "./events/order/held-v1.js";
 import { OrderHoldReleasedV1 } from "./events/order/hold-released-v1.js";
 import { OrderPrescriptionAddedV1 } from "./events/order/prescription-added-v1.js";
+import { OrderPv1ApprovalRefusedV1 } from "./events/order/pv1-approval-refused-v1.js";
 import { OrderPv1ApprovedV1 } from "./events/order/pv1-approved-v1.js";
 import { OrderPv1RejectedV1 } from "./events/order/pv1-rejected-v1.js";
 import { OrderPv1ScreeningAcknowledgedV1 } from "./events/order/pv1-screening-acknowledged-v1.js";
@@ -214,6 +215,7 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   OrderHeldV1,
   OrderHoldReleasedV1,
   OrderPrescriptionAddedV1,
+  OrderPv1ApprovalRefusedV1,
   OrderPv1ApprovedV1,
   OrderPv1RejectedV1,
   OrderPv1ScreeningAcknowledgedV1,

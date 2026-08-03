@@ -49,14 +49,14 @@ const MESSAGES: Readonly<Record<string, Omit<Pv1ScreeningErrorMessage, "code">>>
   [PV1_SCREENING_HARD_STOP]: {
     title: "This prescription cannot pass PV1 as written",
     guidance:
-      "Clinical screening returned a finding with no override path, so there is nothing to acknowledge and no way to sign it. Reject the order with the matching reason and contact the prescriber. The finding, its grading and its source are on the order's clinical screening panel.",
+      "Clinical screening returned a finding with no override path, so there is nothing to acknowledge and no way to sign it. Reject the order with the matching reason and contact the prescriber. Reload the order: the screen this refusal was made against has been recorded, so the panel now shows the finding, its grading and its source.",
     tone: "danger",
     resolvableByAcknowledgement: false,
   },
   [PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED]: {
     title: "Approval refused — findings are waiting on your judgement",
     guidance:
-      "One or more screening findings need an acknowledgement from you specifically. A colleague's acknowledgement of the same finding does not satisfy your approval. Open the order, read each outstanding finding on the clinical screening panel, acknowledge them there, then approve.",
+      "One or more screening findings need an acknowledgement from you specifically. A colleague's acknowledgement of the same finding does not satisfy your approval. Reload the order — approval screens it again at the moment you sign, so the panel may now list a finding that was not there when you started, and it lists exactly what refused you. Acknowledge each outstanding finding on the clinical screening panel, then approve.",
     tone: "warning",
     resolvableByAcknowledgement: true,
   },

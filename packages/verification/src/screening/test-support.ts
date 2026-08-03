@@ -38,6 +38,18 @@ export interface StubFinding {
   readonly certainty: string;
   readonly disposition: string;
   readonly occurredAt: Date;
+  /**
+   * `PV1_START` or `PV1_APPROVE`. Absent on rows a test seeded
+   * directly rather than writing through a command.
+   */
+  readonly phase?: string;
+  /**
+   * The command that produced the screen this row belongs to. It is
+   * how the console groups rows into "the latest screen" (see
+   * `get-order-screening.ts`), so a test asserting what a pharmacist
+   * would be shown has to be able to group the same way.
+   */
+  readonly commandLogId?: string;
 }
 
 export interface StubAcknowledgement {
@@ -146,6 +158,8 @@ export function createScreeningStubs(
             certainty: String(row["certainty"]),
             disposition: String(row["disposition"]),
             occurredAt: row["occurredAt"] as Date,
+            phase: String(row["phase"]),
+            commandLogId: String(row["commandLogId"]),
           });
         }
         return { count: rows.length };

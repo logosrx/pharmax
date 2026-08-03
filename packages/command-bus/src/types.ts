@@ -20,7 +20,7 @@
 //     rule applies to `responsePayload`.
 
 import type { Prisma, PrismaClient } from "@pharmax/database";
-import type { clock, logger } from "@pharmax/platform-core";
+import type { clock, errors, logger } from "@pharmax/platform-core";
 import type { PermissionCode } from "@pharmax/rbac";
 import type { TenancyContext } from "@pharmax/tenancy";
 import type { ZodType } from "zod";
@@ -69,8 +69,7 @@ export interface OutboxEventDraft {
   readonly payload: Record<string, unknown>;
 }
 
-export interface HandlerResult<TOutput> {
-  readonly output: TOutput;
+interface HandlerResultCommon {
   readonly audit: AuditEntryDraft;
   readonly outboxEvents: ReadonlyArray<OutboxEventDraft>;
   /**
@@ -79,6 +78,52 @@ export interface HandlerResult<TOutput> {
    */
   readonly targetOrderId?: string;
 }
+
+/**
+ * What a handler returns: EITHER an output the bus commits and hands
+ * back, OR a refusal the bus commits and then throws. The two are
+ * exclusive by construction — a refused act has no output to return,
+ * and a handler that produced one would be describing something that
+ * did not happen.
+ *
+ * A COMMITTED REFUSAL is a handler that ran, declined to perform the
+ * act it was asked to perform, and wrote down why. The bus commits
+ * the transaction — audit row, order_event rows, outbox rows and
+ * whatever evidence the handler persisted all land — and then THROWS
+ * the error to the caller, so the API contract of a refusal is
+ * unchanged: error class still decides the HTTP status, exactly as it
+ * does for a refusal that rolls back.
+ *
+ * Use it ONLY when the refusal's own evidence has to outlive the
+ * attempt. The motivating case is `ApprovePV1`: its gate refuses on a
+ * clinical-screening finding, and if the screen that produced that
+ * finding rolls back with the refusal, the pharmacist is told "a
+ * finding is outstanding" by a console that can no longer show them
+ * any such finding — and there is then no way to acknowledge it and
+ * no way forward. A refusal that destroys its own evidence is a
+ * deadlock, not a safety control.
+ *
+ * The default remains a rollback. Throwing from the handler is still
+ * right for a refusal whose evidence is the `command_log` row alone;
+ * rows that describe an act which did not happen have to earn their
+ * place.
+ *
+ * What the bus does differently on this path:
+ *
+ *   - NO IDEMPOTENCY ROW is written. A refusal must never be replayed
+ *     from cache: the caller's remedy is to change the world (record
+ *     the acknowledgement) and try again, and a cached refusal would
+ *     answer that retry with the very refusal it was sent to resolve.
+ *   - `command_log` is still marked FAILED with the refusal's code —
+ *     the same row a rollback refusal wrote — so dashboards keyed on
+ *     `errorCode` do not move.
+ *   - The handler MUST NOT return `bumpVersion` alongside a refusal.
+ *     A refusal performs no transition; the factory fails closed if
+ *     both are set.
+ */
+export type HandlerResult<TOutput> =
+  | (HandlerResultCommon & { readonly output: TOutput; readonly refusal?: undefined })
+  | (HandlerResultCommon & { readonly output?: undefined; readonly refusal: errors.PharmaxError });
 
 /**
  * Tenant-scoped command. Runs inside an active user tenancy context

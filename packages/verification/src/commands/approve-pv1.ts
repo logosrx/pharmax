@@ -122,6 +122,14 @@
 //   `ConflictError` (409) would tell an integrator to retry, which
 //   would be wrong for both of these.
 //
+//   Both refusals are COMMITTED REFUSALS (`HandlerResult.refusal`):
+//   the transaction commits with the screen the gate judged written
+//   down, and the error is thrown afterwards. The caller sees the
+//   same class, code and status it always did; what changed is that
+//   the pharmacist can now SEE and ACKNOWLEDGE what refused them.
+//   See the long comment at the call site for why a refusal that
+//   rolls back its own evidence deadlocks the order.
+//
 //   Why re-screen at all, given StartPV1 already did: a PV1 review is
 //   not instantaneous. See the long comment at the call site.
 //
@@ -163,7 +171,7 @@ import {
 } from "@pharmax/workflow";
 import { z } from "zod";
 
-import { assertScreeningPermitsApproval } from "../screening/gate.js";
+import { screeningRefusalForApproval } from "../screening/gate.js";
 import { loadPatientIdForOrder } from "../screening/order-patient.js";
 import { projectScreening } from "../screening/projection.js";
 import { persistFindings, runOrderScreen } from "../screening/run-screen.js";
@@ -339,11 +347,46 @@ export const ApprovePV1 = defineCommand<ApprovePV1Input, ApprovePV1Output>({
     // row lock. That is not a price worth trading a stale safety
     // check for.
     //
-    // A REFUSED approval persists NO findings: the gate throws, the
-    // transaction rolls back, and the evidence of the refusal is the
-    // `command_log` row the bus writes outside the tx (status FAILED,
-    // errorCode PV1_SCREENING_HARD_STOP or
-    // PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED).
+    // A REFUSED APPROVAL PERSISTS ITS SCREEN TOO — and that is the
+    // load-bearing part, not an afterthought.
+    //
+    // The gate refuses on findings. The console shows findings by
+    // reading `order_screening_finding`, and
+    // `AcknowledgePV1ScreeningFinding` refuses any fingerprint that
+    // table does not hold for this order. So if a refusal rolled its
+    // own screen back — which is what a throw from here does — the
+    // pharmacist would be told "a finding is outstanding" by a panel
+    // that shows nothing outstanding, with no way to acknowledge the
+    // thing that blocked them and no way to move the order. Not a
+    // safety control: a deadlock whose only exit is rejecting a
+    // clinically fine prescription.
+    //
+    // That deadlock needs no licensed knowledge source, no allergy
+    // list and no structured sig to reach a real pharmacy.
+    // `SCR_KNOWLEDGE_UNAVAILABLE` is raised per drug code and covers
+    // profile medications as well as the candidate, and the profile
+    // is read live. A second order for the same patient going ACTIVE
+    // mid-review therefore produces a brand-new fingerprint at
+    // sign-off. Multi-order patients are routine.
+    //
+    // So the screen is persisted BEFORE the verdict is acted on, in
+    // both outcomes, and the refusal travels to the bus as a
+    // COMMITTED REFUSAL (`HandlerResult.refusal`): the transaction
+    // commits, and the error is thrown to the caller afterwards. The
+    // pharmacist gets the same 422 and the same code they got before,
+    // and now the panel they are sent to holds exactly the findings
+    // the gate judged — not a second screen computed somewhere else
+    // that is free to disagree.
+    //
+    // Why not persist in a separate transaction that commits first,
+    // which would let the refusal keep throwing: the bus is holding
+    // `SELECT … FOR UPDATE` on this order row, and an insert into
+    // `order_screening_finding` takes `FOR KEY SHARE` on that same
+    // row for its foreign key. A second connection would block on a
+    // lock only this transaction can release, and this transaction is
+    // awaiting that connection. Hoisting the screen before the lock
+    // instead re-introduces the stale-gate problem the re-screen
+    // exists to solve.
     // ---------------------------------------------------------------
     const screeningPolicy = (policy.merged?.merged ?? ORDER_STANDARD_V1).screening;
     const patientId = await loadPatientIdForOrder({
@@ -359,13 +402,112 @@ export const ApprovePV1 = defineCommand<ApprovePV1Input, ApprovePV1Output>({
       policy: screeningPolicy,
     });
 
-    await assertScreeningPermitsApproval({
+    const now = clock.now();
+    const projectedScreening = projectScreening(screen.evaluation);
+
+    // The record of what this approval attempt was screened against.
+    // Written before the verdict is acted on, so the row set and the
+    // gate's input cannot differ: there is one screen, and this is
+    // it. A PV1_APPROVE row therefore means "a sign-off attempt
+    // screened the order and this is what came back" — whether the
+    // attempt then succeeded is answered by the `verification_record`
+    // and `command_log` rows that share this `commandLogId`.
+    //
+    // The table is insert-only, so a repeatedly-refused order
+    // accumulates one screen per attempt. That is the intended cost:
+    // each set is the evidence for one refusal, the projection reads
+    // only the newest (grouped by `commandLogId`), and an attempt
+    // costs a handful of rows. An order that racks up enough of them
+    // to matter has a clinical problem worth the row count.
+    await persistFindings({
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+      phase: ScreeningPhase.PV1_APPROVE,
+      screenedForUserId: approvingPharmacistUserId,
+      findings: screen.evaluation.findings,
+      workflowPolicyId: policy.id,
+      workflowPolicyVersion: policy.version,
+      minimumReportedSeverity: screeningPolicy.minimumReportedSeverity,
+      commandLogId,
+      occurredAt: now,
+    });
+
+    const screeningEmit = {
+      eventType: "order.pv1.screening.recorded.v1",
+      aggregateType: "Order",
+      aggregateId: target.id,
+      payload: {
+        orderId: target.id,
+        organizationId: ctx.organizationId,
+        siteId: target.siteId,
+        pharmacistUserId: approvingPharmacistUserId,
+        phase: ScreeningPhase.PV1_APPROVE,
+        screenedLineCount: screen.screenedLineCount,
+        workflowPolicyId: policy.id,
+        workflowPolicyVersion: policy.version,
+        minimumReportedSeverity: screeningPolicy.minimumReportedSeverity,
+        ...projectedScreening,
+        occurredAt: now.toISOString(),
+      },
+    };
+
+    const refusal = await screeningRefusalForApproval({
       tx,
       organizationId: ctx.organizationId,
       orderId: target.id,
       pharmacistUserId: approvingPharmacistUserId,
       evaluation: screen.evaluation,
     });
+    if (refusal !== null) {
+      return {
+        refusal,
+        targetOrderId: target.id,
+        // No `bumpVersion`: nothing transitioned. The order stays in
+        // PV1_IN_PROGRESS, assigned to this pharmacist, and a
+        // concurrent command's CAS is left alone.
+        audit: {
+          action: "order.pv1.approval.refused_by_screening",
+          resourceType: "Order",
+          resourceId: target.id,
+          metadata: {
+            orderId: target.id,
+            currentStatus: currentState,
+            workflowPolicyId: policy.id,
+            workflowPolicyVersion: policy.version,
+            siteId: target.siteId,
+            approvingPharmacistUserId,
+            commandLogId,
+            refusalCode: refusal.code,
+            screeningOutcome: projectedScreening.outcome,
+            screeningFindingCount: projectedScreening.findingCount,
+            screeningHardStopCount: projectedScreening.hardStopCount,
+            screeningRequiresAcknowledgementCount: projectedScreening.requiresAcknowledgementCount,
+            screeningGapCount: projectedScreening.gapCount,
+          },
+        },
+        emits: [
+          screeningEmit,
+          {
+            eventType: "order.pv1.approval.refused.v1",
+            aggregateType: "Order",
+            aggregateId: target.id,
+            payload: {
+              orderId: target.id,
+              organizationId: ctx.organizationId,
+              siteId: target.siteId,
+              pharmacistUserId: approvingPharmacistUserId,
+              refusalCode: refusal.code,
+              workflowPolicyId: policy.id,
+              workflowPolicyVersion: policy.version,
+              hardStopCount: projectedScreening.hardStopCount,
+              requiresAcknowledgementCount: projectedScreening.requiresAcknowledgementCount,
+              occurredAt: now.toISOString(),
+            },
+          },
+        ],
+      };
+    }
 
     // Destination bucket: PV1_APPROVED_READY_FOR_FILL → "FILL"
     // (first command in the codebase to resolve the FILL bucket).
@@ -427,26 +569,6 @@ export const ApprovePV1 = defineCommand<ApprovePV1Input, ApprovePV1Output>({
         currentAssigneeUserId: null,
       },
     });
-
-    const now = clock.now();
-
-    // The record of what this approval was screened against. Written
-    // after the gate passed, so every PV1_APPROVE row in this table
-    // belongs to an approval that actually happened.
-    await persistFindings({
-      tx,
-      organizationId: ctx.organizationId,
-      orderId: target.id,
-      phase: ScreeningPhase.PV1_APPROVE,
-      screenedForUserId: approvingPharmacistUserId,
-      findings: screen.evaluation.findings,
-      workflowPolicyId: policy.id,
-      workflowPolicyVersion: policy.version,
-      minimumReportedSeverity: screeningPolicy.minimumReportedSeverity,
-      commandLogId,
-      occurredAt: now,
-    });
-    const projectedScreening = projectScreening(screen.evaluation);
 
     await applyCommandStageIntervalTransition({
       commandName: "ApprovePV1",
@@ -513,24 +635,7 @@ export const ApprovePV1 = defineCommand<ApprovePV1Input, ApprovePV1Output>({
             occurredAt: now.toISOString(),
           },
         },
-        {
-          eventType: "order.pv1.screening.recorded.v1",
-          aggregateType: "Order",
-          aggregateId: target.id,
-          payload: {
-            orderId: target.id,
-            organizationId: ctx.organizationId,
-            siteId: target.siteId,
-            pharmacistUserId: approvingPharmacistUserId,
-            phase: ScreeningPhase.PV1_APPROVE,
-            screenedLineCount: screen.screenedLineCount,
-            workflowPolicyId: policy.id,
-            workflowPolicyVersion: policy.version,
-            minimumReportedSeverity: screeningPolicy.minimumReportedSeverity,
-            ...projectedScreening,
-            occurredAt: now.toISOString(),
-          },
-        },
+        screeningEmit,
       ],
     };
   },

@@ -54,6 +54,7 @@ import {
   createScreeningStubs,
   type ScreeningStubOptions,
   type ScreeningStubs,
+  type StubFinding,
 } from "./test-support.js";
 
 // ---------------------------------------------------------------------------
@@ -942,6 +943,212 @@ describe("PV1 screening — the profile moves during the review", () => {
         executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
       ).rejects.toMatchObject({ code: "PV1_SCREENING_HARD_STOP" });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A refusal has to leave its own evidence behind
+// ---------------------------------------------------------------------------
+
+describe("PV1 screening — a finding raised for the first time at sign-off", () => {
+  /**
+   * The candidate is known; the drug that lands on the profile
+   * mid-review is not.
+   *
+   * That combination is what makes this reachable with no licensed
+   * knowledge source, no allergy capture and no structured sig: the
+   * profile-medication knowledge gap is only raised when the
+   * CANDIDATE is known (an unknown candidate gaps the whole screen and
+   * says everything already), and the gap's fingerprint carries the
+   * drug code, so a drug the pharmacist has never seen produces a
+   * fingerprint no acknowledgement of theirs can match.
+   */
+  function knowledgeWithCandidateOnly(): DrugKnowledgeSource {
+    return createInMemoryDrugKnowledgeSource({
+      drugs: {
+        [CANDIDATE_NDC]: {
+          ingredientCodes: ["INGREDIENT_ALFA"],
+          therapeuticClassCodes: [],
+          crossSensitivityClassCodes: [],
+          doseRange: null,
+        },
+      },
+    });
+  }
+
+  /** A second order for the same patient goes ACTIVE mid-review. */
+  const SECOND_ORDER_RX = "00000000-0000-4000-8000-0000000000e3";
+  const SECOND_ORDER_NDC = "00000-0000-03";
+  const PROFILE_GAP_FINGERPRINT = `SCR_KNOWLEDGE_UNAVAILABLE|MODERATE/DEFINITE|${SECOND_ORDER_NDC}|scope=PROFILE_MEDICATION`;
+
+  /**
+   * The rows the console would render: the newest screen, grouped by
+   * the command that produced it, exactly as `getOrderScreening` does.
+   *
+   * "Newest" is insertion order here rather than `occurredAt`, because
+   * the bus runs on a frozen clock in these suites and every screen
+   * stamps the same instant. The console's second sort key
+   * (`createdAt desc`) is what breaks that tie in Postgres; insertion
+   * order is its analogue in the fake.
+   */
+  function latestScreen(fake: FlowFake): ReadonlyArray<StubFinding> {
+    const rows = fake.screening.state.persistedFindings;
+    const newest = rows.at(-1);
+    if (newest === undefined) return [];
+    return rows.filter((row) => row.commandLogId === newest.commandLogId);
+  }
+
+  it("refuses, records the screen it refused against, and lets the pharmacist acknowledge and approve", async () => {
+    // The whole contract, in one test. Before this, step 3 refused and
+    // rolled the screen back with it: the panel kept showing the
+    // start-time findings with nothing outstanding, the acknowledge
+    // command refused the new fingerprint as one it had never seen,
+    // and re-approving produced the identical refusal forever. The
+    // only exit was rejecting a clinically fine prescription.
+    const fake = buildFlowFake({ screening: candidateOnly });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithCandidateOnly() });
+
+    // 1 + 2. The pharmacist opens the review and works through
+    // everything the screen put in front of them.
+    await startReview();
+    const atStart = outstandingFingerprints(fake);
+    expect(atStart).toEqual([...UNSUPPLIED_AXIS_FINGERPRINTS]);
+    await acknowledge(PHARMACIST_A, atStart, "ack-start");
+
+    // 3. The patient's OTHER order progresses and its drug lands on
+    // the profile. Nobody touched this order.
+    fake.screening.state.prescriptions.push({
+      id: SECOND_ORDER_RX,
+      patientId: PATIENT_ID,
+      drugNdc: SECOND_ORDER_NDC,
+      status: "ACTIVE",
+      drugName: "PLACEHOLDER-SECOND-ORDER-NAME",
+    });
+
+    // 4. Sign-off re-screens and refuses on a finding that did not
+    // exist when the pharmacist started.
+    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
+      await expect(
+        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
+      ).rejects.toMatchObject({
+        code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
+        httpStatus: 422,
+        metadata: expect.objectContaining({
+          outstandingFingerprints: [PROFILE_GAP_FINGERPRINT],
+        }),
+      });
+    });
+
+    // The refusal refused: no approval, no transition.
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(0);
+    expect(fake.currentStatus()).toBe("PV1_IN_PROGRESS");
+
+    // 5. …and it left its evidence. The screen the gate judged is on
+    // record, as the newest screen, which is the one the console
+    // renders — so the panel shows EXACTLY what refused the approval
+    // rather than a stale set with nothing outstanding.
+    const shown = latestScreen(fake);
+    expect(shown.map((row) => row.fingerprint).sort()).toEqual(
+      [...UNSUPPLIED_AXIS_FINGERPRINTS, PROFILE_GAP_FINGERPRINT].sort()
+    );
+    for (const row of shown) {
+      expect(row.phase).toBe("PV1_APPROVE");
+    }
+
+    // 6. The new finding can be acknowledged, because it was actually
+    // persisted — the command refuses any fingerprint that was not.
+    const acknowledgement = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
+      executeCommand(
+        AcknowledgePV1ScreeningFinding,
+        { orderId: ORDER_ID, fingerprint: PROFILE_GAP_FINGERPRINT },
+        { idempotencyKey: "ack-profile-gap" }
+      )
+    );
+    expect(acknowledgement.alreadyAcknowledged).toBe(false);
+
+    // 7. And the second attempt goes through. Note the SAME
+    // idempotency key as the refused attempt: a refusal writes no
+    // idempotency row, so the retry re-executes instead of replaying
+    // the refusal it was sent to resolve.
+    const approval = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
+      executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
+    );
+    expect(approval.currentStatus).toBe("PV1_APPROVED_READY_FOR_FILL");
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(1);
+  });
+
+  it("records a hard stop raised at sign-off too, so the pharmacist can read what blocked them", async () => {
+    // A hard stop has no acknowledgement path, but it has a reason, a
+    // grading and a citation the pharmacist has to quote to the
+    // prescriber. Rolling those back leaves them with a code in a
+    // banner and a panel that disagrees with it.
+    const fake = buildFlowFake({ screening: candidateOnly });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithAcknowledgeTierInteraction() });
+
+    await startReview();
+    await acknowledge(PHARMACIST_A, outstandingFingerprints(fake), "ack-start");
+
+    // The interacting drug appears on the profile, and the vendor
+    // grades the pair CONTRAINDICATED / DEFINITE.
+    fake.screening.state.prescriptions.push({
+      id: PROFILE_RX,
+      patientId: PATIENT_ID,
+      drugNdc: PROFILE_NDC,
+      status: "ACTIVE",
+      drugName: "PLACEHOLDER-PROFILE-NAME",
+    });
+    configureClinicalScreening({ knowledgeSource: knowledgeWithHardStopInteraction() });
+
+    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
+      await expect(
+        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_HARD_STOP" });
+    });
+
+    expect(latestScreen(fake).map((row) => row.code)).toContain("SCR_DRUG_INTERACTION");
+    expect(fake.currentStatus()).toBe("PV1_IN_PROGRESS");
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(0);
+  });
+
+  it("puts the refused attempt on the order timeline and in the audit log, without a version bump", async () => {
+    // A refusal that commits has to say what it was. Two events: the
+    // screen (the same event a successful approval emits, so a
+    // consumer counting screens counts this one) and the verdict.
+    const fake = buildFlowFake({ screening: candidateOnly });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithCandidateOnly() });
+
+    await startReview();
+    const eventsBefore = callsOf(fake.calls, "orderEvent", "create").length;
+    const casBefore = callsOf(fake.calls, "order", "updateMany").length;
+
+    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
+      await expect(
+        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED" });
+    });
+
+    const newEvents = callsOf(fake.calls, "orderEvent", "create")
+      .slice(eventsBefore)
+      .map((c) => (c.args as { data: Record<string, unknown> }).data["eventType"]);
+    expect(newEvents).toEqual(["order.pv1.screening.recorded.v1", "order.pv1.approval.refused.v1"]);
+
+    const audit = callsOf(fake.calls, "auditLog", "create").at(-1)!.args as {
+      data: Record<string, unknown>;
+    };
+    expect(audit.data["action"]).toBe("order.pv1.approval.refused_by_screening");
+    expect(audit.data["metadata"]).toMatchObject({
+      refusalCode: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
+      currentStatus: "PV1_IN_PROGRESS",
+    });
+
+    // Nothing transitioned, so nothing moved the order's version and
+    // no concurrent command's CAS was invalidated on behalf of an act
+    // that did not happen.
+    expect(callsOf(fake.calls, "order", "updateMany")).toHaveLength(casBefore);
+    expect(callsOf(fake.calls, "order", "update")).toHaveLength(1); // StartPV1's only
   });
 });
 

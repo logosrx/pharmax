@@ -24,6 +24,15 @@
 // construction, not by convention — `AcknowledgePV1ScreeningFinding`
 // refuses to record one, and this function checks hard stops before
 // it looks at acknowledgements at all.
+//
+// WHY THIS RETURNS THE REFUSAL RATHER THAN THROWING IT. A throw out
+// of an ApprovePV1 handler rolls the transaction back, and the screen
+// this gate just evaluated rolls back with it — so the pharmacist
+// would be refused for a finding no console could then show them and
+// no command would then let them acknowledge. The caller has to be
+// able to persist the evidence BEFORE the refusal reaches the bus,
+// which means the refusal has to be a value it holds, not a stack
+// unwind it cannot get in front of. See `approve-pv1.ts`.
 
 import {
   findingsRequiringAcknowledgement,
@@ -45,20 +54,28 @@ export interface ApprovalGateInput {
 }
 
 /**
- * Refuse the approval unless the screening result permits it.
+ * Decide whether the screening result permits the approval.
+ *
+ * Returns `null` when it does, and the refusal the caller must raise
+ * when it does not. The caller persists the screen first and hands
+ * the refusal to the bus as a committed refusal, so the findings the
+ * gate judged are on record before the pharmacist is told about them.
  *
  * Order of checks is deliberate: hard stops first, so an order that
  * cannot pass at all reports that rather than a list of
  * acknowledgements the pharmacist would waste time recording before
  * meeting the wall.
  */
-export async function assertScreeningPermitsApproval(input: ApprovalGateInput): Promise<void> {
+export async function screeningRefusalForApproval(
+  input: ApprovalGateInput
+): Promise<errors.PharmaxError | null> {
   const blocking = hardStopFindings(input.evaluation);
   if (blocking.length > 0) {
-    throw new errors.InvariantViolationError({
+    return new errors.InvariantViolationError({
       code: PV1_SCREENING_HARD_STOP,
       message:
-        "Clinical screening returned a finding that cannot be overridden; this prescription cannot pass PV1 as written.",
+        "Clinical screening returned a finding that cannot be overridden; this prescription cannot pass PV1 as written. " +
+        "The screen this refusal was made against has been recorded on the order — reload it to read the finding and its source.",
       metadata: {
         orderId: input.orderId,
         // Codes and fingerprints only — the same PHI posture as the
@@ -74,7 +91,7 @@ export async function assertScreeningPermitsApproval(input: ApprovalGateInput): 
   }
 
   const required = findingsRequiringAcknowledgement(input.evaluation);
-  if (required.length === 0) return;
+  if (required.length === 0) return null;
 
   const requiredFingerprints = required.map((f) => f.fingerprint);
   const acknowledged = await input.tx.orderScreeningAcknowledgement.findMany({
@@ -89,13 +106,14 @@ export async function assertScreeningPermitsApproval(input: ApprovalGateInput): 
 
   const settled = new Set(acknowledged.map((row) => row.fingerprint));
   const outstanding = required.filter((f) => !settled.has(f.fingerprint));
-  if (outstanding.length === 0) return;
+  if (outstanding.length === 0) return null;
 
-  throw new errors.InvariantViolationError({
+  return new errors.InvariantViolationError({
     code: PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED,
     message:
       "Clinical screening returned findings that this pharmacist has not acknowledged. " +
-      "Acknowledgements are per-pharmacist: a colleague's acknowledgement of the same finding does not satisfy the gate.",
+      "Acknowledgements are per-pharmacist: a colleague's acknowledgement of the same finding does not satisfy the gate. " +
+      "The screen this refusal was made against has been recorded on the order — reload it, and the findings panel will list exactly these findings for acknowledgement.",
     metadata: {
       orderId: input.orderId,
       pharmacistUserId: input.pharmacistUserId,

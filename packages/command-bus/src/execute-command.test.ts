@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { CommandStatus, Prisma as PrismaNs } from "@pharmax/database";
+import { errors } from "@pharmax/platform-core";
 import {
   configureRbac,
   InMemoryPermissionLoader,
@@ -538,6 +539,88 @@ describe("executeCommand — handler failure path", () => {
     expect(auditCalls).toHaveLength(0);
     expect(outboxCalls).toHaveLength(0);
     expect(idemCalls).toHaveLength(0);
+  });
+});
+
+describe("executeCommand — committed refusal", () => {
+  const REFUSED_ORDER = "55555555-5555-7555-a555-555555555555";
+
+  function refusingCommand(): Command<SampleInput, SampleOutput> {
+    return sampleCommand({
+      handle: async ({ input, ctx, commandLogId }): Promise<HandlerResult<SampleOutput>> => ({
+        refusal: new errors.InvariantViolationError({
+          code: "SAMPLE_REFUSED",
+          message: "The thing you asked for was refused, and here is the evidence.",
+          metadata: { orderId: input.orderId },
+        }),
+        audit: {
+          action: "sample.refused",
+          resourceType: "Order",
+          resourceId: input.orderId,
+        },
+        outboxEvents: [
+          {
+            eventType: "sample.executed.v1",
+            aggregateType: "Order",
+            aggregateId: input.orderId,
+            payload: { orderId: input.orderId, organizationId: ctx.organizationId, commandLogId },
+          },
+        ],
+        targetOrderId: input.orderId,
+      }),
+    });
+  }
+
+  it("commits the handler's evidence, then throws the refusal to the caller", async () => {
+    // The whole point. A refusal whose evidence rolls back with it is
+    // a refusal nobody can act on — see the ApprovePV1 gate, where
+    // the rolled-back rows were the findings the pharmacist had to
+    // read and acknowledge to get past the refusal at all.
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(refusingCommand(), { orderId: REFUSED_ORDER }, { idempotencyKey: "ref-1" })
+      ).rejects.toMatchObject({ code: "SAMPLE_REFUSED", httpStatus: 422 });
+    });
+
+    // The in-tx bus writes ran, which is what "committed" means here:
+    // the tx returned normally rather than unwinding.
+    expect(callsTo(prisma, "auditLog", "create")).toHaveLength(1);
+    expect(callsTo(prisma, "eventOutbox", "createMany")).toHaveLength(1);
+  });
+
+  it("writes NO idempotency row, so a same-key retry re-executes instead of replaying the refusal", async () => {
+    // A cached refusal would answer the retry that was sent to
+    // resolve it with the refusal itself, for as long as the key
+    // lives. The caller's remedy is to change the world and try
+    // again; the bus must let them.
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(refusingCommand(), { orderId: REFUSED_ORDER }, { idempotencyKey: "ref-2" })
+      ).rejects.toMatchObject({ code: "SAMPLE_REFUSED" });
+    });
+
+    expect(callsTo(prisma, "idempotencyKey", "create")).toHaveLength(0);
+  });
+
+  it("marks command_log FAILED with the refusal's code and the target order", async () => {
+    // Same row a rollback refusal wrote, so nothing downstream has to
+    // learn a new shape — `errorCode` dashboards and the SOC 2
+    // attempted-but-failed view keep working unchanged.
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(refusingCommand(), { orderId: REFUSED_ORDER }, { idempotencyKey: "ref-3" })
+      ).rejects.toMatchObject({ code: "SAMPLE_REFUSED" });
+    });
+
+    const updates = callsTo(prisma, "commandLog", "update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.args).toMatchObject({
+      data: expect.objectContaining({
+        status: CommandStatus.FAILED,
+        errorCode: "SAMPLE_REFUSED",
+        targetOrderId: REFUSED_ORDER,
+      }),
+    });
   });
 });
 

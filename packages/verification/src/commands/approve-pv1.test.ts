@@ -1040,6 +1040,98 @@ describe("ApprovePV1 — workflow + scope failures", () => {
 });
 
 // ---------------------------------------------------------------------------
+// The screening gate refuses — and commits its evidence
+// ---------------------------------------------------------------------------
+
+describe("ApprovePV1 — a screening refusal is a COMMITTED refusal", () => {
+  it("persists the screen it refused against and writes no approval", async () => {
+    // The refusal is raised on findings, and the only place a
+    // pharmacist can read or acknowledge a finding is
+    // `order_screening_finding`. Rolling the screen back with the
+    // refusal — which is what throwing from the handler does — leaves
+    // them refused for something nothing can show them and nothing can
+    // settle. So the rows land, the approval does not, and the error
+    // is thrown after the commit.
+    const fake = buildPrismaFake({ screening: DEFAULT_SCREENING_STUBS });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(ApprovePV1, validInput(), { idempotencyKey: "approve-refused" })
+      ).rejects.toMatchObject({
+        code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
+        httpStatus: 422,
+      });
+    });
+
+    const persisted = callsOf(fake.calls, "orderScreeningFinding", "createMany");
+    expect(persisted).toHaveLength(1);
+    const rows = (persisted[0]!.args as { data: Array<Record<string, unknown>> }).data;
+    expect(rows.map((r) => r["fingerprint"]).sort()).toEqual([...DEFAULT_GAP_FINGERPRINTS].sort());
+    for (const row of rows) {
+      expect(row["phase"]).toBe("PV1_APPROVE");
+      expect(row["screenedForUserId"]).toBe(PHARMACIST_ID);
+    }
+
+    // Nothing about the approval happened.
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(0);
+    expect(callsOf(fake.calls, "order", "update")).toHaveLength(0);
+    expect(callsOf(fake.calls, "order", "updateMany")).toHaveLength(0);
+    expect(callsOf(fake.calls, "bucket", "findFirst")).toHaveLength(0);
+  });
+
+  it("records the refused attempt on the timeline and in the audit log, and caches nothing", async () => {
+    const fake = buildPrismaFake({ screening: DEFAULT_SCREENING_STUBS });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(ApprovePV1, validInput(), { idempotencyKey: "approve-refused-trail" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED" });
+    });
+
+    const events = callsOf(fake.calls, "orderEvent", "create").map(
+      (c) => (c.args as { data: Record<string, unknown> }).data["eventType"]
+    );
+    expect(events).toEqual(["order.pv1.screening.recorded.v1", "order.pv1.approval.refused.v1"]);
+    expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(1);
+    expect(callsOf(fake.calls, "eventOutbox", "createMany")).toHaveLength(1);
+
+    // No idempotency row: the pharmacist's remedy is to acknowledge
+    // and retry, and a cached refusal would answer that retry with
+    // the refusal it was sent to resolve.
+    expect(callsOf(fake.calls, "idempotencyKey", "create")).toHaveLength(0);
+  });
+
+  it("carries no PHI into the refusal's audit metadata or event payload", async () => {
+    const fake = buildPrismaFake({ screening: DEFAULT_SCREENING_STUBS });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(ApprovePV1, validInput(), { idempotencyKey: "approve-refused-phi" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED" });
+    });
+
+    const serialized = JSON.stringify(
+      fake.calls
+        .filter(
+          (c) =>
+            (c.table === "auditLog" && c.op === "create") ||
+            (c.table === "eventOutbox" && c.op === "createMany")
+        )
+        .map((c) => c.args),
+      (_key, value) => (typeof value === "bigint" ? value.toString() : value)
+    );
+    expect(serialized).not.toContain(PATIENT_ID);
+    expect(serialized).not.toMatch(/firstName|lastName|dateOfBirth|drugName|\bsig\b/i);
+    // …and the refusal IS described, so the assertion above is not
+    // passing on an empty bag.
+    expect(serialized).toContain("PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tenancy + RBAC
 // ---------------------------------------------------------------------------
 
