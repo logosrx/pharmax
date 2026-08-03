@@ -60,7 +60,7 @@ CREATE TABLE "compliance_criterion" (
     "framework" "ComplianceFramework" NOT NULL,
     "code" TEXT NOT NULL,
     "title" TEXT NOT NULL,
-    "requirementText" TEXT NOT NULL,
+    "requirementText" TEXT,
     "category" TEXT NOT NULL,
     "active" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

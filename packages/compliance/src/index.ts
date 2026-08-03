@@ -16,12 +16,16 @@
 //
 // What deliberately does NOT live here:
 //
-//   - Persistence. The runner returns records; commands own the
-//     writes, so every mutation of the compliance ledger goes through
-//     the command bus with idempotency and audit like any other
-//     critical mutation.
-//
-//   - Scheduling. apps/worker owns the poll loop.
+//   - Persistence and scheduling. The runner returns records; the
+//     worker's poll loop writes them. Machine-generated runs are
+//     written directly rather than through the command bus because a
+//     platform-wide probe has no organizationId for `command_log` —
+//     the same constraint break-glass documents in
+//     packages/security/src/break-glass/SCHEMA.md — and the evidence
+//     tables are themselves the append-only ledger. Human-initiated
+//     mutations (SignOffControl, AcceptCheckException) DO go through
+//     the bus, because there an actor with a real tenancy exists to
+//     attribute the decision to.
 //
 //   - Any LLM call. Drafting policy text and proposing control
 //     mappings is advisory work that belongs behind an explicit
@@ -70,6 +74,50 @@ export {
   forEachActiveOrganization,
   type ComplianceOrganizationRef,
 } from "./checks/per-organization.js";
+
+export {
+  AcceptCheckException,
+  COMPLIANCE_CHECK_NOT_FOUND,
+  COMPLIANCE_EXCEPTION_ALREADY_ACTIVE,
+  COMPLIANCE_EXCEPTION_MAX_DAYS,
+  COMPLIANCE_EXCEPTION_REASON_CODES,
+  type AcceptCheckExceptionInput,
+  type AcceptCheckExceptionOutput,
+} from "./commands/accept-check-exception.js";
+
+export {
+  COMPLIANCE_CONTROL_HAS_FAILING_CHECKS,
+  COMPLIANCE_CONTROL_NOT_FOUND,
+  SignOffControl,
+  type SignOffControlInput,
+  type SignOffControlOutput,
+} from "./commands/sign-off-control.js";
+
+export {
+  CONTROLS_INVENTORY_BAD_CONTROL_CODE,
+  CONTROLS_INVENTORY_DUPLICATE_CODE,
+  CONTROLS_INVENTORY_NO_CONTROLS,
+  CONTROLS_INVENTORY_UNKNOWN_CADENCE,
+  CONTROLS_INVENTORY_UNKNOWN_STATUS,
+  extractImplementationRefs,
+  parseControlsInventory,
+  resolveCadence,
+  type ParsedCadence,
+  type ParsedControl,
+  type ParsedControlStatus,
+} from "./seed/parse-controls-inventory.js";
+export {
+  parseCriteriaFamilies,
+  resolveCriterionTitle,
+  type CriterionFamilyTitles,
+} from "./seed/parse-criteria-families.js";
+export {
+  MARKDOWN_TABLE_RAGGED_ROW,
+  columnIndex,
+  parseMarkdownTables,
+  type MarkdownTable,
+  type MarkdownTableWithHeading,
+} from "./seed/parse-markdown-table.js";
 
 export { auditChainHeadConsistencyCheck } from "./checks/audit/chain-head-consistency.js";
 export {

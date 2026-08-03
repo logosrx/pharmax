@@ -5196,10 +5196,19 @@ model ComplianceCriterion {
 
   title String
 
-  /// Verbatim or close-paraphrased requirement text from the public
-  /// standard. Present so the auditor UI and the AI drafting layer
-  /// can quote the requirement without re-fetching the standard.
-  requirementText String
+  /// Requirement text from the standard, transcribed by a human who
+  /// holds the relevant license.
+  ///
+  /// Nullable, and left NULL by the seeder on purpose. The AICPA
+  /// Trust Services Criteria text is copyrighted; the seeder can
+  /// derive a criterion's CODE from our own crosswalk documents but
+  /// it cannot supply the criterion's TEXT. Generating a plausible
+  /// paraphrase and storing it here would manufacture an
+  /// authoritative-looking requirement nobody verified against the
+  /// standard — a fake compliance artifact, which is worse than an
+  /// obviously empty field. HIPAA text (45 CFR Part 164) is public
+  /// domain and may be transcribed directly.
+  requirementText String?
 
   /// Grouping label for UI ("Logical and Physical Access Controls",
   /// "Administrative Safeguards").

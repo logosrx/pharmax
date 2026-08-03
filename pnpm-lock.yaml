@@ -36,6 +36,9 @@ importers:
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:packages/command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:packages/compliance
       '@pharmax/composition':
         specifier: workspace:*
         version: link:packages/composition
@@ -353,6 +356,9 @@ importers:
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../../packages/command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:../../packages/compliance
       '@pharmax/composition':
         specifier: workspace:*
         version: link:../../packages/composition
@@ -592,6 +598,9 @@ importers:
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../platform-core
+      '@pharmax/rbac':
+        specifier: workspace:*
+        version: link:../rbac
       '@pharmax/security':
         specifier: workspace:*
         version: link:../security

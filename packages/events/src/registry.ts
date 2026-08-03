@@ -42,6 +42,8 @@ import { BillingPricingRuleUpsertedV1 } from "./events/billing/pricing-rule-upse
 
 // ---- compliance (SOC 2 / HIPAA evidence) --------------------------------
 import { ComplianceAccessReviewSnapshotRecordedV1 } from "./events/compliance/access-review-snapshot-recorded-v1.js";
+import { ComplianceCheckExceptionAcceptedV1 } from "./events/compliance/check-exception-accepted-v1.js";
+import { ComplianceControlSignedOffV1 } from "./events/compliance/control-signed-off-v1.js";
 
 // ---- compounding (ADR-0035) ----------------------------------------------
 import { CompoundingFormulaCreatedV1 } from "./events/compounding/formula-created-v1.js";
@@ -183,6 +185,8 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   BillingPricingRuleUpsertedV1,
   // compliance
   ComplianceAccessReviewSnapshotRecordedV1,
+  ComplianceCheckExceptionAcceptedV1,
+  ComplianceControlSignedOffV1,
   // compounding
   CompoundingFormulaCreatedV1,
   CompoundingFormulaPublishedV1,

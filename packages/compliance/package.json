@@ -13,6 +13,7 @@
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
+    "@pharmax/rbac": "workspace:*",
     "@pharmax/security": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
     "zod": "^4.4.3"
