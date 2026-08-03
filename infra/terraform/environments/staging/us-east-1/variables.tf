@@ -83,6 +83,32 @@ variable "alarm_sns_topic_arn" {
   default = ""
 }
 
+# ---- Alerting ---------------------------------------------------------------
+#
+# Off by default here (see terraform.tfvars). If you turn it on, endpoints are
+# supplied as `TF_VAR_alerting_*` at apply time, never from terraform.tfvars.
+
+variable "enable_alerting" {
+  type    = bool
+  default = false
+}
+variable "alerting_critical_email_subscriptions" {
+  type    = list(string)
+  default = []
+}
+variable "alerting_warning_email_subscriptions" {
+  type    = list(string)
+  default = []
+}
+variable "alerting_critical_https_subscriptions" {
+  type    = list(string)
+  default = []
+}
+variable "alerting_warning_https_subscriptions" {
+  type    = list(string)
+  default = []
+}
+
 variable "audit_archive_retention_years" {
   type    = number
   default = 7

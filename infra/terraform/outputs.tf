@@ -155,6 +155,47 @@ output "kms_logs_key_arn" {
   value       = module.kms.logs_key_arn
 }
 
+output "kms_alerts_key_arn" {
+  description = "ARN of the KMS key encrypting the alerting SNS topics."
+  value       = module.kms.alerts_key_arn
+}
+
+# ---- Alerting ---------------------------------------------------------------
+#
+# After an apply, `terraform output alerting_critical_subscription_count` is the
+# fastest answer to "would an alarm actually reach anyone?" — zero means the
+# topics exist and page nobody.
+
+output "alerting_critical_topic_arn" {
+  description = "ARN of the CRITICAL (paging) SNS topic (null unless enable_alerting = true)."
+  value       = try(module.alerting[0].critical_topic_arn, null)
+}
+
+output "alerting_warning_topic_arn" {
+  description = "ARN of the warning (ticket / mailbox) SNS topic (null unless enable_alerting = true)."
+  value       = try(module.alerting[0].warning_topic_arn, null)
+}
+
+output "alerting_critical_subscription_count" {
+  description = "Endpoints subscribed to the CRITICAL topic. Zero means paging alarms reach nobody."
+  value       = try(module.alerting[0].critical_subscription_count, 0)
+}
+
+output "alerting_warning_subscription_count" {
+  description = "Endpoints subscribed to the warning topic."
+  value       = try(module.alerting[0].warning_subscription_count, 0)
+}
+
+output "critical_alarm_names" {
+  description = "CloudWatch alarms routed to the paging topic."
+  value       = module.cloudwatch.critical_alarm_names
+}
+
+output "warning_alarm_names" {
+  description = "CloudWatch alarms routed to the warning topic."
+  value       = module.cloudwatch.warning_alarm_names
+}
+
 # Deprecated alias outputs — preserved so existing tooling that grepped for
 # `app_phi` / `s3_key` keeps resolving until callers migrate.
 

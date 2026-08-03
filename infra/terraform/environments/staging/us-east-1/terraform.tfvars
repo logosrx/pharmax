@@ -61,8 +61,12 @@ ecs_container_insights_enabled = true
 
 # ---- WAF / Alarms -----------------------------------------------------------
 waf_rate_limit_per_5min = 2000
-# TODO: create the pharmax-staging-alerts SNS topic and set its ARN here.
-# Empty string = alarms are created without a notification action.
+# Alerting is off in staging: alarms are created and evaluate, but notify
+# nobody. Staging breakage is discovered by the engineer who caused it, and a
+# staging pager is how a rotation learns to ignore its pager. To turn it on,
+# set `enable_alerting = true` and supply TF_VAR_alerting_* endpoints at apply
+# time (never in this file).
+enable_alerting     = false
 alarm_sns_topic_arn = ""
 
 # ---- Audit archive ----------------------------------------------------------

@@ -8,10 +8,49 @@ variable "aws_region" {
   type        = string
 }
 
-variable "alarm_sns_topic_arn" {
-  description = "SNS topic ARN to notify on alarm. Empty disables actions (the alarm still records to the metric)."
+variable "critical_alarm_sns_topic_arn" {
+  description = <<-EOT
+    SNS topic ARN for alarms that page a human — `module.alerting.critical_topic_arn`.
+    Empty falls back to `alarm_sns_topic_arn`, and if that is empty too the alarm
+    evaluates but notifies nobody. Production MUST set this;
+    `pnpm check:alarm-actions` enforces the wiring.
+  EOT
   type        = string
   default     = ""
+}
+
+variable "warning_alarm_sns_topic_arn" {
+  description = <<-EOT
+    SNS topic ARN for alarms that file a ticket / land in the shift mailbox —
+    `module.alerting.warning_topic_arn`. Same empty-string fallback as the critical
+    topic.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "alarm_sns_topic_arn" {
+  description = <<-EOT
+    LEGACY single-topic ARN, used as the fallback for both severities when the
+    per-severity ARNs above are empty. Retained so a non-prod stack that already
+    sets one topic keeps working, and so "empty means no action" stays the dev
+    default. New wiring should set the per-severity variables instead: routing
+    every alarm to one topic is what makes a pager ignorable.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "print_agent_running_alarm_enabled" {
+  description = <<-EOT
+    Whether to create the print-agent availability alarm. Set false when the stack
+    intends the print agent to run zero tasks (prod today: no physical pharmacy site
+    yet, `ecs_print_agent_desired_count = 0`) — otherwise the alarm is permanently in
+    ALARM and trains everyone to ignore the feed. The root composition derives this
+    from the desired count.
+  EOT
+  type        = bool
+  default     = true
 }
 
 variable "rds_cluster_id" {
