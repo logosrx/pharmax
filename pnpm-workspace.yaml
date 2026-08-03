@@ -70,6 +70,25 @@ overrides:
   # bump with no API change we use, and leaving it pinned means shipping
   # the vulnerable libvips.
   "sharp@<0.35.0": "^0.35.0"
+  # GHSA for `server.fs.deny` bypass on Windows alternate paths, the
+  # optimized-deps `.map` path traversal, and the dev-server request
+  # reflection. All three are patched at 6.4.3. vitest 3.x still accepts
+  # vite 5, so bumping the runner alone left the vulnerable 5.4.21 in the
+  # tree — this is what actually moves it. Held at 6.x rather than 7.x
+  # because vite 7 raises its floor to Node 22.12 while `engines.node`
+  # here is only `>=22.0.0`; the alerts are all satisfied by 6.4.3.
+  # Dev-only: vite is reached exclusively through vitest, never shipped.
+  "vite@<6.4.3": "^6.4.3"
+  # GHSA-67mh-4wv8-2f99: esbuild's dev server sends permissive CORS, so
+  # any website can make the developer's browser fetch its bundles.
+  # Reached only as vite's transform dependency. vite 6.4.3 already pulls
+  # a patched 0.25.x, so this is a floor that keeps a future partial
+  # re-resolve from reintroducing 0.21.5.
+  "esbuild@<0.25.0": "^0.25.0"
+  # GHSA for @babel/core's `sourceMappingURL` arbitrary file read. Comes
+  # in transitively via next; patched inside the same major, so this is a
+  # patch-level bump with no API surface change.
+  "@babel/core@<7.29.6": "^7.29.6"
 
 allowBuilds:
   esbuild: true
