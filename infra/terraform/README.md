@@ -47,8 +47,10 @@ infra/terraform/
 │   │                          workflow (trust scoped to GH Environments)
 │   ├── iam-github-oidc-drill/ ← read-only OIDC role for the quarterly
 │   │                          restore-drill preflight (2 describes)
-│   ├── kms/                 ← eight CMKs (rds / docs / audit-archive /
-│   │                          secrets / data / search / asymm-sign / logs)
+│   ├── alerting/            ← SNS topics (critical / warning) + subscriptions
+│   ├── kms/                 ← nine CMKs (rds / docs / audit-archive /
+│   │                          secrets / data / search / asymm-sign / logs /
+│   │                          alerts)
 │   ├── network/             ← VPC + 3 subnet tiers + NAT + flow logs
 │   ├── rds/                 ← Aurora PostgreSQL cluster, encrypted, isolated
 │   ├── s3-audit-archive/    ← Object-Lock COMPLIANCE Merkle archive
@@ -463,7 +465,7 @@ Notes:
 | Module              | What it owns                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `network/`          | VPC, public/private/isolated subnets across 2-4 AZs, NAT (single or per-AZ), VPC flow logs encrypted with the logs CMK.                                                                                                                                                                                                                                                                                           |
-| `kms/`              | Eight CMKs: `rds`, `documents`, `audit_archive`, `secrets`, `data`, `search`, `asymm_sign`, `logs`. Rotation enabled where supported (asymmetric is application-rotated). Resource policies enumerate principals — no `Principal: *`.                                                                                                                                                                             |
+| `kms/`              | Nine CMKs: `rds`, `documents`, `audit_archive`, `secrets`, `data`, `search`, `asymm_sign`, `logs`, `alerts`. Rotation enabled where supported (asymmetric is application-rotated). Resource policies enumerate principals — no `Principal: *`.                                                                                                                                                                    |
 | `rds/`              | **Aurora PostgreSQL** cluster (writer + env-tuned readers; Serverless v2 or provisioned), encrypted with the rds CMK, in isolated subnets, hardened cluster parameter group (force-ssl, statement-timeout, idle-tx-timeout). Real reader endpoint backs `REPORTING_DATABASE_URL`. `manage_master_user_password = true` so the master password lives in Secrets Manager and Terraform never sees it. See ADR 0029. |
 | `secrets/`          | One Secrets Manager entry per logical credential. Encrypted with the secrets CMK. Optional rotation lambda hooks for Stripe / Clerk / carrier credentials.                                                                                                                                                                                                                                                        |
 | `ecr/`              | Three repositories (web, worker, print-agent) with immutable tags, scan-on-push, and lifecycle rules.                                                                                                                                                                                                                                                                                                             |

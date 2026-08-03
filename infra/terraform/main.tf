@@ -61,9 +61,10 @@ module "network" {
 }
 
 # -----------------------------------------------------------------------------
-# KMS — eight customer-managed keys (rds, documents, audit_archive, secrets,
-# data, search, asymm_sign, logs). Six of those are explicitly required by
-# the brief; documents + logs round out the set.
+# KMS — nine customer-managed keys (rds, documents, audit_archive, secrets,
+# data, search, asymm_sign, logs, alerts). Six of those are explicitly required
+# by the brief; documents + logs round out the set, and alerts encrypts the SNS
+# topics the alarms publish to.
 # -----------------------------------------------------------------------------
 
 module "kms" {
