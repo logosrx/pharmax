@@ -349,8 +349,16 @@ Before `terraform apply` on a new env-region:
 - [ ] No `backend.tf` (only `backend.tf.example`) is committed.
 - [ ] The ACM cert referenced in `acm_certificate_domain` is `ISSUED`
       in the same region as `var.region`.
-- [ ] The SNS topic referenced in `alarm_sns_topic_arn` exists, or the
-      value is empty.
+- [ ] `enable_alerting = true` for every production env-region, and the
+      `TF_VAR_alerting_*` subscription endpoints are available to the
+      apply (they are never committed). With alerting off, every alarm
+      evaluates and notifies nobody — `pnpm check:alarm-actions` fails
+      the build for prod, but a local apply can still be run with a
+      hand-written var file. See
+      [`docs/runbooks/alerting.md`](../../docs/runbooks/alerting.md).
+- [ ] The legacy `alarm_sns_topic_arn` is empty unless you are
+      deliberately pointing at an externally-managed topic (it routes
+      every severity to one place).
 - [ ] The remote state bucket + DynamoDB table exist (run the bootstrap
       module first).
 - [ ] You have read [`docs/operations/restore-drill.md`](../../docs/operations/restore-drill.md)
@@ -475,7 +483,8 @@ Notes:
 | `s3-audit-archive/` | Object-Lock COMPLIANCE bucket, configurable retention (default 7y), SSE-KMS with the dedicated audit-archive CMK, deny-non-TLS, deny-non-KMS, deny-wrong-CMK uploads, lifecycle to Glacier Deep Archive, `prevent_destroy = true`.                                                                                                                                                                                |
 | `s3-documents/`     | SSE-KMS document bucket with the documents CMK, versioning enabled, public access blocked, deny-non-TLS, deny-non-KMS, lifecycle to expire noncurrent versions.                                                                                                                                                                                                                                                   |
 | `ecs/`              | Fargate cluster + three services (web autoscaling on CPU; worker + print-agent fixed). Secrets injected via `secrets =` block (never plaintext). KMS aliases injected as env vars. KMS-encrypted CloudWatch log groups. Container Insights enabled.                                                                                                                                                               |
-| `cloudwatch/`       | Alarms (RDS CPU/storage/connections/replica-lag, ALB 5xx %/p99, ECS CPU/mem/running-count, audit-chain integrity custom metric) + a single overview dashboard.                                                                                                                                                                                                                                                    |
+| `alerting/`         | Two SSE-KMS SNS topics — `alerts-critical` (pages a human) and `alerts-warning` (ticket / shift mailbox) — with a topic policy that accepts publishes only from this account's own `<prefix>-*` alarms, plus subscriptions driven by variables. Endpoints are supplied as `TF_VAR_alerting_*` at apply time and never committed. Operator guide: [`docs/runbooks/alerting.md`](../../docs/runbooks/alerting.md).  |
+| `cloudwatch/`       | Alarms (RDS CPU/storage/connections/replica-lag, ALB 5xx %/p99, ECS CPU/mem/running-count, audit-chain integrity custom metric) + a single overview dashboard. Each alarm routes to one of the two `alerting/` topics and records why in a `# severity:` comment; `pnpm check:alarm-actions` enforces both.                                                                                                       |
 
 ---
 
