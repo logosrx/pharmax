@@ -10,10 +10,18 @@
 //
 // PHI rendering rule: every decrypted value renders inside a <dd>,
 // "—" for null fields.
+//
+// This is also the PV1 clinical-screening review surface. The findings
+// panel sits directly under the prescription lines, because a finding
+// is a claim about a drug ("no drug knowledge is available for
+// <NDC>") and the pharmacist has to have the drug, strength and sig in
+// front of them to judge it. It is the only place an acknowledgement
+// can be recorded; see `screening-findings-panel.tsx`.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { OrderStatus } from "@pharmax/database";
 import { PERMISSIONS } from "@pharmax/rbac";
 
 import {
@@ -23,6 +31,7 @@ import {
 import { resolveOperatorTenancyContext } from "../../../../src/server/auth/resolve-tenancy.js";
 import { auditPatientView } from "../../../../src/server/ops/audit-patient-view.js";
 import { getOrderDetail } from "../../../../src/server/ops/get-order-detail.js";
+import { getOrderScreening } from "../../../../src/server/ops/get-order-screening.js";
 import { resolveOrderSearchToken } from "../../../../src/server/ops/resolve-order-search-token.js";
 import { PageHeader, Section } from "../../../../src/components/ui/page.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../../src/components/ui/card.js";
@@ -32,8 +41,19 @@ import { DataList, Table, THead, TH, TBody, TR, TD } from "../../../../src/compo
 import { buttonClass } from "../../../../src/components/ui/button.js";
 import { Icon } from "../../../../src/components/ui/icon.js";
 import { priorityMeta, statusMeta } from "../../../../src/components/ui/workflow.js";
+import { QueueFlash } from "../../../../src/components/ops/flash.js";
+import { describePv1ScreeningError } from "../../../../src/components/ops/pv1-screening-errors.js";
+import {
+  ScreeningFindingsPanel,
+  type AcknowledgeGate,
+} from "../../../../src/components/ops/screening-findings-panel.js";
 import { StageTimeline } from "../../../../src/components/ops/stage-timeline.js";
 import type { Tone } from "../../../../src/components/ui/badge.js";
+
+const ORDER_FLASH: Readonly<Record<string, string>> = {
+  screening_acknowledged: "Screening finding acknowledged — recorded against your user.",
+  screening_already_acknowledged: "You had already acknowledged that finding; nothing changed.",
+};
 
 function dash(value: string | null): string {
   return value ?? "—";
@@ -149,10 +169,13 @@ function GuardPage({ grant }: { readonly grant: string }) {
 
 export default async function OrderDetailPage({
   params,
+  searchParams,
 }: {
   readonly params: Promise<{ readonly orderId: string }>;
+  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { orderId } = await params;
+  const query = await searchParams;
   const session = await resolveOperatorTenancyContext();
   if (!session.ok) return null;
 
@@ -241,6 +264,30 @@ export default async function OrderDetailPage({
   const sm = statusMeta(detail.currentStatus);
   const pm = priorityMeta(detail.priority);
 
+  // The findings the GATE will evaluate, read from the persisted rows
+  // and scoped to this operator's own acknowledgements.
+  const screening = await getOrderScreening({
+    organizationId: session.tenancy.organizationId,
+    orderId: detail.orderId,
+    pharmacistUserId: session.operator.userId,
+  });
+
+  // UI convenience only — `AcknowledgePV1ScreeningFinding` re-checks
+  // both the permission and the order's stage, and it is the control.
+  const acknowledgeGate: AcknowledgeGate = !hasOperatorPermission(
+    permissions,
+    PERMISSIONS.PV1_APPROVE
+  )
+    ? { kind: "NO_PERMISSION" }
+    : detail.currentStatus !== OrderStatus.PV1_IN_PROGRESS
+      ? { kind: "REVIEW_CLOSED" }
+      : { kind: "OPEN" };
+
+  const screeningError = describePv1ScreeningError(
+    typeof query["error"] === "string" ? query["error"] : null
+  );
+  const flashParams = screeningError === null ? query : { ...query, error: undefined };
+
   return (
     <div className="space-y-6 animate-fade-in">
       <Link
@@ -273,6 +320,17 @@ export default async function OrderDetailPage({
           <StageTimeline status={detail.currentStatus} />
         </CardContent>
       </Card>
+
+      <QueueFlash params={flashParams} messages={ORDER_FLASH} />
+
+      {screeningError !== null ? (
+        <Banner tone={screeningError.tone} title={screeningError.title}>
+          {screeningError.guidance}
+          <p className="mt-2 text-xs opacity-80">
+            Refusal code <code>{screeningError.code}</code>
+          </p>
+        </Banner>
+      ) : null}
 
       {audit.output.wasShredded ? (
         <Banner tone="warning" title="Patient was crypto-shredded (right-to-be-forgotten)">
@@ -379,6 +437,12 @@ export default async function OrderDetailPage({
           </div>
         )}
       </Section>
+
+      <ScreeningFindingsPanel
+        orderId={detail.orderId}
+        screening={screening}
+        gate={acknowledgeGate}
+      />
 
       <Section title="Shipment">
         {detail.shipment === null ? (
