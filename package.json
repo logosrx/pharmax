@@ -34,6 +34,7 @@
     "check:raw-prisma": "tsx scripts/check-raw-prisma-usage.ts",
     "check:raw-sql": "tsx scripts/check-raw-sql-usage.ts",
     "check:layers": "tsx scripts/check-package-layers.ts",
+    "check:seed": "tsx scripts/check-seed-fixtures.ts",
     "check:terraform-apply-workflow": "tsx scripts/check-terraform-apply-workflow.ts",
     "events:validate": "tsx scripts/events/validate-registry.ts",
     "events:migrate-check": "tsx scripts/events/migrate-allowlist.ts",

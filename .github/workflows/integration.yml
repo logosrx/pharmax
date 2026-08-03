@@ -26,7 +26,11 @@ on:
       - "packages/command-bus/**"
       - "packages/audit/**"
       - "packages/crypto/**"
+      # The seed materializes every ROLE_TEMPLATES entry, so a template
+      # added here without reseeding is exactly what check:seed catches.
+      - "packages/rbac/**"
       - "scripts/check-migration-rls.ts"
+      - "scripts/check-seed-fixtures.ts"
       - ".github/workflows/integration.yml"
   push:
     branches: [main]
@@ -95,6 +99,28 @@ jobs:
 
       - name: Run integration tests
         run: pnpm test:integration
+
+      # Seed smoke + completeness. Runs AFTER the integration suite so the
+      # demo dataset can never influence its fixtures.
+      #
+      # prisma/seed.ts had no automated exercise of any kind until now,
+      # which is how the ADR-0033 provider portal reached main without its
+      # seed wiring and stayed that way — the only file in the repo where a
+      # regression was invisible to CI.
+      - name: Seed the demo dataset
+        run: pnpm db:seed
+
+      # Twice, because the seed is upsert-based and the whole workflow
+      # (`db:seed` after a schema change, re-running it locally) depends on
+      # re-runnability. A non-idempotent write shows up here as a unique
+      # constraint violation rather than in someone's local database.
+      - name: Seed again — idempotency
+        run: pnpm db:seed
+
+      # A seed that OMITS a fixture still exits 0, so the two steps above
+      # prove only that it isn't broken. This asserts it isn't incomplete.
+      - name: Assert the demo dataset is complete
+        run: pnpm check:seed
 
   # Migration <-> schema drift guard. Runs in its OWN Postgres service
   # (not the integration job's) because `check:drift` replays every
