@@ -315,6 +315,10 @@ function collectAllergyFindings(
             trigger("RECORDED_ALLERGY", allergy.recordId, allergy.substanceCode),
             trigger("CANDIDATE_DRUG", request.candidate.recordId, allergy.substanceCode),
           ],
+          // The record being reclassified between an allergy and an
+          // intolerance changes both the wording and the grading, so
+          // it has to change the identity too.
+          qualifiers: [`type=${allergy.type}`],
           citation: null,
         })
       );
@@ -353,6 +357,7 @@ function collectAllergyFindings(
             trigger("RECORDED_ALLERGY", allergy.recordId, allergy.substanceCode),
             trigger("CANDIDATE_DRUG", request.candidate.recordId, classCode),
           ],
+          qualifiers: [`type=${allergy.type}`],
           citation: null,
         })
       );
@@ -510,6 +515,10 @@ function collectInteractions(
             trigger("CANDIDATE_DRUG", request.candidate.recordId, candidateIngredient),
             trigger("PROFILE_MEDICATION", med.recordId, profileIngredient),
           ],
+          // Both ingredients are already trigger codes. The grading is
+          // the source's and is carried by the fingerprint directly,
+          // so an upgraded interaction re-prompts on its own.
+          qualifiers: [],
           citation: fact.citation,
         })
       );
@@ -545,6 +554,7 @@ function collectDuplication(
           trigger("CANDIDATE_DRUG", request.candidate.recordId, ingredient),
           trigger("PROFILE_MEDICATION", med.recordId, ingredient),
         ],
+        qualifiers: [],
         citation: null,
       })
     );
@@ -573,6 +583,7 @@ function collectDuplication(
           trigger("CANDIDATE_DRUG", request.candidate.recordId, classCode),
           trigger("PROFILE_MEDICATION", med.recordId, classCode),
         ],
+        qualifiers: [],
         citation: null,
       })
     );
@@ -625,6 +636,10 @@ function collectDoseFindings(
         triggers: [
           trigger("CANDIDATE_DRUG", request.candidate.recordId, request.candidate.drugCode),
         ],
+        // Same shape of hazard as the numeric dose findings at lower
+        // stakes: the drug code alone would let an acknowledgement of
+        // one unit pairing suppress a different one.
+        qualifiers: [`doseUnit=${dose.unit}`, `rangeUnit=${range.unit}`],
         citation: range.citation,
       })
     );
@@ -644,6 +659,13 @@ function collectDoseFindings(
         reason: `The prescribed single dose of ${dose.amount} ${dose.unit} is above the known maximum of ${range.maxSingleDose} ${range.unit}.`,
         triggers: [
           trigger("CANDIDATE_DRUG", request.candidate.recordId, request.candidate.drugCode),
+        ],
+        // The magnitude IS the finding here. Without it in the
+        // identity, acknowledging a dose slightly over the maximum
+        // would suppress one many times over it — see `fingerprintOf`.
+        qualifiers: [
+          `dose=${dose.amount}${dose.unit}`,
+          `limit=${range.maxSingleDose}${range.unit}`,
         ],
         citation: range.citation,
       })
@@ -668,6 +690,13 @@ function collectDoseFindings(
         triggers: [
           trigger("CANDIDATE_DRUG", request.candidate.recordId, request.candidate.drugCode),
         ],
+        // The daily total rather than amount-and-frequency separately:
+        // it is what the reason states, and two regimens reaching the
+        // same total are the same thing to acknowledge.
+        qualifiers: [
+          `dailyTotal=${dailyTotal}${dose.unit}`,
+          `limit=${range.maxDailyDose}${range.unit}`,
+        ],
         citation: range.citation,
       })
     );
@@ -687,6 +716,10 @@ function collectDoseFindings(
         reason: `The prescribed daily total of ${dailyTotal} ${dose.unit} is below the known minimum of ${range.minDailyDose} ${range.unit}.`,
         triggers: [
           trigger("CANDIDATE_DRUG", request.candidate.recordId, request.candidate.drugCode),
+        ],
+        qualifiers: [
+          `dailyTotal=${dailyTotal}${dose.unit}`,
+          `limit=${range.minDailyDose}${range.unit}`,
         ],
         citation: range.citation,
       })
@@ -713,19 +746,37 @@ interface FindingDraft {
   readonly certainty: ScreeningCertainty;
   readonly reason: string;
   readonly triggers: ReadonlyArray<ScreeningTrigger>;
+  /**
+   * Required, not optional, so that adding a finding kind forces a
+   * decision instead of defaulting to the unsafe answer. List every
+   * value `reason` interpolates that is not already a trigger code;
+   * `[]` is correct only when the trigger codes are the whole story.
+   * See `fingerprintOf` for what goes wrong when this is understated.
+   */
+  readonly qualifiers: ReadonlyArray<string>;
   readonly citation: string | null;
 }
 
 /**
  * Disposition and fingerprint are derived here and nowhere else, so no
  * call site can mint a finding that blocks without going through
- * `dispositionFor`.
+ * `dispositionFor`, or one whose identity omits part of what it says.
  */
 function finding(draft: FindingDraft): ScreeningFinding {
+  // `qualifiers` deliberately does not survive onto the finding: it is
+  // an input to identity, and everything in it is already legible to a
+  // reader in `reason`. Persisting it too would widen the event
+  // payload to say the same thing a third time.
   return {
-    ...draft,
+    code: draft.code,
+    kind: draft.kind,
+    severity: draft.severity,
+    certainty: draft.certainty,
+    reason: draft.reason,
+    triggers: draft.triggers,
+    citation: draft.citation,
     disposition: dispositionFor(draft.severity, draft.certainty),
-    fingerprint: fingerprintOf(draft.code, draft.triggers),
+    fingerprint: fingerprintOf(draft),
   };
 }
 
@@ -748,6 +799,13 @@ function knowledgeGapFinding(
     certainty: "DEFINITE",
     reason: `No drug knowledge is available for ${drug.drugCode}; ${scope}.`,
     triggers: [trigger(source, drug.recordId, drug.drugCode)],
+    // The two scopes read differently and mean different things — one
+    // says nothing was screened at all — but the trigger CODE is the
+    // drug either way, and trigger sources are excluded from identity
+    // by design. A drug that was an unscreenable profile entry last
+    // month and is the prescription itself this month would otherwise
+    // reuse the earlier acknowledgement.
+    qualifiers: [`scope=${source}`],
     citation: null,
   });
 }
@@ -798,6 +856,12 @@ function mergeTriggers(
  * A hard stop is never downgraded — an unoverridable finding that a
  * prior acknowledgement could switch off would not be unoverridable,
  * it would just be slower.
+ *
+ * This matches on fingerprint alone, which is safe only because the
+ * fingerprint carries the grading and every varying value in the
+ * reason. Anything left out of it is something a stale acknowledgement
+ * would silently swallow, so read `fingerprintOf` before changing what
+ * goes into one.
  */
 function applyPriorAcknowledgement(
   candidate: ScreeningFinding,

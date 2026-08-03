@@ -27,6 +27,7 @@ export {
   suggestedPv1RejectionReason,
   toFhirDetectedIssueSeverity,
   FHIR_DETECTED_ISSUE_SEVERITIES,
+  SUGGESTED_PV1_REJECTION_REASONS,
   SCREENING_CERTAINTIES,
   SCREENING_DISPOSITIONS,
   SCREENING_FINDING_CODES,
@@ -37,6 +38,7 @@ export {
 
 export type {
   FhirDetectedIssueSeverity,
+  FingerprintInput,
   ScreeningCertainty,
   ScreeningDisposition,
   ScreeningFinding,

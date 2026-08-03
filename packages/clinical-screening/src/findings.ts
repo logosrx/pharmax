@@ -266,30 +266,77 @@ export function dispositionFor(
   }
 }
 
+export interface FingerprintInput {
+  readonly code: ScreeningFindingCode;
+  readonly severity: ScreeningSeverity;
+  readonly certainty: ScreeningCertainty;
+  readonly triggers: ReadonlyArray<ScreeningTrigger>;
+  /**
+   * Every value the finding's `reason` interpolates that is not
+   * already a trigger code — magnitudes, units, and any word that
+   * varies with the input. See the safety argument below.
+   */
+  readonly qualifiers: ReadonlyArray<string>;
+}
+
 /**
  * Stable identity for "this clinical situation", used to dedupe within
  * one screen and to carry a pharmacist's acknowledgement forward
  * across screens.
  *
- * Built from the finding code plus the SORTED SET OF CONTRIBUTING
- * CODES — deliberately not from the trigger record ids, and not from
- * the trigger sources. Two consequences, both intended:
+ * THE INVARIANT THIS EXISTS TO HOLD: an acknowledgement may suppress
+ * only a finding about the situation the pharmacist was actually
+ * shown, and never a more severe or differently-worded instance of it.
+ * `applyPriorAcknowledgement` downgrades purely on fingerprint match,
+ * so anything the fingerprint omits is something a stale
+ * acknowledgement can silently swallow — and a suppressed alert is
+ * worse than no alert, because its absence actively reassures.
  *
- *   - A refill re-screens to the same fingerprint as the original, so
- *     an acknowledgement recorded in January is not demanded again in
- *     February for an unchanged profile.
- *   - An A-against-B interaction fingerprints identically to B-against-A,
- *     so swapping which of the two drugs is the one being dispensed does
- *     not resurrect a settled alert.
+ * Four components, each earning its place:
+ *
+ *   - THE FINDING CODE, so two kinds of problem never collide.
+ *   - THE SORTED SET OF CONTRIBUTING CODES, deliberately NOT the
+ *     trigger record ids and NOT the trigger sources. That is what
+ *     lets a refill re-screen to the same fingerprint as the original
+ *     (an acknowledgement given in January is not demanded again in
+ *     February for an unchanged profile), and what makes an
+ *     A-against-B interaction fingerprint identically to B-against-A
+ *     so that swapping which drug is being dispensed does not
+ *     resurrect a settled alert.
+ *   - SEVERITY AND CERTAINTY, which make "never a more severe
+ *     instance" true by construction rather than by the care of
+ *     whoever adds the next finding kind. If a knowledge source
+ *     upgrades an interaction from MODERATE to MAJOR, or an allergy
+ *     record is confirmed, the fingerprint changes and the pharmacist
+ *     is asked again — which is the correct answer, because the
+ *     situation they acknowledged is not the situation now in front
+ *     of them.
+ *   - QUALIFIERS, which close the remaining hole: two findings can be
+ *     the same code, same codes, same grading, and still say different
+ *     things. A dose finding is the motivating case. Its only trigger
+ *     code is the drug, and the magnitude lives in the `reason`
+ *     string, so without qualifiers "12 mg daily, above the maximum of
+ *     10" and "200 mg daily, above the maximum of 10" are one
+ *     fingerprint — and an acknowledgement of the first hides a
+ *     tenfold overdose.
+ *
+ * RULE FOR NEW FINDING KINDS: if two findings would render a different
+ * `reason` to a pharmacist, they must not share a fingerprint. In
+ * practice that means every value interpolated into `reason` is either
+ * a trigger code or a qualifier. `screening.test.ts` pins this
+ * generally over a corpus of screens rather than case by case, because
+ * the next person to add a finding kind will not read this comment.
  *
  * The record ids stay on `triggers`, where the audit trail needs them.
  */
-export function fingerprintOf(
-  code: ScreeningFindingCode,
-  triggers: ReadonlyArray<ScreeningTrigger>
-): string {
-  const codes = [...new Set(triggers.map((t) => t.code))].sort((a, b) => a.localeCompare(b));
-  return `${code}|${codes.join("+")}`;
+export function fingerprintOf(input: FingerprintInput): string {
+  const codes = [...new Set(input.triggers.map((t) => t.code))].sort((a, b) => a.localeCompare(b));
+  // Qualifiers are sorted so identity cannot depend on the order a
+  // call site happened to build the array in.
+  const qualifiers = [...input.qualifiers].sort((a, b) => a.localeCompare(b));
+  const grading = `${input.severity}/${input.certainty}`;
+  const base = `${input.code}|${grading}|${codes.join("+")}`;
+  return qualifiers.length === 0 ? base : `${base}|${qualifiers.join(";")}`;
 }
 
 /**
@@ -299,14 +346,23 @@ export function fingerprintOf(
  * A HINT for the UI to preselect, not a decision — the pharmacist
  * chooses, and `RejectPV1` validates against its own registry.
  *
- * SYNC HAZARD: these strings are members of `PV1_REJECTION_REASONS` in
+ * These strings are members of `PV1_REJECTION_REASONS` in
  * `@pharmax/verification`, reproduced rather than imported because
  * this package sits below the domain tier and must not depend on a
- * domain package. The PR that wires screening into PV1 owns a test
- * pinning these against that registry.
+ * domain package. The duplication is guarded from outside both:
+ * `scripts/check-event-reason-mirrors.test.ts` imports this list
+ * alongside the registry and fails if a rename there ever leaves a
+ * hint here pointing at a code that no longer exists. Do not add a
+ * member without checking that test still passes.
  */
-export type SuggestedPv1RejectionReason =
-  "DRUG_INTERACTION" | "ALLERGY_CONFLICT" | "DUPLICATE_THERAPY" | "DOSE_INCORRECT";
+export const SUGGESTED_PV1_REJECTION_REASONS = Object.freeze([
+  "DRUG_INTERACTION",
+  "ALLERGY_CONFLICT",
+  "DUPLICATE_THERAPY",
+  "DOSE_INCORRECT",
+] as const);
+
+export type SuggestedPv1RejectionReason = (typeof SUGGESTED_PV1_REJECTION_REASONS)[number];
 
 export function suggestedPv1RejectionReason(
   kind: ScreeningFindingKind

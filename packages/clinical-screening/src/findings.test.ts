@@ -11,6 +11,8 @@ import {
   SCREENING_CERTAINTIES,
   SCREENING_FINDING_KINDS,
   SCREENING_SEVERITIES,
+  SUGGESTED_PV1_REJECTION_REASONS,
+  type FingerprintInput,
   type ScreeningTrigger,
 } from "./index.js";
 
@@ -115,59 +117,99 @@ describe("fingerprintOf", () => {
     return { source, recordId, code };
   }
 
+  function print(overrides: Partial<FingerprintInput> = {}): string {
+    return fingerprintOf({
+      code: "SCR_DRUG_INTERACTION",
+      severity: "MODERATE",
+      certainty: "PROBABLE",
+      triggers: [
+        t("CANDIDATE_DRUG", "line-1", "ING_ALFA"),
+        t("PROFILE_MEDICATION", "line-2", "ING_BRAVO"),
+      ],
+      qualifiers: [],
+      ...overrides,
+    });
+  }
+
   it("ignores trigger order", () => {
-    const a = fingerprintOf("SCR_DRUG_INTERACTION", [
-      t("CANDIDATE_DRUG", "line-1", "ING_ALFA"),
-      t("PROFILE_MEDICATION", "line-2", "ING_BRAVO"),
-    ]);
-    const b = fingerprintOf("SCR_DRUG_INTERACTION", [
-      t("PROFILE_MEDICATION", "line-2", "ING_BRAVO"),
-      t("CANDIDATE_DRUG", "line-1", "ING_ALFA"),
-    ]);
-    expect(a).toBe(b);
+    expect(
+      print({
+        triggers: [
+          t("PROFILE_MEDICATION", "line-2", "ING_BRAVO"),
+          t("CANDIDATE_DRUG", "line-1", "ING_ALFA"),
+        ],
+      })
+    ).toBe(print());
   });
 
   it("ignores which side of the screen a code came from", () => {
     // The A-against-B and B-against-A screens are the same clinical
     // situation. If the fingerprint distinguished them, dispensing the
     // pair in the other order would resurrect a settled alert.
-    const dispensingAlfa = fingerprintOf("SCR_DRUG_INTERACTION", [
-      t("CANDIDATE_DRUG", "line-1", "ING_ALFA"),
-      t("PROFILE_MEDICATION", "line-2", "ING_BRAVO"),
-    ]);
-    const dispensingBravo = fingerprintOf("SCR_DRUG_INTERACTION", [
-      t("CANDIDATE_DRUG", "line-2", "ING_BRAVO"),
-      t("PROFILE_MEDICATION", "line-1", "ING_ALFA"),
-    ]);
-    expect(dispensingAlfa).toBe(dispensingBravo);
+    expect(
+      print({
+        triggers: [
+          t("CANDIDATE_DRUG", "line-2", "ING_BRAVO"),
+          t("PROFILE_MEDICATION", "line-1", "ING_ALFA"),
+        ],
+      })
+    ).toBe(print());
   });
 
   it("ignores record ids so an acknowledgement survives a refill", () => {
-    const original = fingerprintOf("SCR_DUPLICATE_INGREDIENT", [
-      t("CANDIDATE_DRUG", "line-jan", "ING_ALFA"),
-      t("PROFILE_MEDICATION", "line-old", "ING_ALFA"),
-    ]);
-    const refill = fingerprintOf("SCR_DUPLICATE_INGREDIENT", [
-      t("CANDIDATE_DRUG", "line-feb", "ING_ALFA"),
-      t("PROFILE_MEDICATION", "line-old", "ING_ALFA"),
-    ]);
-    expect(refill).toBe(original);
+    expect(
+      print({
+        triggers: [
+          t("CANDIDATE_DRUG", "line-february", "ING_ALFA"),
+          t("PROFILE_MEDICATION", "line-2", "ING_BRAVO"),
+        ],
+      })
+    ).toBe(print());
   });
 
   it("distinguishes different finding codes over identical triggers", () => {
-    const triggers = [t("CANDIDATE_DRUG", "line-1", "ING_ALFA")];
-    expect(fingerprintOf("SCR_DUPLICATE_INGREDIENT", triggers)).not.toBe(
-      fingerprintOf("SCR_DRUG_INTERACTION", triggers)
+    expect(print({ code: "SCR_DUPLICATE_INGREDIENT" })).not.toBe(print());
+  });
+
+  it("distinguishes a more severe instance of the same situation", () => {
+    // The structural half of the "an acknowledgement may never
+    // suppress something worse" invariant: an upgraded grading cannot
+    // reuse the acknowledged identity, whatever the finding kind.
+    expect(print({ severity: "MAJOR" })).not.toBe(print());
+    expect(print({ severity: "CONTRAINDICATED" })).not.toBe(print());
+  });
+
+  it("distinguishes a more certain instance of the same situation", () => {
+    expect(print({ certainty: "DEFINITE" })).not.toBe(print());
+  });
+
+  it("distinguishes instances that differ only in a qualifier", () => {
+    // The other half: same code, same codes, same grading, different
+    // magnitude. This is the dose case.
+    expect(print({ qualifiers: ["dailyTotal=12mg"] })).not.toBe(
+      print({ qualifiers: ["dailyTotal=200mg"] })
+    );
+  });
+
+  it("ignores the order qualifiers were built in", () => {
+    expect(print({ qualifiers: ["limit=10mg", "dose=12mg"] })).toBe(
+      print({ qualifiers: ["dose=12mg", "limit=10mg"] })
     );
   });
 
   it("collapses a repeated code to one occurrence", () => {
     expect(
-      fingerprintOf("SCR_DRUG_ALLERGY_DIRECT", [
-        t("RECORDED_ALLERGY", "allergy-1", "ING_ALFA"),
-        t("CANDIDATE_DRUG", "line-1", "ING_ALFA"),
-      ])
-    ).toBe("SCR_DRUG_ALLERGY_DIRECT|ING_ALFA");
+      fingerprintOf({
+        code: "SCR_DRUG_ALLERGY_DIRECT",
+        severity: "CONTRAINDICATED",
+        certainty: "DEFINITE",
+        triggers: [
+          t("RECORDED_ALLERGY", "allergy-1", "ING_ALFA"),
+          t("CANDIDATE_DRUG", "line-1", "ING_ALFA"),
+        ],
+        qualifiers: [],
+      })
+    ).toBe("SCR_DRUG_ALLERGY_DIRECT|CONTRAINDICATED/DEFINITE|ING_ALFA");
   });
 });
 
@@ -187,6 +229,19 @@ describe("suggestedPv1RejectionReason", () => {
     expect(suggestedPv1RejectionReason("DRUG_ALLERGY")).toBe("ALLERGY_CONFLICT");
     expect(suggestedPv1RejectionReason("THERAPEUTIC_DUPLICATION")).toBe("DUPLICATE_THERAPY");
     expect(suggestedPv1RejectionReason("DOSE_RANGE")).toBe("DOSE_INCORRECT");
+  });
+
+  it("only ever returns a member of the published list", () => {
+    // The list is what `@pharmax/verification` checks against its own
+    // registry, so it has to be the complete set of what can come out
+    // of here. See rejection-reasons.test.ts in that package.
+    const produced = SCREENING_FINDING_KINDS.map(suggestedPv1RejectionReason).filter(
+      (reason) => reason !== null
+    );
+    expect(produced.length).toBeGreaterThan(0);
+    for (const reason of produced) {
+      expect(SUGGESTED_PV1_REJECTION_REASONS).toContain(reason);
+    }
   });
 
   it("suggests nothing for a screening gap", () => {

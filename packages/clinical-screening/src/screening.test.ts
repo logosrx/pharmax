@@ -768,6 +768,266 @@ describe("screenPrescription — completeness and ordering", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Fingerprint identity — what keeps carry-forward from becoming a hole
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — an acknowledgement suppresses only what was shown", () => {
+  function dosedLine(recordId: string, amount: number, dosesPerDay: number): PrescribedDrug {
+    return drug(recordId, "DRUG_DOSED", { amount, unit: "mg", dosesPerDay });
+  }
+
+  it("does not let an acknowledged overdose suppress a larger one", () => {
+    // The regression this guards: acknowledge 12mg against a 10mg
+    // maximum in January, meet 200mg in February, and be shown
+    // nothing — with the absence of an alert now actively reassuring.
+    const january = screen({ candidate: dosedLine("line-january", 12, 1) });
+    const acknowledged = new Set([
+      requireFinding(january, "SCR_DOSE_ABOVE_SINGLE_MAXIMUM").fingerprint,
+    ]);
+
+    const february = screen({
+      candidate: dosedLine("line-february", 200, 1),
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(requireFinding(february, "SCR_DOSE_ABOVE_SINGLE_MAXIMUM").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+
+  it("does not let an acknowledged daily total suppress a larger one", () => {
+    const january = screen({ candidate: dosedLine("line-january", 12, 3) });
+    const acknowledged = new Set([
+      requireFinding(january, "SCR_DOSE_ABOVE_DAILY_MAXIMUM").fingerprint,
+    ]);
+
+    const february = screen({
+      candidate: dosedLine("line-february", 100, 3),
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(requireFinding(february, "SCR_DOSE_ABOVE_DAILY_MAXIMUM").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+
+  it("still stops re-prompting a patient stable on the same above-range dose", () => {
+    // The case worth protecting: palliative and oncology regimens sit
+    // above the population range indefinitely and correctly. Asking
+    // every month is how the acknowledgement becomes reflexive.
+    const january = screen({ candidate: dosedLine("line-january", 50, 4) });
+    const acknowledged = new Set(
+      allFindings(january)
+        .filter((f) => f.disposition === "REQUIRES_ACKNOWLEDGEMENT")
+        .map((f) => f.fingerprint)
+    );
+    expect(acknowledged.size).toBeGreaterThan(0);
+
+    const february = screen({
+      candidate: dosedLine("line-february", 50, 4),
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(findingsRequiringAcknowledgement(february)).toEqual([]);
+  });
+
+  it("re-prompts when only the unit pairing changes", () => {
+    const inMicrograms = screen({
+      candidate: drug("line-1", "DRUG_DOSED", { amount: 5000, unit: "mcg", dosesPerDay: 1 }),
+    });
+    const acknowledged = new Set([
+      requireFinding(inMicrograms, "SCR_DOSE_UNIT_NOT_COMPARABLE").fingerprint,
+    ]);
+
+    const inGrams = screen({
+      candidate: drug("line-2", "DRUG_DOSED", { amount: 5, unit: "g", dosesPerDay: 1 }),
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(requireFinding(inGrams, "SCR_DOSE_UNIT_NOT_COMPARABLE").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+
+  it("does not let an acknowledged unscreened profile entry suppress an unscreened prescription", () => {
+    // Same drug code, same finding code, but one of them means "we
+    // screened nothing at all for this prescription".
+    const asProfileEntry = screen({
+      activeMedications: [drug("line-other", "DRUG_UNKNOWN")],
+    });
+    const acknowledged = new Set([
+      requireFinding(asProfileEntry, "SCR_KNOWLEDGE_UNAVAILABLE").fingerprint,
+    ]);
+
+    const asCandidate = screen({
+      candidate: drug("line-candidate", "DRUG_UNKNOWN"),
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(requireFinding(asCandidate, "SCR_KNOWLEDGE_UNAVAILABLE").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+
+  it("does not let an acknowledged intolerance suppress the same substance recorded as an allergy", () => {
+    const asIntolerance = screen({
+      allergies: [allergy({ type: "INTOLERANCE", criticality: "HIGH" })],
+    });
+    const acknowledged = new Set([
+      requireFinding(asIntolerance, "SCR_DRUG_ALLERGY_DIRECT").fingerprint,
+    ]);
+
+    const asAllergy = screen({
+      allergies: [allergy({ type: "ALLERGY", criticality: "LOW" })],
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(requireFinding(asAllergy, "SCR_DRUG_ALLERGY_DIRECT").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+});
+
+/**
+ * Replace every trigger code in the reason with a placeholder.
+ *
+ * The fingerprint holds trigger codes as an unordered SET, on purpose,
+ * so an A-against-B finding and a B-against-A finding share an identity
+ * while their reasons name the two codes in opposite order. Masking
+ * removes exactly that legitimate difference and leaves the sentence
+ * template plus every magnitude, unit and varying word — which is
+ * precisely what the fingerprint's qualifiers are supposed to cover.
+ *
+ * Longest code first, so one code that is a prefix of another cannot
+ * mask it half way.
+ */
+function maskTriggerCodes(finding: ScreeningFinding): string {
+  const codes = [...new Set(finding.triggers.map((t) => t.code))].sort(
+    (a, b) => b.length - a.length
+  );
+  let masked = finding.reason;
+  for (const code of codes) {
+    masked = masked.split(code).join("<code>");
+  }
+  return masked;
+}
+
+/**
+ * Every finding produced across a wide sweep of inputs.
+ *
+ * Deliberately combinatorial rather than curated: the point is to
+ * catch a collision nobody thought to write a case for.
+ */
+function findingCorpus(): ReadonlyArray<ScreeningFinding> {
+  const doses: ReadonlyArray<PrescribedDrug["dose"]> = [
+    null,
+    { amount: 12, unit: "mg", dosesPerDay: 1 },
+    { amount: 200, unit: "mg", dosesPerDay: 1 },
+    { amount: 12, unit: "mg", dosesPerDay: 3 },
+    { amount: 100, unit: "mg", dosesPerDay: 3 },
+    { amount: 50, unit: "mg", dosesPerDay: 4 },
+    { amount: 2, unit: "mg", dosesPerDay: 1 },
+    { amount: 1, unit: "mg", dosesPerDay: 2 },
+    { amount: 5000, unit: "mcg", dosesPerDay: 1 },
+    { amount: 5, unit: "g", dosesPerDay: 2 },
+  ];
+  const candidateCodes = ["DRUG_ALFA", "DRUG_DOSED", "DRUG_COMBO", "DRUG_UNKNOWN"];
+  const profiles: ReadonlyArray<ReadonlyArray<string>> = [
+    [],
+    ["DRUG_BRAVO"],
+    ["DRUG_ALFA_GENERIC"],
+    ["DRUG_CHARLIE"],
+    ["DRUG_ECHO"],
+    ["DRUG_UNKNOWN"],
+    ["DRUG_BRAVO", "DRUG_UNKNOWN"],
+    ["DRUG_COMBO", "DRUG_CHARLIE"],
+  ];
+  const allergyLists: ReadonlyArray<ReadonlyArray<RecordedAllergy>> = [
+    [],
+    [allergy()],
+    [allergy({ type: "INTOLERANCE" })],
+    [allergy({ criticality: "LOW" })],
+    [allergy({ criticality: "UNABLE_TO_ASSESS" })],
+    [allergy({ verificationStatus: "UNCONFIRMED" })],
+    [allergy({ substanceCode: "ALLERGEN_XRAY" })],
+    [allergy({ substanceCode: "ALLERGEN_XRAY", type: "INTOLERANCE" })],
+    [allergy({ substanceCode: "ING_DELTA", criticality: "LOW" })],
+  ];
+
+  const found: ScreeningFinding[] = [];
+  for (const candidateCode of candidateCodes) {
+    for (const dose of doses) {
+      for (const profile of profiles) {
+        for (const allergies of allergyLists) {
+          found.push(
+            ...allFindings(
+              screen({
+                candidate: drug("line-candidate", candidateCode, dose),
+                activeMedications: profile.map((code, index) => drug(`line-${index}`, code)),
+                allergies,
+              })
+            )
+          );
+        }
+      }
+    }
+  }
+  return found;
+}
+
+describe("screenPrescription — fingerprint identity holds across every finding kind", () => {
+  // These two are the general guard the specific cases above are
+  // examples of. A future finding kind that interpolates a magnitude
+  // into its reason without declaring it as a qualifier fails here,
+  // whether or not anyone remembers to write a case for it.
+  it("gives two findings the same fingerprint only when they say the same thing", () => {
+    const seenByFingerprint = new Map<string, ScreeningFinding>();
+    // A set, not a list: the same clash recurs across hundreds of
+    // screens in the corpus, and a thousand copies of one line would
+    // hide how many DISTINCT problems there are.
+    const collisions = new Set<string>();
+
+    for (const finding of findingCorpus()) {
+      const seen = seenByFingerprint.get(finding.fingerprint);
+      if (seen === undefined) {
+        seenByFingerprint.set(finding.fingerprint, finding);
+        continue;
+      }
+      if (maskTriggerCodes(seen) !== maskTriggerCodes(finding)) {
+        collisions.add(
+          `${finding.fingerprint}\n    "${maskTriggerCodes(seen)}"\n    "${maskTriggerCodes(finding)}"`
+        );
+      }
+    }
+
+    // Collisions first: when this trips, the list of clashing
+    // sentences is the whole diagnosis, and a corpus-size failure
+    // ahead of it would bury the useful output.
+    expect([...collisions]).toEqual([]);
+    // Guard the guard: a corpus that produced almost nothing would
+    // pass the above vacuously.
+    expect(seenByFingerprint.size).toBeGreaterThan(20);
+  });
+
+  it("gives two findings the same fingerprint only when they are graded the same", () => {
+    // "Never a more severe instance" stated directly. Severity and
+    // certainty are in the fingerprint, so this holds by construction
+    // — pinned because it is the invariant, not an implementation
+    // detail of it.
+    const gradingByFingerprint = new Map<string, string>();
+    const collisions = new Set<string>();
+
+    for (const finding of findingCorpus()) {
+      const grading = `${finding.severity}/${finding.certainty}`;
+      const seen = gradingByFingerprint.get(finding.fingerprint);
+      if (seen === undefined) {
+        gradingByFingerprint.set(finding.fingerprint, grading);
+        continue;
+      }
+      if (seen !== grading) {
+        collisions.add(`${finding.fingerprint}: ${seen} vs ${grading}`);
+      }
+    }
+
+    expect([...collisions]).toEqual([]);
+  });
+});
+
 describe("selectors", () => {
   it("partition findings by what the workflow must do about them", () => {
     const result = screen({

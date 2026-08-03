@@ -80,6 +80,7 @@
     "@eslint/js": "^9.13.0",
     "@pharmax/audit": "workspace:*",
     "@pharmax/billing": "workspace:*",
+    "@pharmax/clinical-screening": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/composition": "workspace:*",
     "@pharmax/crypto": "workspace:*",

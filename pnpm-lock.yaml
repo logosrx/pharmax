@@ -36,6 +36,9 @@ importers:
       '@pharmax/billing':
         specifier: workspace:*
         version: link:packages/billing
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:packages/clinical-screening
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:packages/command-bus
