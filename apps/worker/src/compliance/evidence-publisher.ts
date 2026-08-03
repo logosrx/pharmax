@@ -14,11 +14,10 @@
 //      so the job logic is exercised against the same shape the
 //      production adapter satisfies.
 //
-//   2. The "production" adapter that talks to S3 + Object Lock is
-//      owned by infra (Lane 2 Terraform). The shape declared here
-//      is the contract that adapter must satisfy. Wiring is in
-//      `apps/worker/src/main.ts` once both pieces land — see
-//      `apps/worker/src/compliance/README.md`.
+//   2. The production adapter that talks to S3 + Object Lock lives in
+//      `./s3-evidence-publisher.ts` and satisfies the shape declared
+//      here. `./build-evidence-publisher.ts` picks between the two and
+//      is wired from `apps/worker/src/main.ts`.
 //
 // PHI invariant: every evidence body passed to `publish()` is
 // PHI-free by construction (operator + role + scope metadata only;
@@ -62,10 +61,15 @@ export interface EvidencePublisher {
 }
 
 /**
- * Default dev / test publisher: writes under a local directory
- * (matching the production S3 key structure) so the same artifact
- * lookup works in CI snapshots and the auditor sandbox. NOT for
- * production — production must use the S3 Object Lock adapter.
+ * Dev / test publisher: writes under a local directory (matching the
+ * production S3 key structure) so the same artifact lookup works in CI
+ * snapshots and the auditor sandbox.
+ *
+ * NOT for production, and no longer reachable there: container-local
+ * storage is discarded on the next deployment, so a pack written here
+ * would leave the run looking successful and the evidence absent.
+ * `buildEvidencePublisher` refuses the boot rather than select this in
+ * production.
  */
 export class FilesystemEvidencePublisher implements EvidencePublisher {
   private readonly rootDir: string;

@@ -472,10 +472,22 @@ data "aws_iam_policy_document" "task_worker_buckets" {
     ]
   }
 
-  # Audit archive: WRITE ONLY (worker emits signed Merkle roots).
+  # Audit archive: WRITE ONLY. Two writers share this grant — the
+  # nightly signed Merkle roots, and the quarterly access-review
+  # evidence packs.
+  #
+  # `PutObjectRetention` + `PutObjectLegalHold` are needed only by the
+  # Merkle publisher, which sets retention explicitly on the PUT; S3
+  # requires those permissions whenever the request carries Object Lock
+  # headers. The evidence publisher sends none — it inherits the bucket
+  # default — so it needs a strict subset of what is already here, and
+  # `GetObject` covers its pre-write HeadObject.
+  #
   # The worker MUST NOT delete objects in this bucket — Object Lock
   # COMPLIANCE would block it anyway, but stating the limitation
-  # explicitly here keeps the IAM surface narrow.
+  # explicitly here keeps the IAM surface narrow. Note in particular
+  # that `s3:BypassGovernanceRetention` is granted to NOTHING in this
+  # module, by design.
   statement {
     sid    = "AuditArchiveWrite"
     effect = "Allow"
