@@ -1,1 +1,41 @@
+# Pre-commit hook — fast gate. See ./pre-push for the heavier one.
+#
+# Two jobs: keep commits off the trunk, then format/lint staged files.
+#
+# Note what is deliberately NOT here: any check on how much uncommitted
+# work exists. Nagging at commit time punishes the one action we want
+# more of — the 2026-08-02 211-file pile happened because people
+# committed too rarely, not too often. That check lives in
+# scripts/wip-report.sh and runs from post-commit and the Cursor `stop`
+# hook instead.
+
+branch=$(git rev-parse --abbrev-ref HEAD)
+
+case "$branch" in
+  main | master)
+    if [ "$PHARMAX_ALLOW_MAIN_COMMIT" != "1" ]; then
+      cat >&2 <<EOF
+[pre-commit] refusing to commit directly on "$branch".
+
+Everything here lands through a reviewed PR, so a commit on the trunk is
+either a mistake or about to become an awkward force-push. It also feeds
+the failure mode that produced the 2026-08-02 pile: work sitting on main
+makes every commit feel like the wrong move, so it stops happening, so
+the pile grows.
+
+Move to a branch — your staged and unstaged changes come with you:
+
+    git switch -c <feature-branch>
+
+Then commit again. Nothing is lost by switching.
+
+Escape hatch, for a genuine local-only trunk commit:
+    PHARMAX_ALLOW_MAIN_COMMIT=1 git commit ...
+EOF
+      exit 1
+    fi
+    echo "[pre-commit] PHARMAX_ALLOW_MAIN_COMMIT=1 — allowing commit on $branch"
+    ;;
+esac
+
 pnpm lint-staged

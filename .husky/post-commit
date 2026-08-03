@@ -1,0 +1,10 @@
+# Post-commit hook — reports what is still uncommitted.
+#
+# Runs only after a commit succeeded, so by construction it cannot
+# discourage committing; it just answers "what's left?" at the one moment
+# you are already thinking about it.
+#
+# Always exits 0. A reporting hook must never be able to fail a commit
+# that has already been written.
+
+sh scripts/wip-report.sh >/dev/null || true
