@@ -110,7 +110,9 @@ export default async function Pv1QueuePage({
                 href={`/ops/orders/${refusedOrderId}`}
                 className={buttonClass({ variant: "secondary", size: "sm" })}
               >
-                Open the order · clinical screening
+                {screeningRefusal.resolvableByAcknowledgement
+                  ? "Open the order · acknowledge findings"
+                  : "Open the order · read what blocked it"}
               </Link>
             </div>
           ) : null}
