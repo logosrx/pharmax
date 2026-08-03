@@ -5,13 +5,18 @@ import {
   findingsRequiringAcknowledgement,
   hardStopFindings,
   screenPrescription,
+  CLINICAL_SCREENING_AXES,
   DEFAULT_SCREENING_POLICY,
+  INPUT_UNAVAILABLE_CODE_FOR_AXIS,
+  SCREENING_FINDING_KINDS,
   type DrugKnowledge,
   type PrescribedDrug,
   type RecordedAllergy,
   type ScreeningEvaluation,
   type ScreeningFinding,
   type ScreeningFindingCode,
+  type ScreeningInputAvailability,
+  type ScreeningInputAxis,
   type ScreeningRequest,
 } from "./index.js";
 
@@ -139,9 +144,33 @@ function allergy(overrides: Partial<RecordedAllergy> = {}): RecordedAllergy {
   };
 }
 
+/**
+ * Availability declaration for a caller that can supply everything.
+ *
+ * Written out rather than derived from `CLINICAL_SCREENING_AXES`, and
+ * that is the point: a fifth axis breaks this literal, so the suite
+ * cannot keep compiling while quietly asserting the new axis is
+ * screened. Tests that want a gap pass `{ ...ALL_INPUTS_AVAILABLE,
+ * [axis]: "UNAVAILABLE" }`.
+ */
+const ALL_INPUTS_AVAILABLE: Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>> =
+  Object.freeze({
+    DRUG_DRUG_INTERACTION: "AVAILABLE",
+    DRUG_ALLERGY: "AVAILABLE",
+    THERAPEUTIC_DUPLICATION: "AVAILABLE",
+    DOSE_RANGE: "AVAILABLE",
+  });
+
+function withoutAxis(
+  axis: ScreeningInputAxis
+): Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>> {
+  return { ...ALL_INPUTS_AVAILABLE, [axis]: "UNAVAILABLE" };
+}
+
 function screen(overrides: Partial<ScreeningRequest> = {}): ScreeningEvaluation {
   return screenPrescription({
     candidate: drug("line-candidate", "DRUG_ALFA"),
+    inputAvailability: ALL_INPUTS_AVAILABLE,
     activeMedications: [],
     allergies: [],
     knowledge: KNOWLEDGE,
@@ -1044,5 +1073,171 @@ describe("selectors", () => {
     const result = screen();
     expect(hardStopFindings(result)).toEqual([]);
     expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// No axis contributes nothing in silence
+//
+// The general guard, in the same spirit as the fingerprint invariant
+// above: a case written for allergies would pass forever while the
+// next axis someone adds repeats the bug. These iterate
+// `CLINICAL_SCREENING_AXES`, which is derived from the finding kinds,
+// so a fifth clinical question is covered the day it is declared.
+//
+// The bug being guarded, concretely: `allergies: []` made the allergy
+// loop iterate zero times and contribute no findings, and `dose:
+// null` made the dose collector return early with no finding. On both
+// axes the engine reported nothing, and nothing is indistinguishable
+// from clean — while the allergy axis is the only one that can reach
+// a hard stop at all.
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — every clinical axis either runs or reports a gap", () => {
+  /**
+   * Request shapes the sweep runs each axis against. Deliberately
+   * includes the unknown-candidate case, where the engine already
+   * reports one gap of its own: an unsupplied input is a different
+   * fact with a different owner, and must not be swallowed by it.
+   */
+  const shapes: ReadonlyArray<readonly [string, Partial<ScreeningRequest>]> = [
+    ["bare candidate", {}],
+    [
+      "rich inputs",
+      {
+        candidate: drug("line-candidate", "DRUG_DOSED", { amount: 50, unit: "mg", dosesPerDay: 4 }),
+        activeMedications: [drug("line-other", "DRUG_BRAVO")],
+        allergies: [allergy({ substanceCode: "ING_DELTA", criticality: "LOW" })],
+      },
+    ],
+    [
+      "candidate the knowledge source does not recognise",
+      { candidate: drug("line-candidate", "DRUG_UNKNOWN") },
+    ],
+  ];
+
+  it("the axis list is exactly the clinical finding kinds", () => {
+    // The join between the two vocabularies. If a finding kind is
+    // added without becoming an axis, every guarantee below silently
+    // stops covering it — so the derivation is pinned rather than
+    // trusted.
+    expect(new Set(CLINICAL_SCREENING_AXES)).toEqual(
+      new Set(SCREENING_FINDING_KINDS.filter((kind) => kind !== "SCREENING_GAP"))
+    );
+  });
+
+  it("reports a gap naming any axis whose input the caller could not supply", () => {
+    for (const axis of CLINICAL_SCREENING_AXES) {
+      for (const [label, shape] of shapes) {
+        const result = screen({ ...shape, inputAvailability: withoutAxis(axis) });
+        const gaps = allFindings(result).filter(
+          (f) => f.code === INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+        );
+        expect(gaps, `${axis} / ${label}`).toHaveLength(1);
+        expect(gaps[0]?.kind).toBe("SCREENING_GAP");
+      }
+    }
+  });
+
+  it("contributes no finding of its own kind for an axis it could not screen", () => {
+    // The other half: a gap that fired while the axis ALSO produced
+    // findings would mean the declaration was ignored, and a caller
+    // would be told both that we could not check and what we found.
+    for (const axis of CLINICAL_SCREENING_AXES) {
+      for (const [label, shape] of shapes) {
+        const result = screen({ ...shape, inputAvailability: withoutAxis(axis) });
+        expect(
+          allFindings(result).filter((f) => f.kind === axis),
+          `${axis} / ${label}`
+        ).toEqual([]);
+      }
+    }
+  });
+
+  it("grades every unsupplied-input gap so it interrupts but never blocks", () => {
+    // Same grading as `SCR_KNOWLEDGE_UNAVAILABLE`, capped for the same
+    // reason: refusing to dispense because OUR platform cannot hold
+    // an allergy list would make our missing capability the patient's
+    // problem.
+    for (const axis of CLINICAL_SCREENING_AXES) {
+      const gap = requireFinding(
+        screen({ inputAvailability: withoutAxis(axis) }),
+        INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+      );
+      expect(gap.severity, axis).toBe("MODERATE");
+      expect(gap.certainty, axis).toBe("DEFINITE");
+      expect(gap.disposition, axis).toBe("REQUIRES_ACKNOWLEDGEMENT");
+    }
+  });
+
+  it("declaring nothing available yields exactly one gap per axis and no clinical finding", () => {
+    const allUnavailable = Object.fromEntries(
+      CLINICAL_SCREENING_AXES.map((axis) => [axis, "UNAVAILABLE"])
+    ) as Record<ScreeningInputAxis, ScreeningInputAvailability>;
+
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED", { amount: 50, unit: "mg", dosesPerDay: 4 }),
+      activeMedications: [drug("line-other", "DRUG_ECHO")],
+      allergies: [allergy()],
+      inputAvailability: allUnavailable,
+    });
+
+    expect(new Set(codes(result))).toEqual(
+      new Set(CLINICAL_SCREENING_AXES.map((axis) => INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]))
+    );
+    // Nothing was screened, so nothing can block — including the
+    // contraindicated pair and the confirmed high-criticality allergy
+    // sitting unread in the inputs.
+    expect(hardStopFindings(result)).toEqual([]);
+    expect(result.outcome).toBe("ADVISORY");
+  });
+
+  it("does not gap an axis whose inputs are genuinely empty", () => {
+    // The distinction the whole design turns on: "this patient has no
+    // recorded allergies" is not "this platform cannot tell you about
+    // allergies". If emptiness implied a gap, every clean patient
+    // would meet a permanent alert, and an alert that always fires is
+    // one that gets trained away.
+    const result = screen({ allergies: [], activeMedications: [] });
+    expect(result.outcome).toBe("CLEAR");
+    expect(codes(result)).toEqual([]);
+  });
+
+  it("fingerprints an unsupplied axis identically across drugs and lines", () => {
+    // One acknowledgement per pharmacist settles "we cannot screen
+    // allergies" for the whole order. Were the drug code part of the
+    // identity, a three-line order would ask three times for the same
+    // platform-level fact — the fastest possible route to a reflexive
+    // click-through.
+    const first = requireFinding(
+      screen({
+        candidate: drug("line-1", "DRUG_ALFA"),
+        inputAvailability: withoutAxis("DRUG_ALLERGY"),
+      }),
+      "SCR_ALLERGY_INPUT_UNAVAILABLE"
+    );
+    const second = requireFinding(
+      screen({
+        candidate: drug("line-2", "DRUG_BRAVO"),
+        inputAvailability: withoutAxis("DRUG_ALLERGY"),
+      }),
+      "SCR_ALLERGY_INPUT_UNAVAILABLE"
+    );
+    expect(second.fingerprint).toBe(first.fingerprint);
+  });
+
+  it("gives two unsupplied axes different fingerprints", () => {
+    // An acknowledgement of "we cannot screen doses" must not settle
+    // "we cannot screen allergies".
+    const seen = new Set(
+      CLINICAL_SCREENING_AXES.map(
+        (axis) =>
+          requireFinding(
+            screen({ inputAvailability: withoutAxis(axis) }),
+            INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+          ).fingerprint
+      )
+    );
+    expect(seen.size).toBe(CLINICAL_SCREENING_AXES.length);
   });
 });

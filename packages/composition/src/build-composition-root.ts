@@ -36,7 +36,10 @@ import type {
   CompositionRoot,
   Configurator,
 } from "./types.js";
+import { createInMemoryDrugKnowledgeSource } from "@pharmax/clinical-screening";
+
 import { createBillingConfigurator } from "./configurators/billing-configurator.js";
+import { createClinicalScreeningConfigurator } from "./configurators/clinical-screening-configurator.js";
 import { createCommandBusConfigurator } from "./configurators/command-bus-configurator.js";
 import { createCryptoConfigurator } from "./configurators/crypto-configurator.js";
 import { createRbacConfigurator } from "./configurators/rbac-configurator.js";
@@ -177,6 +180,16 @@ function mergeAndSortConfigurators(input: BuildCompositionRootInput): ReadonlyAr
     }),
     createShippingConfigurator({ factories: input.shippingFactories }),
     createBillingConfigurator({ stripeRefundPort: input.stripeRefundPort }),
+    // Always wired, even without a licensed adapter. Falling back to
+    // the empty source HERE rather than leaving the package
+    // unconfigured means the fallback is a visible decision in the
+    // boot manifest instead of an absence nobody notices — and the
+    // empty source is not silent: it makes every PV1 screen report a
+    // gap the pharmacist must acknowledge.
+    createClinicalScreeningConfigurator({
+      knowledgeSource:
+        input.clinicalScreeningKnowledgeSource ?? createInMemoryDrugKnowledgeSource(),
+    }),
   ];
 
   const merged: ReadonlyArray<Configurator> = [...builtIns, ...(input.extraConfigurators ?? [])];

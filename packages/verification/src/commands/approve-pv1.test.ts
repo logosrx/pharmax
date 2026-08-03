@@ -42,6 +42,12 @@ import {
 } from "@pharmax/rbac";
 import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
+import {
+  createScreeningStubs,
+  type ScreeningStubOptions,
+  type ScreeningStubs,
+} from "../screening/test-support.js";
+
 import { ApprovePV1 } from "./approve-pv1.js";
 
 // ---------------------------------------------------------------------------
@@ -57,6 +63,67 @@ const PHARMACIST_ID = "00000000-0000-4000-8000-000000000099";
 const TYPIST_ID = "00000000-0000-4000-8000-000000000088";
 const FILL_BUCKET_ID = "00000000-0000-4000-8000-0000000000cc";
 const VERIFICATION_RECORD_ID = "00000000-0000-4000-8000-0000000000ff";
+const PATIENT_ID = "00000000-0000-4000-8000-0000000000d1";
+const RX_ID = "00000000-0000-4000-8000-0000000000e1";
+
+/**
+ * Every fingerprint a default screen produces here, written out
+ * rather than imported.
+ *
+ * An acknowledgement matches a finding on this string and nothing
+ * else, so a silent change to `fingerprintOf` would silently orphan
+ * every acknowledgement ever recorded. Spelling them out means that
+ * change fails here instead.
+ *
+ * Note what the two input gaps do NOT contain: the drug code. "This
+ * platform cannot screen allergies" is the same fact on every line of
+ * every order, so one acknowledgement settles it — unlike the
+ * knowledge gap, which is about one unrecognised NDC.
+ */
+const KNOWLEDGE_GAP_FINGERPRINT =
+  "SCR_KNOWLEDGE_UNAVAILABLE|MODERATE/DEFINITE|00000-0000-01|scope=CANDIDATE_DRUG";
+const ALLERGY_INPUT_GAP_FINGERPRINT =
+  "SCR_ALLERGY_INPUT_UNAVAILABLE|MODERATE/DEFINITE|DRUG_ALLERGY";
+const DOSE_INPUT_GAP_FINGERPRINT = "SCR_DOSE_INPUT_UNAVAILABLE|MODERATE/DEFINITE|DOSE_RANGE";
+
+const DEFAULT_GAP_FINGERPRINTS: ReadonlyArray<string> = [
+  KNOWLEDGE_GAP_FINGERPRINT,
+  ALLERGY_INPUT_GAP_FINGERPRINT,
+  DOSE_INPUT_GAP_FINGERPRINT,
+];
+
+/**
+ * One prescription on the order, nothing else on the profile.
+ *
+ * Against the empty knowledge source — the only source this
+ * repository ships — that is three findings, all of them gaps and all
+ * requiring acknowledgement: the knowledge source does not recognise
+ * the NDC, and this platform can supply neither an allergy list nor a
+ * structured dose. So the DEFAULT state of these tests is an approval
+ * that is BLOCKED until the pharmacist acknowledges each thing that
+ * could not be checked, which is the honest behaviour and worth
+ * having as the default rather than the exception.
+ */
+const DEFAULT_SCREENING_STUBS: ScreeningStubOptions = {
+  patientId: PATIENT_ID,
+  orderLinePrescriptionIds: [RX_ID],
+  prescriptions: [{ id: RX_ID, patientId: PATIENT_ID, drugNdc: "00000-0000-01", status: "ACTIVE" }],
+};
+
+/** Default inputs plus this pharmacist's acknowledgement of every gap. */
+function screeningStubsWithGapsAcknowledged(
+  pharmacistUserId: string = PHARMACIST_ID
+): ScreeningStubOptions {
+  return {
+    ...DEFAULT_SCREENING_STUBS,
+    acknowledgements: DEFAULT_GAP_FINGERPRINTS.map((fingerprint, index) => ({
+      id: `ack-existing-${index}`,
+      orderId: ORDER_ID,
+      pharmacistUserId,
+      fingerprint,
+    })),
+  };
+}
 
 const orgWidePV1ApproveGrants: ReadonlyArray<ResolvedGrant> = [
   {
@@ -128,6 +195,12 @@ interface FakeOverrides {
    * id-shape change or a custom row.
    */
   verificationRecordCreate?: { id: string };
+  /**
+   * Clinical-screening inputs. Defaults to the gap-acknowledged
+   * fixture so the pre-existing happy-path assertions still exercise
+   * a successful approval — the screening gate is proved separately.
+   */
+  screening?: ScreeningStubOptions;
 }
 
 const DEFAULT_HEALTHY_HISTORY: ReadonlyArray<FakeHistoryRow> = [
@@ -140,8 +213,13 @@ const DEFAULT_HEALTHY_HISTORY: ReadonlyArray<FakeHistoryRow> = [
 function buildPrismaFake(overrides: FakeOverrides = {}): {
   client: unknown;
   calls: FakeCall[];
+  screening: ScreeningStubs;
 } {
   const calls: FakeCall[] = [];
+  const screening = createScreeningStubs(
+    (table, op, args) => calls.push({ table, op, args }),
+    overrides.screening ?? screeningStubsWithGapsAcknowledged()
+  );
 
   const lockedRow =
     overrides.lockedRow === undefined
@@ -172,6 +250,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
       }),
     },
     order: {
+      ...screening.order,
       update: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "update", args });
         return { id: ORDER_ID };
@@ -181,6 +260,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return { count: orderUpdateManyCount };
       }),
     },
+    orderLine: screening.orderLine,
+    prescription: screening.prescription,
+    orderScreeningFinding: screening.orderScreeningFinding,
+    orderScreeningAcknowledgement: screening.orderScreeningAcknowledgement,
     bucket: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "bucket", op: "findFirst", args });
@@ -321,7 +404,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     $transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
   };
 
-  return { client, calls };
+  return { client, calls, screening };
 }
 
 function callsOf(calls: FakeCall[], table: string, op: string): FakeCall[] {
@@ -459,15 +542,23 @@ describe("ApprovePV1 — happy path", () => {
     expect(casArgs.where).toEqual({ id: ORDER_ID, organizationId: ORG_ID, version: 3 });
     expect(casArgs.data).toEqual({ version: 4 });
 
-    // order_event written with seq = head+1 = 5.
+    // Two order_event rows: the approval (seq = head+1 = 5) and the
+    // re-screen this approval was gated on (seq 6). Both belong on the
+    // timeline — "approved" without "screened against what" is the
+    // record that cannot answer the question that matters later.
     const oeCreate = callsOf(fake.calls, "orderEvent", "create");
-    expect(oeCreate).toHaveLength(1);
+    expect(oeCreate).toHaveLength(2);
     const oeData = (oeCreate[0]!.args as { data: Record<string, unknown> }).data;
     expect(oeData).toMatchObject({
       organizationId: ORG_ID,
       orderId: ORDER_ID,
       eventType: "order.pv1.approved.v1",
       sequenceNumber: 5,
+      actorUserId: PHARMACIST_ID,
+    });
+    expect((oeCreate[1]!.args as { data: Record<string, unknown> }).data).toMatchObject({
+      eventType: "order.pv1.screening.recorded.v1",
+      sequenceNumber: 6,
       actorUserId: PHARMACIST_ID,
     });
 
@@ -502,7 +593,7 @@ describe("ApprovePV1 — happy path", () => {
 
     const outboxCall = callsOf(fake.calls, "eventOutbox", "createMany")[0];
     const rows = (outboxCall!.args as { data: Array<Record<string, unknown>> }).data;
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
       organizationId: ORG_ID,
       eventType: "order.pv1.approved.v1",
@@ -682,7 +773,8 @@ describe("ApprovePV1 — Separation of Duties (sod.typing-pv1-same-actor)", () =
     // Happy-path mutations all happened (proving SoD did NOT fire).
     expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(1);
     expect(callsOf(fake.calls, "order", "update")).toHaveLength(1);
-    expect(callsOf(fake.calls, "orderEvent", "create")).toHaveLength(1);
+    // Two: the approval and the screening record it was gated on.
+    expect(callsOf(fake.calls, "orderEvent", "create")).toHaveLength(2);
     expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(1);
     expect(callsOf(fake.calls, "eventOutbox", "createMany")).toHaveLength(1);
   });
@@ -944,6 +1036,98 @@ describe("ApprovePV1 — workflow + scope failures", () => {
     expect(callsOf(fake.calls, "orderEvent", "create")).toHaveLength(0);
     expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(0);
     expect(callsOf(fake.calls, "eventOutbox", "createMany")).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The screening gate refuses — and commits its evidence
+// ---------------------------------------------------------------------------
+
+describe("ApprovePV1 — a screening refusal is a COMMITTED refusal", () => {
+  it("persists the screen it refused against and writes no approval", async () => {
+    // The refusal is raised on findings, and the only place a
+    // pharmacist can read or acknowledge a finding is
+    // `order_screening_finding`. Rolling the screen back with the
+    // refusal — which is what throwing from the handler does — leaves
+    // them refused for something nothing can show them and nothing can
+    // settle. So the rows land, the approval does not, and the error
+    // is thrown after the commit.
+    const fake = buildPrismaFake({ screening: DEFAULT_SCREENING_STUBS });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(ApprovePV1, validInput(), { idempotencyKey: "approve-refused" })
+      ).rejects.toMatchObject({
+        code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
+        httpStatus: 422,
+      });
+    });
+
+    const persisted = callsOf(fake.calls, "orderScreeningFinding", "createMany");
+    expect(persisted).toHaveLength(1);
+    const rows = (persisted[0]!.args as { data: Array<Record<string, unknown>> }).data;
+    expect(rows.map((r) => r["fingerprint"]).sort()).toEqual([...DEFAULT_GAP_FINGERPRINTS].sort());
+    for (const row of rows) {
+      expect(row["phase"]).toBe("PV1_APPROVE");
+      expect(row["screenedForUserId"]).toBe(PHARMACIST_ID);
+    }
+
+    // Nothing about the approval happened.
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(0);
+    expect(callsOf(fake.calls, "order", "update")).toHaveLength(0);
+    expect(callsOf(fake.calls, "order", "updateMany")).toHaveLength(0);
+    expect(callsOf(fake.calls, "bucket", "findFirst")).toHaveLength(0);
+  });
+
+  it("records the refused attempt on the timeline and in the audit log, and caches nothing", async () => {
+    const fake = buildPrismaFake({ screening: DEFAULT_SCREENING_STUBS });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(ApprovePV1, validInput(), { idempotencyKey: "approve-refused-trail" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED" });
+    });
+
+    const events = callsOf(fake.calls, "orderEvent", "create").map(
+      (c) => (c.args as { data: Record<string, unknown> }).data["eventType"]
+    );
+    expect(events).toEqual(["order.pv1.screening.recorded.v1", "order.pv1.approval.refused.v1"]);
+    expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(1);
+    expect(callsOf(fake.calls, "eventOutbox", "createMany")).toHaveLength(1);
+
+    // No idempotency row: the pharmacist's remedy is to acknowledge
+    // and retry, and a cached refusal would answer that retry with
+    // the refusal it was sent to resolve.
+    expect(callsOf(fake.calls, "idempotencyKey", "create")).toHaveLength(0);
+  });
+
+  it("carries no PHI into the refusal's audit metadata or event payload", async () => {
+    const fake = buildPrismaFake({ screening: DEFAULT_SCREENING_STUBS });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(ApprovePV1, validInput(), { idempotencyKey: "approve-refused-phi" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED" });
+    });
+
+    const serialized = JSON.stringify(
+      fake.calls
+        .filter(
+          (c) =>
+            (c.table === "auditLog" && c.op === "create") ||
+            (c.table === "eventOutbox" && c.op === "createMany")
+        )
+        .map((c) => c.args),
+      (_key, value) => (typeof value === "bigint" ? value.toString() : value)
+    );
+    expect(serialized).not.toContain(PATIENT_ID);
+    expect(serialized).not.toMatch(/firstName|lastName|dateOfBirth|drugName|\bsig\b/i);
+    // …and the refusal IS described, so the assertion above is not
+    // passing on an empty bag.
+    expect(serialized).toContain("PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED");
   });
 });
 

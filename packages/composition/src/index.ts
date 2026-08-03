@@ -61,6 +61,7 @@ export {
 } from "@pharmax/cache";
 
 export { createBillingConfigurator } from "./configurators/billing-configurator.js";
+export { createClinicalScreeningConfigurator } from "./configurators/clinical-screening-configurator.js";
 export { createCommandBusConfigurator } from "./configurators/command-bus-configurator.js";
 export { createCryptoConfigurator } from "./configurators/crypto-configurator.js";
 export { createRbacConfigurator } from "./configurators/rbac-configurator.js";
@@ -69,6 +70,7 @@ export { createShippingConfigurator } from "./configurators/shipping-configurato
 export type {
   BillingConfiguration,
   BuildCompositionRootInput,
+  ClinicalScreeningConfiguration,
   CommandBusConfiguration,
   CompositionEnv,
   CompositionRoot,

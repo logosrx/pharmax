@@ -285,6 +285,47 @@ export {
   type MissingInfoReason,
 } from "./missing-info-reasons.js";
 
+// PV1 clinical screening.
+//
+// `StartPV1` screens so the console has findings to render;
+// `ApprovePV1` screens AGAIN and gates on that second result, because
+// a review is not instantaneous and the profile can move underneath
+// it. `AcknowledgePV1ScreeningFinding` is how a pharmacist records
+// the judgement that opens the gate — per pharmacist, per order, per
+// finding.
+//
+// The knowledge source behind the engine is INJECTED
+// (`configureClinicalScreening`), never embedded: interaction tables
+// and severity gradings are licensed content and this repository must
+// not contain any. With nothing wired, the engine reports
+// `SCR_KNOWLEDGE_UNAVAILABLE` on every prescription — a finding that
+// requires acknowledgement — so an unconfigured deployment says
+// plainly that it could not screen rather than implying it did.
+export {
+  AcknowledgePV1ScreeningFinding,
+  type AcknowledgePV1ScreeningFindingInput,
+  type AcknowledgePV1ScreeningFindingOutput,
+} from "./commands/acknowledge-pv1-screening-finding.js";
+
+export {
+  PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED,
+  PV1_SCREENING_FINDING_NOT_ACKNOWLEDGEABLE,
+  PV1_SCREENING_FINDING_UNKNOWN,
+  PV1_SCREENING_HARD_STOP,
+  PV1_SCREENING_NOT_PERFORMED,
+  PV1_SCREENING_PROFILE_TOO_LARGE,
+  PV1_SCREENING_STAGE_INVALID,
+} from "./screening/errors.js";
+
+export {
+  clinicalScreeningKnowledgeSourceIsConfigured,
+  configureClinicalScreening,
+  getClinicalScreeningKnowledgeSource,
+  resetClinicalScreeningConfigurationForTests,
+  type ClinicalScreeningConfiguration,
+} from "./screening/configure.js";
+
+import * as acknowledgePV1ScreeningFindingModule from "./commands/acknowledge-pv1-screening-finding.js";
 import * as approveFinalVerificationModule from "./commands/approve-final-verification.js";
 import * as approvePV1Module from "./commands/approve-pv1.js";
 import * as completeTypingReviewModule from "./commands/complete-typing-review.js";
@@ -304,6 +345,8 @@ export const verification = {
     ResumeTyping: resumeTypingModule.ResumeTyping,
     StartPV1: startPV1Module.StartPV1,
     ApprovePV1: approvePV1Module.ApprovePV1,
+    AcknowledgePV1ScreeningFinding:
+      acknowledgePV1ScreeningFindingModule.AcknowledgePV1ScreeningFinding,
     RejectPV1: rejectPV1Module.RejectPV1,
     StartFinalVerification: startFinalVerificationModule.StartFinalVerification,
     ApproveFinalVerification: approveFinalVerificationModule.ApproveFinalVerification,

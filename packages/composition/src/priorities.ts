@@ -53,6 +53,12 @@ export const BUILT_IN_PRIORITIES = Object.freeze({
   SHIPPING: 40,
   /** @pharmax/billing Stripe refund port. */
   BILLING: 50,
+  /**
+   * @pharmax/verification clinical-screening knowledge source. The
+   * licensed drug database behind PV1 screening, injected because it
+   * must never live in this repository (clean-room policy).
+   */
+  CLINICAL_SCREENING: 60,
 });
 
 export type BuiltInPriority = (typeof BUILT_IN_PRIORITIES)[keyof typeof BUILT_IN_PRIORITIES];

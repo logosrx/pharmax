@@ -22,6 +22,8 @@
 // (`HOLD_FROM_STATES`, `CANCEL_FROM_STATES`) document the rule;
 // the transitions array IS the runtime enforcement.
 
+import type { ScreeningPolicy } from "@pharmax/clinical-screening";
+
 import type { OrderWorkflowCommand } from "./commands.js";
 import { type OrderState, ORDER_PRIMARY_STATES, isTerminalState } from "./states.js";
 
@@ -302,6 +304,32 @@ export interface OrderWorkflowPolicy {
   readonly terminalStates: ReadonlyArray<OrderState>;
   readonly transitions: ReadonlyArray<OrderTransitionRow>;
   /**
+   * Clinical-screening behaviour for the PV1 stage.
+   *
+   * This lives on the POLICY VERSION, not in tenant configuration,
+   * and the placement is the whole point. `minimumReportedSeverity`
+   * is a way to see fewer findings: raised to `CONTRAINDICATED` it
+   * silences the entire acknowledge tier — the part that actually
+   * changes decisions — and leaves only what the engine would block
+   * on. A knob that can do that must not be editable as loose
+   * per-tenant config, because then "why did nobody get asked about
+   * this interaction in March?" has no answer anyone can reconstruct.
+   *
+   * Here it is versioned instead: changing it means publishing a new
+   * `workflow_policy` version through the existing activation
+   * command, which is reviewed and audited, and in-flight orders keep
+   * evaluating against the version they were born under (ADR-0017).
+   * `order_screening_finding` already stamps
+   * `workflowPolicyId`/`workflowPolicyVersion` on every row, so the
+   * floor that applied to any historical screen is recoverable from
+   * the row itself.
+   *
+   * `mergePolicyWithOverlay` copies this field from the base
+   * verbatim. A tenant overlay may TIGHTEN the state machine; it
+   * cannot touch the screening floor.
+   */
+  readonly screening: ScreeningPolicy;
+  /**
    * Optional per-transition attestation requirements, keyed by
    * `OrderTransitionRow.transitionId`. Populated by
    * `mergePolicyWithOverlay` (Tier 2 — see ADR-0019); base policies
@@ -327,4 +355,9 @@ export const ORDER_STANDARD_V1: OrderWorkflowPolicy = Object.freeze({
   ] as OrderState[]),
   terminalStates: Object.freeze(["SHIPPED", "CANCELLED"] as OrderState[]),
   transitions: ORDER_STANDARD_V1_TRANSITIONS,
+  // v1 reports everything the engine produces, including the MINOR
+  // tier. Retiring that tier is a legitimate thing for a pharmacy to
+  // decide once it has override-rate data of its own — and when it
+  // does, it lands as policy v2, not as a config flag someone flips.
+  screening: Object.freeze({ minimumReportedSeverity: "MINOR" as const }),
 });

@@ -235,6 +235,9 @@ importers:
       '@pharmax/billing':
         specifier: workspace:*
         version: link:../../packages/billing
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:../../packages/clinical-screening
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../../packages/command-bus
@@ -610,6 +613,9 @@ importers:
       '@pharmax/cache':
         specifier: workspace:*
         version: link:../cache
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:../clinical-screening
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../command-bus
@@ -628,6 +634,9 @@ importers:
       '@pharmax/shipping':
         specifier: workspace:*
         version: link:../shipping
+      '@pharmax/verification':
+        specifier: workspace:*
+        version: link:../verification
       ioredis:
         specifier: ^5.11.1
         version: 5.11.1
@@ -1432,6 +1441,9 @@ importers:
 
   packages/verification:
     dependencies:
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:../clinical-screening
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../command-bus
@@ -1469,6 +1481,9 @@ importers:
 
   packages/workflow:
     dependencies:
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:../clinical-screening
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../platform-core

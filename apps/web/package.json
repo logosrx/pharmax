@@ -13,6 +13,7 @@
     "@pharmax/auth": "workspace:*",
     "resend": "^4.0.0",
     "@pharmax/billing": "workspace:*",
+    "@pharmax/clinical-screening": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/composition": "workspace:*",
     "@pharmax/controlled-substances": "workspace:*",

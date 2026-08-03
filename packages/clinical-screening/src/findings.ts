@@ -94,6 +94,54 @@ export const SCREENING_FINDING_KINDS = Object.freeze([
 export type ScreeningFindingKind = (typeof SCREENING_FINDING_KINDS)[number];
 
 /**
+ * A clinical question the engine answers — equivalently, an input the
+ * caller has to be able to supply.
+ *
+ * DERIVED, NOT DECLARED. This is exactly `SCREENING_FINDING_KINDS`
+ * minus the one entry that is not a clinical question, and it is
+ * computed rather than written out so the two lists cannot drift.
+ * That matters more than it looks: adding a fifth finding kind
+ * automatically adds a fifth axis, which makes
+ * `ScreeningRequest.inputAvailability` incomplete at every call site
+ * and `INPUT_UNAVAILABLE_CODE_FOR_AXIS` incomplete here — both
+ * compile errors. The next axis cannot be added silently, which is
+ * the property the second-oldest bug in this package lacked.
+ */
+export type ScreeningInputAxis = Exclude<ScreeningFindingKind, "SCREENING_GAP">;
+
+export const CLINICAL_SCREENING_AXES: ReadonlyArray<ScreeningInputAxis> = Object.freeze(
+  SCREENING_FINDING_KINDS.filter((kind): kind is ScreeningInputAxis => kind !== "SCREENING_GAP")
+);
+
+/**
+ * Whether the caller could supply the facts one axis needs.
+ *
+ * THE DISTINCTION THIS EXISTS TO DRAW: "this patient has no recorded
+ * allergies" and "this platform cannot tell you about allergies" are
+ * different clinical facts, and only the second is a gap. An empty
+ * array cannot express both — which is how an axis with no input
+ * ended up contributing no findings and reading, to a pharmacist,
+ * exactly like an axis that ran and found nothing.
+ *
+ * A genuinely allergy-free patient MUST be able to screen clear on
+ * that axis. If unavailability were inferred from emptiness, the gap
+ * would fire on every clean patient forever, and a finding that
+ * always fires is a finding that gets trained away — the alert
+ * fatigue this engine is built to avoid, reintroduced by the
+ * mechanism meant to make it safer.
+ *
+ * Two values and no third. "PARTIAL" is deliberately absent: a
+ * pharmacist cannot act on "some of this patient's allergies are
+ * here", and a caller holding an incomplete list should supply what
+ * it has and declare AVAILABLE — the same posture the engine already
+ * takes toward a knowledge source that answers some lookups and not
+ * others.
+ */
+export const SCREENING_INPUT_AVAILABILITIES = Object.freeze(["AVAILABLE", "UNAVAILABLE"] as const);
+
+export type ScreeningInputAvailability = (typeof SCREENING_INPUT_AVAILABILITIES)[number];
+
+/**
  * Stable finding codes. These are audit vocabulary: they are written
  * into event payloads and rolled up in reporting, so a code may be
  * ADDED but never renamed or repurposed.
@@ -109,9 +157,42 @@ export const SCREENING_FINDING_CODES = Object.freeze([
   "SCR_DOSE_BELOW_DAILY_MINIMUM",
   "SCR_KNOWLEDGE_UNAVAILABLE",
   "SCR_DOSE_UNIT_NOT_COMPARABLE",
+  // One per axis, for the case where the CALLER could not supply the
+  // input at all. Distinct from `SCR_KNOWLEDGE_UNAVAILABLE`, which
+  // reports that the knowledge source did not recognise a drug we DID
+  // ask it about: these say the question was never asked, and the
+  // remediation is a different team's (a missing product capability,
+  // not a missing row in a licensed database).
+  "SCR_INTERACTION_INPUT_UNAVAILABLE",
+  "SCR_ALLERGY_INPUT_UNAVAILABLE",
+  "SCR_DUPLICATION_INPUT_UNAVAILABLE",
+  "SCR_DOSE_INPUT_UNAVAILABLE",
 ] as const);
 
 export type ScreeningFindingCode = (typeof SCREENING_FINDING_CODES)[number];
+
+/**
+ * The finding code that reports each axis as unsupplied.
+ *
+ * One code per axis rather than one shared code with the axis as a
+ * qualifier, because the two are different operational facts with
+ * different owners: "we cannot screen allergies" and "we cannot
+ * screen doses" are separate tickets, and a dashboard should be able
+ * to count them separately without parsing a fingerprint.
+ *
+ * Exhaustive over `ScreeningInputAxis` by TYPE, which is the forcing
+ * function: a new axis does not compile until it has a code here, and
+ * `screenPrescription` emits from this map, so the new axis gets gap
+ * coverage the moment it exists.
+ */
+export const INPUT_UNAVAILABLE_CODE_FOR_AXIS: Readonly<
+  Record<ScreeningInputAxis, ScreeningFindingCode>
+> = Object.freeze({
+  DRUG_DRUG_INTERACTION: "SCR_INTERACTION_INPUT_UNAVAILABLE",
+  DRUG_ALLERGY: "SCR_ALLERGY_INPUT_UNAVAILABLE",
+  THERAPEUTIC_DUPLICATION: "SCR_DUPLICATION_INPUT_UNAVAILABLE",
+  DOSE_RANGE: "SCR_DOSE_INPUT_UNAVAILABLE",
+});
 
 /** Which side of the screen a trigger came from. */
 export const SCREENING_TRIGGER_SOURCES = Object.freeze([
@@ -139,6 +220,14 @@ export interface ScreeningTrigger {
    * The coded concept this input contributed: an ingredient code for
    * an interaction, a substance code for an allergy, a class code
    * where the match was made at class level.
+   *
+   * For an input-unavailability gap there is no contributing concept
+   * — that is the point of it — so the code is the AXIS that could
+   * not be screened. Putting it here rather than in a qualifier is
+   * deliberate: the axis is then part of the fingerprint through the
+   * trigger set, so "we cannot screen allergies" fingerprints
+   * identically on every drug and every line, and one acknowledgement
+   * settles it for the whole order instead of one per prescription.
    */
   readonly code: string;
 }
