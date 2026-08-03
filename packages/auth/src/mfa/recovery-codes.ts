@@ -6,7 +6,7 @@
 // constant-time hash compare; the command layer stamps `usedAt` so a
 // code is never redeemable twice.
 
-import { randomBytes } from "node:crypto";
+import { randomInt } from "node:crypto";
 
 import type { PasswordHasher } from "../password/hasher.js";
 
@@ -14,13 +14,6 @@ import type { PasswordHasher } from "../password/hasher.js";
 const ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ";
 const GROUP_LEN = 5;
 const GROUPS = 2; // e.g. "A2C4E-9GHJK"
-
-// A byte holds 256 values but the alphabet has 30 characters, so the
-// range does not divide evenly. These two constants carve out the part
-// that does: BYTES_PER_CHAR (8) byte values map to each character, and
-// any byte at or above UNBIASED_BYTE_LIMIT (240) is discarded.
-const BYTES_PER_CHAR = Math.floor(256 / ALPHABET.length);
-const UNBIASED_BYTE_LIMIT = BYTES_PER_CHAR * ALPHABET.length;
 
 /** Generate `count` display codes like "A2C4E-9GHJK". */
 export function generateRecoveryCodes(count: number): string[] {
@@ -58,23 +51,13 @@ export async function verifyRecoveryCode(
 }
 
 function randomGroup(): string {
-  // Rejection sampling, so every character is exactly equally likely.
-  // Folding a whole byte into the alphabet with `% 30` would make the
-  // first 16 characters ~17% more likely than the last 14; integer
-  // division of an accepted byte cannot skew the distribution.
+  // `randomInt` draws uniformly over [0, 30) — it rejects the values
+  // that would not divide evenly instead of folding them in. Reducing a
+  // raw byte to the alphabet by hand, with either `% 30` or `/ 30`,
+  // biases the low characters because 256 is not a multiple of 30.
   let out = "";
-  while (out.length < GROUP_LEN) {
-    // Draw a group's worth of bytes at a time — rejections are rare
-    // (16 of 256 values), so this almost always needs one draw.
-    for (const byte of randomBytes(GROUP_LEN)) {
-      if (byte >= UNBIASED_BYTE_LIMIT) {
-        continue;
-      }
-      out += ALPHABET[Math.floor(byte / BYTES_PER_CHAR)]!;
-      if (out.length === GROUP_LEN) {
-        break;
-      }
-    }
+  for (let i = 0; i < GROUP_LEN; i += 1) {
+    out += ALPHABET[randomInt(ALPHABET.length)]!;
   }
   return out;
 }

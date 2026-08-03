@@ -10,32 +10,27 @@ import {
   verifyRecoveryCode,
 } from "./recovery-codes.js";
 
-// Lets a single test script the exact bytes `randomGroup` draws, so the
-// rejection-sampling branch is covered deterministically. Left null for
-// every other test, which keeps the real CSPRNG in play.
-const scripted = vi.hoisted(() => ({ nextBytes: null as ((size: number) => Buffer) | null }));
+// Declared here rather than imported, so the test pins the alphabet the
+// product is supposed to use. Reusing the module's own constant would
+// accept a change that reintroduced the ambiguous I/L/O/U/0/1.
+const ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+// Lets a test pin the index `randomGroup` draws, so the edges of the
+// alphabet can be asserted exactly. Left null for every other test,
+// which keeps the real CSPRNG in play.
+const scripted = vi.hoisted(() => ({ nextIndex: null as (() => number) | null }));
 
 vi.mock("node:crypto", async (importOriginal) => {
   const actual = await importOriginal<typeof nodeCrypto>();
   return {
     ...actual,
-    randomBytes: (size: number): Buffer =>
-      scripted.nextBytes === null ? actual.randomBytes(size) : scripted.nextBytes(size),
+    randomInt: (max: number): number =>
+      scripted.nextIndex === null ? actual.randomInt(max) : scripted.nextIndex(),
   };
 });
 
-/** Replay `draws` in order, repeating the last entry once exhausted. */
-function scriptDraws(draws: ReadonlyArray<ReadonlyArray<number>>): void {
-  let call = 0;
-  scripted.nextBytes = (): Buffer => {
-    const draw = draws[Math.min(call, draws.length - 1)]!;
-    call += 1;
-    return Buffer.from(draw);
-  };
-}
-
 afterEach(() => {
-  scripted.nextBytes = null;
+  scripted.nextIndex = null;
 });
 
 // Fast deterministic fake so recovery-code tests don't pay the Argon2id
@@ -62,28 +57,28 @@ describe("generateRecoveryCodes", () => {
     expect(new Set(codes).size).toBe(10);
   });
 
-  it("discards the byte values that would bias the alphabet", () => {
-    // 240-255 are the 16 values that don't fit a whole 30-character
-    // cycle. Folding them in with `% 30` is what made the first 16
-    // characters over-represented; they must be drawn again instead.
-    // Accepted bytes map by integer division: 0 -> "2", 8 -> "3", etc.
-    scriptDraws([
-      [240, 241, 247, 250, 255],
-      [0, 8, 16, 24, 32],
-    ]);
+  it("maps the first and last draw onto the ends of the alphabet", () => {
+    // Guards the index range. Drawing over the wrong bound would make
+    // one end of the alphabet unreachable (or yield undefined), and a
+    // random sample would hide that for a long time.
+    scripted.nextIndex = (): number => 0;
+    expect(generateRecoveryCodes(1)[0]).toBe("22222-22222");
 
-    const [code] = generateRecoveryCodes(1);
-
-    // Both groups consume the second draw; the first is fully rejected.
-    expect(code).toBe("23456-23456");
+    scripted.nextIndex = (): number => ALPHABET.length - 1;
+    expect(generateRecoveryCodes(1)[0]).toBe("ZZZZZ-ZZZZZ");
   });
 
-  it("maps the highest accepted byte to the last alphabet character", () => {
-    scriptDraws([[239, 239, 239, 239, 239]]);
+  it("draws every alphabet character and nothing outside it", () => {
+    const seen = new Set<string>();
+    for (const code of generateRecoveryCodes(500)) {
+      for (const ch of normalizeRecoveryCode(code)) {
+        seen.add(ch);
+      }
+    }
 
-    const [code] = generateRecoveryCodes(1);
-
-    expect(code).toBe("ZZZZZ-ZZZZZ");
+    // 5000 characters over 30 symbols — missing one would mean the draw
+    // cannot reach it, not bad luck.
+    expect([...seen].sort().join("")).toBe([...ALPHABET].sort().join(""));
   });
 });
 
