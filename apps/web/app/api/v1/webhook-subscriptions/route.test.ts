@@ -249,7 +249,7 @@ describe("POST /api/v1/webhook-subscriptions", () => {
     expect(JSON.stringify(body)).not.toContain(FRESH_SECRET);
   });
 
-  it("maps a command PharmaxError to a 422 with its code", async () => {
+  it("maps a command ValidationError to a 400 with its code", async () => {
     executeCommandDetailedMock.mockRejectedValue(
       new errors.ValidationError({
         code: "CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_HTTPS",
@@ -262,7 +262,7 @@ describe("POST /api/v1/webhook-subscriptions", () => {
         body: { ...VALID_BODY, url: "http://insecure.example.com" },
       })
     );
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error.code).toBe("CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_HTTPS");
   });

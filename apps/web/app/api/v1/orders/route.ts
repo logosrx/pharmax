@@ -21,11 +21,11 @@
 import { executeCommandDetailed } from "@pharmax/command-bus";
 import { IntakeSourceKind, OrderStatus, readInOrgScope } from "@pharmax/database";
 import { CreateOrder } from "@pharmax/orders";
-import { errors } from "@pharmax/platform-core";
 import { withTenancyContext } from "@pharmax/tenancy";
 import { NextResponse } from "next/server";
 
 import {
+  partnerCommandError,
   partnerJsonError,
   requireIdempotencyKeyHeader,
   requirePartnerScope,
@@ -156,9 +156,8 @@ export async function POST(request: Request): Promise<Response> {
       { status: replayed ? 200 : 201 }
     );
   } catch (cause) {
-    if (cause instanceof errors.PharmaxError) {
-      return partnerJsonError({ status: 422, code: cause.code, message: cause.message });
-    }
+    const mapped = partnerCommandError(cause);
+    if (mapped !== null) return mapped;
     throw cause;
   }
 }

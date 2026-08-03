@@ -10,6 +10,12 @@
 // strict schema is what rejects an unknown or misspelled field. A
 // route that projected named fields would silently drop them.
 //
+// The other is the error-status contract. `RX_NUMBER_COLLISION` is a
+// transient conflict the operator console tells people to retry, and
+// `RX_NUMBER_ALLOCATION_FAILED` is a database failure of ours; a
+// blanket 422 called the first one un-retryable and the second one
+// the partner's fault. Both statuses are pinned below.
+//
 // PHI: every fixture is synthetic. `sig` must reach the command (it is
 // the prescription) and must appear in NOTHING else — not the
 // response, not the logger.
@@ -220,7 +226,7 @@ describe("POST /api/v1/prescriptions", () => {
     expect(body.meta).toEqual({ idempotentReplay: true });
   });
 
-  it("422s command-level rejections with their typed code", async () => {
+  it("400s a defective request with its typed code", async () => {
     executeCommandDetailedMock.mockRejectedValue(
       new errors.ValidationError({
         code: "RX_PATIENT_CLINIC_MISMATCH",
@@ -228,9 +234,61 @@ describe("POST /api/v1/prescriptions", () => {
       })
     );
     const res = await POST(postRequest({ idempotencyKey: "rx-intake-1" }));
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error.code).toBe("RX_PATIENT_CLINIC_MISMATCH");
+  });
+
+  it("422s a workflow-invariant refusal", async () => {
+    executeCommandDetailedMock.mockRejectedValue(
+      new errors.InvariantViolationError({
+        code: "RX_CONTROLLED_AUTHORIZATION_INVALID",
+        message: "A Schedule II prescription may not authorize refills.",
+      })
+    );
+    const res = await POST(postRequest({ idempotencyKey: "rx-intake-1" }));
+    expect(res.status).toBe(422);
+    expect((await res.json()).error.code).toBe("RX_CONTROLLED_AUTHORIZATION_INVALID");
+  });
+
+  it("409s RX_NUMBER_COLLISION — the operator wording says retry, and 422 would forbid it", async () => {
+    // The same condition must not read as "retry" on the console and
+    // "your payload is defective" on the API. No client library
+    // retries a 422.
+    executeCommandDetailedMock.mockRejectedValue(
+      new errors.ConflictError({
+        code: "RX_NUMBER_COLLISION",
+        message: "The allocated prescription number is already in use. Retry the transcription.",
+      })
+    );
+    const res = await POST(postRequest({ idempotencyKey: "rx-intake-1" }));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.code).toBe("RX_NUMBER_COLLISION");
+  });
+
+  it("500s an allocator failure — our outage, not their request", async () => {
+    // `allocateRxNumber` raises this as an InternalError on a database
+    // failure. As a 422 it misattributed our fault to the caller AND
+    // hid from the error-rate alarms on-call pages against.
+    executeCommandDetailedMock.mockRejectedValue(
+      new errors.InternalError({
+        code: "RX_NUMBER_ALLOCATION_FAILED",
+        message: "Rx number allocation failed for clinic clinic-1: deadlock detected.",
+      })
+    );
+    const res = await POST(postRequest({ idempotencyKey: "rx-intake-1" }));
+    expect(res.status).toBe(500);
+
+    const body = await res.json();
+    expect(body.error.code).toBe("RX_NUMBER_ALLOCATION_FAILED");
+    // The class contract forbids echoing an InternalError message: it
+    // carries driver text and internal identifiers.
+    expect(body.error.message).not.toContain("deadlock");
+    expect(body.error.message).not.toContain("clinic-1");
+
+    // A 5xx that never reaches the logger never reaches Sentry, and
+    // an internal failure nobody is paged for is the whole problem.
+    expect(loggerMock.error).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the sig out of the response and out of the logs on both paths", async () => {
