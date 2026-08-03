@@ -41,7 +41,7 @@
 // linters form the "no command lands without
 // (defineCommand + tenant-scoped model + RLS policy)" net.
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, type Dirent } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -163,22 +163,33 @@ export function checkAllCommandFiles(packagesDir: string): {
   const pkgs = readdirSync(packagesDir);
   for (const pkg of pkgs) {
     const cmdDir = join(packagesDir, pkg, "src", "commands");
-    let entries: string[];
+    let entries: Dirent[];
     try {
-      entries = readdirSync(cmdDir);
+      // The listing itself reports the entry type, so there is no
+      // separate stat to race against: a stat-then-read pair can be
+      // pointed at two different files if the path is swapped in
+      // between. Symlinks stay eligible — `readFileSync` follows them,
+      // which is what the old `statSync` check did too.
+      entries = readdirSync(cmdDir, { withFileTypes: true });
     } catch {
       continue;
     }
     for (const entry of entries) {
-      if (!entry.endsWith(".ts")) continue;
-      if (entry.endsWith(".test.ts")) continue;
-      if (entry.endsWith(".spec.ts")) continue;
-      if (COMMAND_FILE_EXCLUDES.has(entry)) continue;
-      const filePath = join(cmdDir, entry);
-      const stat = statSync(filePath);
-      if (!stat.isFile()) continue;
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      const name = entry.name;
+      if (!name.endsWith(".ts")) continue;
+      if (name.endsWith(".test.ts")) continue;
+      if (name.endsWith(".spec.ts")) continue;
+      if (COMMAND_FILE_EXCLUDES.has(name)) continue;
+      const filePath = join(cmdDir, name);
 
-      const sourceText = readFileSync(filePath, "utf8");
+      let sourceText: string;
+      try {
+        sourceText = readFileSync(filePath, "utf8");
+      } catch {
+        // Vanished or became unreadable after the listing.
+        continue;
+      }
       const result = scanCommandFile(sourceText, filePath);
       checked.push(filePath);
       if (!result.ok) {
