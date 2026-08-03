@@ -2,16 +2,18 @@
 # scripts/wip-report.sh
 #
 # Fast, dependency-free version of `pnpm check:wip` (see
-# scripts/check-wip.ts for the full rationale). Pure git + awk, so it
-# runs in environments where Node is not on PATH — notably the Cursor
-# hook process, which is spawned by the GUI app and does not inherit a
-# shell profile.
+# scripts/check-wip.ts for the full rationale), plus the shared-checkout
+# notice described below. Pure git + awk, so it runs in environments
+# where Node is not on PATH — notably the Cursor hook process, which is
+# spawned by the GUI app and does not inherit a shell profile.
 #
-# Called from two places, both of which are advisory by construction:
-#   - .cursor/hooks.json on the `stop` event, i.e. the end of every
-#     agent turn. That is the moment work actually accumulates.
-#   - .husky/post-commit, which can only ever run AFTER you did the
-#     right thing, so it cannot discourage committing.
+# Called from three places, all advisory by construction:
+#   - .cursor/hooks.json on `sessionStart`, so a session opens knowing
+#     what it inherited.
+#   - .cursor/hooks.json on `stop`, i.e. the end of every agent turn.
+#     That is the moment work actually accumulates.
+#   - .husky/post-commit, which can only run AFTER you did the right
+#     thing, so it cannot discourage committing.
 #
 # It never blocks and always exits 0. Emits `{}` on stdout to satisfy
 # the Cursor hook's JSON expectation and puts the human-readable report
@@ -25,6 +27,11 @@
 FILE_COUNT_THRESHOLD=20
 AREA_COUNT_THRESHOLD=4
 
+# Window within which a branch change is worth mentioning. Tonight's
+# collision switched branches three times inside a single minute, so
+# anything at this scale is generous.
+BRANCH_CHANGE_WINDOW_SECONDS=300
+
 emit_json_and_exit() {
   echo '{}'
   exit 0
@@ -34,6 +41,44 @@ emit_json_and_exit() {
 git rev-parse --git-dir >/dev/null 2>&1 || emit_json_and_exit
 
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+
+# --- shared-checkout notice -------------------------------------------
+#
+# If this checkout changed branch since the last time the hook ran, and
+# it happened recently, say so. A session that switched deliberately
+# will recognise its own action and ignore the line; a session that did
+# NOT switch has just learned that something else is driving its working
+# directory — which is the failure this notice exists to surface.
+#
+# The state file lives in the per-worktree git dir (`git rev-parse
+# --git-path` resolves to .git/worktrees/<name> inside a linked
+# worktree), so each worktree tracks its own HEAD independently and
+# worktrees never trip each other's notice.
+state_file=$(git rev-parse --git-path pharmax-session-branch 2>/dev/null)
+now=$(date +%s)
+
+if [ -n "$state_file" ] && [ -f "$state_file" ]; then
+  read -r prev_branch prev_at <"$state_file" 2>/dev/null || true
+  if [ -n "$prev_branch" ] && [ "$prev_branch" != "$branch" ]; then
+    age=$((now - ${prev_at:-0}))
+    if [ "$age" -ge 0 ] && [ "$age" -le "$BRANCH_CHANGE_WINDOW_SECONDS" ]; then
+      {
+        echo "[wip] this checkout moved from \"$prev_branch\" to \"$branch\" ${age}s ago."
+        echo "      If that was not you, another session is sharing this working"
+        echo "      directory — a branch switch carries everyone's uncommitted work"
+        echo "      with it. Give this session its own tree:"
+        echo "        pnpm session:new <branch-name>"
+      } >&2
+    fi
+  fi
+fi
+
+if [ -n "$state_file" ]; then
+  printf '%s %s\n' "$branch" "$now" >"$state_file" 2>/dev/null || true
+fi
+
+# --- accumulation report ----------------------------------------------
+
 status=$(git status --porcelain --untracked-files=all 2>/dev/null)
 
 [ -z "$status" ] && emit_json_and_exit
@@ -79,7 +124,7 @@ esac
 untracked_source=$(printf '%s\n' "$status" |
   grep '^??' |
   cut -c4- |
-  grep -cE '\.(ts|tsx|js|mjs|cjs|prisma)$')
+  grep -cE '\.(ts|tsx|js|mjs|cjs|prisma|sh)$')
 
 if [ "$untracked_source" -gt 0 ]; then
   add "untracked-source: $untracked_source new source file(s) are untracked."
