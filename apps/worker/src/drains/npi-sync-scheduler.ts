@@ -234,7 +234,7 @@ async function processOrg(args: ProcessOrgArgs): Promise<Outcome> {
     actor: { userId: actor.id, correlationId: ids.generateUlid() },
   });
 
-  let result: RunNpiSyncForOrgResult | null = null;
+  let result: RunNpiSyncForOrgResult;
   try {
     result = await withTenancyContext(tenancy, () =>
       runNpiSyncForOrg(

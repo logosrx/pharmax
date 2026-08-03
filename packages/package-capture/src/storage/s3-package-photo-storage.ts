@@ -250,8 +250,8 @@ export class S3PackagePhotoStorage implements PackagePhotoStorage {
       context = readCurrentUploadContext();
     } catch (cause) {
       throw new Error(
-        `${S3_PACKAGE_PHOTO_STORAGE_NO_TENANCY}: beginUpload must be called inside withTenancyContext(...). ` +
-          `Original error: ${cause instanceof Error ? cause.message : String(cause)}`
+        `${S3_PACKAGE_PHOTO_STORAGE_NO_TENANCY}: beginUpload must be called inside withTenancyContext(...).`,
+        { cause }
       );
     }
 

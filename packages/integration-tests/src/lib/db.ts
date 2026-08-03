@@ -129,12 +129,17 @@ export async function assertSchemaReady(): Promise<void> {
   } catch (cause) {
     const code = (cause as { code?: string }).code;
     if (code === "ECONNREFUSED" || code === "ENOTFOUND") {
+      // `cause` carries the pg errno and the host/port it actually
+      // tried; ENOTFOUND in particular means the URL is wrong, not
+      // that the container is down, and the advice above is then
+      // misleading on its own.
       throw new Error(
         `Integration tests cannot connect to Postgres. Start the local DB first:\n` +
           `  pnpm db:up                  # start docker-compose postgres\n` +
           `  pnpm db:migrate:deploy      # apply the schema\n` +
           `Then re-run \`pnpm test:integration\`.\n` +
-          `(connection target was ${resolveDatabaseUrl()})`
+          `(connection target was ${resolveDatabaseUrl()})`,
+        { cause }
       );
     }
     throw cause;

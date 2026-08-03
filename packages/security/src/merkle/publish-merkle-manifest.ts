@@ -212,7 +212,7 @@ export class S3ObjectLockPublisher implements ManifestPublisher {
     });
     const uri = `s3://${this.options.bucket}/${key}`;
 
-    let existing: Awaited<ReturnType<S3ObjectLockClient["headObject"]>> | null = null;
+    let existing: Awaited<ReturnType<S3ObjectLockClient["headObject"]>>;
     try {
       existing = await this.options.s3Client.headObject({
         Bucket: this.options.bucket,
