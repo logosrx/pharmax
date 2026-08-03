@@ -1,4 +1,4 @@
-import { normalizeNdc } from "./normalize-ndc.js";
+import { normalizeNdc } from "@pharmax/drug-identity";
 
 export const GS1_PARSE_FAILED = "GS1_PARSE_FAILED";
 

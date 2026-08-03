@@ -49,6 +49,12 @@ export const PERMISSIONS = Object.freeze({
   PROVIDERS_ONBOARDING_SUBMIT: "providers.onboarding.submit",
   PROVIDERS_ONBOARDING_REVIEW: "providers.onboarding.review",
 
+  // Prescription intake. Transcribing a prescription is the act that
+  // brings a clinical order into the system; it is deliberately a
+  // separate grant from ORDERS_ADD_PRESCRIPTION, which only attaches
+  // an already-transcribed prescription to an order.
+  PRESCRIPTIONS_CREATE: "prescriptions.create",
+
   // Clinic (practice) directory.
   CLINICS_READ: "clinics.read",
 
@@ -241,6 +247,11 @@ export const PERMISSION_METADATA: Readonly<
     description:
       "Crypto-shred a patient: render PHI permanently unreadable (right-to-be-forgotten, compliance action; OrgAdmin only by default).",
     category: "Patients",
+  },
+  [PERMISSIONS.PRESCRIPTIONS_CREATE]: {
+    description:
+      "Transcribe a new prescription (encrypts the sig; enforces DEA Part 1306 authorization limits for controlled substances).",
+    category: "Prescriptions",
   },
   [PERMISSIONS.PROVIDERS_CREATE]: {
     description: "Register a new prescribing provider.",

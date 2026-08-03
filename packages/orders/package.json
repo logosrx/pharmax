@@ -10,7 +10,10 @@
   },
   "dependencies": {
     "@pharmax/command-bus": "workspace:*",
+    "@pharmax/controlled-substances": "workspace:*",
+    "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
+    "@pharmax/drug-identity": "workspace:*",
     "@pharmax/order-contracts": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",

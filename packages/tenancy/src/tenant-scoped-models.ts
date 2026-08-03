@@ -113,6 +113,12 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["Patient", { kind: "organizationId" }] as const,
   ["Provider", { kind: "organizationId" }] as const,
   ["Prescription", { kind: "organizationId" }] as const,
+  // Rx-number allocator. Carries no PHI, but auto-scoping matters for
+  // a different reason: an unscoped increment would hand one tenant's
+  // clinic a number out of another tenant's series, and the resulting
+  // collision would surface as a unique-constraint failure at the far
+  // end of a transcription rather than as an isolation error here.
+  ["RxNumberSequence", { kind: "organizationId" }] as const,
   ["Order", { kind: "organizationId" }] as const,
   ["OrderLine", { kind: "organizationId" }] as const,
   // OrderCancellation carries `organizationId` and is per-order

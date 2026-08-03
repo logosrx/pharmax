@@ -94,6 +94,9 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       // Techs prepare from ACTIVE formulas; they do not author them.
       PERMISSIONS.COMPOUNDING_READ,
       PERMISSIONS.COMPOUNDING_PREPARE,
+      // Transcription is a technician function; the pharmacist's
+      // check on it is PV1, not a second data-entry grant.
+      PERMISSIONS.PRESCRIPTIONS_CREATE,
       PERMISSIONS.ORDERS_CREATE,
       PERMISSIONS.ORDERS_READ,
       PERMISSIONS.ORDERS_ADD_PRESCRIPTION,

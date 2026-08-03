@@ -92,6 +92,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
       "Approve or reject prescriber onboarding applications in the NEEDS_REVIEW queue; human reviewer permission, MFA-gated in the ops console (ADR-0033)",
   },
   {
+    code: "prescriptions.create",
+    description:
+      "Transcribe a new prescription (encrypts the sig; enforces DEA Part 1306 authorization limits for controlled substances)",
+  },
+  {
     code: "clinics.read",
     description:
       "View the clinic (practice) directory: codes, names, statuses, and pharmacy-site links; no PHI",

@@ -1,4 +1,8 @@
-export { normalizeNdc, NDC_INVALID } from "./normalize-ndc.js";
+// Re-exported from `@pharmax/drug-identity`, where the normalizer now
+// lives so `@pharmax/orders` can share it without a domain -> domain
+// edge. Kept on this barrel because scan's existing consumers import
+// it from here.
+export { normalizeNdc, NDC_INVALID } from "@pharmax/drug-identity";
 export { parseGs1, GS1_PARSE_FAILED, type ParsedGs1, type ParsedGs1Fields } from "./parse-gs1.js";
 export {
   parseScannedValue,

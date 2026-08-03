@@ -768,6 +768,7 @@ model Organization {
   patients                       Patient[]
   providers                      Provider[]
   prescriptions                  Prescription[]
+  rxNumberSequences              RxNumberSequence[]
   orders                         Order[]
   orderLines                     OrderLine[]
   orderCancellations             OrderCancellation[]
@@ -899,6 +900,7 @@ model Clinic {
   clinicCreditEntries            ClinicCreditEntry[]
   patients                       Patient[]
   prescriptions                  Prescription[]
+  rxNumberSequences              RxNumberSequence[]
   orders                         Order[]
   orderLines                     OrderLine[]
   controlledSubstanceDispensings ControlledSubstanceDispensing[]
@@ -3105,6 +3107,39 @@ model Prescription {
   // "every CS prescription in this org, by schedule, over a period".
   @@index([organizationId, controlledSubstanceSchedule, originalDateWritten])
   @@map("prescription")
+}
+
+// Prescription-number allocator, one counter row per (organization,
+// clinic).
+//
+// An Rx number goes on the vial label, into the PDMP submission, and
+// in front of a DEA inspector who expects a dense, monotonic series.
+// It cannot be random, cannot be operator-typed, and cannot be
+// `MAX(rxNumber) + 1` — concurrent transcriptions would read the same
+// maximum. `CreatePrescription` increments this row inside its
+// transaction; the resulting row lock serializes same-clinic
+// transcriptions and lets different clinics proceed in parallel.
+//
+// Granularity mirrors `prescription(organizationId, clinicId,
+// rxNumber)` exactly. Anything coarser over-serializes; anything finer
+// permits duplicates.
+//
+// `lastValue` is the number most recently HANDED OUT (starts at 0, so
+// the first allocation is 1). A rolled-back transaction consumes its
+// number — a gap in the series is explainable, a reused number is not.
+model RxNumberSequence {
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  clinicId       String       @db.Uuid
+  clinic         Clinic       @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  lastValue Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([organizationId, clinicId])
+  @@map("rx_number_sequence")
 }
 
 // A pharmacy order. The workflow state machine for an order is
