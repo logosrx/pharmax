@@ -57,6 +57,12 @@ const NAV: ReadonlyArray<GroupSpec> = [
     items: [
       { href: "/ops", label: "Dashboard", icon: "dashboard", requires: null },
       {
+        href: "/ops/prescriptions/new",
+        label: "Transcribe Rx",
+        icon: "pill",
+        requires: PERMISSIONS.PRESCRIPTIONS_CREATE,
+      },
+      {
         href: "/ops/typing",
         label: "Typing",
         icon: "typing",

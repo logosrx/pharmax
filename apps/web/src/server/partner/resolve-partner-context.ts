@@ -30,7 +30,7 @@ import "server-only";
 import { getApiKeyQuota, resolveApiKey, type ResolvedApiKey } from "@pharmax/partner-api";
 import { createRateLimiterFromEnv } from "@pharmax/composition";
 import { prisma } from "@pharmax/database";
-import { ids } from "@pharmax/platform-core";
+import { errors, ids } from "@pharmax/platform-core";
 import { buildTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 import { NextResponse } from "next/server";
 
@@ -163,6 +163,67 @@ export function requirePartnerScope(context: PartnerContext, scope: string): Res
     status: 403,
     code: "SCOPE_DENIED",
     message: `This API key does not carry the "${scope}" scope.`,
+  });
+}
+
+/**
+ * Message substituted for a 5xx. `InternalError` messages name the
+ * subsystem that failed and sometimes quote the underlying driver
+ * error; the class contract forbids echoing them to a client.
+ */
+const INTERNAL_ERROR_MESSAGE =
+  "Pharmax could not complete this request. This is a fault on our side, not a defect in " +
+  "your payload. Retrying with the same Idempotency-Key is safe: it either performs the " +
+  "operation or returns the original result.";
+
+/**
+ * Map a command rejection onto the v1 error contract. Returns the
+ * response to send, or `null` when the throw was not a `PharmaxError`
+ * and the caller should rethrow it.
+ *
+ * The status comes from the error CLASS, never from the code string.
+ * Every class in `@pharmax/platform-core` already declares the status
+ * it means (`ValidationError` 400, `AuthorizationError` 403,
+ * `NotFoundError` 404, `ConflictError` 409, `InvariantViolationError`
+ * 422, `InternalError` 500), so honouring `httpStatus` is what keeps
+ * one taxonomy instead of a per-route opinion.
+ *
+ * Flattening everything to 422 — which every v1 mutation route did
+ * until this helper existed — got two things wrong that matter:
+ *
+ *   - It told partners a TRANSIENT failure was a defective request.
+ *     `RX_NUMBER_COLLISION` and an optimistic-lock miss are
+ *     `ConflictError`s that the caller should retry, and no client
+ *     library retries a 422.
+ *   - It reported OUR outages as their fault.
+ *     `RX_NUMBER_ALLOCATION_FAILED`, `CREATE_ORDER_NO_POLICY` and
+ *     `ORDER_INTAKE_BUCKET_NOT_CONFIGURED` are `InternalError`s. As
+ *     422s they were invisible to error-rate alerting, so the one
+ *     failure class that should page was the one class that could
+ *     not.
+ *
+ * Hence the split here: `category === "unexpected"` is logged at
+ * ERROR (which bridges to Sentry) and answered with a generic
+ * message; expected rejections pass their own message through, since
+ * those are written for the caller and are the whole point of a
+ * typed code.
+ */
+export function partnerCommandError(cause: unknown): Response | null {
+  if (!(cause instanceof errors.PharmaxError)) return null;
+
+  if (cause.category === "unexpected") {
+    logger.error("partner_api.command_internal_error", { code: cause.code, error: cause });
+    return partnerJsonError({
+      status: cause.httpStatus,
+      code: cause.code,
+      message: INTERNAL_ERROR_MESSAGE,
+    });
+  }
+
+  return partnerJsonError({
+    status: cause.httpStatus,
+    code: cause.code,
+    message: cause.message,
   });
 }
 

@@ -100,6 +100,8 @@ describe("DELETE /api/v1/webhook-subscriptions/{id}", () => {
   });
 
   it("404s the command's not-found error", async () => {
+    // Previously matched on the code string; now it falls out of the
+    // NotFoundError class, so the status cannot drift from the throw.
     executeCommandMock.mockRejectedValue(
       new errors.NotFoundError({
         code: "REVOKE_WEBHOOK_SUBSCRIPTION_NOT_FOUND",
@@ -110,12 +112,12 @@ describe("DELETE /api/v1/webhook-subscriptions/{id}", () => {
     expect(res.status).toBe(404);
   });
 
-  it("422s any other command error with its code", async () => {
+  it("409s a conflict with its code", async () => {
     executeCommandMock.mockRejectedValue(
       new errors.ConflictError({ code: "SOMETHING_ELSE", message: "nope" })
     );
     const res = await call({ subscriptionId: SUB_ID, idempotencyKey: "revoke-attempt-1" });
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.error.code).toBe("SOMETHING_ELSE");
   });
