@@ -51,6 +51,8 @@ docs/soc2/
 ├── controls-inventory.md                    # control catalog with status
 ├── code-evidence-map.md                     # engineering crosswalk: control → code + test
 ├── evidence-inventory.md                    # artifact catalog with source
+├── placeholder-inventory.md                 # every unresolved marker, its owner, its gate
+├── evidence-integrity-findings.md           # durability / immutability gaps, as tasks
 ├── playbooks/                               # operator instructions
 │   ├── quarterly-access-review.md
 │   ├── change-management-review.md
@@ -220,5 +222,9 @@ When a fact contradicts across files, the source of truth is:
 - For control implementation: the code path / ADR.
 - For control status: `controls-inventory.md`.
 - For control evidence: `evidence-inventory.md`.
+- For what is still unresolved in the policy bundle:
+  `placeholder-inventory.md`.
+- For whether the evidence is durable and immutable:
+  `evidence-integrity-findings.md`.
 - For policy text: `docs/policies/<name>.md` (the legal-reviewed one),
   not `docs/soc2/policies/<name>.md` (the framework stub).

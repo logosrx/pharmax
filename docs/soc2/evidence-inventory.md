@@ -23,7 +23,7 @@ evidence/
 │   ├── audit-chain-summary.csv
 │   ├── user-roster.csv
 │   ├── access-grants.csv
-│   ├── clerk-session-log.csv
+│   ├── clerk-session-log.csv           # retired — see EI-6
 │   ├── change-control-summary.csv
 │   ├── vendor-inventory.csv
 │   ├── incident-log.csv                # or "no-incidents.txt"
@@ -52,25 +52,27 @@ this repo are textual only.
 
 These are evidenced by query or by inspecting live configuration.
 
-| Artifact                    | Source                                                | Controls satisfied                 | Notes                                                           |
-| --------------------------- | ----------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------- |
-| `audit_log` table           | Database                                              | CC2.1-1, CC6.2-1, CC7.2-2, PI1.4-2 | Tamper-evident per ADR-0006. Query with `organizationId` scope. |
-| `audit_chain_state` table   | Database                                              | CC7.2-2                            | Per-tenant chain head pointer.                                  |
-| `command_log` table         | Database                                              | PI1.1-1, PI1.3-1                   | Idempotency-keyed; every command attempt.                       |
-| `event_outbox` table        | Database                                              | PI1.4-1                            | At-least-once delivery state.                                   |
-| `clerk_webhook_event` table | Database                                              | CC6.1-1, CC6.5-1                   | Svix-verified lifecycle events.                                 |
-| `user_role` table           | Database                                              | CC6.1-2, CC6.2-1                   | Grant assignments per user.                                     |
-| `pg_policies` snapshot      | `SELECT * FROM pg_policies WHERE schemaname='public'` | CC6.1-3                            | RLS policy state.                                               |
-| `workflow_policy` rows      | Database                                              | CC8.1-3                            | Versioned workflow policy with lifecycle.                       |
-| ADR set                     | `docs/adr/` at period-end commit                      | CC8.1-4, CC5.1-1                   | One ADR per material decision.                                  |
-| CI workflow files           | `.github/workflows/{ci,security}.yml`                 | CC5.2-1, CC7.1-2, CC8.1-1          | Branch protection cross-reference.                              |
-| Branch-protection config    | `docs/security/branch-protection.{md,json}`           | CC8.1-1                            | Mirrors GitHub branch-protection state.                         |
-| CODEOWNERS                  | `.github/CODEOWNERS`                                  | CC1.5-1, CC8.1-1                   | Security-sensitive paths gated.                                 |
-| Terraform state             | `infra/terraform/environments/*/`                     | A1.2-1, CC6.6-1                    | RDS multi-AZ, ACM, security groups, WAF.                        |
-| KMS key inventory           | AWS console / `aws kms list-keys`                     | CC6.7-1                            | Per-tenant KEK aliases.                                         |
-| Schema-linter R6 / R7       | `pnpm run check:schema`                               | CC6.7-1, CC6.7-2, C1.1-2, C1.1-3   | CI-enforced.                                                    |
-| Migration-linter            | `pnpm run check:migrations`                           | CC6.1-3                            | CI-enforced; RLS coverage on every new tenant table.            |
-| Command-file linter         | `pnpm run check:commands`                             | PI1.1-1                            | CI-enforced; command shape pinned.                              |
+| Artifact                    | Source                                                | Controls satisfied                 | Notes                                                                                                  |
+| --------------------------- | ----------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `audit_log` table           | Database                                              | CC2.1-1, CC6.2-1, CC7.2-2, PI1.4-2 | Tamper-evident per ADR-0006. Query with `organizationId` scope.                                        |
+| `audit_chain_state` table   | Database                                              | CC7.2-2                            | Per-tenant chain head pointer.                                                                         |
+| `command_log` table         | Database                                              | PI1.1-1, PI1.3-1                   | Idempotency-keyed; every command attempt.                                                              |
+| `event_outbox` table        | Database                                              | PI1.4-1                            | At-least-once delivery state.                                                                          |
+| `clerk_webhook_event` table | Database                                              | — (retired)                        | Historical only. No writer since ADR-0030 removed Clerk; do not cite it as current evidence. See EI-6. |
+| `login_attempt` table       | Database                                              | CC6.1-1, CC6.1-4                   | Sign-in outcomes including `MFA_REQUIRED` and lockout.                                                 |
+| `user_session` table        | Database                                              | CC6.1-1, CC6.5-1                   | Session issue and revocation, with revocation reason.                                                  |
+| `user_role` table           | Database                                              | CC6.1-2, CC6.2-1                   | Grant assignments per user.                                                                            |
+| `pg_policies` snapshot      | `SELECT * FROM pg_policies WHERE schemaname='public'` | CC6.1-3                            | RLS policy state.                                                                                      |
+| `workflow_policy` rows      | Database                                              | CC8.1-3                            | Versioned workflow policy with lifecycle.                                                              |
+| ADR set                     | `docs/adr/` at period-end commit                      | CC8.1-4, CC5.1-1                   | One ADR per material decision.                                                                         |
+| CI workflow files           | `.github/workflows/{ci,security}.yml`                 | CC5.2-1, CC7.1-2, CC8.1-1          | Branch protection cross-reference.                                                                     |
+| Branch-protection config    | `docs/security/branch-protection.{md,json}`           | CC8.1-1                            | Mirrors GitHub branch-protection state.                                                                |
+| CODEOWNERS                  | `.github/CODEOWNERS`                                  | CC1.5-1, CC8.1-1                   | Security-sensitive paths gated.                                                                        |
+| Terraform state             | `infra/terraform/environments/*/`                     | A1.2-1, CC6.6-1                    | RDS multi-AZ, ACM, security groups, WAF.                                                               |
+| KMS key inventory           | AWS console / `aws kms list-keys`                     | CC6.7-1                            | Per-tenant KEK aliases.                                                                                |
+| Schema-linter R6 / R7       | `pnpm run check:schema`                               | CC6.7-1, CC6.7-2, C1.1-2, C1.1-3   | CI-enforced.                                                                                           |
+| Migration-linter            | `pnpm run check:migrations`                           | CC6.1-3                            | CI-enforced; RLS coverage on every new tenant table.                                                   |
+| Command-file linter         | `pnpm run check:commands`                             | PI1.1-1                            | CI-enforced; command shape pinned.                                                                     |
 
 ### Daily artifacts
 
@@ -89,7 +91,7 @@ Produced by `scripts/soc2/run-quarterly-evidence-pack.ts` into
 | ----------------------------- | -------------------------------------------------------- | ---------------------------------------------------- | ------------------ | ------------------ |
 | User roster                   | `scripts/soc2/export-user-roster.ts`                     | `evidence/<YYYY-Q#>/user-roster.csv`                 | CC6.1-1, CC6.5-1   | Security Officer   |
 | Access grants                 | `scripts/soc2/export-access-grants.ts`                   | `evidence/<YYYY-Q#>/access-grants.csv`               | CC6.1-2, CC6.2-1   | Security Officer   |
-| Clerk session log             | `scripts/soc2/export-clerk-session-log.ts`               | `evidence/<YYYY-Q#>/clerk-session-log.csv`           | CC6.1-1, CC6.5-1   | Security Officer   |
+| Clerk session log             | `scripts/soc2/export-clerk-session-log.ts`               | `evidence/<YYYY-Q#>/clerk-session-log.csv`           | — (retired)        | Security Officer   |
 | Change control summary        | `scripts/soc2/export-change-control-summary.ts`          | `evidence/<YYYY-Q#>/change-control-summary.csv`      | CC8.1-1, CC8.1-2   | Engineering Lead   |
 | Vendor inventory              | `scripts/soc2/export-vendor-inventory.ts`                | `evidence/<YYYY-Q#>/vendor-inventory.csv`            | CC9.2-1, P6.1-1    | Compliance Officer |
 | Audit chain summary           | `scripts/soc2/export-audit-chain-summary.ts`             | `evidence/<YYYY-Q#>/audit-chain-summary.csv`         | CC7.2-2, PI1.4-2   | Security Officer   |

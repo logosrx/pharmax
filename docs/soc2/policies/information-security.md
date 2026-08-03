@@ -57,7 +57,8 @@ per [`../../governance/risk-assessment-procedure.md`](../../governance/risk-asse
 
 ### 3.3 Defense in depth
 
-Pharmax operates layered controls: authentication (Clerk), authorization
+Pharmax operates layered controls: authentication (`@pharmax/auth`,
+ADR-0030), authorization
 (`@pharmax/rbac`), tenancy isolation (RLS), envelope encryption per
 PHI field, hash-chained audit log, and ongoing monitoring (Sentry,
 CloudWatch, nightly digest).

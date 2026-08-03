@@ -29,12 +29,20 @@ contractors) that touch Pharmax production systems.
 
 ### 3.1 Identity establishment (authentication)
 
-- Identity is established through Clerk; the bridge to Pharmax is
-  `User.clerkUserId` (ADR-0015).
-- MFA is required for every operator (ADR-0025 §3 sets the floor for
-  high-privilege roles; the broader workforce posture is `<TBD by SOC
-2 auditor: confirm MFA-everywhere wording vs role-conditional
-wording>`).
+- Identity is established by the in-house identity engine (ADR-0030),
+  which superseded the Clerk split of ADR-0015. `User.clerkUserId`
+  remains in the schema as a nullable legacy column with no live writer.
+- MFA is required for **high-privilege roles**, not yet for every
+  operator. ADR-0030 carries forward the floor from ADR-0025 §3; the
+  role set is `MFA_REQUIRED_ROLE_CODES` at
+  `packages/auth/src/configure.ts:68` and today contains `OrgAdmin` and
+  `BillingManager` only. It is enforced in the sign-in path at
+  `packages/auth/src/commands/sign-in.ts:104`, where a second factor is
+  demanded if the user holds a floor role **or** has voluntarily
+  enrolled. An operator outside the floor set who has not enrolled signs
+  in with a password alone. Whether the policy should read
+  MFA-everywhere or role-conditional is `<TBD by SOC 2 auditor: confirm
+wording; the implemented posture is role-conditional (gate: PRE-T1)>`.
 - Passwordless / SSO supplements the default password+MFA mechanism
   where the organization's IdP supports it.
 
@@ -66,18 +74,30 @@ inside the command bus. Canonical rules:
 - Fill tech who completes fill cannot approve final verification.
 
 `<TBD by SOC 2 auditor: confirm any additional SoD rules expected by
-the auditor for pharmacy operations.>`
+the auditor for pharmacy operations (gate: PRE-T1).>`
 
 ### 3.5 Provisioning and deprovisioning
 
-- New users are pre-provisioned via `bootstrap-org` (`User.clerkUserId`
-  set at provisioning time). First Clerk sign-in completes the link.
-- Termination triggers a Clerk webhook `user.deleted`, which the
-  webhook handler (ADR-0025 §1) translates into `User.status =
-INACTIVE` and writes an `audit_log` row.
+- New users are pre-provisioned via `bootstrap-org` and complete
+  enrollment through the invite flow (`AcceptInvite`) under ADR-0030.
+- Termination is actioned by an administrator dispatching
+  `DeactivateUser`
+  (`packages/auth/src/commands/deactivate-user.ts`), which flips
+  `User.status` to `SUSPENDED` or `TERMINATED` **and** revokes every
+  active session in the same transaction, so the next request from a
+  stale session is rejected at `resolveSession`. The command writes
+  `command_log` and `audit_log` like any other.
+- This step is **manual**. The automated Clerk `user.deleted` webhook
+  that previously translated a termination into a status flip was
+  removed with Clerk (ADR-0030) and nothing replaced it. There is no
+  identity-provider or HR-system trigger, so the system cannot detect a
+  termination that nobody actioned. CC6.5-1 is recorded as `Partial` for
+  this reason; see `EI-6` in
+  [`../evidence-integrity-findings.md`](../evidence-integrity-findings.md).
 - The deprovisioning SLA is `<TBD by legal counsel: 24 hours
 from termination is the current engineering target; confirm against
-employment-law obligations and any customer contractual SLAs>`.
+employment-law obligations and any customer contractual SLAs (gate:
+PRE-T1)>`.
 
 ### 3.6 Break-glass
 
@@ -109,7 +129,7 @@ playbook. Every active organization is reviewed once per quarter.
 
 `<TBD by legal counsel: sanctions wording for misuse of access,
 unauthorized elevation, or failure to comply with the quarterly
-review.>`
+review (gate: PRE-T1).>`
 
 ## 6. Review cadence
 
@@ -120,9 +140,10 @@ role template, new SoD rule, new MFA factor required).
 
 - ADR-0004 (RLS).
 - ADR-0011 (SoD).
-- ADR-0015 (Clerk + Pharmax authorization split).
-- ADR-0025 (Clerk hardening).
-- `packages/rbac/`, `packages/tenancy/`.
+- ADR-0030 (in-house identity engine; supersedes ADR-0015 and ADR-0025,
+  both retained for lineage).
+- ADR-0036 (SSO and WebAuthn second factor).
+- `packages/auth/`, `packages/rbac/`, `packages/tenancy/`.
 
 ## 8. Revision history
 
