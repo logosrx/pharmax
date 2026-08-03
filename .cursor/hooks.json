@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "sh scripts/wip-report.sh",
+        "timeout": 10
+      }
+    ]
+  }
+}
