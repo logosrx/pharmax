@@ -27,8 +27,10 @@
 export {
   dispositionFor,
   fingerprintOf,
+  gapRemediationForAvailability,
   isAtLeastAsSevere,
   leastSevere,
+  screeningGapSeverity,
   severityRank,
   suggestedPv1RejectionReason,
   toFhirDetectedIssueSeverity,
@@ -40,6 +42,7 @@ export {
   SCREENING_DISPOSITIONS,
   SCREENING_FINDING_CODES,
   SCREENING_FINDING_KINDS,
+  SCREENING_GAP_REMEDIATIONS,
   SCREENING_INPUT_AVAILABILITIES,
   SCREENING_SEVERITIES,
   SCREENING_TRIGGER_SOURCES,
@@ -53,6 +56,7 @@ export type {
   ScreeningFinding,
   ScreeningFindingCode,
   ScreeningFindingKind,
+  ScreeningGapRemediation,
   ScreeningInputAvailability,
   ScreeningInputAxis,
   ScreeningSeverity,
@@ -61,6 +65,8 @@ export type {
   SuggestedPv1RejectionReason,
 } from "./findings.js";
 
+export { gapRemediationForCoverage, DRUG_KNOWLEDGE_COVERAGES } from "./knowledge-source.js";
+
 export type {
   AllergenCode,
   AllergenKnowledge,
@@ -68,6 +74,7 @@ export type {
   DoseRange,
   DrugCode,
   DrugKnowledge,
+  DrugKnowledgeCoverage,
   DrugKnowledgeSource,
   IngredientCode,
   InteractionFact,

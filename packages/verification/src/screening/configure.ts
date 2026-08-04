@@ -22,16 +22,23 @@
 // configured, as `@pharmax/shipping` does for an unregistered
 // carrier. It is the wrong choice here, because the empty source is
 // not silent. An unknown drug makes `screenPrescription` return
-// `SCR_KNOWLEDGE_UNAVAILABLE` — a MODERATE, DEFINITE
-// `SCREENING_GAP` finding whose disposition is
-// REQUIRES_ACKNOWLEDGEMENT — so an unconfigured deployment does not
-// quietly approve unscreened prescriptions. It tells the pharmacist,
-// on every single order, that no screening could be performed, and
-// ApprovePV1 will not let the order through until they have recorded
-// that they know. "Could not screen" reaching the pharmacist is
-// strictly better than PV1 refusing to function; refusing would be
-// interpreted as a bug and routed around, and the failure mode of
-// routing around it is worse than the failure mode of an honest gap.
+// `SCR_KNOWLEDGE_UNAVAILABLE`, a `SCREENING_GAP` finding persisted on
+// every order — so an unconfigured deployment does not quietly approve
+// unscreened prescriptions, and its `order_screening_finding` rows say
+// on their face that no screening could be performed. "Could not
+// screen" reaching the record is strictly better than PV1 refusing to
+// function; refusing would be interpreted as a bug and routed around,
+// and the failure mode of routing around it is worse than the failure
+// mode of an honest gap.
+//
+// WHAT THE EMPTY SOURCE DOES NOT DO IS DEMAND A CLICK PER ORDER. It
+// declares `coverage: "NOT_PROVISIONED"`, which grades that gap
+// MINOR/INFORMATIONAL: no pharmacist can license a drug database from
+// the PV1 queue, and an alert on 100% of orders that nobody can act on
+// trains the reflex that dismisses the alert that mattered. The
+// systemic deficiency is stated where it can be acted on — the boot
+// warning in the entry point, and `gapCount` in reporting — rather
+// than charged to every prescription. See `screeningGapSeverity`.
 //
 // What the default must never become is an empty `DrugKnowledge` for
 // unknown codes: "I have no record of this drug" and "this drug has

@@ -89,7 +89,12 @@ const CANDIDATE_DRUG_NAME = "PLACEHOLDER-BRAND-NAME";
  * that fails loudly rather than derived from the same function under
  * test.
  */
-const GAP_FINGERPRINT = `SCR_KNOWLEDGE_UNAVAILABLE|MODERATE/DEFINITE|${CANDIDATE_NDC}|scope=CANDIDATE_DRUG`;
+/**
+ * The candidate NDC unrecognised by an UNPROVISIONED source — i.e. the
+ * shipped default, where no licensed database is wired and every lookup
+ * for every drug fails. MINOR, so recorded without interrupting.
+ */
+const GAP_FINGERPRINT = `SCR_KNOWLEDGE_UNAVAILABLE|MINOR/DEFINITE|${CANDIDATE_NDC}|remediation=PLATFORM_CAPABILITY;scope=CANDIDATE_DRUG`;
 const INTERACTION_FINGERPRINT =
   "SCR_DRUG_INTERACTION|MAJOR/PROBABLE|INGREDIENT_ALFA+INGREDIENT_BRAVO";
 
@@ -97,16 +102,24 @@ const INTERACTION_FINGERPRINT =
  * The two axes this platform cannot supply at all: there is no
  * allergy capture, and the sig is encrypted free text with no
  * structured dose beside it. `run-screen.ts` declares both
- * UNAVAILABLE, so every screen reports them — including the screens
- * below where the knowledge source knows the drugs perfectly well.
+ * NOT_SUPPORTED_BY_PLATFORM, so every screen RECORDS them — including
+ * the screens below where the knowledge source knows the drugs
+ * perfectly well.
+ *
+ * MINOR, therefore INFORMATIONAL, and that grading is the point. No
+ * patient can ever have these inputs and no pharmacist can supply
+ * them, so an acknowledgement per order would collect a signature per
+ * prescription against a product backlog. The gaps are still written to
+ * `order_screening_finding` and still counted in `gapCount`; what they
+ * do not do is gate an approval.
  *
  * Neither fingerprint carries a drug code: the fact is about the
- * platform, not the prescription, so one acknowledgement settles it
- * for the whole order however many lines it has.
+ * platform, not the prescription.
  */
 const ALLERGY_INPUT_GAP_FINGERPRINT =
-  "SCR_ALLERGY_INPUT_UNAVAILABLE|MODERATE/DEFINITE|DRUG_ALLERGY";
-const DOSE_INPUT_GAP_FINGERPRINT = "SCR_DOSE_INPUT_UNAVAILABLE|MODERATE/DEFINITE|DOSE_RANGE";
+  "SCR_ALLERGY_INPUT_UNAVAILABLE|MINOR/DEFINITE|DRUG_ALLERGY|remediation=PLATFORM_CAPABILITY";
+const DOSE_INPUT_GAP_FINGERPRINT =
+  "SCR_DOSE_INPUT_UNAVAILABLE|MINOR/DEFINITE|DOSE_RANGE|remediation=PLATFORM_CAPABILITY";
 const UNSUPPLIED_AXIS_FINGERPRINTS: ReadonlyArray<string> = [
   ALLERGY_INPUT_GAP_FINGERPRINT,
   DOSE_INPUT_GAP_FINGERPRINT,
@@ -505,12 +518,11 @@ function outstandingFingerprints(fake: FlowFake): ReadonlyArray<string> {
 // ---------------------------------------------------------------------------
 
 describe("PV1 screening — with no drug knowledge configured", () => {
-  it("reports a gap rather than a clear screen, and the gap blocks approval until acknowledged", async () => {
+  it("records a gap rather than a clear screen", async () => {
     // The single most important behaviour in this feature. Pharmax
     // ships no drug data, so out of the box the engine can answer
-    // none of its questions. It must say that — loudly enough to stop
-    // an approval — rather than return "no findings", which a
-    // pharmacist reads as "clinically clear".
+    // none of its questions. It must SAY that, rather than return "no
+    // findings", which a pharmacist reads as "clinically clear".
     const fake = buildFlowFake();
     configureBus(fake.client);
     configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
@@ -521,10 +533,9 @@ describe("PV1 screening — with no drug knowledge configured", () => {
     expect(persisted).toHaveLength(1);
     const rows = (persisted[0]!.args as { data: Array<Record<string, unknown>> }).data;
     // Three separate things could not be checked, and each is its own
-    // fact with its own owner: the knowledge source does not know
-    // this NDC (a licensed-data problem), and this platform can
-    // supply neither an allergy list nor a structured dose (two
-    // product gaps).
+    // fact with its own owner: no licensed database is wired at all,
+    // and this platform can supply neither an allergy list nor a
+    // structured dose.
     expect(rows.map((r) => r["fingerprint"])).toEqual(
       expect.arrayContaining([
         GAP_FINGERPRINT,
@@ -533,34 +544,53 @@ describe("PV1 screening — with no drug knowledge configured", () => {
       ])
     );
     for (const row of rows) {
-      expect(row).toMatchObject({
-        kind: "SCREENING_GAP",
-        disposition: "REQUIRES_ACKNOWLEDGEMENT",
-        phase: "PV1_START",
-      });
+      expect(row).toMatchObject({ kind: "SCREENING_GAP", phase: "PV1_START" });
     }
-
-    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
-      await expect(
-        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
-      ).rejects.toMatchObject({
-        code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
-        httpStatus: 422,
-        metadata: expect.objectContaining({
-          outstandingFindingCodes: expect.arrayContaining([
-            "SCR_KNOWLEDGE_UNAVAILABLE",
-            "SCR_ALLERGY_INPUT_UNAVAILABLE",
-            "SCR_DOSE_INPUT_UNAVAILABLE",
-          ]),
-        }),
-      });
-    });
-
-    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(0);
-    expect(callsOf(fake.calls, "order", "update")).toHaveLength(1); // StartPV1's only
   });
 
-  it("reports the two axes this platform cannot supply even when the drug IS known", async () => {
+  it("does not charge the pharmacist an acknowledgement for a deficiency they cannot fix", async () => {
+    // THE ALERT-FATIGUE INVARIANT, at the level a pharmacist meets it.
+    //
+    // In a default-configured deployment all three gaps fire on EVERY
+    // order: nobody has licensed a drug database, nobody can record an
+    // allergy, and no sig carries a structured dose. None of those is
+    // closable from a PV1 queue. Demanding three acknowledgements per
+    // prescription would train the reflex that dismisses the first
+    // genuine MAJOR interaction, and file a documented sign-off
+    // implying a review that could not have happened — worse than no
+    // screening, because it manufactures the evidence too.
+    //
+    // So the approval passes with no clicks, and the gaps are on record.
+    const fake = buildFlowFake();
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    await startReview();
+
+    expect(outstandingFingerprints(fake)).toEqual([]);
+
+    const approval = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
+      executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
+    );
+    expect(approval.currentStatus).toBe("PV1_APPROVED_READY_FOR_FILL");
+    // Zero acknowledgement commands were needed to get here.
+    expect(callsOf(fake.calls, "orderScreeningAcknowledgement", "create")).toHaveLength(0);
+
+    // And the gaps are still recorded against the approval itself, so
+    // "was this order screened?" is answerable from the row set.
+    const approvePhaseRows = callsOf(fake.calls, "orderScreeningFinding", "createMany")
+      .flatMap((c) => (c.args as { data: Array<Record<string, unknown>> }).data)
+      .filter((r) => r["phase"] === "PV1_APPROVE");
+    expect(approvePhaseRows.map((r) => r["code"])).toEqual(
+      expect.arrayContaining([
+        "SCR_KNOWLEDGE_UNAVAILABLE",
+        "SCR_ALLERGY_INPUT_UNAVAILABLE",
+        "SCR_DOSE_INPUT_UNAVAILABLE",
+      ])
+    );
+  });
+
+  it("records the two axes this platform cannot supply even when the drug IS known", async () => {
     // The regression that motivated the input-availability
     // declaration. Wiring a licensed knowledge source silences
     // SCR_KNOWLEDGE_UNAVAILABLE and makes interaction and duplication
@@ -569,6 +599,10 @@ describe("PV1 screening — with no drug knowledge configured", () => {
     // list that does not exist. Allergy is the only axis that can
     // produce a hard stop, so it was the axis most capable of saving
     // someone that was silently not running.
+    //
+    // Recording it is the invariant. Interrupting for it is not: a
+    // licensed database arriving does not give anyone the ability to
+    // record an allergy, so these two are as unfixable as before.
     const fake = buildFlowFake({ screening: candidateOnly });
     configureBus(fake.client);
     configureClinicalScreening({ knowledgeSource: knowledgeWithAcknowledgeTierInteraction() });
@@ -587,8 +621,37 @@ describe("PV1 screening — with no drug knowledge configured", () => {
     await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
       await expect(
         executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
-      ).rejects.toMatchObject({ code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED" });
+      ).resolves.toMatchObject({ currentStatus: "PV1_APPROVED_READY_FOR_FILL" });
     });
+  });
+
+  it("still refuses when a REAL finding is outstanding, gaps notwithstanding", async () => {
+    // The other half of the invariant, and the one that makes the
+    // downgrade safe rather than a blanket weakening: the acknowledge
+    // tier still works. A genuine MAJOR interaction gates the approval
+    // exactly as before, and it is now the ONLY thing the pharmacist is
+    // asked about — which is the entire point of clearing the noise.
+    const fake = buildFlowFake({ screening: candidateAndInteractingProfileDrug });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithAcknowledgeTierInteraction() });
+
+    await startReview();
+
+    expect(outstandingFingerprints(fake)).toEqual([INTERACTION_FINGERPRINT]);
+
+    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
+      await expect(
+        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
+      ).rejects.toMatchObject({
+        code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
+        httpStatus: 422,
+        metadata: expect.objectContaining({
+          outstandingFindingCodes: ["SCR_DRUG_INTERACTION"],
+        }),
+      });
+    });
+
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(0);
   });
 
   it("the gap is surfaced as a gap count on the screening event, not buried in a finding total", async () => {
@@ -606,13 +669,18 @@ describe("PV1 screening — with no drug knowledge configured", () => {
     const screeningRow = rows.find((r) => r["eventType"] === "order.pv1.screening.recorded.v1");
     expect(screeningRow?.["payload"]).toMatchObject({
       outcome: "ADVISORY",
-      // One unrecognised drug plus the two axes this platform cannot
-      // supply. `gapCount` equals `findingCount` here, which is the
-      // honest summary of an order on which nothing was screened.
+      // One unprovisioned knowledge source plus the two axes this
+      // platform cannot supply. `gapCount` equals `findingCount` here,
+      // which is the honest summary of an order on which nothing was
+      // screened — and it stays visible in reporting even though none
+      // of the three interrupted the pharmacist. THIS is where the
+      // systemic deficiency has to be legible, because this is the
+      // number a manager can act on.
       findingCount: 3,
       gapCount: 3,
       hardStopCount: 0,
-      requiresAcknowledgementCount: 3,
+      requiresAcknowledgementCount: 0,
+      informationalCount: 3,
       phase: "PV1_START",
       minimumReportedSeverity: "MINOR",
       workflowPolicyVersion: 1,
@@ -643,37 +711,48 @@ describe("PV1 screening — with no drug knowledge configured", () => {
     expect(payload["gapCount"]).toBe(2);
   });
 
-  it("approves once the pharmacist has acknowledged that the screen could not run", async () => {
-    // Approving an unscreened prescription is allowed — refusing
-    // would make our missing reference data the patient's problem —
-    // but only against a recorded acknowledgement that says so.
+  it("still demands the click for a drug an otherwise-working database does not know", async () => {
+    // The contrast that keeps the downgrade honest. A PROVISIONED
+    // source that does not recognise ONE code is a fixable hole — check
+    // the NDC, chase a reference-data update — so the pharmacist is
+    // still asked, and the approval still refuses until they answer.
+    //
+    // Same finding code as the unprovisioned case, graded differently
+    // because a different person can close it.
     const fake = buildFlowFake();
     configureBus(fake.client);
-    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+    configureClinicalScreening({
+      // Knows a drug, just not the one on this order.
+      knowledgeSource: createInMemoryDrugKnowledgeSource({
+        drugs: {
+          SOME_OTHER_NDC: {
+            ingredientCodes: ["INGREDIENT_ALFA"],
+            therapeuticClassCodes: [],
+            crossSensitivityClassCodes: [],
+            doseRange: null,
+          },
+        },
+      }),
+    });
 
     await startReview();
-    await acknowledge(PHARMACIST_A, outstandingFingerprints(fake), "ack");
-    const approval = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
-      executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
-    );
 
-    expect(approval.currentStatus).toBe("PV1_APPROVED_READY_FOR_FILL");
-    // And the approval recorded WHAT it was approved against — with
-    // each gap still graded REQUIRES_ACKNOWLEDGEMENT rather than
-    // softened to informational because it had been acknowledged.
-    const approvePhaseRows = callsOf(fake.calls, "orderScreeningFinding", "createMany")
-      .flatMap((c) => (c.args as { data: Array<Record<string, unknown>> }).data)
-      .filter((r) => r["phase"] === "PV1_APPROVE");
-    expect(approvePhaseRows.map((r) => r["code"])).toEqual(
-      expect.arrayContaining([
-        "SCR_KNOWLEDGE_UNAVAILABLE",
-        "SCR_ALLERGY_INPUT_UNAVAILABLE",
-        "SCR_DOSE_INPUT_UNAVAILABLE",
-      ])
+    const outstanding = outstandingFingerprints(fake);
+    expect(outstanding).toEqual([
+      `SCR_KNOWLEDGE_UNAVAILABLE|MODERATE/DEFINITE|${CANDIDATE_NDC}|remediation=SUBJECT_DATA;scope=CANDIDATE_DRUG`,
+    ]);
+
+    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
+      await expect(
+        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED" });
+    });
+
+    await acknowledge(PHARMACIST_A, outstanding, "ack");
+    const approval = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
+      executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve-2" })
     );
-    for (const row of approvePhaseRows) {
-      expect(row["disposition"]).toBe("REQUIRES_ACKNOWLEDGEMENT");
-    }
+    expect(approval.currentStatus).toBe("PV1_APPROVED_READY_FOR_FILL");
   });
 });
 
@@ -747,8 +826,7 @@ describe("PV1 screening — acknowledgement is per pharmacist", () => {
 
     await startReview();
 
-    // B works through every outstanding finding — the interaction and
-    // the two axes this platform cannot supply.
+    // B works through every outstanding finding.
     await acknowledge(PHARMACIST_B, outstandingFingerprints(fake), "ack-by-b");
 
     await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
@@ -758,10 +836,7 @@ describe("PV1 screening — acknowledgement is per pharmacist", () => {
         code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
         metadata: expect.objectContaining({
           pharmacistUserId: PHARMACIST_A,
-          outstandingFingerprints: expect.arrayContaining([
-            INTERACTION_FINGERPRINT,
-            ...UNSUPPLIED_AXIS_FINGERPRINTS,
-          ]),
+          outstandingFingerprints: expect.arrayContaining([INTERACTION_FINGERPRINT]),
         }),
       });
     });
@@ -826,15 +901,15 @@ describe("PV1 screening — acknowledgement is per pharmacist", () => {
   });
 
   it("a repeat acknowledgement is a no-op that emits no second event", async () => {
-    const fake = buildFlowFake();
+    const fake = buildFlowFake({ screening: candidateAndInteractingProfileDrug });
     configureBus(fake.client);
-    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+    configureClinicalScreening({ knowledgeSource: knowledgeWithAcknowledgeTierInteraction() });
 
     await startReview();
     const first = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
       executeCommand(
         AcknowledgePV1ScreeningFinding,
-        { orderId: ORDER_ID, fingerprint: GAP_FINGERPRINT },
+        { orderId: ORDER_ID, fingerprint: INTERACTION_FINGERPRINT },
         { idempotencyKey: "ack-1" }
       )
     );
@@ -843,7 +918,7 @@ describe("PV1 screening — acknowledgement is per pharmacist", () => {
     const second = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
       executeCommand(
         AcknowledgePV1ScreeningFinding,
-        { orderId: ORDER_ID, fingerprint: GAP_FINGERPRINT },
+        { orderId: ORDER_ID, fingerprint: INTERACTION_FINGERPRINT },
         { idempotencyKey: "ack-2" }
       )
     );
@@ -880,9 +955,9 @@ describe("PV1 screening — the profile moves during the review", () => {
 
     // Clear on the CLINICAL axes at start: the candidate is known and
     // nothing else is on the profile, so interaction and duplication
-    // both ran and found nothing. The two unsupplied axes report
-    // themselves, as they do on every screen — and the pharmacist
-    // settles those while reading the order.
+    // both ran and found nothing. The two unsupported axes record
+    // themselves, as they do on every screen, and neither is
+    // outstanding — so the pharmacist begins with nothing to click.
     const startFindings = callsOf(fake.calls, "orderScreeningFinding", "createMany").flatMap(
       (c) => (c.args as { data: Array<Record<string, unknown>> }).data
     );
@@ -890,7 +965,7 @@ describe("PV1 screening — the profile moves during the review", () => {
       "SCR_ALLERGY_INPUT_UNAVAILABLE",
       "SCR_DOSE_INPUT_UNAVAILABLE",
     ]);
-    await acknowledge(PHARMACIST_A, UNSUPPLIED_AXIS_FINGERPRINTS, "ack-gaps");
+    expect(outstandingFingerprints(fake)).toEqual([]);
 
     // …and now the profile gains an interacting drug.
     fake.screening.state.prescriptions.push({
@@ -906,9 +981,11 @@ describe("PV1 screening — the profile moves during the review", () => {
         executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve" })
       ).rejects.toMatchObject({
         code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
-        // Exactly the interaction: the platform gaps were already
-        // settled before the profile moved, so what is outstanding is
-        // precisely what changed under the review.
+        // Exactly the interaction, and nothing else. The platform gaps
+        // never demanded a decision, so what is outstanding at sign-off
+        // is precisely what changed under the review — which is the
+        // signal the pharmacist needs to see and the reason the noise
+        // was cleared out from under it.
         metadata: expect.objectContaining({
           outstandingFindingCodes: ["SCR_DRUG_INTERACTION"],
         }),
@@ -979,7 +1056,10 @@ describe("PV1 screening — a finding raised for the first time at sign-off", ()
   /** A second order for the same patient goes ACTIVE mid-review. */
   const SECOND_ORDER_RX = "00000000-0000-4000-8000-0000000000e3";
   const SECOND_ORDER_NDC = "00000-0000-03";
-  const PROFILE_GAP_FINGERPRINT = `SCR_KNOWLEDGE_UNAVAILABLE|MODERATE/DEFINITE|${SECOND_ORDER_NDC}|scope=PROFILE_MEDICATION`;
+  // MODERATE, and therefore outstanding: this source IS provisioned —
+  // it knows the candidate — so one code it does not hold is a fixable
+  // hole somebody can chase, not a systemic absence.
+  const PROFILE_GAP_FINGERPRINT = `SCR_KNOWLEDGE_UNAVAILABLE|MODERATE/DEFINITE|${SECOND_ORDER_NDC}|remediation=SUBJECT_DATA;scope=PROFILE_MEDICATION`;
 
   /**
    * The rows the console would render: the newest screen, grouped by
@@ -1009,12 +1089,11 @@ describe("PV1 screening — a finding raised for the first time at sign-off", ()
     configureBus(fake.client);
     configureClinicalScreening({ knowledgeSource: knowledgeWithCandidateOnly() });
 
-    // 1 + 2. The pharmacist opens the review and works through
-    // everything the screen put in front of them.
+    // 1 + 2. The pharmacist opens the review. Everything the screen
+    // puts in front of them is a gap nobody in the pharmacy can close,
+    // so there is nothing outstanding to work through.
     await startReview();
-    const atStart = outstandingFingerprints(fake);
-    expect(atStart).toEqual([...UNSUPPLIED_AXIS_FINGERPRINTS]);
-    await acknowledge(PHARMACIST_A, atStart, "ack-start");
+    expect(outstandingFingerprints(fake)).toEqual([]);
 
     // 3. The patient's OTHER order progresses and its drug lands on
     // the profile. Nobody touched this order.
@@ -1123,6 +1202,18 @@ describe("PV1 screening — a finding raised for the first time at sign-off", ()
     await startReview();
     const eventsBefore = callsOf(fake.calls, "orderEvent", "create").length;
     const casBefore = callsOf(fake.calls, "order", "updateMany").length;
+
+    // The patient's other order goes ACTIVE mid-review, carrying a drug
+    // this provisioned source does not hold — an outstanding finding
+    // that did not exist when the pharmacist opened the review, which
+    // is what gives the sign-off something to refuse on.
+    fake.screening.state.prescriptions.push({
+      id: SECOND_ORDER_RX,
+      patientId: PATIENT_ID,
+      drugNdc: SECOND_ORDER_NDC,
+      status: "ACTIVE",
+      drugName: "PLACEHOLDER-SECOND-ORDER-NAME",
+    });
 
     await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
       await expect(

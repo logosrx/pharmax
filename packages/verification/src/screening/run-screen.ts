@@ -11,18 +11,35 @@
 //
 // The engine screens four axes. This platform can supply two of them,
 // and `INPUT_AVAILABILITY` below DECLARES the other two unavailable —
-// which makes the engine report each as a `SCREENING_GAP` the
-// approving pharmacist has to acknowledge. The list is therefore a
-// statement of what is enforced, not a warning somebody has to read:
+// which makes the engine report each as a `SCREENING_GAP` recorded on
+// the order. The list is therefore a statement of what is enforced,
+// not a warning somebody has to read:
 //
 //   - DRUG-DRUG INTERACTION and THERAPEUTIC DUPLICATION: supplied.
 //     The candidate is the prescription on each order line; the
 //     profile is the patient's other ACTIVE prescriptions.
-//   - DRUG ALLERGY: NOT supplied. Pharmax has no allergy capture —
-//     there is no `patient_allergy` table to read.
-//   - DOSE RANGE: NOT supplied. `prescription.sigEnc` is encrypted
-//     free text with no structured (amount, unit, frequency) beside
-//     it, so there is no dose to compare against a range.
+//   - DRUG ALLERGY: NOT supplied, and NOT SUPPORTABLE. Pharmax has no
+//     allergy capture at all — there is no `patient_allergy` table to
+//     read, so no patient can have allergy data for any order.
+//   - DOSE RANGE: NOT supplied, and NOT SUPPORTABLE.
+//     `prescription.sigEnc` is encrypted free text with no structured
+//     (amount, unit, frequency) beside it, so no prescription carries
+//     a dose to compare against a range.
+//
+// Both unavailable axes are declared NOT_SUPPORTED_BY_PLATFORM rather
+// than NOT_RECORDED_FOR_SUBJECT, and the difference is the difference
+// between a gap that interrupts and a gap that is merely recorded.
+// Neither is a fact about a patient: they are facts about this
+// codebase, identical on every order, and no pharmacist can close
+// either one. Asking for an acknowledgement per order would collect
+// three signatures per prescription attesting to a product backlog —
+// which trains the reflex that dismisses the first real MAJOR
+// interaction, and files a sign-off implying a review that could not
+// have happened. See `screeningGapSeverity` for the full argument.
+// The gaps are still emitted, persisted to
+// `order_screening_finding`, carried in the outbox payload's
+// `gapCount`, and countable per code; what they no longer do is tax
+// every order.
 //
 // Why this is a declaration and not a comment. An empty `allergies`
 // array makes the engine's allergy loop iterate zero times and
@@ -36,14 +53,24 @@
 // never been compared to an allergy list that does not exist —
 // against the one axis that can produce a hard stop at all.
 //
-// SELF-HEALING, which is the property to preserve when editing this.
+// SELF-HEALING, which is the property to preserve when editing this,
+// and which the three-valued declaration is what buys.
+//
 // Nothing here has to be deleted at the right moment. When allergy
-// capture lands, pass the records and flip DRUG_ALLERGY to
-// "AVAILABLE"; the gap stops being emitted because the declaration
-// changed, not because someone remembered a note. Same for DOSE_RANGE
-// when a structured sig lands. Leaving a declaration at "UNAVAILABLE"
-// after the input exists costs a spurious acknowledgement, which is
-// loud; the reverse is impossible without editing this constant.
+// capture lands, this constant stops being a constant: it becomes a
+// per-order computation that answers "AVAILABLE" for a patient with
+// records (pass them), and "NOT_RECORDED_FOR_SUBJECT" for a patient
+// with none on file. The second is ACTIONABLE — somebody should go and
+// take an allergy history — so it grades MODERATE and the
+// acknowledgement prompt comes back BY ITSELF, for exactly the
+// patients where a pharmacist can do something about it. Nobody has
+// to remember to re-enable it, because the thing that silenced it was
+// a claim about the platform that will no longer be true.
+//
+// The unsafe direction stays hard. Silencing a per-patient gap would
+// require declaring this platform incapable of allergy capture while
+// the table exists — one visibly false line in one constant, not an
+// omission that hides.
 //
 // ---------------------------------------------------------------------
 // Why acknowledged fingerprints are NOT passed to the engine
@@ -109,12 +136,18 @@ const INPUT_AVAILABILITY: Readonly<Record<ScreeningInputAxis, ScreeningInputAvai
     // Both fed from the patient's other ACTIVE prescriptions.
     DRUG_DRUG_INTERACTION: "AVAILABLE",
     THERAPEUTIC_DUPLICATION: "AVAILABLE",
-    // No allergy capture exists in this platform yet. Flip to
-    // "AVAILABLE" and pass the records when it lands.
-    DRUG_ALLERGY: "UNAVAILABLE",
-    // `prescription.sigEnc` is encrypted free text; there is no
-    // structured dose to compare. Flip when a structured sig lands.
-    DOSE_RANGE: "UNAVAILABLE",
+    // No allergy capture exists in this platform at all: `allergy`
+    // appears nowhere in `prisma/schema.prisma`. This is a missing
+    // CAPABILITY, not a missing record — so no patient can ever have
+    // this input, and no pharmacist can supply it. When the table
+    // lands, this becomes a per-patient decision between "AVAILABLE"
+    // (records passed) and "NOT_RECORDED_FOR_SUBJECT" (none on file).
+    DRUG_ALLERGY: "NOT_SUPPORTED_BY_PLATFORM",
+    // `prescription.sigEnc` is encrypted free text and there are no
+    // structured (amount, unit, frequency) columns beside it, so no
+    // prescription in this schema carries a comparable dose. Same
+    // treatment, same self-healing path when a structured sig lands.
+    DOSE_RANGE: "NOT_SUPPORTED_BY_PLATFORM",
   });
 
 export interface RunScreenInput {

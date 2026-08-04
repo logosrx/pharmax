@@ -20,6 +20,7 @@ import type {
   AllergenKnowledge,
   DrugCode,
   DrugKnowledge,
+  DrugKnowledgeCoverage,
   DrugKnowledgeSource,
   IngredientCode,
   InteractionFact,
@@ -35,6 +36,12 @@ export interface InMemoryKnowledgeSeed {
   readonly drugs?: Readonly<Record<DrugCode, DrugKnowledge>>;
   readonly allergens?: Readonly<Record<AllergenCode, AllergenKnowledge>>;
   readonly interactions?: ReadonlyArray<SeededInteraction>;
+  /**
+   * Overrides the derived coverage. Supply this to model an adapter
+   * that holds a licence but happens to know nothing about the drugs
+   * in a particular test.
+   */
+  readonly coverage?: DrugKnowledgeCoverage;
 }
 
 /**
@@ -50,6 +57,17 @@ function pairKey(a: IngredientCode, b: IngredientCode): string {
  * Build a source over the supplied facts. The seed is copied into
  * lookup structures at construction, so later mutation of the caller's
  * objects cannot change what an in-flight screen sees.
+ *
+ * COVERAGE IS DERIVED HERE, which is the one place deriving it is
+ * legitimate. A real adapter must DECLARE its coverage, because
+ * "answered nothing so far" and "holds nothing" are different claims
+ * it alone can distinguish. This container is the exception: its
+ * entire contents are the argument the caller just passed, so
+ * "were any drugs seeded?" is not an inference about the world, it is
+ * a reading of the caller's own expression. An unseeded container —
+ * which is what an unlicensed deployment boots with — is
+ * NOT_PROVISIONED, and that is the answer that keeps a permanent
+ * product gap from being reported as if a pharmacist could fix it.
  */
 export function createInMemoryDrugKnowledgeSource(
   seed: InMemoryKnowledgeSeed = {}
@@ -63,7 +81,11 @@ export function createInMemoryDrugKnowledgeSource(
     interactions.set(pairKey(a, b), entry.fact);
   }
 
+  const coverage: DrugKnowledgeCoverage =
+    seed.coverage ?? (drugs.size > 0 ? "PROVISIONED" : "NOT_PROVISIONED");
+
   return {
+    coverage,
     describeDrug(code: DrugCode): DrugKnowledge | null {
       return drugs.get(code) ?? null;
     },
