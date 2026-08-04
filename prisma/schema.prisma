@@ -4404,6 +4404,14 @@ model Product {
   // pharmacist acknowledges a gap) while a mis-flagged manufactured
   // product would under-prompt (a real missing-NDC signal is
   // silenced).
+  //
+  // WRITE-SURFACE REQUIREMENT (screening-suppression vector): flipping
+  // NATIONAL → IN_HOUSE_COMPOUND converts the acknowledge-tier "verify
+  // the NDC" prompt into an informational gap on every order for this
+  // product. No application write path for `product` exists today (the
+  // catalog is seeded/ops-managed); whoever builds product CRUD must
+  // make `ndcKind` changes permission-gated and audit-logged, or that
+  // surface becomes a channel for silencing a screening prompt.
   ndcKind ProductNdcKind @default(NATIONAL)
 
   // DEA schedule for this NDC (21 CFR part 1308). The catalog is the
