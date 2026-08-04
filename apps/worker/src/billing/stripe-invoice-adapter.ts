@@ -116,6 +116,7 @@ export function createStripeInvoiceAdapter(
             pharmaxInvoiceId: request.pharmaxInvoiceId,
             stripeErrorCode: code,
           },
+          cause,
         });
       }
     },

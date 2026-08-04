@@ -86,12 +86,14 @@ export {
   CRYPTO_VALIDATION,
   DECRYPT_FAILED,
   ENVELOPE_MALFORMED,
+  KMS_ACCESS_DENIED,
   KMS_KEY_NOT_FOUND,
   aadMismatchError,
   cryptoNotConfiguredError,
   cryptoValidationError,
   decryptFailedError,
   envelopeMalformedError,
+  kmsAccessDeniedError,
   kmsKeyNotFoundError,
 } from "./errors.js";
 

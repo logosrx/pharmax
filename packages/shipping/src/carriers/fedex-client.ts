@@ -47,8 +47,14 @@ export class FedExApiError extends Error {
     message: string;
     httpStatus: number;
     providerErrorCode?: string | null;
+    // Optional so existing call sites keep compiling. Thread it
+    // wherever this error wraps a lower-level failure:
+    // `wrapFedExError` in fedex-adapter.ts preserves whatever chain
+    // it is handed, so a cause dropped here is a cause Sentry never
+    // sees.
+    cause?: unknown;
   }) {
-    super(input.message);
+    super(input.message, input.cause === undefined ? undefined : { cause: input.cause });
     this.name = "FedExApiError";
     this.code = input.code;
     this.httpStatus = input.httpStatus;
@@ -491,6 +497,7 @@ export class FedExClient {
           code: "FEDEX_REQUEST_TIMEOUT",
           message: `FedEx ${init.method ?? "GET"} ${path} timed out after ${this.timeoutMs}ms.`,
           httpStatus: 0,
+          cause,
         });
       }
       throw new FedExApiError({
@@ -499,6 +506,7 @@ export class FedExClient {
           cause instanceof Error ? cause.message : "unknown"
         }`,
         httpStatus: 0,
+        cause,
       });
     } finally {
       clearTimeout(timeout);
@@ -511,11 +519,12 @@ export class FedExClient {
     if (text.length > 0) {
       try {
         json = JSON.parse(text);
-      } catch {
+      } catch (cause) {
         throw new FedExApiError({
           code: "FEDEX_RESPONSE_INVALID_JSON",
           message: `FedEx ${label} returned non-JSON body (status ${response.status}).`,
           httpStatus: response.status,
+          cause,
         });
       }
     }

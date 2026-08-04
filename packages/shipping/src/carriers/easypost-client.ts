@@ -86,8 +86,14 @@ export class EasyPostApiError extends Error {
     message: string;
     httpStatus: number;
     providerErrorCode?: string | null;
+    // Optional so existing call sites keep compiling. Thread it
+    // wherever this error wraps a lower-level failure:
+    // `wrapEasyPostError` in easypost-adapter.ts preserves whatever
+    // chain it is handed, so a cause dropped here is a cause Sentry
+    // never sees.
+    cause?: unknown;
   }) {
-    super(input.message);
+    super(input.message, input.cause === undefined ? undefined : { cause: input.cause });
     this.name = "EasyPostApiError";
     this.code = input.code;
     this.httpStatus = input.httpStatus;
@@ -164,12 +170,14 @@ export class EasyPostClient {
           code: "EASYPOST_REQUEST_TIMEOUT",
           message: `EasyPost ${method} ${path} timed out after ${this.timeoutMs}ms.`,
           httpStatus: 0,
+          cause,
         });
       }
       throw new EasyPostApiError({
         code: "EASYPOST_REQUEST_FAILED",
         message: `EasyPost ${method} ${path} failed: ${cause instanceof Error ? cause.message : "unknown"}`,
         httpStatus: 0,
+        cause,
       });
     } finally {
       clearTimeout(timeout);
@@ -180,11 +188,12 @@ export class EasyPostClient {
     if (text.length > 0) {
       try {
         json = JSON.parse(text);
-      } catch {
+      } catch (cause) {
         throw new EasyPostApiError({
           code: "EASYPOST_RESPONSE_INVALID_JSON",
           message: `EasyPost ${method} ${path} returned non-JSON body (status ${response.status}).`,
           httpStatus: response.status,
+          cause,
         });
       }
     }
