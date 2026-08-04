@@ -277,6 +277,54 @@ describe("getOrderScreening", () => {
     expect(groupByFingerprint.get("FP-ALLERGY-PLATFORM")).toBe("PLATFORM_CAPABILITY");
   });
 
+  it("files the compound-coverage codes under ORGANIZATION_COVERAGE, never platform capability", async () => {
+    // These two codes grade MINOR, and MINOR's severity-recovery answer
+    // is (and must remain, for historical rows) PLATFORM_CAPABILITY —
+    // so if the code-first consult (`gapRemediationForFindingCode`)
+    // were ever dropped from `groupFor`, both would silently fall into
+    // "Checks Pharmax cannot perform yet". That block tells the
+    // pharmacist NOBODY can close the gap, about a gap their own
+    // formulary team can close — an instruction that cannot be
+    // followed, which is exactly what this test exists to prevent.
+    givenFindings([
+      findingRow({
+        id: "f-compound-uncoded",
+        code: "SCR_COMPOUND_FORMULA_NOT_CODED",
+        kind: "SCREENING_GAP",
+        severity: "MINOR",
+        certainty: "DEFINITE",
+        disposition: "INFORMATIONAL",
+        fingerprint: "FP-COMPOUND-UNCODED",
+      }),
+      findingRow({
+        id: "f-compound-partial",
+        code: "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED",
+        kind: "SCREENING_GAP",
+        severity: "MINOR",
+        certainty: "DEFINITE",
+        disposition: "INFORMATIONAL",
+        fingerprint: "FP-COMPOUND-PARTIAL",
+      }),
+      // Control: a MINOR gap on a code with no fixed remediation still
+      // reads PLATFORM_CAPABILITY from its severity, as it always did.
+      findingRow({
+        id: "f-knowledge-platform",
+        code: "SCR_KNOWLEDGE_UNAVAILABLE",
+        kind: "SCREENING_GAP",
+        severity: "MINOR",
+        certainty: "DEFINITE",
+        fingerprint: "FP-KNOWLEDGE-PLATFORM",
+      }),
+    ]);
+    givenAcknowledgements([]);
+
+    const screening = await read();
+    const groupByFingerprint = new Map(screening?.findings.map((f) => [f.fingerprint, f.group]));
+    expect(groupByFingerprint.get("FP-COMPOUND-UNCODED")).toBe("ORGANIZATION_COVERAGE");
+    expect(groupByFingerprint.get("FP-COMPOUND-PARTIAL")).toBe("ORGANIZATION_COVERAGE");
+    expect(groupByFingerprint.get("FP-KNOWLEDGE-PLATFORM")).toBe("PLATFORM_CAPABILITY");
+  });
+
   it("files a gap whose grading this build cannot read under prescription coverage", async () => {
     // `severity` is TEXT so the vocabulary can grow, which means this
     // build can read a grade it does not know. Falling back to the group

@@ -57,14 +57,15 @@ const PHI_PLACEHOLDER = JSON.stringify({ v: "placeholder", alg: "test" });
 async function insertCompoundProduct(
   client: Client,
   organizationId: string,
-  ndc: string
+  ndc: string,
+  ndcKind: "IN_HOUSE_COMPOUND" | "NATIONAL" = "IN_HOUSE_COMPOUND"
 ): Promise<string> {
   const id = randomUUID();
   await client.query(
     `INSERT INTO product (
        id, "organizationId", ndc, name, "ndcKind", "createdAt", "updatedAt"
-     ) VALUES ($1, $2, $3, 'FIXTURE-COMPOUND (IT)', 'IN_HOUSE_COMPOUND'::"ProductNdcKind", now(), now())`,
-    [id, organizationId, ndc]
+     ) VALUES ($1, $2, $3, 'FIXTURE-COMPOUND (IT)', $4::"ProductNdcKind", now(), now())`,
+    [id, organizationId, ndc, ndcKind]
   );
   return id;
 }
@@ -545,6 +546,56 @@ describe("formula versioning — attribution follows the republish", () => {
       );
     await expect(badRow("RXNORM_IN", null)).rejects.toThrowError(/coding_rxcui_check/);
     await expect(badRow("UNCODED", OTHER_RXCUI)).rejects.toThrowError(/coding_rxcui_check/);
+  });
+});
+
+describe("NATIONAL shadowing — the second layer, behind the command refusal", () => {
+  it("never consults a formula claiming a NATIONAL product, even when one is in the table", async () => {
+    // CreateCompoundFormula refuses this link
+    // (COMPOUND_FORMULA_PRODUCT_NOT_COMPOUND), so force the bad state
+    // in with raw SQL: a coded ACTIVE formula claiming a NATIONAL
+    // product, whose coded ingredient matches the patient's confirmed
+    // allergy. If the composite source ever routed a NATIONAL code to
+    // the formulary, this screen would hard-stop from an org-authored
+    // ingredient list — replacing the published-nomenclature screen a
+    // real NDC must get. The routing filter (`ndcKind =
+    // IN_HOUSE_COMPOUND` in the compound adapter's product lookup) is
+    // what this test pins; dropping it fails here.
+    const ndc = "99999100006";
+    const productId = await insertCompoundProduct(owner, tenant.organizationId, ndc, "NATIONAL");
+    await insertActiveFormula(owner, tenant, {
+      code: "IT-SHADOW",
+      version: 1,
+      compoundProductId: productId,
+      ingredients: [{ name: "FIXTURE-ACTIVE-A", coding: "RXNORM_IN", rxcui: ALLERGEN_RXCUI }],
+    });
+
+    const chain = await seedOrderChain(owner, tenant);
+    const providerId = await insertProvider(owner, tenant);
+    await insertPrescriptionWithLine(owner, tenant, {
+      orderId: chain.orderId,
+      patientId: chain.patientId,
+      providerId,
+      drugNdc: ndc,
+    });
+    await insertConfirmedIngredientAllergy(owner, tenant, chain.patientId, ALLERGEN_RXCUI);
+
+    const { screen, refusal } = await screenAndGate(tenant, chain.orderId, chain.patientId);
+
+    // The org-authored list answered NOTHING for the national code: no
+    // allergy findings, no hard stop, no formula provenance — and no
+    // org-closable compound gap either, because the code is not the
+    // org's to declare. (With no RxNorm release in this database, the
+    // honest outcome is the national path's knowledge gap.)
+    expect(screen.evaluation.findings.filter((f) => f.code.startsWith("SCR_DRUG_ALLERGY"))).toEqual(
+      []
+    );
+    expect(hardStopFindings(screen.evaluation)).toEqual([]);
+    expect(screen.formulaProvenanceByFingerprint.size).toBe(0);
+    expect(
+      screen.evaluation.findings.filter((f) => f.code === "SCR_COMPOUND_FORMULA_NOT_CODED")
+    ).toEqual([]);
+    expect(refusal).toBeNull();
   });
 });
 
