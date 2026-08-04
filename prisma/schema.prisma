@@ -3678,6 +3678,16 @@ model OrderScreeningFinding {
   // workflow policy VERSION (see `OrderWorkflowPolicy.screening`) —
   // stamped here so a screen is reproducible without re-deriving the
   // policy that governed it.
+  //
+  // READ IT AS A PROPERTY OF THE SCREEN, NOT A PREDICATE APPLIED TO
+  // THIS ROW. The floor filters CLINICAL findings only; rows with
+  // `kind = 'SCREENING_GAP'` are exempt from it at every setting,
+  // because they record whether a check ran rather than what it found,
+  // and a suppressed gap would make an unscreened order look screened.
+  // So a gap row graded MINOR while this column says MAJOR is correct
+  // and expected, not corrupt data. The rule lives in `isReportable`
+  // in `@pharmax/clinical-screening`.
+
   workflowPolicyId        String         @db.Uuid
   workflowPolicy          WorkflowPolicy @relation(fields: [workflowPolicyId], references: [id], onDelete: Restrict)
   workflowPolicyVersion   Int

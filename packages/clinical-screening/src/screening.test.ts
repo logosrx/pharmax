@@ -9,6 +9,7 @@ import {
   DEFAULT_SCREENING_POLICY,
   INPUT_UNAVAILABLE_CODE_FOR_AXIS,
   SCREENING_FINDING_KINDS,
+  SCREENING_SEVERITIES,
   type DrugKnowledge,
   type PrescribedDrug,
   type RecordedAllergy,
@@ -150,8 +151,7 @@ function allergy(overrides: Partial<RecordedAllergy> = {}): RecordedAllergy {
  * Written out rather than derived from `CLINICAL_SCREENING_AXES`, and
  * that is the point: a fifth axis breaks this literal, so the suite
  * cannot keep compiling while quietly asserting the new axis is
- * screened. Tests that want a gap pass `{ ...ALL_INPUTS_AVAILABLE,
- * [axis]: "UNAVAILABLE" }`.
+ * screened. Tests that want a gap call `withoutAxis`.
  */
 const ALL_INPUTS_AVAILABLE: Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>> =
   Object.freeze({
@@ -161,10 +161,25 @@ const ALL_INPUTS_AVAILABLE: Readonly<Record<ScreeningInputAxis, ScreeningInputAv
     DOSE_RANGE: "AVAILABLE",
   });
 
+/**
+ * Defaults to the ACTIONABLE unavailability, because that is the one
+ * whose behaviour most of this suite is about: a platform that could
+ * have supplied the input and did not for this subject. Tests about the
+ * systemic case pass "NOT_SUPPORTED_BY_PLATFORM" explicitly.
+ */
 function withoutAxis(
-  axis: ScreeningInputAxis
+  axis: ScreeningInputAxis,
+  unavailability: Exclude<ScreeningInputAvailability, "AVAILABLE"> = "NOT_RECORDED_FOR_SUBJECT"
 ): Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>> {
-  return { ...ALL_INPUTS_AVAILABLE, [axis]: "UNAVAILABLE" };
+  return { ...ALL_INPUTS_AVAILABLE, [axis]: unavailability };
+}
+
+function everyAxis(
+  unavailability: Exclude<ScreeningInputAvailability, "AVAILABLE">
+): Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>> {
+  return Object.fromEntries(
+    CLINICAL_SCREENING_AXES.map((axis) => [axis, unavailability])
+  ) as Record<ScreeningInputAxis, ScreeningInputAvailability>;
 }
 
 function screen(overrides: Partial<ScreeningRequest> = {}): ScreeningEvaluation {
@@ -279,6 +294,59 @@ describe("screenPrescription — knowledge gaps", () => {
       activeMedications: [drug("line-a", "DRUG_UNKNOWN_ONE"), drug("line-b", "DRUG_UNKNOWN_TWO")],
     });
     expect(allFindings(result)).toHaveLength(2);
+  });
+
+  it("still reports the gap when no knowledge source is provisioned at all", () => {
+    // The deployment with no licensed database. Every lookup fails for
+    // every drug, and the record must say so — a screen that came back
+    // CLEAR here would be the single most dangerous output this engine
+    // could produce.
+    const result = screen({ knowledge: createInMemoryDrugKnowledgeSource() });
+    expect(result.outcome).toBe("ADVISORY");
+    expect(codes(result)).toEqual(["SCR_KNOWLEDGE_UNAVAILABLE"]);
+    expect(requireFinding(result, "SCR_KNOWLEDGE_UNAVAILABLE").kind).toBe("SCREENING_GAP");
+  });
+
+  it("does not demand an acknowledgement when no knowledge source is provisioned", () => {
+    // Nobody can license a drug database from the PV1 queue. With no
+    // source wired this gap fires on 100% of prescriptions, so a
+    // required click would be a per-order tax that buys nothing and
+    // spends the attention the real findings need. The deficiency is
+    // stated at boot and in coverage reporting instead.
+    const result = screen({ knowledge: createInMemoryDrugKnowledgeSource() });
+    const gap = requireFinding(result, "SCR_KNOWLEDGE_UNAVAILABLE");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("does demand an acknowledgement for one unknown code in a provisioned source", () => {
+    // The contrast that makes the grading meaningful rather than a
+    // blanket downgrade. A database that answers for other drugs and
+    // not this one has a hole somebody can act on today: verify the
+    // NDC, or chase a reference-data update.
+    const result = screen({ candidate: drug("line-candidate", "DRUG_UNKNOWN") });
+    const gap = requireFinding(result, "SCR_KNOWLEDGE_UNAVAILABLE");
+    expect(gap.severity).toBe("MODERATE");
+    expect(gap.disposition).toBe("REQUIRES_ACKNOWLEDGEMENT");
+  });
+
+  it("fingerprints the unprovisioned and unknown-code gaps differently", () => {
+    // Same reason as the per-axis case: an acknowledgement matches on
+    // fingerprint alone, so a settled "this code is unknown" must not be
+    // able to silence — or be silenced by — "no database exists".
+    //
+    // The drug code is held constant on both sides, so the only thing
+    // that can separate these fingerprints is the remediation. Were it
+    // omitted from the identity, this would pass by accident on any two
+    // different codes and fail to protect anything.
+    const candidate = drug("line-candidate", "DRUG_UNKNOWN");
+    const unprovisioned = requireFinding(
+      screen({ candidate, knowledge: createInMemoryDrugKnowledgeSource() }),
+      "SCR_KNOWLEDGE_UNAVAILABLE"
+    );
+    const unknownCode = requireFinding(screen({ candidate }), "SCR_KNOWLEDGE_UNAVAILABLE");
+    expect(unprovisioned.fingerprint).not.toBe(unknownCode.fingerprint);
   });
 });
 
@@ -732,6 +800,77 @@ describe("screenPrescription — reporting floor", () => {
     });
     expect(result.outcome).toBe("CLEAR");
   });
+
+  it("never drops a screening gap, at any floor, for either remediation", () => {
+    // THE COVERAGE-RECORD INVARIANT. The floor is a clinical noise
+    // floor; a gap is not a clinical finding but a statement about
+    // whether a check RAN. Filter one out and the order carries zero
+    // gap rows — identical to an order that was fully screened and came
+    // back clean. An auditor asking "was this screened for allergies?"
+    // would find no row and have to infer the answer from the tenant's
+    // policy configuration, which is a compliance claim the system did
+    // not earn.
+    //
+    // Both remediations, because the invariant is about the record and
+    // not about who can act: a per-subject gap dropped by the floor
+    // leaves exactly the same indistinguishable order.
+    for (const unavailability of [
+      "NOT_RECORDED_FOR_SUBJECT",
+      "NOT_SUPPORTED_BY_PLATFORM",
+    ] as const) {
+      for (const floor of SCREENING_SEVERITIES) {
+        const result = screen({
+          inputAvailability: withoutAxis("DRUG_ALLERGY", unavailability),
+          policy: { minimumReportedSeverity: floor },
+        });
+        const label = `${unavailability} @ ${floor}`;
+        expect(codes(result), label).toContain("SCR_ALLERGY_INPUT_UNAVAILABLE");
+        // Not CLEAR either: an outcome of CLEAR is the very reading the
+        // gap exists to prevent.
+        expect(result.outcome, label).toBe("ADVISORY");
+      }
+    }
+  });
+
+  it("keeps the exemption narrow — a clinical finding at the same floor still drops", () => {
+    // Guards against fixing the coverage record by quietly disabling the
+    // floor. At CONTRAINDICATED the MAJOR duplication must still be
+    // silenced; only the gap survives.
+    const result = screen({
+      inputAvailability: withoutAxis("DRUG_ALLERGY", "NOT_SUPPORTED_BY_PLATFORM"),
+      activeMedications: [drug("line-other", "DRUG_ALFA_GENERIC")],
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    expect(codes(result)).toEqual(["SCR_ALLERGY_INPUT_UNAVAILABLE"]);
+    expect(codes(result)).not.toContain("SCR_DUPLICATE_INGREDIENT");
+  });
+
+  it("keeps a gap exempt without making it interrupt", () => {
+    // The two properties are independent and the engine holds both:
+    // never nag, always record. A raised floor must not smuggle the
+    // acknowledgement prompt back in for a systemic gap.
+    const result = screen({
+      inputAvailability: withoutAxis("DRUG_ALLERGY", "NOT_SUPPORTED_BY_PLATFORM"),
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    const gap = requireFinding(result, "SCR_ALLERGY_INPUT_UNAVAILABLE");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("never drops an unprovisioned knowledge gap either", () => {
+    // The same invariant on the other family of gap. This is the one a
+    // default deployment raises on every order, so a floor that erased
+    // it would erase the coverage record fleet-wide.
+    for (const floor of SCREENING_SEVERITIES) {
+      const result = screen({
+        knowledge: createInMemoryDrugKnowledgeSource(),
+        policy: { minimumReportedSeverity: floor },
+      });
+      expect(codes(result), floor).toContain("SCR_KNOWLEDGE_UNAVAILABLE");
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1154,14 +1293,15 @@ describe("screenPrescription — every clinical axis either runs or reports a ga
     }
   });
 
-  it("grades every unsupplied-input gap so it interrupts but never blocks", () => {
-    // Same grading as `SCR_KNOWLEDGE_UNAVAILABLE`, capped for the same
-    // reason: refusing to dispense because OUR platform cannot hold
-    // an allergy list would make our missing capability the patient's
-    // problem.
+  it("grades a gap somebody can close so it interrupts but never blocks", () => {
+    // The platform holds this input for other patients and nobody
+    // supplied it for this one. That is a job for a human on this
+    // order, so the pharmacist is asked — and still never blocked,
+    // because a missing record is not grounds for refusing to
+    // dispense.
     for (const axis of CLINICAL_SCREENING_AXES) {
       const gap = requireFinding(
-        screen({ inputAvailability: withoutAxis(axis) }),
+        screen({ inputAvailability: withoutAxis(axis, "NOT_RECORDED_FOR_SUBJECT") }),
         INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
       );
       expect(gap.severity, axis).toBe("MODERATE");
@@ -1170,16 +1310,80 @@ describe("screenPrescription — every clinical axis either runs or reports a ga
     }
   });
 
-  it("declaring nothing available yields exactly one gap per axis and no clinical finding", () => {
-    const allUnavailable = Object.fromEntries(
-      CLINICAL_SCREENING_AXES.map((axis) => [axis, "UNAVAILABLE"])
-    ) as Record<ScreeningInputAxis, ScreeningInputAvailability>;
+  it("records a gap nobody in the pharmacy can close without interrupting for it", () => {
+    // THE ALERT-FATIGUE INVARIANT. A capability this platform does not
+    // have produces an identical finding on every order forever, and no
+    // pharmacist can close it. Demanding an acknowledgement would train
+    // the reflex that dismisses the alert that mattered, and file a
+    // sign-off implying a review that could not have happened.
+    //
+    // It is still REPORTED. That is the half this test pins hardest:
+    // the finding exists, keeps its code and its SCREENING_GAP kind, and
+    // remains persistable and countable. Only the interruption is gone.
+    for (const axis of CLINICAL_SCREENING_AXES) {
+      const gap = requireFinding(
+        screen({ inputAvailability: withoutAxis(axis, "NOT_SUPPORTED_BY_PLATFORM") }),
+        INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+      );
+      expect(gap.kind, axis).toBe("SCREENING_GAP");
+      expect(gap.severity, axis).toBe("MINOR");
+      expect(gap.certainty, axis).toBe("DEFINITE");
+      expect(gap.disposition, axis).toBe("INFORMATIONAL");
+    }
+  });
 
+  it("distinguishes a systemic gap from a per-subject one by fingerprint", () => {
+    // An acknowledgement is carried forward on fingerprint alone, so
+    // the two must never share one. Otherwise settling "nobody recorded
+    // allergies for this patient" would also settle — or be settled by
+    // — "this platform cannot record allergies", and the actionable
+    // signal would inherit the silence of the systemic one.
+    for (const axis of CLINICAL_SCREENING_AXES) {
+      const subject = requireFinding(
+        screen({ inputAvailability: withoutAxis(axis, "NOT_RECORDED_FOR_SUBJECT") }),
+        INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+      );
+      const platform = requireFinding(
+        screen({ inputAvailability: withoutAxis(axis, "NOT_SUPPORTED_BY_PLATFORM") }),
+        INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+      );
+      expect(platform.fingerprint, axis).not.toBe(subject.fingerprint);
+      expect(platform.reason, axis).not.toBe(subject.reason);
+    }
+  });
+
+  it("restores the per-subject prompt the moment an axis becomes supportable", () => {
+    // The self-healing property, which is the whole reason the
+    // distinction lives on the DECLARATION rather than on the finding
+    // code. A caller that gains a capability can no longer honestly say
+    // NOT_SUPPORTED_BY_PLATFORM; the day it starts answering
+    // per-subject, the patients with nothing on file begin asking for
+    // an acknowledgement again with no change to this package.
+    const axis = "DRUG_ALLERGY";
+    const whileUnsupported = requireFinding(
+      screen({ inputAvailability: withoutAxis(axis, "NOT_SUPPORTED_BY_PLATFORM") }),
+      INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+    );
+    expect(whileUnsupported.disposition).toBe("INFORMATIONAL");
+
+    const onceSupported = requireFinding(
+      screen({ inputAvailability: withoutAxis(axis, "NOT_RECORDED_FOR_SUBJECT") }),
+      INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+    );
+    expect(onceSupported.disposition).toBe("REQUIRES_ACKNOWLEDGEMENT");
+
+    // And a patient who DOES have records screens the axis for real
+    // rather than reporting any gap at all.
+    const screened = screen({ allergies: [allergy()] });
+    expect(codes(screened)).not.toContain(INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]);
+  });
+
+  it("declaring nothing available yields exactly one gap per axis and no clinical finding", () => {
     const result = screen({
       candidate: drug("line-candidate", "DRUG_DOSED", { amount: 50, unit: "mg", dosesPerDay: 4 }),
       activeMedications: [drug("line-other", "DRUG_ECHO")],
       allergies: [allergy()],
-      inputAvailability: allUnavailable,
+      inputAvailability: everyAxis("NOT_RECORDED_FOR_SUBJECT"),
     });
 
     expect(new Set(codes(result))).toEqual(

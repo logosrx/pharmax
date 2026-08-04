@@ -9,12 +9,18 @@
 // its customer's licence covers, exactly as it supplies a KMS adapter.
 //
 // Omitting `knowledgeSource` is a supported configuration, not a
-// misconfiguration: the empty in-memory source makes the engine report
-// `SCR_KNOWLEDGE_UNAVAILABLE` on every prescription, which requires a
-// pharmacist acknowledgement before ApprovePV1 will pass. A deployment
-// without a licensed source therefore says plainly that it could not
-// screen, on every order, rather than implying a safety check it never
-// performed.
+// misconfiguration: the empty in-memory source declares itself
+// NOT_PROVISIONED, so the engine reports `SCR_KNOWLEDGE_UNAVAILABLE`
+// on every prescription. A deployment without a licensed source
+// therefore says plainly that it could not screen, on every order,
+// rather than implying a safety check it never performed.
+//
+// That gap is recorded, not interruptive. Nobody in a pharmacy can
+// provision a drug database from a PV1 queue, so demanding an
+// acknowledgement per order would buy no safety and spend the
+// attention the acknowledge tier exists to reserve for findings that
+// can change a decision. The systemic fact belongs at boot and in
+// coverage reporting, which is where the entry point states it.
 //
 // Priority: after the command bus, alongside the other domain-adapter
 // wiring. No dispatch happens at boot, so the ordering is convention

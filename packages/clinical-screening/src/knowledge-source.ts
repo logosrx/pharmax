@@ -30,7 +30,7 @@
 // point of the seam, since it keeps `screenPrescription` pure and
 // replayable over `command_log`.
 
-import type { ScreeningCertainty, ScreeningSeverity } from "./findings.js";
+import type { ScreeningCertainty, ScreeningGapRemediation, ScreeningSeverity } from "./findings.js";
 
 /**
  * Codes are opaque strings, compared only for equality. The engine
@@ -116,11 +116,66 @@ export interface InteractionFact {
 }
 
 /**
+ * Whether this source has a body of knowledge to answer FROM.
+ *
+ * The same distinction `ScreeningInputAvailability` draws for caller
+ * inputs, applied to the knowledge seam: `describeDrug` returning
+ * `null` is one answer with two very different meanings, and the
+ * engine has to be able to tell them apart.
+ *
+ *   - PROVISIONED, and a code is unknown: one row missing from a
+ *     database that is otherwise answering. Somebody can act on that
+ *     today — check the NDC is right, ask the vendor for an update —
+ *     so the gap is worth a pharmacist's attention.
+ *   - NOT_PROVISIONED: no database is wired, so EVERY lookup will
+ *     return `null` for every drug on every order forever. Nobody in
+ *     the pharmacy can close that, and reporting it interruptively on
+ *     every prescription trains the dismiss reflex rather than
+ *     informing anyone.
+ *
+ * DECLARED, NOT INFERRED, for a real adapter. An adapter must not
+ * compute this from whether its last lookup succeeded; it knows at
+ * construction whether it was given a licence and a dataset, and that
+ * is the answer.
+ */
+export const DRUG_KNOWLEDGE_COVERAGES = Object.freeze(["PROVISIONED", "NOT_PROVISIONED"] as const);
+
+export type DrugKnowledgeCoverage = (typeof DRUG_KNOWLEDGE_COVERAGES)[number];
+
+/**
+ * Project a coverage declaration onto the same "who can close this?"
+ * axis that caller-input availability projects onto, so
+ * `screeningGapSeverity` grades both families of gap by one rule.
+ *
+ * Lives here rather than beside `gapRemediationForAvailability` only
+ * because `findings.ts` sits below this module and must not import
+ * from it.
+ */
+export function gapRemediationForCoverage(
+  coverage: DrugKnowledgeCoverage
+): ScreeningGapRemediation {
+  switch (coverage) {
+    case "PROVISIONED":
+      return "SUBJECT_DATA";
+    case "NOT_PROVISIONED":
+      return "PLATFORM_CAPABILITY";
+    default: {
+      const exhaustive: never = coverage;
+      return exhaustive;
+    }
+  }
+}
+
+/**
  * The seam. Implement this over a licensed clinical database, behind
  * an adapter, and the engine works unchanged.
  *
  * Implementer contract:
  *   - Pure and synchronous. No I/O, no clock, no throwing.
+ *   - `coverage` is CONSTANT for the lifetime of the source. The
+ *     engine reads it while grading and a source that changed its
+ *     answer mid-screen would grade two lines of one order
+ *     differently.
  *   - `findIngredientInteraction` MUST be symmetric: the answer for
  *     (a, b) and (b, a) must be identical. The engine enumerates pairs
  *     in profile order and does not normalise them, so an asymmetric
@@ -132,6 +187,7 @@ export interface InteractionFact {
  *     the one that has to reach the pharmacist.
  */
 export interface DrugKnowledgeSource {
+  readonly coverage: DrugKnowledgeCoverage;
   describeDrug(code: DrugCode): DrugKnowledge | null;
   describeAllergen(code: AllergenCode): AllergenKnowledge | null;
   findIngredientInteraction(a: IngredientCode, b: IngredientCode): InteractionFact | null;

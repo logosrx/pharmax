@@ -114,14 +114,15 @@ export const CLINICAL_SCREENING_AXES: ReadonlyArray<ScreeningInputAxis> = Object
 );
 
 /**
- * Whether the caller could supply the facts one axis needs.
+ * Whether the caller could supply the facts one axis needs, and — when
+ * it could not — WHY NOT.
  *
- * THE DISTINCTION THIS EXISTS TO DRAW: "this patient has no recorded
- * allergies" and "this platform cannot tell you about allergies" are
- * different clinical facts, and only the second is a gap. An empty
- * array cannot express both — which is how an axis with no input
- * ended up contributing no findings and reading, to a pharmacist,
- * exactly like an axis that ran and found nothing.
+ * THE FIRST DISTINCTION THIS EXISTS TO DRAW: "this patient has no
+ * recorded allergies" and "this platform cannot tell you about
+ * allergies" are different clinical facts, and only the second is a
+ * gap. An empty array cannot express both — which is how an axis with
+ * no input ended up contributing no findings and reading, to a
+ * pharmacist, exactly like an axis that ran and found nothing.
  *
  * A genuinely allergy-free patient MUST be able to screen clear on
  * that axis. If unavailability were inferred from emptiness, the gap
@@ -130,16 +131,161 @@ export const CLINICAL_SCREENING_AXES: ReadonlyArray<ScreeningInputAxis> = Object
  * fatigue this engine is built to avoid, reintroduced by the
  * mechanism meant to make it safer.
  *
- * Two values and no third. "PARTIAL" is deliberately absent: a
- * pharmacist cannot act on "some of this patient's allergies are
- * here", and a caller holding an incomplete list should supply what
- * it has and declare AVAILABLE — the same posture the engine already
- * takes toward a knowledge source that answers some lookups and not
- * others.
+ * THE SECOND DISTINCTION, and the reason there are three values
+ * rather than two: a gap the pharmacist can do something about and a
+ * gap they cannot are different findings, even though both are true
+ * and both must be recorded.
+ *
+ *   - NOT_RECORDED_FOR_SUBJECT is ACTIONABLE. The platform can hold
+ *     this input and nobody supplied it for this patient or this
+ *     prescription. Somebody should go and get it, and the person
+ *     best placed to start that is the pharmacist looking at the
+ *     order. Worth interrupting for.
+ *   - NOT_SUPPORTED_BY_PLATFORM is NOT ACTIONABLE by anyone in the
+ *     pharmacy. No patient can ever have this input because the
+ *     capability does not exist, so the finding is identical on every
+ *     order forever. Interrupting for it buys nothing and costs the
+ *     one thing a screening engine cannot afford to spend: the
+ *     pharmacist's willingness to read the next alert.
+ *
+ * Collapsing these two into one "UNAVAILABLE" is what made a missing
+ * product capability indistinguishable from a missing record, and it
+ * is the difference `screeningGapSeverity` grades on. Keeping them
+ * apart is also what makes the per-patient prompt come back BY
+ * ITSELF: a caller that gains the capability can no longer honestly
+ * declare NOT_SUPPORTED_BY_PLATFORM, and the patients with nothing on
+ * file start reporting the actionable gap without anyone editing this
+ * package.
+ *
+ * "PARTIAL" is still deliberately absent: a pharmacist cannot act on
+ * "some of this patient's allergies are here", and a caller holding an
+ * incomplete list should supply what it has and declare AVAILABLE —
+ * the same posture the engine already takes toward a knowledge source
+ * that answers some lookups and not others.
  */
-export const SCREENING_INPUT_AVAILABILITIES = Object.freeze(["AVAILABLE", "UNAVAILABLE"] as const);
+export const SCREENING_INPUT_AVAILABILITIES = Object.freeze([
+  "AVAILABLE",
+  "NOT_RECORDED_FOR_SUBJECT",
+  "NOT_SUPPORTED_BY_PLATFORM",
+] as const);
 
 export type ScreeningInputAvailability = (typeof SCREENING_INPUT_AVAILABILITIES)[number];
+
+/**
+ * Who can close a gap — the only question that decides whether a gap
+ * interrupts a pharmacist.
+ *
+ * Derived from an availability declaration by
+ * `gapRemediationForAvailability`, and from a knowledge source's
+ * `coverage` by `gapRemediationForCoverage`, so the same rule grades
+ * both families of gap and neither can drift from the other.
+ */
+export const SCREENING_GAP_REMEDIATIONS = Object.freeze([
+  /**
+   * Somebody can supply the missing fact for this patient or this
+   * prescription today, using capabilities that already exist.
+   */
+  "SUBJECT_DATA",
+  /**
+   * The platform cannot hold or answer this at all. Closing it is a
+   * product or procurement change, not something anyone touching this
+   * order can do.
+   */
+  "PLATFORM_CAPABILITY",
+] as const);
+
+export type ScreeningGapRemediation = (typeof SCREENING_GAP_REMEDIATIONS)[number];
+
+export function gapRemediationForAvailability(
+  availability: Exclude<ScreeningInputAvailability, "AVAILABLE">
+): ScreeningGapRemediation {
+  switch (availability) {
+    case "NOT_RECORDED_FOR_SUBJECT":
+      return "SUBJECT_DATA";
+    case "NOT_SUPPORTED_BY_PLATFORM":
+      return "PLATFORM_CAPABILITY";
+    default: {
+      const exhaustive: never = availability;
+      return exhaustive;
+    }
+  }
+}
+
+/**
+ * How severely to grade a `SCREENING_GAP`.
+ *
+ * A gap has no clinical severity of its own — nobody is harmed by the
+ * fact of a missing input, they are harmed by what the missing input
+ * would have caught. So severity on a gap has always been used here as
+ * the dial that decides whether the pharmacist is interrupted, and
+ * this function is that dial made explicit rather than a constant
+ * repeated at each emit site.
+ *
+ *   - SUBJECT_DATA → MODERATE, therefore
+ *     REQUIRES_ACKNOWLEDGEMENT. Something is missing that this
+ *     pharmacy can supply, and a pharmacist signing off without
+ *     noticing is exactly what the acknowledge tier exists to
+ *     prevent.
+ *   - PLATFORM_CAPABILITY → MINOR, therefore INFORMATIONAL. Recorded,
+ *     persisted, and reportable — MINOR is the documented "noise
+ *     floor: recorded for the trail, not worth interrupting for", and
+ *     that is precisely what a capability we do not have is to the
+ *     pharmacist in front of the order.
+ *
+ * WHY NOT KEEP DEMANDING THE CLICK, WHICH IS SAFER-SOUNDING. Because a
+ * finding that fires on 100% of orders is not a finding, it is a
+ * loading screen. It trains the dismiss reflex the rest of this
+ * package is built to protect, and the first genuine MAJOR interaction
+ * is then dismissed by that same reflex — while the audit trail
+ * records a pharmacist who considered it. That is strictly worse than
+ * no alert, because it manufactures evidence of a review that did not
+ * happen. The systemic deficiency still has to be answered for; it is
+ * answered at the level that can act on it (a boot-time statement and
+ * screening-coverage reporting), not by taxing every order.
+ *
+ * Neither grade can block, at either end. Refusing to dispense
+ * because our platform cannot hold an allergy list would make our
+ * missing capability the patient's problem.
+ */
+export function screeningGapSeverity(remediation: ScreeningGapRemediation): ScreeningSeverity {
+  switch (remediation) {
+    case "SUBJECT_DATA":
+      return "MODERATE";
+    case "PLATFORM_CAPABILITY":
+      return "MINOR";
+    default: {
+      const exhaustive: never = remediation;
+      return exhaustive;
+    }
+  }
+}
+
+/**
+ * Recover a gap's remediation from the severity persisted on its row.
+ *
+ * For readers of `order_screening_finding`, which stores the grading but
+ * not the remediation. The console needs it to decide whether to tell a
+ * pharmacist "go and look this up" or "nobody here can close this", and
+ * guessing from the finding CODE gets that wrong: since the same code
+ * can be raised for either reason, a code-based rule would tell a
+ * pharmacist to obtain an allergy history the platform cannot store, or
+ * to look up a drug in a database that does not exist.
+ *
+ * COMPUTED AS THE INVERSE of `screeningGapSeverity` rather than written
+ * out, so the two cannot disagree: regrade a remediation there and this
+ * follows on its own. Returns `null` for a severity no gap can carry,
+ * which is the honest answer for a row this build cannot interpret —
+ * `severity` is TEXT precisely so the vocabulary can grow.
+ *
+ * Only meaningful for `kind = SCREENING_GAP`. A clinical finding's
+ * severity says nothing about remediation and callers must check the
+ * kind first.
+ */
+export function gapRemediationFromSeverity(
+  severity: ScreeningSeverity
+): ScreeningGapRemediation | null {
+  return SCREENING_GAP_REMEDIATIONS.find((r) => screeningGapSeverity(r) === severity) ?? null;
+}
 
 /**
  * Stable finding codes. These are audit vocabulary: they are written

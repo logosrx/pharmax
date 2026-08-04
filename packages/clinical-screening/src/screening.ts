@@ -56,8 +56,8 @@
 //      Every axis in `CLINICAL_SCREENING_AXES` either runs or
 //      produces a `SCREENING_GAP` naming itself; there is no third
 //      outcome, because a caller cannot build a `ScreeningRequest`
-//      without declaring each axis AVAILABLE or UNAVAILABLE, and an
-//      UNAVAILABLE declaration is what emits the gap. Two situations
+//      without declaring each axis available or unavailable, and an
+//      unavailable declaration is what emits the gap. Two situations
 //      reach it: a drug the knowledge source does not recognise
 //      (`SCR_KNOWLEDGE_UNAVAILABLE`), and an input the caller could
 //      not supply at all (`SCR_*_INPUT_UNAVAILABLE`). Without both,
@@ -66,13 +66,26 @@
 //      the more dangerous state.
 //
 //      The corollary is that gaps must be rare and SPECIFIC, so they
-//      are bounded on both sides. Allergies a drug knowledge base
+//      are bounded on three sides. Allergies a drug knowledge base
 //      could never answer (food, environmental) are excluded from
-//      screening rather than gapped on every prescription; and
+//      screening rather than gapped on every prescription;
 //      unavailability is DECLARED, never inferred from an empty
 //      array, so a patient with genuinely no recorded allergies
 //      screens clear on that axis instead of meeting a permanent
-//      alert that teaches them to dismiss it.
+//      alert that teaches them to dismiss it; and a gap NOBODY IN THE
+//      PHARMACY CAN CLOSE is recorded without interrupting, because a
+//      gap that fires on every order forever is the alert-fatigue
+//      machine above wearing this feature's clothes. That last one is
+//      the `ScreeningGapRemediation` split — see
+//      `screeningGapSeverity`, which is where the reasoning lives.
+//      RECORDED IS NOT THE SAME AS INTERRUPTIVE: every gap is still
+//      emitted, persisted and reportable whichever way it is graded.
+//
+//      And a gap is exempt from `minimumReportedSeverity` at every
+//      setting, so no tenant configuration can take a screen back to
+//      being indistinguishable from one that ran clean. See
+//      `isReportable`. The two properties are independent and the
+//      engine holds both: never nag, always record.
 //
 // The vocabulary for allergy records follows HL7 FHIR R4
 // `AllergyIntolerance` — `category`, `type`, `criticality`,
@@ -85,6 +98,7 @@ import type {
   ScreeningFinding,
   ScreeningFindingCode,
   ScreeningFindingKind,
+  ScreeningGapRemediation,
   ScreeningInputAvailability,
   ScreeningInputAxis,
   ScreeningSeverity,
@@ -93,8 +107,10 @@ import type {
 import {
   dispositionFor,
   fingerprintOf,
+  gapRemediationForAvailability,
   isAtLeastAsSevere,
   leastSevere,
+  screeningGapSeverity,
   severityRank,
   CLINICAL_SCREENING_AXES,
   INPUT_UNAVAILABLE_CODE_FOR_AXIS,
@@ -103,8 +119,10 @@ import type {
   AllergenCode,
   DrugCode,
   DrugKnowledge,
+  DrugKnowledgeCoverage,
   DrugKnowledgeSource,
 } from "./knowledge-source.js";
+import { gapRemediationForCoverage } from "./knowledge-source.js";
 
 // ---------------------------------------------------------------------------
 // Request vocabulary
@@ -197,7 +215,10 @@ export interface RecordedAllergy {
  */
 export interface ScreeningPolicy {
   /**
-   * Findings below this grade are dropped before the result is built.
+   * CLINICAL findings below this grade are dropped before the result is
+   * built. `SCREENING_GAP` findings are exempt at every setting — see
+   * `isReportable`, which is where that exemption and its reasoning
+   * live.
    *
    * The intended use is raising the floor to `MODERATE` to retire the
    * informational tier once a pharmacy decides it adds nothing.
@@ -337,7 +358,7 @@ export function screenPrescription(request: ScreeningRequest): ScreeningEvaluati
     // Nothing downstream can run without the candidate's ingredients,
     // so this is the rest of the screen: one unmistakable gap rather
     // than a silent pass.
-    raw.push(knowledgeGapFinding("CANDIDATE_DRUG", request.candidate));
+    raw.push(knowledgeGapFinding("CANDIDATE_DRUG", request.candidate, request.knowledge.coverage));
   } else {
     // Each collector returns immediately when its own axis was
     // declared unavailable — one rule, applied in one place per axis,
@@ -348,9 +369,7 @@ export function screenPrescription(request: ScreeningRequest): ScreeningEvaluati
     collectDoseFindings(request, candidateKnowledge, raw);
   }
 
-  const reportable = raw.filter((f) =>
-    isAtLeastAsSevere(f.severity, request.policy.minimumReportedSeverity)
-  );
+  const reportable = raw.filter((f) => isReportable(f, request.policy.minimumReportedSeverity));
   const merged = mergeByFingerprint(reportable);
   const settled = merged.map((f) => applyPriorAcknowledgement(f, request.acknowledgedFingerprints));
   const findings = [...settled].sort(compareFindings);
@@ -364,6 +383,59 @@ export function screenPrescription(request: ScreeningRequest): ScreeningEvaluati
   return { outcome: "ADVISORY", findings };
 }
 
+/**
+ * Whether a finding survives the pharmacy's reporting floor.
+ *
+ * A `SCREENING_GAP` IS EXEMPT AT EVERY SETTING, and the reason is that
+ * the floor and the gap answer different questions.
+ * `minimumReportedSeverity` is a clinical noise floor: it exists so a
+ * pharmacy can stop being told about findings too mild to change a
+ * decision. A gap is not a finding about the prescription at all — see
+ * `SCREENING_FINDING_KINDS`, where the kind is defined as "a report
+ * that some part of the screen could NOT be performed". It answers
+ * "did verification happen?", and there is no severity at which the
+ * answer to that stops mattering.
+ *
+ * WHAT SUBJECTING GAPS TO THE FLOOR ACTUALLY DID. Filter them out and
+ * an order carries zero gap rows — which is byte-for-byte what an
+ * order that was fully screened and came back clean looks like. That
+ * is precisely the ambiguity this whole finding kind was introduced to
+ * destroy, reintroduced by the floor at the far end of the pipeline.
+ * An auditor asking "was this order screened for allergies?" would
+ * find no row and have to infer the answer from the tenant's policy
+ * configuration at the time. Reconstructible is not recorded, and an
+ * unscreened order that reads as fully screened is a compliance claim
+ * the system did not earn.
+ *
+ * IT ALSO MADE A SAFETY PROPERTY TENANT-CONFIGURABLE, which is the
+ * part that settles it. Whether the record distinguishes "screened" from
+ * "never screened" must not depend on a customer's setting.
+ *
+ * WHY THE WHOLE KIND AND NOT JUST THE SYSTEMIC ONES. It is tempting to
+ * exempt only `PLATFORM_CAPABILITY` gaps, since those are the ones
+ * nobody can close. Three reasons not to:
+ *
+ *   - The invariant is "no screen may read as clear when it did not
+ *     run", and ANY suppressed gap breaks it. A per-patient allergy gap
+ *     dropped by the floor leaves exactly the same zero-row order.
+ *   - It would invert the value ordering. The per-subject gap is the
+ *     MORE actionable signal — somebody can go and obtain the missing
+ *     fact — so exempting only the systemic one would leave the more
+ *     valuable half suppressible by configuration.
+ *   - Severity on a gap is instrumental, not clinical: it encodes
+ *     whether to interrupt (see `screeningGapSeverity`). Filtering an
+ *     instrumental value through a clinical floor is a category error
+ *     whichever remediation it carries.
+ *
+ * This is INDEPENDENT of the interruption question. Gaps are always
+ * recorded; whether one also demands an acknowledgement is decided by
+ * `screeningGapSeverity` and nothing here. Never nag, always record.
+ */
+function isReportable(finding: ScreeningFinding, floor: ScreeningSeverity): boolean {
+  if (finding.kind === "SCREENING_GAP") return true;
+  return isAtLeastAsSevere(finding.severity, floor);
+}
+
 // ---------------------------------------------------------------------------
 // Unsupplied inputs
 // ---------------------------------------------------------------------------
@@ -373,49 +445,69 @@ function isAvailable(request: ScreeningRequest, axis: ScreeningInputAxis): boole
 }
 
 /**
- * One gap per axis the caller declared it could not supply.
+ * One gap per axis the caller declared it could not supply, graded by
+ * WHO CAN CLOSE IT.
  *
  * Iterates `CLINICAL_SCREENING_AXES` rather than naming the four
  * axes, so this is the half of the guarantee that self-maintains: a
  * fifth finding kind becomes a fifth axis, the compiler forces a code
  * for it and a declaration at every call site, and this loop emits
  * its gap without being told.
+ *
+ * The gap is ALWAYS emitted, whichever way it is graded. "We could
+ * not screen for allergies" is a compliance-relevant fact about a
+ * dispense and it belongs in the record either way; what the grading
+ * decides is only whether a pharmacist is interrupted for something
+ * they cannot act on. See `screeningGapSeverity`.
  */
 function collectInputUnavailabilityFindings(
   request: ScreeningRequest,
   out: ScreeningFinding[]
 ): void {
   for (const axis of CLINICAL_SCREENING_AXES) {
-    if (isAvailable(request, axis)) continue;
+    const availability = request.inputAvailability[axis];
+    if (availability === "AVAILABLE") continue;
+
+    const remediation = gapRemediationForAvailability(availability);
     out.push(
       finding({
         code: INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis],
         kind: "SCREENING_GAP",
-        // Graded exactly like `SCR_KNOWLEDGE_UNAVAILABLE`, and capped
-        // for the same reason: high enough that a pharmacist has to
-        // say they know the check did not run, never high enough to
-        // block. Refusing to dispense because our platform cannot
-        // hold an allergy list would make our missing capability the
-        // patient's problem.
-        severity: "MODERATE",
+        // Never high enough to block, at either grade. Refusing to
+        // dispense because our platform cannot hold an allergy list
+        // would make our missing capability the patient's problem.
+        severity: screeningGapSeverity(remediation),
         certainty: "DEFINITE",
-        reason: `No ${axis} input was available to this screen; that check was not performed.`,
+        reason: `No ${axis} input was available to this screen; that check was not performed. ${REMEDIATION_REASON[remediation]}`,
         // The axis is the trigger code — see `ScreeningTrigger.code`.
         // It keeps the fingerprint identical across drugs and lines,
-        // so a pharmacist acknowledges "we cannot screen allergies"
-        // once for the order rather than once per prescription.
+        // so a pharmacist acknowledges "nobody recorded allergies for
+        // this patient" once for the order rather than once per
+        // prescription.
         triggers: [trigger("CANDIDATE_DRUG", request.candidate.recordId, axis)],
-        // Empty on purpose. The only value `reason` interpolates is
-        // the axis, and the axis is already a trigger code, so the
-        // fingerprint distinguishes these findings without help. See
-        // `fingerprintOf` for what a missing qualifier costs when
-        // that is NOT true.
-        qualifiers: [],
+        // The remediation is interpolated into `reason` and is not a
+        // trigger code, so `fingerprintOf` requires it here. Severity
+        // already separates the two grades, but relying on that would
+        // leave the identity depending on a coincidence of the
+        // grading table rather than on what the finding says.
+        qualifiers: [`remediation=${remediation}`],
         citation: null,
       })
     );
   }
 }
+
+/**
+ * The sentence that tells a reader whose problem the gap is. Templated
+ * from the remediation rather than free text, so it stays PHI-free by
+ * construction like every other `reason` in this package.
+ */
+const REMEDIATION_REASON: Readonly<Record<ScreeningGapRemediation, string>> = Object.freeze({
+  SUBJECT_DATA:
+    "The platform supports this input but none was recorded for this subject; it can be obtained and the screen re-run.",
+  PLATFORM_CAPABILITY:
+    "This platform has no capability to supply that input for any subject, so no screen can perform this check until the capability is built.",
+});
 
 // ---------------------------------------------------------------------------
 // Allergy screening
@@ -617,7 +709,7 @@ function collectProfileFindings(
       // otherwise have been screened, so the gap is specific and
       // actionable. When the candidate is unknown no pair is
       // screenable and the candidate's own gap says everything.
-      out.push(knowledgeGapFinding("PROFILE_MEDICATION", med));
+      out.push(knowledgeGapFinding("PROFILE_MEDICATION", med, request.knowledge.coverage));
       continue;
     }
 
@@ -936,24 +1028,37 @@ function finding(draft: FindingDraft): ScreeningFinding {
   };
 }
 
+/**
+ * `coverage` decides the grade, for the same reason an input axis's
+ * declaration does.
+ *
+ * A PROVISIONED source that does not recognise one code has a fixable
+ * hole in it: the NDC may be wrong, or the vendor may owe an update,
+ * and a pharmacist is right to be asked. A NOT_PROVISIONED source will
+ * fail every lookup for every drug on every order until somebody buys
+ * a licence — an acknowledgement per prescription cannot close that
+ * and only spends the pharmacist's attention on the way to not closing
+ * it. Both are recorded identically; only the interruption differs.
+ */
 function knowledgeGapFinding(
   source: "CANDIDATE_DRUG" | "PROFILE_MEDICATION",
-  drug: PrescribedDrug
+  drug: PrescribedDrug,
+  coverage: DrugKnowledgeCoverage
 ): ScreeningFinding {
   const scope =
     source === "CANDIDATE_DRUG"
       ? "no screening could be performed for this prescription"
       : "this profile medication was excluded from interaction and duplication screening";
+  const remediation = gapRemediationForCoverage(coverage);
   return finding({
     code: "SCR_KNOWLEDGE_UNAVAILABLE",
     kind: "SCREENING_GAP",
-    // High enough to demand acknowledgement, never high enough to
-    // block: refusing to dispense because our reference data is
-    // incomplete would make a gap in our knowledge the patient's
-    // problem.
-    severity: "MODERATE",
+    // Never high enough to block, at either grade: refusing to
+    // dispense because our reference data is incomplete would make a
+    // gap in our knowledge the patient's problem.
+    severity: screeningGapSeverity(remediation),
     certainty: "DEFINITE",
-    reason: `No drug knowledge is available for ${drug.drugCode}; ${scope}.`,
+    reason: `No drug knowledge is available for ${drug.drugCode}; ${scope}. ${KNOWLEDGE_REMEDIATION_REASON[remediation]}`,
     triggers: [trigger(source, drug.recordId, drug.drugCode)],
     // The two scopes read differently and mean different things — one
     // says nothing was screened at all — but the trigger CODE is the
@@ -961,10 +1066,18 @@ function knowledgeGapFinding(
     // by design. A drug that was an unscreenable profile entry last
     // month and is the prescription itself this month would otherwise
     // reuse the earlier acknowledgement.
-    qualifiers: [`scope=${source}`],
+    qualifiers: [`scope=${source}`, `remediation=${remediation}`],
     citation: null,
   });
 }
+
+const KNOWLEDGE_REMEDIATION_REASON: Readonly<Record<ScreeningGapRemediation, string>> =
+  Object.freeze({
+    SUBJECT_DATA:
+      "The drug knowledge source is provisioned but holds no record of this code; verify the code and request a reference-data update.",
+    PLATFORM_CAPABILITY:
+      "No drug knowledge source is provisioned for this deployment, so no prescription can be screened against one until a licensed source is wired.",
+  });
 
 /**
  * Collapse findings that describe the same clinical situation.

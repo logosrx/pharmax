@@ -24,6 +24,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createInMemoryDrugKnowledgeSource } from "@pharmax/clinical-screening";
 import {
   configureCommandBus,
   executeCommand,
@@ -42,6 +43,10 @@ import {
 } from "@pharmax/rbac";
 import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
+import {
+  configureClinicalScreening,
+  resetClinicalScreeningConfigurationForTests,
+} from "../screening/configure.js";
 import {
   createScreeningStubs,
   type ScreeningStubOptions,
@@ -80,11 +85,23 @@ const RX_ID = "00000000-0000-4000-8000-0000000000e1";
  * every order, so one acknowledgement settles it — unlike the
  * knowledge gap, which is about one unrecognised NDC.
  */
-const KNOWLEDGE_GAP_FINGERPRINT =
-  "SCR_KNOWLEDGE_UNAVAILABLE|MODERATE/DEFINITE|00000-0000-01|scope=CANDIDATE_DRUG";
+const CANDIDATE_NDC = "00000-0000-01";
+
+/**
+ * The three gaps a default-configured deployment reports on EVERY
+ * order, all graded MINOR because no pharmacist can close any of them:
+ * no licensed knowledge source is wired at all, this platform has no
+ * allergy capture, and the sig carries no structured dose.
+ *
+ * MINOR means INFORMATIONAL, so none of them gates an approval — see
+ * `screeningGapSeverity`. They are still persisted on every screen,
+ * which is what these fingerprints are pinned for.
+ */
+const KNOWLEDGE_GAP_FINGERPRINT = `SCR_KNOWLEDGE_UNAVAILABLE|MINOR/DEFINITE|${CANDIDATE_NDC}|remediation=PLATFORM_CAPABILITY;scope=CANDIDATE_DRUG`;
 const ALLERGY_INPUT_GAP_FINGERPRINT =
-  "SCR_ALLERGY_INPUT_UNAVAILABLE|MODERATE/DEFINITE|DRUG_ALLERGY";
-const DOSE_INPUT_GAP_FINGERPRINT = "SCR_DOSE_INPUT_UNAVAILABLE|MODERATE/DEFINITE|DOSE_RANGE";
+  "SCR_ALLERGY_INPUT_UNAVAILABLE|MINOR/DEFINITE|DRUG_ALLERGY|remediation=PLATFORM_CAPABILITY";
+const DOSE_INPUT_GAP_FINGERPRINT =
+  "SCR_DOSE_INPUT_UNAVAILABLE|MINOR/DEFINITE|DOSE_RANGE|remediation=PLATFORM_CAPABILITY";
 
 const DEFAULT_GAP_FINGERPRINTS: ReadonlyArray<string> = [
   KNOWLEDGE_GAP_FINGERPRINT,
@@ -95,35 +112,20 @@ const DEFAULT_GAP_FINGERPRINTS: ReadonlyArray<string> = [
 /**
  * One prescription on the order, nothing else on the profile.
  *
- * Against the empty knowledge source — the only source this
- * repository ships — that is three findings, all of them gaps and all
- * requiring acknowledgement: the knowledge source does not recognise
- * the NDC, and this platform can supply neither an allergy list nor a
- * structured dose. So the DEFAULT state of these tests is an approval
- * that is BLOCKED until the pharmacist acknowledges each thing that
- * could not be checked, which is the honest behaviour and worth
- * having as the default rather than the exception.
+ * Against the empty knowledge source — the only source this repository
+ * ships — that is three findings, all of them gaps, and NONE of them
+ * outstanding. That is deliberately the default state of these tests:
+ * a default-configured deployment can screen nothing, says so on every
+ * order, and does not make a pharmacist click through a product
+ * backlog to sign off. Suites that need an outstanding finding wire a
+ * provisioned knowledge source, as the committed-refusal suite below
+ * does.
  */
 const DEFAULT_SCREENING_STUBS: ScreeningStubOptions = {
   patientId: PATIENT_ID,
   orderLinePrescriptionIds: [RX_ID],
-  prescriptions: [{ id: RX_ID, patientId: PATIENT_ID, drugNdc: "00000-0000-01", status: "ACTIVE" }],
+  prescriptions: [{ id: RX_ID, patientId: PATIENT_ID, drugNdc: CANDIDATE_NDC, status: "ACTIVE" }],
 };
-
-/** Default inputs plus this pharmacist's acknowledgement of every gap. */
-function screeningStubsWithGapsAcknowledged(
-  pharmacistUserId: string = PHARMACIST_ID
-): ScreeningStubOptions {
-  return {
-    ...DEFAULT_SCREENING_STUBS,
-    acknowledgements: DEFAULT_GAP_FINGERPRINTS.map((fingerprint, index) => ({
-      id: `ack-existing-${index}`,
-      orderId: ORDER_ID,
-      pharmacistUserId,
-      fingerprint,
-    })),
-  };
-}
 
 const orgWidePV1ApproveGrants: ReadonlyArray<ResolvedGrant> = [
   {
@@ -218,7 +220,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
   const calls: FakeCall[] = [];
   const screening = createScreeningStubs(
     (table, op, args) => calls.push({ table, op, args }),
-    overrides.screening ?? screeningStubsWithGapsAcknowledged()
+    overrides.screening ?? DEFAULT_SCREENING_STUBS
   );
 
   const lockedRow =
@@ -1043,7 +1045,85 @@ describe("ApprovePV1 — workflow + scope failures", () => {
 // The screening gate refuses — and commits its evidence
 // ---------------------------------------------------------------------------
 
+describe("ApprovePV1 — a gap nobody can close does not gate the approval", () => {
+  it("approves a routine order with zero acknowledgements, and records all three gaps", async () => {
+    // The behaviour this change exists to produce, asserted at the
+    // command that actually gates.
+    //
+    // A default-configured deployment reports three gaps on every
+    // order: no licensed knowledge source is wired, there is no
+    // allergy capture, and the sig carries no structured dose. Before,
+    // each demanded its own acknowledgement command — three per
+    // prescription, on 100% of orders, none of them closable by the
+    // pharmacist being asked. That is an override-rate machine, and the
+    // reflex it trains is the one that dismisses the first genuine
+    // MAJOR interaction.
+    //
+    // Both halves matter here: no clicks, AND all three gaps on the
+    // record. Suppressing them would trade alert fatigue for a screen
+    // that reads as clean, which is the worse failure.
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    const result = await withTenancyContext(ctxFor(), () =>
+      executeCommand(ApprovePV1, validInput(), { idempotencyKey: "approve-routine" })
+    );
+
+    expect(result.currentStatus).toBe("PV1_APPROVED_READY_FOR_FILL");
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(1);
+
+    const rows = callsOf(fake.calls, "orderScreeningFinding", "createMany").flatMap(
+      (c) => (c.args as { data: Array<Record<string, unknown>> }).data
+    );
+    expect(rows.map((r) => r["fingerprint"]).sort()).toEqual([...DEFAULT_GAP_FINGERPRINTS].sort());
+    for (const row of rows) {
+      expect(row["kind"]).toBe("SCREENING_GAP");
+      expect(row["disposition"]).toBe("INFORMATIONAL");
+      // Still stamped with the policy that governed the grading, so a
+      // historical screen stays interpretable under its own policy.
+      expect(row["workflowPolicyVersion"]).toBe(1);
+      expect(row["minimumReportedSeverity"]).toBe("MINOR");
+    }
+  });
+});
+
 describe("ApprovePV1 — a screening refusal is a COMMITTED refusal", () => {
+  /**
+   * A PROVISIONED source that does not hold the candidate's NDC.
+   *
+   * The default empty source cannot produce a refusal any more, and
+   * that is the fix, not an obstacle: its gaps are systemic and nobody
+   * can close them. A provisioned database with one code missing is a
+   * genuinely outstanding finding — check the NDC, chase a
+   * reference-data update — so it is the honest way to exercise the
+   * committed-refusal path.
+   */
+  beforeEach(() => {
+    configureClinicalScreening({
+      knowledgeSource: createInMemoryDrugKnowledgeSource({
+        drugs: {
+          "00000-0000-99": {
+            ingredientCodes: ["INGREDIENT_ALFA"],
+            therapeuticClassCodes: [],
+            crossSensitivityClassCodes: [],
+            doseRange: null,
+          },
+        },
+      }),
+    });
+  });
+
+  afterEach(() => {
+    resetClinicalScreeningConfigurationForTests();
+  });
+
+  const OUTSTANDING_KNOWLEDGE_GAP_FINGERPRINT = `SCR_KNOWLEDGE_UNAVAILABLE|MODERATE/DEFINITE|${CANDIDATE_NDC}|remediation=SUBJECT_DATA;scope=CANDIDATE_DRUG`;
+  const REFUSED_SCREEN_FINGERPRINTS: ReadonlyArray<string> = [
+    OUTSTANDING_KNOWLEDGE_GAP_FINGERPRINT,
+    ALLERGY_INPUT_GAP_FINGERPRINT,
+    DOSE_INPUT_GAP_FINGERPRINT,
+  ];
+
   it("persists the screen it refused against and writes no approval", async () => {
     // The refusal is raised on findings, and the only place a
     // pharmacist can read or acknowledge a finding is
@@ -1067,7 +1147,9 @@ describe("ApprovePV1 — a screening refusal is a COMMITTED refusal", () => {
     const persisted = callsOf(fake.calls, "orderScreeningFinding", "createMany");
     expect(persisted).toHaveLength(1);
     const rows = (persisted[0]!.args as { data: Array<Record<string, unknown>> }).data;
-    expect(rows.map((r) => r["fingerprint"]).sort()).toEqual([...DEFAULT_GAP_FINGERPRINTS].sort());
+    expect(rows.map((r) => r["fingerprint"]).sort()).toEqual(
+      [...REFUSED_SCREEN_FINGERPRINTS].sort()
+    );
     for (const row of rows) {
       expect(row["phase"]).toBe("PV1_APPROVE");
       expect(row["screenedForUserId"]).toBe(PHARMACIST_ID);

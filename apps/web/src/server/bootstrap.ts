@@ -497,16 +497,26 @@ async function doBootstrap(): Promise<void> {
   // What that means operationally, stated loudly because it is a
   // patient-safety fact and not a TODO: with no knowledge source, the
   // screening engine can answer none of its questions and reports
-  // `SCR_KNOWLEDGE_UNAVAILABLE` on EVERY prescription. That finding
-  // requires a pharmacist acknowledgement, so PV1 approvals still
-  // work — but each one is a pharmacist explicitly recording that
-  // this prescription was not screened. The system says what it did
-  // not do; it does not pretend it screened and found nothing.
+  // `SCR_KNOWLEDGE_UNAVAILABLE` on EVERY prescription. The system
+  // says what it did not do; it does not pretend it screened and
+  // found nothing.
+  //
+  // The empty source declares itself NOT_PROVISIONED, so that gap is
+  // graded MINOR/INFORMATIONAL: recorded on every order and counted in
+  // `gapCount`, but not demanding a per-order pharmacist
+  // acknowledgement. A prompt that fires on 100% of orders and that no
+  // pharmacist can act on does not add a safety control, it spends the
+  // attention the real findings need — see `screeningGapSeverity` in
+  // `@pharmax/clinical-screening`.
+  //
+  // THIS WARNING IS THEREFORE THE CONTROL, not a footnote to one. It
+  // is addressed to the party who can actually close the gap, which is
+  // whoever provisions this deployment.
   configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
   logger.warn("apps/web booted without a licensed drug knowledge source", {
     event: "clinical_screening.knowledge_source.absent",
     reason:
-      "PV1 screening will report SCR_KNOWLEDGE_UNAVAILABLE on every prescription; each approval requires a pharmacist to acknowledge that the screen could not run.",
+      "PV1 clinical screening has NO drug knowledge coverage: SCR_KNOWLEDGE_UNAVAILABLE is reported on every prescription, and no interaction, duplication, cross-sensitivity or dose check can return a finding. Provision a licensed source to restore screening.",
   });
 
   // 6. @pharmax/auth — the in-house identity engine (ADR-0030).

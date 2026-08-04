@@ -3,18 +3,56 @@ import { describe, expect, it } from "vitest";
 import {
   dispositionFor,
   fingerprintOf,
+  gapRemediationFromSeverity,
   isAtLeastAsSevere,
   leastSevere,
+  screeningGapSeverity,
   severityRank,
   suggestedPv1RejectionReason,
   toFhirDetectedIssueSeverity,
   SCREENING_CERTAINTIES,
   SCREENING_FINDING_KINDS,
+  SCREENING_GAP_REMEDIATIONS,
   SCREENING_SEVERITIES,
   SUGGESTED_PV1_REJECTION_REASONS,
   type FingerprintInput,
   type ScreeningTrigger,
 } from "./index.js";
+
+// ---------------------------------------------------------------------------
+// Gap grading
+// ---------------------------------------------------------------------------
+
+describe("screening gap grading", () => {
+  it("round-trips every remediation through severity", () => {
+    // `gapRemediationFromSeverity` is how a reader of
+    // `order_screening_finding` recovers what a persisted gap row means,
+    // so the mapping has to be injective. If two remediations ever
+    // shared a severity, the console would silently start telling
+    // pharmacists to chase gaps nobody can close.
+    for (const remediation of SCREENING_GAP_REMEDIATIONS) {
+      expect(gapRemediationFromSeverity(screeningGapSeverity(remediation))).toBe(remediation);
+    }
+  });
+
+  it("grades no gap at a severity that could block", () => {
+    // A gap must never reach HARD_STOP: refusing to dispense because
+    // OUR platform cannot screen would make our deficiency the
+    // patient's problem.
+    for (const remediation of SCREENING_GAP_REMEDIATIONS) {
+      const severity = screeningGapSeverity(remediation);
+      expect(dispositionFor(severity, "DEFINITE"), remediation).not.toBe("HARD_STOP");
+    }
+  });
+
+  it("returns null for a severity no gap carries", () => {
+    const gapSeverities = new Set(SCREENING_GAP_REMEDIATIONS.map(screeningGapSeverity));
+    for (const severity of SCREENING_SEVERITIES) {
+      if (gapSeverities.has(severity)) continue;
+      expect(gapRemediationFromSeverity(severity), severity).toBeNull();
+    }
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Severity ordering
