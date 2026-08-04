@@ -36,6 +36,7 @@
 import "server-only";
 
 import {
+  gapRemediationForFindingCode,
   gapRemediationFromSeverity,
   SCREENING_SEVERITIES,
   severityRank,
@@ -73,6 +74,13 @@ const FINDING_SCAN_LIMIT = 400;
  *     for this patient. Specific to this order, and somebody here can
  *     close it — so these are the gaps that still ask for an
  *     acknowledgement.
+ *   - ORGANIZATION_COVERAGE — a check that could not (fully) run
+ *     because the pharmacy's OWN reference data is incomplete: a
+ *     compound whose formula has uncoded ingredient rows. Closable —
+ *     but by the formulary team, once, org-wide, not by the
+ *     pharmacist on this order, so it informs rather than interrupts.
+ *     Shown in its own block so "your org can fix this" is never
+ *     dressed as either "you must fix this" or "nobody can".
  *   - PLATFORM_CAPABILITY — a check Pharmax cannot perform for ANY
  *     order, because the input or the knowledge source does not exist
  *     in this deployment. Identical on every order until an engineer
@@ -80,12 +88,13 @@ const FINDING_SCAN_LIMIT = 400;
  *     can resolve it, and pretending otherwise is what turns an
  *     acknowledgement into a keystroke.
  *
- * Both gap groups are recorded on every screen regardless of the
+ * All gap groups are recorded on every screen regardless of the
  * pharmacy's `minimumReportedSeverity` — the floor governs CLINICAL
  * findings only, so this panel can never show a screen as clean that
  * merely went unrecorded.
  */
-export type ScreeningFindingGroup = "CLINICAL" | "PRESCRIPTION_COVERAGE" | "PLATFORM_CAPABILITY";
+export type ScreeningFindingGroup =
+  "CLINICAL" | "PRESCRIPTION_COVERAGE" | "ORGANIZATION_COVERAGE" | "PLATFORM_CAPABILITY";
 
 function isKnownSeverity(severity: string): severity is ScreeningSeverity {
   return (SCREENING_SEVERITIES as ReadonlyArray<string>).includes(severity);
@@ -156,27 +165,34 @@ function rankOf(severity: string): number {
 }
 
 /**
- * Grouped by REMEDIATION, not by finding code.
+ * Grouped by REMEDIATION, recovered code-first and severity-second.
  *
- * The code cannot answer this. Every gap code can be raised for either
- * reason — `SCR_ALLERGY_INPUT_UNAVAILABLE` means "no allergy capture
- * exists" today and will mean "nobody recorded allergies for this
- * patient" once it does; `SCR_KNOWLEDGE_UNAVAILABLE` means "no database
- * is provisioned" or "this one code is missing from a working database".
- * A code-based rule therefore mislabels in both directions, and each
- * mislabel is an instruction to the pharmacist that cannot be followed:
- * look up a drug in a database that does not exist, or go and obtain an
- * allergy history the platform cannot store.
+ * MOST codes cannot answer this on their own. `SCR_ALLERGY_INPUT_UNAVAILABLE`
+ * means "no allergy capture exists" today and will mean "nobody
+ * recorded allergies for this patient" once it does;
+ * `SCR_KNOWLEDGE_UNAVAILABLE` means "no database is provisioned" or
+ * "this one code is missing from a working database". For those, a
+ * code-based rule mislabels in both directions and the persisted
+ * severity decides (`gapRemediationFromSeverity`).
  *
- * The remediation is recovered from the persisted severity, which is 1:1
- * with it by `screeningGapSeverity`. An uninterpretable grading falls to
- * PRESCRIPTION_COVERAGE — the group that invites a look — because
- * telling someone to check is a cheaper error than telling them to
- * ignore.
+ * The compound-coverage codes are the exception: they were minted to
+ * carry exactly ORGANIZATION_DATA, they grade MINOR, and MINOR's
+ * severity-recovery answer is (and must remain, for historical rows)
+ * PLATFORM_CAPABILITY. `gapRemediationForFindingCode` is consulted
+ * FIRST for exactly this reason — without it the panel would tell a
+ * pharmacist "nobody can close this" about their own formulary
+ * team's backlog.
+ *
+ * An uninterpretable grading falls to PRESCRIPTION_COVERAGE — the
+ * group that invites a look — because telling someone to check is a
+ * cheaper error than telling them to ignore.
  */
-function groupFor(kind: string, severity: string): ScreeningFindingGroup {
+function groupFor(kind: string, code: string, severity: string): ScreeningFindingGroup {
   if (kind !== "SCREENING_GAP") return "CLINICAL";
-  const remediation = isKnownSeverity(severity) ? gapRemediationFromSeverity(severity) : null;
+  const remediation =
+    gapRemediationForFindingCode(code) ??
+    (isKnownSeverity(severity) ? gapRemediationFromSeverity(severity) : null);
+  if (remediation === "ORGANIZATION_DATA") return "ORGANIZATION_COVERAGE";
   return remediation === "PLATFORM_CAPABILITY" ? "PLATFORM_CAPABILITY" : "PRESCRIPTION_COVERAGE";
 }
 
@@ -267,7 +283,7 @@ export async function getOrderScreening(input: {
           reason: row.reason,
           citation: row.citation,
           triggers: parseTriggers(row.triggers),
-          group: groupFor(row.kind, row.severity),
+          group: groupFor(row.kind, row.code, row.severity),
           acknowledgedByViewer,
           acknowledgeable: row.disposition === "REQUIRES_ACKNOWLEDGEMENT" && !acknowledgedByViewer,
         });

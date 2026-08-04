@@ -1160,6 +1160,7 @@ describe("ApprovePV1 — a screening refusal is a COMMITTED refusal", () => {
         drugs: {
           "00000-0000-99": {
             ingredientCodes: ["INGREDIENT_ALFA"],
+            uncodedIngredientCount: 0,
             therapeuticClassCodes: [],
             crossSensitivityClassCodes: [],
             doseRange: null,

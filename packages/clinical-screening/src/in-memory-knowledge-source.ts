@@ -18,6 +18,7 @@
 import type {
   AllergenCode,
   AllergenKnowledge,
+  CompoundFormulaProvenance,
   DrugCode,
   DrugCodeScope,
   DrugKnowledge,
@@ -47,10 +48,26 @@ export interface InMemoryKnowledgeSeed {
   /**
    * Codes the source declares OUT_OF_NOMENCLATURE — never resolvable,
    * so their gaps grade informational rather than acknowledge-tier.
-   * Models a compounded preparation's org-local identifier. Every
-   * other code answers IN_NOMENCLATURE, the conservative default.
+   * Models a compounded preparation's org-local identifier under a
+   * source with no local-declaration capability. Every other code
+   * answers IN_NOMENCLATURE, the conservative default.
    */
   readonly outOfNomenclatureDrugCodes?: ReadonlyArray<DrugCode>;
+  /**
+   * Codes the source declares LOCALLY_DECLARABLE — a compounded
+   * preparation the platform could screen from an org-declared
+   * formula that has not been (sufficiently) coded. Gaps for these
+   * grade ORGANIZATION_DATA. Takes precedence over
+   * `outOfNomenclatureDrugCodes` when a code appears in both, since a
+   * declarable code is by definition outside national nomenclature.
+   */
+  readonly locallyDeclarableDrugCodes?: ReadonlyArray<DrugCode>;
+  /**
+   * Per-code formula attribution, for modelling a source that answers
+   * (or consulted a formula for) a compound code. Codes absent here
+   * answer `null`, the published-nomenclature default.
+   */
+  readonly compoundProvenance?: Readonly<Record<DrugCode, CompoundFormulaProvenance>>;
   /**
    * The release identity the wiring layer stamps onto persisted
    * findings. Defaults to `null`: a caller-seeded container holds no
@@ -100,6 +117,10 @@ export function createInMemoryDrugKnowledgeSource(
     seed.coverage ?? (drugs.size > 0 ? "PROVISIONED" : "NOT_PROVISIONED");
 
   const outOfNomenclature = new Set(seed.outOfNomenclatureDrugCodes ?? []);
+  const locallyDeclarable = new Set(seed.locallyDeclarableDrugCodes ?? []);
+  const compoundProvenance = new Map<DrugCode, CompoundFormulaProvenance>(
+    Object.entries(seed.compoundProvenance ?? {})
+  );
 
   return {
     coverage,
@@ -111,7 +132,11 @@ export function createInMemoryDrugKnowledgeSource(
       return allergens.get(code) ?? null;
     },
     drugCodeScope(code: DrugCode): DrugCodeScope {
+      if (locallyDeclarable.has(code)) return "LOCALLY_DECLARABLE";
       return outOfNomenclature.has(code) ? "OUT_OF_NOMENCLATURE" : "IN_NOMENCLATURE";
+    },
+    compoundFormulaProvenance(code: DrugCode): CompoundFormulaProvenance | null {
+      return compoundProvenance.get(code) ?? null;
     },
     findIngredientInteraction(a: IngredientCode, b: IngredientCode): InteractionFact | null {
       return interactions.get(pairKey(a, b)) ?? null;

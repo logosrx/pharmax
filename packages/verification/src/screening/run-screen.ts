@@ -94,6 +94,8 @@
 import {
   screenPrescription,
   severityRank,
+  INPUT_UNAVAILABLE_CODE_FOR_AXIS,
+  type CompoundFormulaProvenance,
   type DrugKnowledgeRelease,
   type DrugKnowledgeSource,
   type PrescribedDrug,
@@ -157,6 +159,16 @@ export interface ScreenResult {
    * source carries no release identity (empty or caller-seeded).
    */
   readonly knowledgeRelease: DrugKnowledgeRelease | null;
+  /**
+   * Per-finding compound-formula attribution, keyed by fingerprint —
+   * the org-formulary counterpart of `knowledgeRelease`. A licensed
+   * release versions as one unit and stamps once per screen; formulas
+   * version per recipe, so their attribution travels per finding:
+   * each entry names the formula version the drug-knowledge answer
+   * behind that finding was drawn from. Findings that involved no
+   * compound formula are absent, and their stamp columns stay NULL.
+   */
+  readonly formulaProvenanceByFingerprint: ReadonlyMap<string, CompoundFormulaProvenance>;
 }
 
 /**
@@ -247,7 +259,63 @@ export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResul
     evaluation: toEvaluation(findings),
     screenedLineCount: candidates.length,
     knowledgeRelease: knowledge.release,
+    formulaProvenanceByFingerprint: resolveFormulaProvenance(
+      findings,
+      [...candidates, ...activeMedications],
+      knowledge
+    ),
   };
+}
+
+/**
+ * Which formula version each finding was screened against, recovered
+ * from the finding's own triggers: a trigger's `recordId` is a
+ * prescription id, the prescription's drug code is what the knowledge
+ * source answered for, and `compoundFormulaProvenance` names the
+ * formula behind that answer.
+ *
+ * When one finding involves two formulas (a duplication between two
+ * compound lines), the CANDIDATE side wins — the finding is about the
+ * line being dispensed, and the other recipe stays reachable through
+ * the triggers. Ties beyond that break on formulaId so replays stamp
+ * identically.
+ */
+function resolveFormulaProvenance(
+  findings: ReadonlyArray<ScreeningFinding>,
+  screenedDrugs: ReadonlyArray<PrescribedDrug>,
+  knowledge: DrugKnowledgeSource
+): ReadonlyMap<string, CompoundFormulaProvenance> {
+  const drugCodeByRecordId = new Map(screenedDrugs.map((drug) => [drug.recordId, drug.drugCode]));
+
+  // Caller-input gaps ("no dose input was available") name the
+  // candidate line in their triggers but never consulted drug
+  // knowledge — stamping a formula on them would claim a recipe was
+  // read where none was.
+  const inputGapCodes = new Set<string>(Object.values(INPUT_UNAVAILABLE_CODE_FOR_AXIS));
+
+  const provenanceFor = (recordId: string): CompoundFormulaProvenance | null => {
+    const drugCode = drugCodeByRecordId.get(recordId);
+    if (drugCode === undefined) return null;
+    return knowledge.compoundFormulaProvenance(drugCode);
+  };
+
+  const out = new Map<string, CompoundFormulaProvenance>();
+  for (const finding of findings) {
+    if (inputGapCodes.has(finding.code)) continue;
+    const candidateSide: CompoundFormulaProvenance[] = [];
+    const otherSide: CompoundFormulaProvenance[] = [];
+    for (const trigger of finding.triggers) {
+      const provenance = provenanceFor(trigger.recordId);
+      if (provenance === null) continue;
+      (trigger.source === "CANDIDATE_DRUG" ? candidateSide : otherSide).push(provenance);
+    }
+    const ranked = (candidateSide.length > 0 ? candidateSide : otherSide).sort((a, b) =>
+      a.formulaId.localeCompare(b.formulaId)
+    );
+    const chosen = ranked[0];
+    if (chosen !== undefined) out.set(finding.fingerprint, chosen);
+  }
+  return out;
 }
 
 /**
@@ -370,6 +438,13 @@ export interface PersistFindingsInput {
    * fire in March?" survives the reference data moving on.
    */
   readonly knowledgeRelease: DrugKnowledgeRelease | null;
+  /**
+   * Per-finding formula attribution
+   * (`ScreenResult.formulaProvenanceByFingerprint`). Findings absent
+   * from the map persist NULL stamp columns — the honest answer for a
+   * finding that involved no compound formula.
+   */
+  readonly formulaProvenanceByFingerprint: ReadonlyMap<string, CompoundFormulaProvenance>;
   readonly commandLogId: string;
   readonly occurredAt: Date;
 }
@@ -386,27 +461,33 @@ export async function persistFindings(input: PersistFindingsInput): Promise<void
   if (input.findings.length === 0) return;
 
   await input.tx.orderScreeningFinding.createMany({
-    data: input.findings.map((finding) => ({
-      organizationId: input.organizationId,
-      orderId: input.orderId,
-      phase: input.phase,
-      screenedForUserId: input.screenedForUserId,
-      code: finding.code,
-      kind: finding.kind,
-      severity: finding.severity,
-      certainty: finding.certainty,
-      disposition: finding.disposition,
-      fingerprint: finding.fingerprint,
-      reason: finding.reason,
-      triggers: finding.triggers as unknown as Prisma.InputJsonValue,
-      citation: finding.citation,
-      workflowPolicyId: input.workflowPolicyId,
-      workflowPolicyVersion: input.workflowPolicyVersion,
-      minimumReportedSeverity: input.minimumReportedSeverity,
-      knowledgeSourceCode: input.knowledgeRelease?.source ?? null,
-      knowledgeReleaseVersion: input.knowledgeRelease?.version ?? null,
-      commandLogId: input.commandLogId,
-      occurredAt: input.occurredAt,
-    })),
+    data: input.findings.map((finding) => {
+      const formula = input.formulaProvenanceByFingerprint.get(finding.fingerprint) ?? null;
+      return {
+        organizationId: input.organizationId,
+        orderId: input.orderId,
+        phase: input.phase,
+        screenedForUserId: input.screenedForUserId,
+        code: finding.code,
+        kind: finding.kind,
+        severity: finding.severity,
+        certainty: finding.certainty,
+        disposition: finding.disposition,
+        fingerprint: finding.fingerprint,
+        reason: finding.reason,
+        triggers: finding.triggers as unknown as Prisma.InputJsonValue,
+        citation: finding.citation,
+        workflowPolicyId: input.workflowPolicyId,
+        workflowPolicyVersion: input.workflowPolicyVersion,
+        minimumReportedSeverity: input.minimumReportedSeverity,
+        knowledgeSourceCode: input.knowledgeRelease?.source ?? null,
+        knowledgeReleaseVersion: input.knowledgeRelease?.version ?? null,
+        formulaId: formula?.formulaId ?? null,
+        formulaCode: formula?.formulaCode ?? null,
+        formulaVersion: formula?.formulaVersion ?? null,
+        commandLogId: input.commandLogId,
+        occurredAt: input.occurredAt,
+      };
+    }),
   });
 }

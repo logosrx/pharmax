@@ -332,6 +332,15 @@ export function screenPrescription(request: ScreeningRequest): ScreeningEvaluati
     // than a silent pass.
     raw.push(knowledgeGapFinding("CANDIDATE_DRUG", request.candidate, request.knowledge));
   } else {
+    // The knowledge answered, but for a drug whose declared
+    // ingredient list it could not fully name (a partially-coded
+    // compound formula) the answer is a subset — the collectors
+    // below screen that subset, and this row says so. Emitted before
+    // them so the report exists whatever they find.
+    if (candidateKnowledge.uncodedIngredientCount > 0) {
+      raw.push(partialCodingGapFinding("CANDIDATE_DRUG", request.candidate, candidateKnowledge));
+    }
+
     // Each collector returns immediately when its own axis was
     // declared unavailable — one rule, applied in one place per axis,
     // rather than a gate here that a new collector could be added
@@ -479,6 +488,13 @@ const REMEDIATION_REASON: Readonly<Record<ScreeningGapRemediation, string>> = Ob
     "The platform supports this input but none was recorded for this subject; it can be obtained and the screen re-run.",
   PLATFORM_CAPABILITY:
     "This platform has no capability to supply that input for any subject, so no screen can perform this check until the capability is built.",
+  // Unreachable from an input-availability declaration (the
+  // availability vocabulary maps onto the other two values), but the
+  // Record is total over the remediation vocabulary on purpose — a
+  // remediation with no operator-facing sentence would fail to
+  // compile here rather than interpolate `undefined` into a reason.
+  ORGANIZATION_DATA:
+    "The pharmacy organization can supply this input as reference data; once it does, every subsequent screen performs this check without further per-order action.",
 });
 
 // ---------------------------------------------------------------------------
@@ -647,6 +663,13 @@ function collectProfileFindings(
       // screenable and the candidate's own gap says everything.
       out.push(knowledgeGapFinding("PROFILE_MEDICATION", med, request.knowledge));
       continue;
+    }
+
+    // A partially-coded profile entry is screened over its coded
+    // subset, exactly like a partially-coded candidate — and reported
+    // the same way, for the same reason.
+    if (medKnowledge.uncodedIngredientCount > 0) {
+      out.push(partialCodingGapFinding("PROFILE_MEDICATION", med, medKnowledge));
     }
 
     if (screensInteractions) {
@@ -1008,10 +1031,36 @@ function knowledgeGapFinding(
       ? "no screening could be performed for this prescription"
       : "this profile medication was excluded from interaction and duplication screening";
 
-  if (
-    knowledge.coverage === "PROVISIONED" &&
-    knowledge.drugCodeScope(drug.drugCode) === "OUT_OF_NOMENCLATURE"
-  ) {
+  const codeScope = knowledge.drugCodeScope(drug.drugCode);
+
+  // Consulted at ANY coverage, unlike the nomenclature scopes below:
+  // an org's own formulary answers independently of whether a
+  // licensed national release is wired, so "code the formula" is the
+  // true remediation either way. See `DRUG_CODE_SCOPES`.
+  if (codeScope === "LOCALLY_DECLARABLE") {
+    return finding({
+      code: "SCR_COMPOUND_FORMULA_NOT_CODED",
+      kind: "SCREENING_GAP",
+      // ORGANIZATION_DATA grading (MINOR → INFORMATIONAL): closable,
+      // but only by the org's formulary team, and identical on every
+      // order for this product until they act — interrupting the
+      // pharmacist for it would charge the queue for another team's
+      // backlog. Recorded on every screen so coverage reporting can
+      // count it. Never high enough to block.
+      severity: screeningGapSeverity("ORGANIZATION_DATA"),
+      certainty: "DEFINITE",
+      reason:
+        `Drug code ${drug.drugCode} is a compounded preparation's identifier and its ingredients ` +
+        `are not machine-readable: no active formula with coded ingredients is on file for it; ${scope}. ` +
+        `The platform supports locally declared ingredients — coding the preparation's formula ` +
+        `closes this gap for every subsequent order.`,
+      triggers: [trigger(source, drug.recordId, drug.drugCode)],
+      qualifiers: [`scope=${source}`, `remediation=ORGANIZATION_DATA`],
+      citation: null,
+    });
+  }
+
+  if (knowledge.coverage === "PROVISIONED" && codeScope === "OUT_OF_NOMENCLATURE") {
     return finding({
       code: "SCR_KNOWLEDGE_NOT_APPLICABLE",
       kind: "SCREENING_GAP",
@@ -1025,7 +1074,7 @@ function knowledgeGapFinding(
         `(a compounded preparation's identifier appears in no national drug nomenclature); ${scope}. ` +
         `The code is correct as recorded and no reference-data update can resolve it; ` +
         `ingredient-level screening for such preparations requires locally declared ingredients, ` +
-        `which this platform does not yet support.`,
+        `which the knowledge source in use does not support.`,
       triggers: [trigger(source, drug.recordId, drug.drugCode)],
       qualifiers: [`scope=${source}`, `remediation=PLATFORM_CAPABILITY`],
       citation: null,
@@ -1060,7 +1109,58 @@ const KNOWLEDGE_REMEDIATION_REASON: Readonly<Record<ScreeningGapRemediation, str
       "The drug knowledge source is provisioned but holds no record of this code; verify the code and request a reference-data update.",
     PLATFORM_CAPABILITY:
       "No drug knowledge source is provisioned for this deployment, so no prescription can be screened against one until a licensed source is wired.",
+    // Unreachable through `gapRemediationForCoverage` (an
+    // organization cannot remediate a licensed source's coverage);
+    // the LOCALLY_DECLARABLE path above templates its own sentence.
+    // Present because the Record is total over the vocabulary, so a
+    // new remediation cannot ship without an operator-facing sentence.
+    ORGANIZATION_DATA:
+      "The pharmacy organization can declare this knowledge as reference data; once it does, subsequent screens answer from it without further per-order action.",
   });
+
+/**
+ * The report that keeps a partially-coded ingredient list honest.
+ *
+ * Emitted whenever a drug's knowledge admits `uncodedIngredientCount`
+ * rows it could not name — in practice a compound formula with rows
+ * nobody has coded. The screen HAS run over the coded subset and its
+ * findings stand; this row records that the remainder was compared by
+ * nobody, so "no findings" on the drug cannot be read as "screened
+ * clear". The uncoded count is a qualifier because it is interpolated
+ * into the reason and varies as coding progresses — a re-screen after
+ * the formulary team codes two more rows is a different statement and
+ * must not inherit the old row's identity.
+ */
+function partialCodingGapFinding(
+  source: "CANDIDATE_DRUG" | "PROFILE_MEDICATION",
+  drug: PrescribedDrug,
+  drugKnowledge: DrugKnowledge
+): ScreeningFinding {
+  const scope =
+    source === "CANDIDATE_DRUG"
+      ? "screening for this prescription covered only the coded ingredients"
+      : "interaction and duplication screening against this profile medication covered only its coded ingredients";
+
+  return finding({
+    code: "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED",
+    kind: "SCREENING_GAP",
+    // Same grading and same reasoning as SCR_COMPOUND_FORMULA_NOT_CODED.
+    severity: screeningGapSeverity("ORGANIZATION_DATA"),
+    certainty: "DEFINITE",
+    reason:
+      `${drugKnowledge.uncodedIngredientCount} declared ingredient row(s) of compounded preparation ` +
+      `${drug.drugCode} are not coded and were not machine-screened; ${scope}. ` +
+      `The uncoded rows must be read by the verifying pharmacist; coding them in the formula ` +
+      `closes this gap for every subsequent order.`,
+    triggers: [trigger(source, drug.recordId, drug.drugCode)],
+    qualifiers: [
+      `scope=${source}`,
+      `remediation=ORGANIZATION_DATA`,
+      `uncodedRows=${drugKnowledge.uncodedIngredientCount}`,
+    ],
+    citation: null,
+  });
+}
 
 /**
  * Collapse findings that describe the same clinical situation.

@@ -83,6 +83,7 @@ export {
   CompoundFormulaRetireReason,
   CompoundFormulaStatus,
   CompoundingQualityOutcome,
+  CompoundIngredientCoding,
   CompoundPreparationKind,
   CompoundStorageCondition,
   ControlledSubstancePartialFillBasis,

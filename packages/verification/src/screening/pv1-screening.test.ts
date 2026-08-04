@@ -161,12 +161,14 @@ function knowledgeWithAcknowledgeTierInteraction(): DrugKnowledgeSource {
     drugs: {
       [CANDIDATE_NDC]: {
         ingredientCodes: ["INGREDIENT_ALFA"],
+        uncodedIngredientCount: 0,
         therapeuticClassCodes: [],
         crossSensitivityClassCodes: [],
         doseRange: null,
       },
       [PROFILE_NDC]: {
         ingredientCodes: ["INGREDIENT_BRAVO"],
+        uncodedIngredientCount: 0,
         therapeuticClassCodes: [],
         crossSensitivityClassCodes: [],
         doseRange: null,
@@ -190,12 +192,14 @@ function knowledgeWithHardStopInteraction(): DrugKnowledgeSource {
     drugs: {
       [CANDIDATE_NDC]: {
         ingredientCodes: ["INGREDIENT_ALFA"],
+        uncodedIngredientCount: 0,
         therapeuticClassCodes: [],
         crossSensitivityClassCodes: [],
         doseRange: null,
       },
       [PROFILE_NDC]: {
         ingredientCodes: ["INGREDIENT_BRAVO"],
+        uncodedIngredientCount: 0,
         therapeuticClassCodes: [],
         crossSensitivityClassCodes: [],
         doseRange: null,
@@ -768,6 +772,94 @@ describe("PV1 screening — the allergy axis is per-patient", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Compound-formula attribution and partial coding
+// ---------------------------------------------------------------------------
+
+describe("PV1 screening — compound formulas", () => {
+  const FORMULA_ID = "00000000-0000-4000-8000-00000000f0f0";
+
+  /**
+   * A source modelling the composite: the candidate resolves from an
+   * org-declared formula (one row still uncoded), and the source
+   * names the formula version behind that answer.
+   */
+  function knowledgeFromPartiallyCodedFormula(): DrugKnowledgeSource {
+    return createInMemoryDrugKnowledgeSource({
+      drugs: {
+        [CANDIDATE_NDC]: {
+          ingredientCodes: ["INGREDIENT_ALFA"],
+          uncodedIngredientCount: 1,
+          therapeuticClassCodes: [],
+          crossSensitivityClassCodes: [],
+          doseRange: null,
+        },
+      },
+      compoundProvenance: {
+        [CANDIDATE_NDC]: {
+          formulaId: FORMULA_ID,
+          formulaCode: "F-SYNTH",
+          formulaVersion: 3,
+        },
+      },
+    });
+  }
+
+  it("stamps the formula version on formula-derived findings, and only those", async () => {
+    const fake = buildFlowFake({
+      screening: {
+        ...candidateOnly,
+        historyAssertions: [],
+        allergies: [
+          screenableStubAllergy({
+            patientId: PATIENT_ID,
+            substanceCode: "INGREDIENT_ALFA",
+            criticality: "HIGH",
+            verificationStatus: "CONFIRMED",
+          }),
+        ],
+      },
+    });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeFromPartiallyCodedFormula() });
+
+    await startReview();
+
+    // The hard stop the coded rows made possible names the recipe
+    // version it was screened against — the org-formulary counterpart
+    // of the knowledge-release stamp.
+    const allergyRow = fake.screening.state.persistedFindings.find(
+      (f) => f.code === "SCR_DRUG_ALLERGY_DIRECT"
+    );
+    expect(allergyRow).toMatchObject({
+      disposition: "HARD_STOP",
+      formulaId: FORMULA_ID,
+      formulaCode: "F-SYNTH",
+      formulaVersion: 3,
+    });
+
+    // The partial-coding report is attributed to the same version —
+    // "which recipe had the uncoded rows?" is its reader's question —
+    // and is informational: org-closable, not the pharmacist's click.
+    const partialRow = fake.screening.state.persistedFindings.find(
+      (f) => f.code === "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED"
+    );
+    expect(partialRow).toMatchObject({
+      disposition: "INFORMATIONAL",
+      formulaId: FORMULA_ID,
+      formulaVersion: 3,
+    });
+
+    // A caller-input gap on the same candidate consulted no recipe,
+    // so it must not claim one — even though its trigger names the
+    // same prescription line.
+    const doseGapRow = fake.screening.state.persistedFindings.find(
+      (f) => f.code === "SCR_DOSE_INPUT_UNAVAILABLE"
+    );
+    expect(doseGapRow).toMatchObject({ formulaId: null, formulaVersion: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The empty knowledge source — the shipped default
 // ---------------------------------------------------------------------------
 
@@ -985,6 +1077,7 @@ describe("PV1 screening — with no drug knowledge configured", () => {
         drugs: {
           SOME_OTHER_NDC: {
             ingredientCodes: ["INGREDIENT_ALFA"],
+            uncodedIngredientCount: 0,
             therapeuticClassCodes: [],
             crossSensitivityClassCodes: [],
             doseRange: null,
@@ -1301,6 +1394,7 @@ describe("PV1 screening — a finding raised for the first time at sign-off", ()
       drugs: {
         [CANDIDATE_NDC]: {
           ingredientCodes: ["INGREDIENT_ALFA"],
+          uncodedIngredientCount: 0,
           therapeuticClassCodes: [],
           crossSensitivityClassCodes: [],
           doseRange: null,
@@ -1652,12 +1746,14 @@ describe("PV1 screening — knowledge-release attribution", () => {
         drugs: {
           [CANDIDATE_NDC]: {
             ingredientCodes: ["INGREDIENT_ALFA"],
+            uncodedIngredientCount: 0,
             therapeuticClassCodes: [],
             crossSensitivityClassCodes: [],
             doseRange: null,
           },
           [PROFILE_NDC]: {
             ingredientCodes: ["INGREDIENT_BRAVO"],
+            uncodedIngredientCount: 0,
             therapeuticClassCodes: [],
             crossSensitivityClassCodes: [],
             doseRange: null,

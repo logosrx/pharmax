@@ -345,6 +345,7 @@ export const StartPV1 = defineCommand<StartPV1Input, StartPV1Output>({
       workflowPolicyVersion: policy.version,
       minimumReportedSeverity: screeningPolicy.minimumReportedSeverity,
       knowledgeRelease: screen.knowledgeRelease,
+      formulaProvenanceByFingerprint: screen.formulaProvenanceByFingerprint,
       commandLogId,
       occurredAt: now,
     });

@@ -36,9 +36,11 @@ import type { Command, HandlerResult } from "@pharmax/command-bus";
 import {
   CompoundBudBasis,
   CompoundFormulaStatus,
+  CompoundIngredientCoding,
   CompoundPreparationKind,
   CompoundStorageCondition,
   Prisma,
+  ProductNdcKind,
 } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
@@ -52,9 +54,25 @@ import {
   COMPOUND_FORMULA_BUD_REFERENCE_REQUIRED,
   COMPOUND_FORMULA_DRAFT_EXISTS,
   COMPOUND_FORMULA_INGREDIENT_PRODUCT_NOT_FOUND,
+  COMPOUND_FORMULA_PRODUCT_NOT_COMPOUND,
+  COMPOUND_FORMULA_PRODUCT_NOT_FOUND,
   USP_795_BUD_CAPS_DAYS,
   USP_797_BUD_CAPS_DAYS,
 } from "../shared.js";
+
+/**
+ * The row's coding state, derived from what the author stated. The
+ * Zod refine above makes the "both" case unrepresentable; the DB
+ * CHECK ties the enum to the code column again at the schema layer.
+ */
+function ingredientCoding(row: {
+  readonly rxnormInRxcui?: string | undefined;
+  readonly noRxnormIngredient?: boolean | undefined;
+}): CompoundIngredientCoding {
+  if (row.rxnormInRxcui !== undefined) return CompoundIngredientCoding.RXNORM_IN;
+  if (row.noRxnormIngredient === true) return CompoundIngredientCoding.NO_RXNORM_INGREDIENT;
+  return CompoundIngredientCoding.UNCODED;
+}
 
 // ---------------------------------------------------------------------
 // Input schema
@@ -72,8 +90,30 @@ const ingredientSchema = z
       .positive()
       .refine((n) => Number.isFinite(n), "must be finite"),
     unit: z.string().min(1).max(20),
+    /**
+     * RxNorm ingredient (IN) RXCUI for this row — bare digits, the
+     * code space `patient_allergy` RXNORM records use, which is what
+     * lets the PV1 allergy screen compare this row to the patient's
+     * coded allergies. Omitted for a row nobody has coded yet.
+     */
+    rxnormInRxcui: z
+      .string()
+      .regex(/^\d{1,8}$/, "expected a bare RXCUI: 1-8 digits")
+      .optional(),
+    /**
+     * The authored assertion that NO RxNorm ingredient concept applies
+     * to this row — a base, vehicle or excipient national nomenclature
+     * does not model. A positive claim with the author's name on it
+     * (the formula records who created the version), not a default:
+     * it is what lets a real formula reach "fully coded" without
+     * pretending its cream base has an RXCUI.
+     */
+    noRxnormIngredient: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .refine((row) => !(row.rxnormInRxcui !== undefined && row.noRxnormIngredient === true), {
+    message: "a row cannot both carry an RXCUI and assert that none applies",
+  });
 
 const inputSchema = z
   .object({
@@ -83,6 +123,22 @@ const inputSchema = z
     code: z.string().regex(/^[A-Z0-9][A-Z0-9_-]{1,63}$/, "expected 2-64 chars: A-Z, 0-9, '-', '_'"),
     name: z.string().min(1).max(200),
     description: z.string().min(1).max(2000).optional(),
+
+    /**
+     * The catalog product this formula is the recipe FOR — the
+     * PV1-time link that makes the compound screenable. Must reference
+     * an IN_HOUSE_COMPOUND product in this org's catalog. Optional
+     * because a formula can legitimately exist before its dispensable
+     * product does; until it is linked and published, orders for the
+     * product carry the `SCR_COMPOUND_FORMULA_NOT_CODED` gap.
+     *
+     * Declared per VERSION on purpose: the link is screening-relevant
+     * (pointing a product at the wrong recipe screens the wrong
+     * ingredients), so changing it must ride the same draft→publish
+     * cycle — commanded, permission-gated, audited, evented — as any
+     * other screening-relevant recipe change.
+     */
+    compoundProductId: z.uuid().optional(),
 
     preparationKind: z.enum(CompoundPreparationKind),
     hazardous: z.boolean().optional(),
@@ -180,6 +236,36 @@ export const CreateCompoundFormula: Command<
       }
     }
 
+    // The linked dispensable product must exist in THIS org's catalog
+    // and actually be a compound. Linking a NATIONAL product would
+    // shadow the published-nomenclature screen for a real NDC with an
+    // org-authored recipe — a screening-suppression vector — so it is
+    // refused outright rather than left to the composite source's
+    // routing.
+    if (input.compoundProductId !== undefined) {
+      const compoundProduct = await tx.product.findFirst({
+        where: { organizationId: ctx.organizationId, id: input.compoundProductId },
+        select: { id: true, ndcKind: true },
+      });
+      if (compoundProduct === null) {
+        throw new errors.NotFoundError({
+          code: COMPOUND_FORMULA_PRODUCT_NOT_FOUND,
+          message: "compoundProductId is not in this organization's catalog.",
+          metadata: { compoundProductId: input.compoundProductId },
+        });
+      }
+      if (compoundProduct.ndcKind !== ProductNdcKind.IN_HOUSE_COMPOUND) {
+        throw new errors.ValidationError({
+          code: COMPOUND_FORMULA_PRODUCT_NOT_COMPOUND,
+          message:
+            "compoundProductId references a NATIONAL product. A formula may only claim an " +
+            "IN_HOUSE_COMPOUND product: linking a recipe to a real NDC would replace its " +
+            "published-nomenclature screening with an org-authored ingredient list.",
+          metadata: { compoundProductId: input.compoundProductId },
+        });
+      }
+    }
+
     // Next version for this code. Concurrent drafts of the same code
     // are serialized by the partial UNIQUE (one DRAFT per org+code);
     // see the P2002 translation below.
@@ -211,6 +297,9 @@ export const CreateCompoundFormula: Command<
           storageCondition: input.storageCondition,
           instructions: input.instructions,
           ...(input.qualityChecks === undefined ? {} : { qualityChecks: input.qualityChecks }),
+          ...(input.compoundProductId === undefined
+            ? {}
+            : { compoundProductId: input.compoundProductId }),
           createdByUserId: ctx.actor.userId,
         },
       });
@@ -239,8 +328,23 @@ export const CreateCompoundFormula: Command<
         quantity: new Prisma.Decimal(ingredient.quantity),
         unit: ingredient.unit,
         sortOrder: index,
+        coding: ingredientCoding(ingredient),
+        ...(ingredient.rxnormInRxcui === undefined
+          ? {}
+          : { rxnormInRxcui: ingredient.rxnormInRxcui }),
       })),
     });
+
+    // Screening-relevant facts belong in the audit record: which
+    // product this recipe claims, and how much of it is
+    // machine-readable. Counts rather than the rows themselves — the
+    // recipe stays out of audit metadata, as before.
+    const codedIngredientCount = input.ingredients.filter(
+      (row) => row.rxnormInRxcui !== undefined
+    ).length;
+    const uncodedIngredientCount = input.ingredients.filter(
+      (row) => row.rxnormInRxcui === undefined && row.noRxnormIngredient !== true
+    ).length;
 
     return {
       output: { formulaId, code: input.code, version },
@@ -256,6 +360,9 @@ export const CreateCompoundFormula: Command<
           budDays: input.budDays,
           budBasis: input.budBasis,
           ingredientCount: input.ingredients.length,
+          codedIngredientCount,
+          uncodedIngredientCount,
+          compoundProductId: input.compoundProductId ?? null,
           commandLogId,
         },
       },

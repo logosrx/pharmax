@@ -192,6 +192,40 @@ export const SCREENING_GAP_REMEDIATIONS = Object.freeze([
    * order can do.
    */
   "PLATFORM_CAPABILITY",
+  /**
+   * The pharmacy ORGANIZATION can close it, once, for every order at
+   * once — by supplying reference data the platform already knows how
+   * to hold. The motivating case: a compound product whose formula
+   * has uncoded ingredient rows. The formulary team coding that
+   * formula closes the gap org-wide.
+   *
+   * Neither of the other two values tells the truth about this
+   * situation. It is not SUBJECT_DATA: nothing about the PATIENT is
+   * missing, and "obtain it for this subject and re-run" — the
+   * instruction SUBJECT_DATA carries — would send a pharmacist after
+   * a fact that is not theirs to obtain. It is not
+   * PLATFORM_CAPABILITY: the capability exists, and "no screen can
+   * perform this check until the capability is built" would be false
+   * on its face.
+   *
+   * Graded like PLATFORM_CAPABILITY (MINOR → INFORMATIONAL) and the
+   * reasoning is the same alert-fatigue argument, one owner over:
+   * the gap is identical on every order for the product until the
+   * FORMULARY TEAM acts, and no pharmacist in the PV1 queue can code
+   * a formula from there. Charging an acknowledgement per order would
+   * punish the pharmacist for another team's backlog and train the
+   * dismiss reflex this engine exists to avoid. The deficiency is
+   * answered where it can be acted on — the finding is recorded on
+   * every screen under its own codes, so coverage reporting can put a
+   * number on the formulary backlog — not by taxing the queue.
+   *
+   * Appended AFTER the original two: `gapRemediationFromSeverity`
+   * recovers a remediation from a persisted severity by first match,
+   * and rows written before this value existed must keep reading as
+   * they always did. New-code rows are recovered by
+   * `gapRemediationForFindingCode` instead — see both functions.
+   */
+  "ORGANIZATION_DATA",
 ] as const);
 
 export type ScreeningGapRemediation = (typeof SCREENING_GAP_REMEDIATIONS)[number];
@@ -231,6 +265,11 @@ export function gapRemediationForAvailability(
  *     floor: recorded for the trail, not worth interrupting for", and
  *     that is precisely what a capability we do not have is to the
  *     pharmacist in front of the order.
+ *   - ORGANIZATION_DATA → MINOR, therefore INFORMATIONAL, for the
+ *     same reason at one remove: the gap is closable, but not by
+ *     anyone touching this order, and it fires identically on every
+ *     order for the product until the org's formulary work is done.
+ *     See the value's own doc for why neither other value is honest.
  *
  * WHY NOT KEEP DEMANDING THE CLICK, WHICH IS SAFER-SOUNDING. Because a
  * finding that fires on 100% of orders is not a finding, it is a
@@ -253,6 +292,8 @@ export function screeningGapSeverity(remediation: ScreeningGapRemediation): Scre
       return "MODERATE";
     case "PLATFORM_CAPABILITY":
       return "MINOR";
+    case "ORGANIZATION_DATA":
+      return "MINOR";
     default: {
       const exhaustive: never = remediation;
       return exhaustive;
@@ -266,16 +307,23 @@ export function screeningGapSeverity(remediation: ScreeningGapRemediation): Scre
  * For readers of `order_screening_finding`, which stores the grading but
  * not the remediation. The console needs it to decide whether to tell a
  * pharmacist "go and look this up" or "nobody here can close this", and
- * guessing from the finding CODE gets that wrong: since the same code
- * can be raised for either reason, a code-based rule would tell a
- * pharmacist to obtain an allergy history the platform cannot store, or
- * to look up a drug in a database that does not exist.
+ * for MOST codes guessing from the finding CODE gets that wrong: since
+ * the same code can be raised for either reason, a code-based rule
+ * would tell a pharmacist to obtain an allergy history the platform
+ * cannot store, or to look up a drug in a database that does not exist.
  *
- * COMPUTED AS THE INVERSE of `screeningGapSeverity` rather than written
- * out, so the two cannot disagree: regrade a remediation there and this
- * follows on its own. Returns `null` for a severity no gap can carry,
- * which is the honest answer for a row this build cannot interpret —
- * `severity` is TEXT precisely so the vocabulary can grow.
+ * NO LONGER INJECTIVE since ORGANIZATION_DATA landed: two remediations
+ * grade MINOR, and this function keeps answering PLATFORM_CAPABILITY
+ * for MINOR — the value every MINOR gap row written before
+ * ORGANIZATION_DATA existed actually carried, so historical rows keep
+ * reading as they always did. The codes that carry ORGANIZATION_DATA
+ * were minted at the same time as the value and can carry nothing
+ * else, so readers must consult `gapRemediationForFindingCode` FIRST
+ * and fall back here only when it answers `null`.
+ *
+ * Returns `null` for a severity no gap can carry, which is the honest
+ * answer for a row this build cannot interpret — `severity` is TEXT
+ * precisely so the vocabulary can grow.
  *
  * Only meaningful for `kind = SCREENING_GAP`. A clinical finding's
  * severity says nothing about remediation and callers must check the
@@ -284,7 +332,36 @@ export function screeningGapSeverity(remediation: ScreeningGapRemediation): Scre
 export function gapRemediationFromSeverity(
   severity: ScreeningSeverity
 ): ScreeningGapRemediation | null {
-  return SCREENING_GAP_REMEDIATIONS.find((r) => screeningGapSeverity(r) === severity) ?? null;
+  return (
+    SCREENING_GAP_REMEDIATIONS.filter((r) => r !== "ORGANIZATION_DATA").find(
+      (r) => screeningGapSeverity(r) === severity
+    ) ?? null
+  );
+}
+
+/**
+ * The remediation a finding code carries BY CONSTRUCTION, for the codes
+ * where that is a fixed fact rather than a per-emission decision.
+ *
+ * The general rule stands: most gap codes can be raised under more
+ * than one remediation (see `gapRemediationFromSeverity`), so most
+ * codes answer `null` here and the severity-based recovery decides.
+ * The compound-coverage codes are the exception that makes this
+ * function necessary — they grade MINOR, MINOR historically meant
+ * PLATFORM_CAPABILITY, and telling a pharmacist "nobody can close
+ * this" about a gap their own formulary team can close is an
+ * instruction that cannot be followed. Each code listed here was
+ * minted to carry exactly one remediation, and `findings.test.ts`
+ * pins that the engine never emits them under any other.
+ */
+export function gapRemediationForFindingCode(code: string): ScreeningGapRemediation | null {
+  switch (code) {
+    case "SCR_COMPOUND_FORMULA_NOT_CODED":
+    case "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED":
+      return "ORGANIZATION_DATA";
+    default:
+      return null;
+  }
 }
 
 /**
@@ -312,6 +389,23 @@ export const SCREENING_FINDING_CODES = Object.freeze([
   // ingredients), and a dashboard must be able to count them
   // separately without parsing reasons.
   "SCR_KNOWLEDGE_NOT_APPLICABLE",
+  // A compound product whose org-declared formula could not supply a
+  // single coded ingredient — no ACTIVE formula claims the product,
+  // or the claiming formula has no RXNORM_IN rows. NOTHING was
+  // screened for the drug, and unlike `SCR_KNOWLEDGE_NOT_APPLICABLE`
+  // the platform DOES support closing it: the org's formulary team
+  // codes the formula. Distinct code so a dashboard can count the
+  // formulary backlog without parsing reasons, and so remediation
+  // recovery can be exact (`gapRemediationForFindingCode`).
+  "SCR_COMPOUND_FORMULA_NOT_CODED",
+  // The formula answered, but with UNCODED rows left over: the screen
+  // ran over the coded subset and the remainder was read by nobody.
+  // The deliberate alternative to a PARTIAL screening state — the
+  // engine screens what it has and reports what it lacks, and this is
+  // the report. Same owner and remediation as the code above; split
+  // so "not screened at all" and "partially screened" are separately
+  // countable operational facts.
+  "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED",
   "SCR_DOSE_UNIT_NOT_COMPARABLE",
   // One per axis, for the case where the CALLER could not supply the
   // input at all. Distinct from `SCR_KNOWLEDGE_UNAVAILABLE`, which

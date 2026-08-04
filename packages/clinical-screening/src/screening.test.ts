@@ -34,6 +34,7 @@ const DRUGS: Readonly<Record<string, DrugKnowledge>> = {
   // Single ingredient, one therapeutic class, one cross-sensitivity class.
   DRUG_ALFA: {
     ingredientCodes: ["ING_ALFA"],
+    uncodedIngredientCount: 0,
     therapeuticClassCodes: ["CLASS_ONE"],
     crossSensitivityClassCodes: ["XCLASS_ONE"],
     doseRange: null,
@@ -42,6 +43,7 @@ const DRUGS: Readonly<Record<string, DrugKnowledge>> = {
   // duplicate-ingredient case.
   DRUG_ALFA_GENERIC: {
     ingredientCodes: ["ING_ALFA"],
+    uncodedIngredientCount: 0,
     therapeuticClassCodes: ["CLASS_ONE"],
     crossSensitivityClassCodes: ["XCLASS_ONE"],
     doseRange: null,
@@ -49,6 +51,7 @@ const DRUGS: Readonly<Record<string, DrugKnowledge>> = {
   // Different ingredient, unrelated class.
   DRUG_BRAVO: {
     ingredientCodes: ["ING_BRAVO"],
+    uncodedIngredientCount: 0,
     therapeuticClassCodes: ["CLASS_TWO"],
     crossSensitivityClassCodes: [],
     doseRange: null,
@@ -57,6 +60,7 @@ const DRUGS: Readonly<Record<string, DrugKnowledge>> = {
   // without ingredient duplication.
   DRUG_CHARLIE: {
     ingredientCodes: ["ING_CHARLIE"],
+    uncodedIngredientCount: 0,
     therapeuticClassCodes: ["CLASS_ONE"],
     crossSensitivityClassCodes: [],
     doseRange: null,
@@ -64,6 +68,7 @@ const DRUGS: Readonly<Record<string, DrugKnowledge>> = {
   // Combination product sharing one ingredient with DRUG_ALFA.
   DRUG_COMBO: {
     ingredientCodes: ["ING_ALFA", "ING_BRAVO"],
+    uncodedIngredientCount: 0,
     therapeuticClassCodes: ["CLASS_ONE", "CLASS_TWO"],
     crossSensitivityClassCodes: [],
     doseRange: null,
@@ -71,12 +76,14 @@ const DRUGS: Readonly<Record<string, DrugKnowledge>> = {
   // Carries an absolute contraindication against DRUG_ALFA.
   DRUG_ECHO: {
     ingredientCodes: ["ING_ECHO"],
+    uncodedIngredientCount: 0,
     therapeuticClassCodes: ["CLASS_THREE"],
     crossSensitivityClassCodes: [],
     doseRange: null,
   },
   DRUG_DOSED: {
     ingredientCodes: ["ING_DELTA"],
+    uncodedIngredientCount: 0,
     therapeuticClassCodes: ["CLASS_FOUR"],
     crossSensitivityClassCodes: [],
     doseRange: {
@@ -91,6 +98,7 @@ const DRUGS: Readonly<Record<string, DrugKnowledge>> = {
   // floating-point boundary. See the tolerance test.
   DRUG_FRACTIONAL: {
     ingredientCodes: ["ING_FOXTROT"],
+    uncodedIngredientCount: 0,
     therapeuticClassCodes: [],
     crossSensitivityClassCodes: [],
     doseRange: {
@@ -455,6 +463,161 @@ describe("screenPrescription — codes outside the source's nomenclature", () =>
       "SCR_KNOWLEDGE_UNAVAILABLE"
     );
     expect(notApplicable.fingerprint).not.toBe(unprovisioned.fingerprint);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locally-declarable drug codes (compound formulas)
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — locally declarable codes and partially-coded formulas", () => {
+  // A source that supports org-declared compound formulas: it answers
+  // for a fully-coded compound, answers a coded SUBSET for a
+  // partially-coded one, and declares an uncoded compound's code
+  // locally declarable rather than out of nomenclature.
+  const formulaAwareKnowledge = createInMemoryDrugKnowledgeSource({
+    drugs: {
+      DRUG_ALFA: DRUGS["DRUG_ALFA"]!,
+      COMPOUND_CODED: {
+        ingredientCodes: ["ING_ALFA"],
+        uncodedIngredientCount: 0,
+        therapeuticClassCodes: [],
+        crossSensitivityClassCodes: [],
+        doseRange: null,
+      },
+      COMPOUND_PARTIAL: {
+        ingredientCodes: ["ING_BRAVO"],
+        uncodedIngredientCount: 2,
+        therapeuticClassCodes: [],
+        crossSensitivityClassCodes: [],
+        doseRange: null,
+      },
+    },
+    locallyDeclarableDrugCodes: ["COMPOUND_UNCODED"],
+  });
+
+  it("hard-stops a fully-coded compound on a confirmed exact-ingredient allergy", () => {
+    // The bar this feature exists to reach: the compound path ends at
+    // the same unoverridable refusal a national product's does.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_CODED"),
+      allergies: [allergy()],
+      knowledge: formulaAwareKnowledge,
+    });
+    expect(result.outcome).toBe("BLOCKED");
+    const finding = requireFinding(result, "SCR_DRUG_ALLERGY_DIRECT");
+    expect(finding.severity).toBe("CONTRAINDICATED");
+    expect(finding.disposition).toBe("HARD_STOP");
+  });
+
+  it("screens a fully-coded compound CLEAR when nothing matches", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_CODED"),
+      allergies: [],
+      knowledge: formulaAwareKnowledge,
+    });
+    expect(result.outcome).toBe("CLEAR");
+  });
+
+  it("reports SCR_COMPOUND_FORMULA_NOT_CODED for an uncoded compound, informationally", () => {
+    // Org-closable, so recorded without interrupting: the formulary
+    // team codes the formula once; the pharmacist in the queue cannot.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_UNCODED"),
+      knowledge: formulaAwareKnowledge,
+    });
+    expect(codes(result)).toEqual(["SCR_COMPOUND_FORMULA_NOT_CODED"]);
+    const gap = requireFinding(result, "SCR_COMPOUND_FORMULA_NOT_CODED");
+    expect(gap.kind).toBe("SCREENING_GAP");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("grades the locally-declarable gap at ANY coverage, unlike out-of-nomenclature", () => {
+    // The org's formulary answers independently of national
+    // licensing: "code the formula" is true whether or not a release
+    // is provisioned, and the acknowledge-tier "no source is wired"
+    // spelling would drown it.
+    const unprovisioned = createInMemoryDrugKnowledgeSource({
+      locallyDeclarableDrugCodes: ["COMPOUND_UNCODED"],
+    });
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_UNCODED"),
+      knowledge: unprovisioned,
+    });
+    expect(codes(result)).toEqual(["SCR_COMPOUND_FORMULA_NOT_CODED"]);
+  });
+
+  it("screens the coded subset of a partially-coded compound AND reports the remainder", () => {
+    // The deliberate alternative to a PARTIAL state: real findings
+    // from the coded rows, plus the report that makes the subset
+    // honest. Both at once, neither displacing the other.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_PARTIAL"),
+      allergies: [allergy({ substanceCode: "ING_BRAVO" })],
+      knowledge: formulaAwareKnowledge,
+    });
+    expect(result.outcome).toBe("BLOCKED");
+    requireFinding(result, "SCR_DRUG_ALLERGY_DIRECT");
+    const gap = requireFinding(result, "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED");
+    expect(gap.kind).toBe("SCREENING_GAP");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(gap.reason).toContain("2 declared ingredient row(s)");
+  });
+
+  it("survives every reporting floor, like every gap", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_PARTIAL"),
+      knowledge: formulaAwareKnowledge,
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    expect(codes(result)).toEqual(["SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED"]);
+  });
+
+  it("re-fingerprints the partial gap when the uncoded count changes", () => {
+    // Coding two more rows changes what the finding says, so it must
+    // change what it is: a stale identity would let the old row's
+    // (hypothetical future) disposition suppress the new statement.
+    const partialTwo = requireFinding(
+      screen({
+        candidate: drug("line-candidate", "COMPOUND_PARTIAL"),
+        knowledge: formulaAwareKnowledge,
+      }),
+      "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED"
+    );
+    const oneUncodedRow = createInMemoryDrugKnowledgeSource({
+      drugs: {
+        COMPOUND_PARTIAL: {
+          ingredientCodes: ["ING_BRAVO"],
+          uncodedIngredientCount: 1,
+          therapeuticClassCodes: [],
+          crossSensitivityClassCodes: [],
+          doseRange: null,
+        },
+      },
+    });
+    const partialOne = requireFinding(
+      screen({
+        candidate: drug("line-candidate", "COMPOUND_PARTIAL"),
+        knowledge: oneUncodedRow,
+      }),
+      "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED"
+    );
+    expect(partialTwo.fingerprint).not.toBe(partialOne.fingerprint);
+  });
+
+  it("reports a partially-coded PROFILE medication the same way", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA"),
+      activeMedications: [drug("line-partial", "COMPOUND_PARTIAL")],
+      knowledge: formulaAwareKnowledge,
+    });
+    const gap = requireFinding(result, "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED");
+    expect(gap.triggers).toEqual([
+      { source: "PROFILE_MEDICATION", recordId: "line-partial", code: "COMPOUND_PARTIAL" },
+    ]);
   });
 });
 

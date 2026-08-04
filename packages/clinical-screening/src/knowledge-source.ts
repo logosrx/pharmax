@@ -81,6 +81,28 @@ export interface DrugKnowledge {
    */
   readonly crossSensitivityClassCodes: ReadonlyArray<CrossSensitivityClassCode>;
   readonly doseRange: DoseRange | null;
+  /**
+   * How many declared components of this drug the source KNOWS it
+   * could not name in `ingredientCodes` — recipe rows nobody has
+   * coded yet, for a source answering from an org-declared compound
+   * formula. `0` for a source whose ingredient list is complete by
+   * construction (a national product resolved from a published
+   * release names every active ingredient or resolves nothing).
+   *
+   * REQUIRED, not defaulted, because the default answer is the unsafe
+   * one: an adapter holding a partial list that omits this field
+   * would let the engine read "screened these ingredients" as
+   * "screened THE ingredients", which is the ambiguity
+   * `SCREENING_GAP` findings exist to destroy. Any value above zero
+   * makes the engine emit `SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED`
+   * alongside whatever the coded subset produced.
+   *
+   * This is the engine's existing posture toward partial inputs —
+   * "supply what it has and declare AVAILABLE" (see
+   * `SCREENING_INPUT_AVAILABILITIES` on why PARTIAL is deliberately
+   * not a state) — completed with the report that makes it honest.
+   */
+  readonly uncodedIngredientCount: number;
 }
 
 /**
@@ -195,13 +217,37 @@ export function gapRemediationForCoverage(
  *     closing it is a product capability — locally declared compound
  *     ingredients — not anything the pharmacist on this order can do.
  *
- * Consulted ONLY after `describeDrug` returned `null`, and only when
- * `coverage` is PROVISIONED (an unprovisioned source cannot resolve
- * anything, so the distinction adds no information). A source with no
- * basis for the judgement answers IN_NOMENCLATURE — over-prompting is
- * the conservative direction.
+ * THE THIRD VALUE, for the source that can hold locally declared
+ * ingredients (compound formulas coded by the org's own formulary
+ * team):
+ *
+ *   - LOCALLY_DECLARABLE: the code is outside every national
+ *     nomenclature AND the platform supports an org-declared
+ *     ingredient list for it — the org just has not supplied one the
+ *     screen can use (no ACTIVE formula claims the product, or the
+ *     claiming formula has no coded rows). A miss here is closable,
+ *     by the ORGANIZATION rather than by anyone touching the order:
+ *     graded `SCR_COMPOUND_FORMULA_NOT_CODED`, ORGANIZATION_DATA,
+ *     informational. Distinct from OUT_OF_NOMENCLATURE because "no
+ *     update can ever resolve this" stopped being true the day local
+ *     declaration shipped, and a reason that says so would lie.
+ *
+ * `IN_NOMENCLATURE` / `OUT_OF_NOMENCLATURE` are consulted only after
+ * `describeDrug` returned `null` and only when `coverage` is
+ * PROVISIONED (an unprovisioned source cannot resolve anything, so
+ * the distinction adds no information). `LOCALLY_DECLARABLE` is
+ * consulted whenever `describeDrug` returned `null`, REGARDLESS of
+ * coverage: the org's own formulary is a body of knowledge
+ * independent of any licensed release, and "code the formula" is the
+ * true remediation whether or not a national database is wired. A
+ * source with no basis for the judgement answers IN_NOMENCLATURE —
+ * over-prompting is the conservative direction.
  */
-export const DRUG_CODE_SCOPES = Object.freeze(["IN_NOMENCLATURE", "OUT_OF_NOMENCLATURE"] as const);
+export const DRUG_CODE_SCOPES = Object.freeze([
+  "IN_NOMENCLATURE",
+  "OUT_OF_NOMENCLATURE",
+  "LOCALLY_DECLARABLE",
+] as const);
 
 export type DrugCodeScope = (typeof DRUG_CODE_SCOPES)[number];
 
@@ -221,6 +267,25 @@ export interface DrugKnowledgeRelease {
   readonly source: string;
   /** The release version as the publisher names it, e.g. "07072026". */
   readonly version: string;
+}
+
+/**
+ * The identity of the org-declared compound formula VERSION a drug
+ * code's answer was drawn from — the per-code counterpart of
+ * `DrugKnowledgeRelease`, for the body of knowledge that has no
+ * publisher because the org wrote it itself.
+ *
+ * A licensed release versions as one unit and is stamped once per
+ * screen; formulas version independently per recipe, so their
+ * attribution has to travel per drug code. The wiring layer stamps
+ * these three values onto the persisted finding rows the formula
+ * contributed to, which is what keeps "which recipe did March's
+ * screen read?" answerable after the recipe is republished.
+ */
+export interface CompoundFormulaProvenance {
+  readonly formulaId: string;
+  readonly formulaCode: string;
+  readonly formulaVersion: number;
 }
 
 /**
@@ -255,10 +320,26 @@ export interface DrugKnowledgeSource {
   describeDrug(code: DrugCode): DrugKnowledge | null;
   describeAllergen(code: AllergenCode): AllergenKnowledge | null;
   /**
-   * Consulted only when `describeDrug(code)` returned `null` and
-   * `coverage` is PROVISIONED, to decide how the resulting gap is
-   * graded. See `DRUG_CODE_SCOPES`. Pure, like every other member.
+   * Consulted when `describeDrug(code)` returned `null`, to decide
+   * how the resulting gap is graded: LOCALLY_DECLARABLE at any
+   * coverage; the other two values only when `coverage` is
+   * PROVISIONED. See `DRUG_CODE_SCOPES`. Pure, like every other
+   * member.
    */
   drugCodeScope(code: DrugCode): DrugCodeScope;
+  /**
+   * The org-declared formula version the answer (or the consulted
+   * non-answer) for `code` came from, or `null` for a code this
+   * source resolves from published nomenclature — the common case,
+   * and the only case for a source with no local-declaration
+   * capability.
+   *
+   * Non-null does NOT imply `describeDrug` answered: a formula that
+   * exists but has no coded rows is a consulted body of knowledge
+   * that produced a gap, and the gap row deserves the attribution as
+   * much as a finding would — "which uncoded recipe was on file?" is
+   * exactly what its reader asks.
+   */
+  compoundFormulaProvenance(code: DrugCode): CompoundFormulaProvenance | null;
   findIngredientInteraction(a: IngredientCode, b: IngredientCode): InteractionFact | null;
 }
