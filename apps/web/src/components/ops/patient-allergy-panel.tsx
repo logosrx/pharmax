@@ -177,6 +177,25 @@ function HistoryState({ profile }: { readonly profile: PatientAllergyProfile }):
     );
   }
 
+  // A NO_KNOWN_ALLERGIES assertion coexisting with a live allergy
+  // record is stale, and screening already treats it that way: the
+  // availability computation reads the records first and never consults
+  // the assertion (see `hasScreenableAllergyInput`). The banner must not
+  // out-claim the screen — a green "no known allergies" line above a
+  // live penicillin row is exactly the reassuring misreading this panel
+  // exists to prevent.
+  if (profile.allergies.some(isLive)) {
+    return (
+      <Banner tone="warning" title="A no-known-allergies assertion has been superseded">
+        &ldquo;No known allergies&rdquo; was asserted on{" "}
+        <span className="font-mono">{state.assertedAt.toISOString().slice(0, 10)}</span> by user{" "}
+        <span className="font-mono text-xs">{state.assertedByUserId}</span>, but this patient now
+        has live allergy records below. Screening uses the records, not the assertion; the assertion
+        stays in the history as the record of who said what, when.
+      </Banner>
+    );
+  }
+
   return (
     <Banner tone="success" title="Allergy history taken — no known allergies">
       Asserted on <span className="font-mono">{state.assertedAt.toISOString().slice(0, 10)}</span>{" "}
