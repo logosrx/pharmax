@@ -32,6 +32,8 @@ import { resolveOperatorTenancyContext } from "../../../../src/server/auth/resol
 import { auditPatientView } from "../../../../src/server/ops/audit-patient-view.js";
 import { getOrderDetail } from "../../../../src/server/ops/get-order-detail.js";
 import { getOrderScreening } from "../../../../src/server/ops/get-order-screening.js";
+import { getPatientAllergies } from "../../../../src/server/ops/get-patient-allergies.js";
+import { PatientAllergyPanel } from "../../../../src/components/ops/patient-allergy-panel.js";
 import { resolveOrderSearchToken } from "../../../../src/server/ops/resolve-order-search-token.js";
 import { PageHeader, Section } from "../../../../src/components/ui/page.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../../src/components/ui/card.js";
@@ -272,6 +274,23 @@ export default async function OrderDetailPage({
     pharmacistUserId: session.operator.userId,
   });
 
+  // The allergy profile, beside the prescription it matters for.
+  //
+  // NOT a duplicate of the screening panel, and the difference is the
+  // point. The screening panel says what the ENGINE concluded; with no
+  // licensed drug-knowledge source wired it concludes almost nothing,
+  // because it cannot resolve an NDC to its ingredients. This panel is
+  // the input, rendered so a pharmacist can do the comparison the engine
+  // cannot — which for an uncoded allergen is the only comparison there
+  // will ever be. Read-only here: capture belongs on the patient record,
+  // not mid-verification.
+  const allergyProfile = hasOperatorPermission(permissions, PERMISSIONS.PATIENTS_ALLERGIES_READ)
+    ? await getPatientAllergies({
+        organizationId: session.tenancy.organizationId,
+        patientId: detail.patient.patientId,
+      })
+    : null;
+
   // UI convenience only — `AcknowledgePV1ScreeningFinding` re-checks
   // both the permission and the order's stage, and it is the control.
   const acknowledgeGate: AcknowledgeGate = !hasOperatorPermission(
@@ -437,6 +456,36 @@ export default async function OrderDetailPage({
           </div>
         )}
       </Section>
+
+      {/* ABOVE the findings panel, deliberately. The findings panel is
+          where a pharmacist signs; the allergy list is what they should
+          have read before signing. Ordering it after would put the
+          control before the evidence. */}
+      {allergyProfile === null ? null : (
+        <PatientAllergyPanel
+          profile={allergyProfile}
+          // Read-only at PV1. Capture is intake work and belongs on the
+          // patient record; a form here would invite a pharmacist to
+          // enter a history they are taking from the prescription in
+          // front of them rather than from the patient.
+          capabilities={{ canRecord: false, canAmendStatus: false }}
+          actionBase={`/api/ops/admin/patients/${detail.patient.patientId}`}
+          title="Patient allergies (verification input)"
+          footnote={
+            <p className="text-xs text-subtle">
+              To record or correct an allergy, open the{" "}
+              <Link
+                href={`/ops/admin/patients/${detail.patient.patientId}`}
+                className="underline hover:text-fg"
+              >
+                patient record
+              </Link>
+              . Findings below reflect the screen that ran at PV1; a change made now is picked up by
+              the re-screen at approval.
+            </p>
+          }
+        />
+      )}
 
       <ScreeningFindingsPanel
         orderId={detail.orderId}

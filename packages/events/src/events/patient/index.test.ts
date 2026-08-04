@@ -13,8 +13,8 @@ import * as PatientEvents from "./index.js";
 const ALL = Object.values(PatientEvents);
 
 describe("patient domain barrel", () => {
-  it("4 patient.* events are registered", () => {
-    expect(ALL.length).toBe(4);
+  it("7 patient.* events are registered", () => {
+    expect(ALL.length).toBe(7);
   });
 
   it("every patient.* event is owned by `patients`", () => {

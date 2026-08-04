@@ -43,6 +43,13 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
     description: "PV1 + Final Verification authority within a site.",
     permissions: [
       PERMISSIONS.PATIENTS_READ,
+      // The allergy profile is a PV1 input, so a pharmacist must be
+      // able to read it and to correct it. AMEND_STATUS sits here and
+      // NOT with technicians: refuting an allergy is the one edit that
+      // switches a safety check off, and it is a clinical judgement.
+      PERMISSIONS.PATIENTS_ALLERGIES_READ,
+      PERMISSIONS.PATIENTS_ALLERGIES_RECORD,
+      PERMISSIONS.PATIENTS_ALLERGIES_AMEND_STATUS,
       PERMISSIONS.PROVIDERS_READ,
       // Read-only directory surfaces: pharmacists verify against the
       // drug catalog / lot status and need to see which practice an
@@ -79,6 +86,12 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       PERMISSIONS.PATIENTS_CREATE,
       PERMISSIONS.PATIENTS_READ,
       PERMISSIONS.PATIENTS_UPDATE,
+      // Taking an allergy history is intake work, and the technician is
+      // who does it. Recording an allergy — or recording that there are
+      // none — is therefore a tech grant; amending a recorded status is
+      // not.
+      PERMISSIONS.PATIENTS_ALLERGIES_READ,
+      PERMISSIONS.PATIENTS_ALLERGIES_RECORD,
       PERMISSIONS.PROVIDERS_CREATE,
       PERMISSIONS.PROVIDERS_READ,
       PERMISSIONS.PROVIDERS_UPDATE,

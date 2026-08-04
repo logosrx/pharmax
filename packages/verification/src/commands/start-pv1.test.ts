@@ -31,6 +31,7 @@ import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@p
 
 import {
   createScreeningStubs,
+  historyTakenNoKnownAllergies,
   type ScreeningStubOptions,
   type ScreeningStubs,
 } from "../screening/test-support.js";
@@ -63,6 +64,12 @@ const RX_ID = "00000000-0000-4000-8000-0000000000e1";
 const DEFAULT_SCREENING_STUBS: ScreeningStubOptions = {
   patientId: PATIENT_ID,
   orderLinePrescriptionIds: [RX_ID],
+  // History taken and empty, so the DRUG_ALLERGY axis is AVAILABLE and
+  // screens clear. A fixture that said nothing about allergies would be
+  // a patient nobody has asked, which raises an acknowledge-tier gap —
+  // correct, and not what these tests are about. See
+  // `allergy-availability.test.ts` for that path.
+  historyAssertions: [historyTakenNoKnownAllergies(PATIENT_ID)],
   prescriptions: [{ id: RX_ID, patientId: PATIENT_ID, drugNdc: "00000-0000-01", status: "ACTIVE" }],
 };
 
@@ -176,6 +183,8 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     prescription: screening.prescription,
     orderScreeningFinding: screening.orderScreeningFinding,
     orderScreeningAcknowledgement: screening.orderScreeningAcknowledgement,
+    patientAllergy: screening.patientAllergy,
+    patientAllergyHistoryAssertion: screening.patientAllergyHistoryAssertion,
     bucket: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "bucket", op: "findFirst", args });

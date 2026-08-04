@@ -59,6 +59,33 @@ export interface StubAcknowledgement {
   readonly fingerprint: string;
 }
 
+/**
+ * One row of `patient_allergy`, as the screening path selects it.
+ *
+ * Only the coded columns: the screen must never read
+ * `substanceLabelEnc` or `reactionNoteEnc`, so the stub cannot hand
+ * them out and a test cannot accidentally prove the wrong thing.
+ */
+export interface StubAllergy {
+  readonly id: string;
+  readonly patientId: string;
+  readonly substanceCode: string | null;
+  readonly substanceCodeSystem: string;
+  readonly category: string;
+  readonly type: string;
+  readonly criticality: string;
+  readonly clinicalStatus: string;
+  readonly verificationStatus: string;
+}
+
+/** One row of `patient_allergy_history_assertion`. */
+export interface StubHistoryAssertion {
+  readonly id: string;
+  readonly patientId: string;
+  readonly status: string;
+  readonly assertedAt: Date;
+}
+
 export interface ScreeningStubState {
   patientId: string;
   orderLinePrescriptionIds: string[];
@@ -66,6 +93,13 @@ export interface ScreeningStubState {
   /** Rows `order_screening_finding` already holds for the order. */
   persistedFindings: StubFinding[];
   acknowledgements: StubAcknowledgement[];
+  /**
+   * Mutable so a test can record an allergy BETWEEN the StartPV1 screen
+   * and the ApprovePV1 re-screen — the allergy analogue of pushing a
+   * prescription onto the profile mid-review.
+   */
+  allergies: StubAllergy[];
+  historyAssertions: StubHistoryAssertion[];
 }
 
 export interface ScreeningStubOptions {
@@ -74,6 +108,56 @@ export interface ScreeningStubOptions {
   readonly prescriptions?: ReadonlyArray<StubPrescription>;
   readonly persistedFindings?: ReadonlyArray<StubFinding>;
   readonly acknowledgements?: ReadonlyArray<StubAcknowledgement>;
+  /**
+   * Default EMPTY, which resolves DRUG_ALLERGY to
+   * NOT_RECORDED_FOR_SUBJECT — the correct answer for a patient nobody
+   * has asked, and therefore the right default for a fixture that says
+   * nothing about allergies.
+   */
+  readonly allergies?: ReadonlyArray<StubAllergy>;
+  readonly historyAssertions?: ReadonlyArray<StubHistoryAssertion>;
+}
+
+/**
+ * A patient whose allergy history HAS been taken and found empty.
+ *
+ * The default posture for a fixture about something other than
+ * allergies. Without an assertion the DRUG_ALLERGY axis resolves to
+ * NOT_RECORDED_FOR_SUBJECT and contributes an acknowledge-tier gap,
+ * which would make every unrelated PV1 test fail on a screening gate
+ * rather than on the thing it is testing. Saying "history taken, none
+ * found" keeps those tests about their own subject and is what a
+ * routine, correctly-intaked patient looks like.
+ */
+export function historyTakenNoKnownAllergies(
+  patientId: string,
+  assertedAt = new Date("2026-01-01T00:00:00.000Z")
+): StubHistoryAssertion {
+  return {
+    id: "00000000-0000-4000-8000-00000000b001",
+    patientId,
+    status: "NO_KNOWN_ALLERGIES",
+    assertedAt,
+  };
+}
+
+/**
+ * A screenable MEDICATION allergy, for tests that need the axis to come
+ * back AVAILABLE. Synthetic RxNorm-shaped code; no real patient data.
+ */
+export function screenableStubAllergy(overrides: Partial<StubAllergy> = {}): StubAllergy {
+  return {
+    id: "00000000-0000-4000-8000-00000000a001",
+    patientId: "00000000-0000-4000-8000-0000000000d1",
+    substanceCode: "TEST-INGREDIENT-1",
+    substanceCodeSystem: "RXNORM",
+    category: "MEDICATION",
+    type: "ALLERGY",
+    criticality: "LOW",
+    clinicalStatus: "ACTIVE",
+    verificationStatus: "CONFIRMED",
+    ...overrides,
+  };
 }
 
 export type RecordCall = (table: string, op: string, args: unknown) => void;
@@ -100,6 +184,8 @@ export interface ScreeningStubs {
     findFirst: ReturnType<typeof vi.fn>;
     create: ReturnType<typeof vi.fn>;
   };
+  readonly patientAllergy: { findMany: ReturnType<typeof vi.fn> };
+  readonly patientAllergyHistoryAssertion: { findFirst: ReturnType<typeof vi.fn> };
 }
 
 export function createScreeningStubs(
@@ -112,6 +198,8 @@ export function createScreeningStubs(
     prescriptions: [...(options.prescriptions ?? [])],
     persistedFindings: [...(options.persistedFindings ?? [])],
     acknowledgements: [...(options.acknowledgements ?? [])],
+    allergies: [...(options.allergies ?? [])],
+    historyAssertions: [...(options.historyAssertions ?? [])],
   };
 
   let nextAcknowledgementId = 1;
@@ -214,6 +302,32 @@ export function createScreeningStubs(
           fingerprint: String(data["fingerprint"]),
         });
         return { id };
+      }),
+    },
+    patientAllergy: {
+      findMany: vi.fn(async (args: unknown) => {
+        record("patientAllergy", "findMany", args);
+        const where = (args as WhereArgs).where ?? {};
+        // Mirrors the real query, which filters ACTIVE in SQL so the
+        // index does the work. A stub that returned every row would let
+        // an in-memory-only filter pass a test the database would fail.
+        return state.allergies.filter(
+          (a) =>
+            a.patientId === where["patientId"] &&
+            (where["clinicalStatus"] === undefined || a.clinicalStatus === where["clinicalStatus"])
+        );
+      }),
+    },
+    patientAllergyHistoryAssertion: {
+      findFirst: vi.fn(async (args: unknown) => {
+        record("patientAllergyHistoryAssertion", "findFirst", args);
+        const where = (args as WhereArgs).where ?? {};
+        const matches = state.historyAssertions.filter((a) => a.patientId === where["patientId"]);
+        if (matches.length === 0) return null;
+        // Mirrors `orderBy: [{ assertedAt: "desc" }, ...]` — latest
+        // assertion wins, which is the rule the screening layer relies
+        // on to let a corrected history supersede an earlier one.
+        return [...matches].sort((a, b) => b.assertedAt.getTime() - a.assertedAt.getTime())[0];
       }),
     },
   };

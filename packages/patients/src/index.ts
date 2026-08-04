@@ -70,8 +70,54 @@ export {
   type ViewPatientSurface,
 } from "./commands/view-patient.js";
 
+export {
+  assertsEmptyAllergyHistory,
+  isScreenableAllergyRow,
+  loadAllergyHistoryState,
+  ALLERGY_RETIRING_CLINICAL_STATUSES,
+  ALLERGY_RETRACTING_VERIFICATION_STATUSES,
+  ALLERGY_STATUS_CHANGE_REASONS,
+  ALLERGY_STATUS_CHANGE_REASON_CODES,
+  type AllergyHistoryState,
+  type AllergyScreenabilityRow,
+  type AllergyStatusChangeReason,
+  type PatientAllergyView,
+} from "./allergies.js";
+
+export {
+  RecordPatientAllergy,
+  ALLERGY_PATIENT_NOT_FOUND,
+  ALLERGY_PATIENT_SHREDDED,
+  type RecordPatientAllergyInput,
+  type RecordPatientAllergyOutput,
+} from "./commands/record-patient-allergy.js";
+
+export {
+  AmendPatientAllergyStatus,
+  ALLERGY_NOT_FOUND,
+  ALLERGY_STATUS_UNCHANGED,
+  type AmendPatientAllergyStatusInput,
+  type AmendPatientAllergyStatusOutput,
+} from "./commands/amend-patient-allergy-status.js";
+
+export {
+  AssertPatientAllergyHistory,
+  ALLERGY_HISTORY_ASSERTED_IN_FUTURE,
+  ALLERGY_HISTORY_ASSERTED_TOO_LONG_AGO,
+  ALLERGY_HISTORY_PATIENT_NOT_FOUND,
+  MAX_ALLERGY_HISTORY_BACKFILL_DAYS,
+  type AssertPatientAllergyHistoryInput,
+  type AssertPatientAllergyHistoryOutput,
+} from "./commands/assert-patient-allergy-history.js";
+
+export { getPatientAllergyProfile, type PatientAllergyProfile } from "./patient-allergy-profile.js";
+
+import * as allergiesModule from "./allergies.js";
 import * as blindIndexesModule from "./blind-indexes.js";
+import * as amendPatientAllergyStatusModule from "./commands/amend-patient-allergy-status.js";
+import * as assertPatientAllergyHistoryModule from "./commands/assert-patient-allergy-history.js";
 import * as cryptoShredPatientModule from "./commands/crypto-shred-patient.js";
+import * as recordPatientAllergyModule from "./commands/record-patient-allergy.js";
 import * as registerPatientModule from "./commands/register-patient.js";
 import * as updatePatientModule from "./commands/update-patient.js";
 import * as viewPatientModule from "./commands/view-patient.js";
@@ -84,10 +130,14 @@ export const patients = {
   ...blindIndexesModule,
   ...searchPatientsModule,
   ...patientRepositoryModule,
+  ...allergiesModule,
   commands: {
     RegisterPatient: registerPatientModule.RegisterPatient,
     UpdatePatient: updatePatientModule.UpdatePatient,
     CryptoShredPatient: cryptoShredPatientModule.CryptoShredPatient,
     ViewPatient: viewPatientModule.ViewPatient,
+    RecordPatientAllergy: recordPatientAllergyModule.RecordPatientAllergy,
+    AmendPatientAllergyStatus: amendPatientAllergyStatusModule.AmendPatientAllergyStatus,
+    AssertPatientAllergyHistory: assertPatientAllergyHistoryModule.AssertPatientAllergyHistory,
   },
 } as const;

@@ -307,6 +307,153 @@ enum ProviderStatus {
   INACTIVE
 }
 
+// ---------- Patient allergy capture -----------------------------------
+//
+// Vocabulary is HL7 FHIR R4 `AllergyIntolerance`
+// (https://hl7.org/fhir/R4/allergyintolerance.html), which is a
+// permitted public source. Member values match the string unions in
+// `@pharmax/clinical-screening` exactly where the two overlap, and
+// `packages/verification/src/screening/allergy-input.test.ts` asserts
+// that equality so the two vocabularies cannot drift apart.
+//
+// PHI: every column on `patient_allergy` is PHI once joined to a
+// patient. The split between plaintext and envelope columns is
+// explained on the model itself.
+
+/// FHIR `AllergyIntolerance.category`. FOOD and ENVIRONMENT are
+/// recorded because intake staff take a whole history, and excluded
+/// from drug screening because a drug knowledge base cannot answer
+/// them.
+enum AllergyCategory {
+  MEDICATION
+  BIOLOGIC
+  FOOD
+  ENVIRONMENT
+}
+
+/// FHIR `AllergyIntolerance.type`. An intolerance is a non-immune
+/// adverse reaction: real, worth showing a pharmacist, and never the
+/// anaphylaxis risk that could justify refusing to dispense.
+enum AllergyIntoleranceType {
+  ALLERGY
+  INTOLERANCE
+}
+
+/// FHIR `AllergyIntolerance.criticality` — the potential of a FUTURE
+/// exposure to be life-threatening, which is the question a pharmacist
+/// is actually asking. Distinct from the severity of what happened
+/// last time (`AllergyReactionSeverity`).
+enum AllergyCriticality {
+  HIGH
+  LOW
+  UNABLE_TO_ASSESS
+}
+
+/// FHIR `AllergyIntolerance.clinicalStatus` — whether the propensity
+/// still exists. Only ACTIVE records are screened; INACTIVE and
+/// RESOLVED stay visible in the console because a pharmacist wants to
+/// see an outgrown childhood penicillin allergy even when the engine
+/// will not act on it.
+enum AllergyClinicalStatus {
+  ACTIVE
+  INACTIVE
+  RESOLVED
+}
+
+/// FHIR `AllergyIntolerance.verificationStatus`. REFUTED and
+/// ENTERED_IN_ERROR are the retraction path: clinical data is
+/// corrected, never deleted, so a wrong record stops screening while
+/// staying in history.
+enum AllergyVerificationStatus {
+  CONFIRMED
+  UNCONFIRMED
+  REFUTED
+  ENTERED_IN_ERROR
+}
+
+/// FHIR `AllergyIntolerance.reaction.severity` — how bad the reaction
+/// that was OBSERVED was. Recorded for the pharmacist and deliberately
+/// not fed to the screening engine, which grades on `criticality`.
+enum AllergyReactionSeverity {
+  MILD
+  MODERATE
+  SEVERE
+}
+
+/// A coded stand-in for FHIR `AllergyIntolerance.reaction.manifestation`.
+///
+/// A closed code list rather than free text, because the difference
+/// between hives and airway compromise is the difference a pharmacist
+/// decides on, and a decision should not depend on parsing prose.
+/// Anything this list cannot express is OTHER plus the encrypted
+/// narrative note.
+enum AllergyReactionManifestation {
+  ANAPHYLAXIS
+  ANGIOEDEMA
+  BRONCHOSPASM
+  HYPOTENSION
+  URTICARIA
+  RASH
+  PRURITUS
+  SEVERE_CUTANEOUS_REACTION
+  NAUSEA_OR_VOMITING
+  DIARRHEA
+  ABDOMINAL_PAIN
+  HEADACHE
+  DIZZINESS
+  HEPATOTOXICITY
+  NEPHROTOXICITY
+  CYTOPENIA
+  OTHER
+}
+
+/// Which code space `patient_allergy.substanceCode` is expressed in.
+///
+/// The screening engine compares substance codes to a knowledge
+/// source's ingredient codes by STRING EQUALITY and owns no code space
+/// of its own, so a record's code system decides whether the
+/// comparison can mean anything at all.
+///
+/// UNCODED is the honest representation of "the patient said sulfa and
+/// nobody could code it". Such a record is shown to the pharmacist and
+/// is NOT counted as screenable input — see
+/// `packages/verification/src/screening/allergy-input.ts`, because an
+/// uncodeable allergen compared against an ingredient list matches
+/// nothing and would read as a clean allergy screen.
+enum AllergySubstanceCodeSystem {
+  /// RxNorm ingredient RXCUI (public, NLM).
+  RXNORM
+  /// NDC product code (public, FDA).
+  NDC
+  /// SNOMED CT substance concept.
+  SNOMED_CT
+  /// A Pharmax-defined allergen class code, for groupings recorded
+  /// above the level of a single ingredient.
+  PHARMAX_ALLERGEN_CLASS
+  /// No code could be assigned. `substanceCode` is NULL and
+  /// `substanceLabelEnc` carries what was said.
+  UNCODED
+}
+
+/// A patient-level statement ABOUT the allergy history itself, as
+/// opposed to a statement about one substance.
+///
+/// This exists because an empty allergy list is ambiguous between
+/// "asked, and there is nothing" and "nobody has asked", and a
+/// pharmacist reads the safer meaning into the more dangerous state.
+/// FHIR expresses the first with a `code` of "no known allergy"; we
+/// give it its own record so it carries an asserter and a time without
+/// pretending to be an allergy to a substance called "none".
+enum AllergyHistoryAssertionStatus {
+  /// History taken; the patient reports no allergies or intolerances.
+  /// This is the assertion that lets the allergy axis screen CLEAR.
+  NO_KNOWN_ALLERGIES
+  /// History attempted and could not be obtained (no historian,
+  /// patient unable to answer). Deliberately does NOT satisfy the
+  /// screening axis: "we tried" is not "we know".
+  UNABLE_TO_ASSESS
+}
+
 // ---------- NPI Registry sync (SyncFromNpiRegistry slice 3) ----------
 //
 // The worker that reconciles local provider rows against the public
@@ -828,6 +975,9 @@ model Organization {
 
   controlledSubstanceDispensings ControlledSubstanceDispensing[]
 
+  patientAllergies                PatientAllergy[]
+  patientAllergyHistoryAssertions PatientAllergyHistoryAssertion[]
+
   @@map("organization")
 }
 
@@ -910,6 +1060,9 @@ model Clinic {
   packagePhotos            PackagePhoto[]
   packagePhotoUploadTokens PackagePhotoUploadToken[]
   workflowPolicyOverlays   WorkflowPolicyOverlay[]
+
+  patientAllergies                PatientAllergy[]
+  patientAllergyHistoryAssertions PatientAllergyHistoryAssertion[]
 
   @@unique([organizationId, code])
   @@index([organizationId, status])
@@ -1107,6 +1260,10 @@ model User {
   dscsaTransactionsReceived   DscsaTransaction[]  @relation("DscsaTransactionReceiver")
 
   controlledSubstancesDispensed ControlledSubstanceDispensing[]
+
+  patientAllergiesRecorded        PatientAllergy[]                 @relation("PatientAllergyRecordedBy")
+  patientAllergyStatusChanges     PatientAllergy[]                 @relation("PatientAllergyStatusChangedBy")
+  patientAllergyHistoryAssertions PatientAllergyHistoryAssertion[] @relation("PatientAllergyHistoryAssertedBy")
 
   @@unique([organizationId, email])
   @@index([organizationId, status])
@@ -2544,6 +2701,9 @@ model Patient {
   orders        Order[]
   packagePhotos PackagePhoto[] @relation("PackagePhotoMatchedPatient")
 
+  allergies                PatientAllergy[]
+  allergyHistoryAssertions PatientAllergyHistoryAssertion[]
+
   @@index([organizationId, clinicId, status])
   @@index([organizationId, lastNameBi])
   @@index([organizationId, firstNameBi])
@@ -2555,6 +2715,155 @@ model Patient {
   @@index([organizationId, mrnBi])
   @@index([organizationId, mergedIntoPatientId])
   @@map("patient")
+}
+
+// One recorded allergy or intolerance, modelled on HL7 FHIR R4
+// `AllergyIntolerance`.
+//
+// ---------------------------------------------------------------------
+// THE PHI SPLIT, AND WHY IT IS WHERE IT IS
+// ---------------------------------------------------------------------
+//
+// Every row here is PHI: it is individually identifiable health
+// information the moment it is read alongside its patient. Encryption
+// is not what makes a column safe — tenant RLS, the RBAC gate, and the
+// audit trail are. So the split below is NOT "PHI here, non-PHI there".
+// It is between values the platform must COMPARE and values only a
+// human will READ.
+//
+//   PLAINTEXT under tenant RLS — the coded values: `substanceCode`,
+//   `substanceCodeSystem`, `category`, `type`, `criticality`,
+//   `clinicalStatus`, `verificationStatus`,
+//   `reactionManifestations`, `reactionSeverity`. The screening engine
+//   compares these inside the PV1 command transaction on every screen.
+//   A column that must be decrypted row-by-row to be compared cannot
+//   be indexed or filtered, so encrypting them would move the
+//   comparison into application memory on a per-row basis — where a
+//   bug drops rows SILENTLY, which is the one failure mode a safety
+//   screen cannot have. The established precedent is
+//   `prescription.drugNdc`: a coded clinical value kept queryable in
+//   plaintext under RLS.
+//
+//   ENCRYPTED envelope (AAD-bound, same pattern as
+//   `prescription.sigEnc`) — the narrative: `substanceLabelEnc` and
+//   `reactionNoteEnc`. Free text about a reaction reliably carries far
+//   more than the minimum necessary: dates, places, other people's
+//   names, unrelated history. It is never compared and never indexed,
+//   so encryption costs nothing operationally, and it is what a
+//   crypto-shred has to be able to destroy.
+//
+// Nothing from this table reaches a log, an audit metadata blob, or an
+// event payload except record ids and coded enum values.
+model PatientAllergy {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // Copied from the patient at capture time so a clinic-scoped read
+  // does not have to join through `patient` to be safe. Never updated:
+  // it records the clinic the history was taken at.
+  clinicId String @db.Uuid
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  patientId String  @db.Uuid
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+
+  /// The substance reacted to, in the code space named by
+  /// `substanceCodeSystem`. NULL exactly when that system is UNCODED —
+  /// enforced by a CHECK constraint in the migration, because a coded
+  /// system with no code is a row the screen would silently skip.
+  substanceCode       String?
+  substanceCodeSystem AllergySubstanceCodeSystem
+
+  /// What the patient or the referring clinic actually said, verbatim.
+  /// Narrative, therefore encrypted. For an UNCODED record this is the
+  /// only description of the allergen there is, which is why the
+  /// console shows it to the pharmacist even though no engine can use
+  /// it.
+  substanceLabelEnc Json?
+
+  category           AllergyCategory
+  type               AllergyIntoleranceType
+  criticality        AllergyCriticality
+  clinicalStatus     AllergyClinicalStatus     @default(ACTIVE)
+  verificationStatus AllergyVerificationStatus @default(UNCONFIRMED)
+
+  /// Coded reaction manifestations. Empty is legitimate: a patient may
+  /// report an allergy without remembering what it did.
+  reactionManifestations AllergyReactionManifestation[]
+  reactionSeverity       AllergyReactionSeverity?
+  /// Narrative detail about the reaction. PHI, encrypted, never read
+  /// by the engine.
+  reactionNoteEnc        Json?
+
+  /// FHIR `AllergyIntolerance.onsetDateTime`, to the day. Date rather
+  /// than timestamp: nobody recalls the hour of a childhood rash.
+  onsetDate DateTime? @db.Date
+
+  /// Who recorded it, and who last changed its status. Both are
+  /// operator users, not PHI.
+  recordedByUserId String   @db.Uuid
+  recordedByUser   User     @relation("PatientAllergyRecordedBy", fields: [recordedByUserId], references: [id], onDelete: Restrict)
+  recordedAt       DateTime
+
+  statusChangedByUserId String?   @db.Uuid
+  statusChangedByUser   User?     @relation("PatientAllergyStatusChangedBy", fields: [statusChangedByUserId], references: [id], onDelete: Restrict)
+  statusChangedAt       DateTime?
+  /// Reason code for the most recent status change. Required by the
+  /// workflow rules for every retraction, and the thing that makes
+  /// "why is this refuted?" answerable a year later.
+  statusChangeReason    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Screening reads (organizationId, patientId) and filters on
+  // clinicalStatus; this index serves that directly.
+  @@index([organizationId, patientId, clinicalStatus])
+  @@index([organizationId, clinicId])
+  @@index([organizationId, substanceCode])
+  @@map("patient_allergy")
+}
+
+// A patient-level assertion about the allergy HISTORY, which is what
+// makes "no known allergies" distinguishable from "nobody has asked".
+//
+// APPEND-ONLY. Rows are never updated or deleted; the current
+// assertion is the most recent one. A superseded assertion is exactly
+// the record that answers "who said this patient had no allergies, and
+// when, before the anaphylaxis?" — deleting it would destroy the only
+// evidence of the decision.
+//
+// PHI: an assertion carries no narrative and no substance. Every
+// column is an id, an enum, or a timestamp, and the whole row is still
+// PHI by association with its patient — tenant RLS is the control.
+model PatientAllergyHistoryAssertion {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  clinicId String @db.Uuid
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  patientId String  @db.Uuid
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+
+  status AllergyHistoryAssertionStatus
+
+  /// The user stamp. An assertion that nobody owns is not an
+  /// assertion.
+  assertedByUserId String   @db.Uuid
+  assertedByUser   User     @relation("PatientAllergyHistoryAssertedBy", fields: [assertedByUserId], references: [id], onDelete: Restrict)
+  /// When the history was taken, which is not necessarily when the row
+  /// was written.
+  assertedAt       DateTime
+
+  createdAt DateTime @default(now())
+
+  // "Latest assertion for this patient" is the only read shape.
+  @@index([organizationId, patientId, assertedAt(sort: Desc)])
+  @@index([organizationId, clinicId])
+  @@map("patient_allergy_history_assertion")
 }
 
 // A prescriber. NPI registry data is public information; provider

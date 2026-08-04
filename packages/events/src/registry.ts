@@ -112,6 +112,9 @@ import { PlatformWebhookSubscriptionRevokedV1 } from "./events/platform/webhook-
 import { PlatformWebhookSubscriptionSecretRotatedV1 } from "./events/platform/webhook-subscription-secret-rotated-v1.js";
 
 // ---- patient -------------------------------------------------------------
+import { PatientAllergyHistoryAssertedV1 } from "./events/patient/allergy-history-asserted-v1.js";
+import { PatientAllergyRecordedV1 } from "./events/patient/allergy-recorded-v1.js";
+import { PatientAllergyStatusAmendedV1 } from "./events/patient/allergy-status-amended-v1.js";
 import { PatientCryptoShreddedV1 } from "./events/patient/crypto-shredded-v1.js";
 import { PatientRegisteredV1 } from "./events/patient/registered-v1.js";
 import { PatientUpdatedV1 } from "./events/patient/updated-v1.js";
@@ -250,6 +253,9 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   PlatformWebhookSubscriptionRevokedV1,
   PlatformWebhookSubscriptionSecretRotatedV1,
   // patient
+  PatientAllergyHistoryAssertedV1,
+  PatientAllergyRecordedV1,
+  PatientAllergyStatusAmendedV1,
   PatientCryptoShreddedV1,
   PatientRegisteredV1,
   PatientUpdatedV1,

@@ -64,6 +64,21 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     description:
       "Crypto-shred a patient: render PHI permanently unreadable (right-to-be-forgotten)",
   },
+  {
+    code: "patients.allergies.read",
+    description:
+      "Read a patient's allergy and intolerance profile, including whether a history has been taken at all",
+  },
+  {
+    code: "patients.allergies.record",
+    description:
+      "Record an allergy or intolerance, or assert that an allergy history was taken (no known allergies / unable to assess)",
+  },
+  {
+    code: "patients.allergies.amend_status",
+    description:
+      "Resolve, refute, or mark entered-in-error a recorded allergy — stops it driving PV1 screening",
+  },
   { code: "providers.create", description: "Register a new prescribing provider" },
   { code: "providers.read", description: "Read provider directory" },
   {

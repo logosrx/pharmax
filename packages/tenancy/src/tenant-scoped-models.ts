@@ -111,6 +111,13 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // ORM layer prevents cross-tenant *row* leaks even before crypto
   // would refuse a cross-tenant decrypt (defense in depth).
   ["Patient", { kind: "organizationId" }] as const,
+  // Allergy capture. Auto-scoping is load-bearing beyond the usual row
+  // isolation: the PV1 screening engine reads these rows to decide
+  // whether the allergy axis can be screened at all, so a query that
+  // escaped its tenant would not merely leak — it would screen one
+  // patient's prescription against another patient's allergies.
+  ["PatientAllergy", { kind: "organizationId" }] as const,
+  ["PatientAllergyHistoryAssertion", { kind: "organizationId" }] as const,
   ["Provider", { kind: "organizationId" }] as const,
   ["Prescription", { kind: "organizationId" }] as const,
   // Rx-number allocator. Carries no PHI, but auto-scoping matters for

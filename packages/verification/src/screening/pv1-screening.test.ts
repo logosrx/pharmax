@@ -52,6 +52,8 @@ import {
 } from "./configure.js";
 import {
   createScreeningStubs,
+  historyTakenNoKnownAllergies,
+  screenableStubAllergy,
   type ScreeningStubOptions,
   type ScreeningStubs,
   type StubFinding,
@@ -99,31 +101,42 @@ const INTERACTION_FINGERPRINT =
   "SCR_DRUG_INTERACTION|MAJOR/PROBABLE|INGREDIENT_ALFA+INGREDIENT_BRAVO";
 
 /**
- * The two axes this platform cannot supply at all: there is no
- * allergy capture, and the sig is encrypted free text with no
- * structured dose beside it. `run-screen.ts` declares both
- * NOT_SUPPORTED_BY_PLATFORM, so every screen RECORDS them — including
- * the screens below where the knowledge source knows the drugs
- * perfectly well.
+ * The one axis this platform cannot supply at all: the sig is encrypted
+ * free text with no structured dose beside it, so
+ * `SCREENING_AXIS_CAPABILITY` declares DOSE_RANGE
+ * NOT_SUPPORTED_BY_PLATFORM and every screen RECORDS the gap —
+ * including the screens below where the knowledge source knows the
+ * drugs perfectly well.
  *
  * MINOR, therefore INFORMATIONAL, and that grading is the point. No
- * patient can ever have these inputs and no pharmacist can supply
- * them, so an acknowledgement per order would collect a signature per
- * prescription against a product backlog. The gaps are still written to
- * `order_screening_finding` and still counted in `gapCount`; what they
- * do not do is gate an approval.
+ * patient can ever have this input and no pharmacist can supply it, so
+ * an acknowledgement per order would collect a signature per
+ * prescription against a product backlog. The gap is still written to
+ * `order_screening_finding` and still counted in `gapCount`; what it
+ * does not do is gate an approval.
  *
- * Neither fingerprint carries a drug code: the fact is about the
- * platform, not the prescription.
+ * DRUG_ALLERGY used to be the second entry here, and is not any more.
+ * Allergy capture exists, so the axis is per-patient: AVAILABLE for a
+ * patient with screenable records or an asserted-empty history,
+ * NOT_RECORDED_FOR_SUBJECT (MODERATE, acknowledge-tier) for a patient
+ * nobody has asked. The fixtures below assert an empty history, so the
+ * axis screens clear and raises nothing. See the "allergy axis" describe
+ * block for the three states.
+ *
+ * The fingerprint carries no drug code: the fact is about the platform,
+ * not the prescription.
  */
-const ALLERGY_INPUT_GAP_FINGERPRINT =
-  "SCR_ALLERGY_INPUT_UNAVAILABLE|MINOR/DEFINITE|DRUG_ALLERGY|remediation=PLATFORM_CAPABILITY";
 const DOSE_INPUT_GAP_FINGERPRINT =
   "SCR_DOSE_INPUT_UNAVAILABLE|MINOR/DEFINITE|DOSE_RANGE|remediation=PLATFORM_CAPABILITY";
-const UNSUPPLIED_AXIS_FINGERPRINTS: ReadonlyArray<string> = [
-  ALLERGY_INPUT_GAP_FINGERPRINT,
-  DOSE_INPUT_GAP_FINGERPRINT,
-];
+const UNSUPPLIED_AXIS_FINGERPRINTS: ReadonlyArray<string> = [DOSE_INPUT_GAP_FINGERPRINT];
+
+/**
+ * The per-patient allergy gap, for a patient nobody has asked. MODERATE
+ * rather than MINOR because somebody can go and take a history, which
+ * is what makes it worth interrupting for.
+ */
+const ALLERGY_NOT_RECORDED_FINGERPRINT =
+  "SCR_ALLERGY_INPUT_UNAVAILABLE|MODERATE/DEFINITE|DRUG_ALLERGY|remediation=SUBJECT_DATA";
 
 const HEALTHY_HISTORY = [
   { eventType: "order.received.v1", actorUserId: TYPIST_ID, sequenceNumber: 1 },
@@ -200,6 +213,12 @@ function knowledgeWithHardStopInteraction(): DrugKnowledgeSource {
 const candidateOnly: ScreeningStubOptions = {
   patientId: PATIENT_ID,
   orderLinePrescriptionIds: [CANDIDATE_RX],
+  // History taken and empty, so the DRUG_ALLERGY axis is AVAILABLE and
+  // screens clear. Stated explicitly because a fixture that says nothing
+  // about allergies is a patient nobody has asked, which is now an
+  // acknowledge-tier gap — correct behaviour, and not what these tests
+  // are about.
+  historyAssertions: [historyTakenNoKnownAllergies(PATIENT_ID)],
   prescriptions: [
     {
       id: CANDIDATE_RX,
@@ -310,6 +329,8 @@ function buildFlowFake(options: FlowFakeOptions = {}): FlowFake {
     prescription: screening.prescription,
     orderScreeningFinding: screening.orderScreeningFinding,
     orderScreeningAcknowledgement: screening.orderScreeningAcknowledgement,
+    patientAllergy: screening.patientAllergy,
+    patientAllergyHistoryAssertion: screening.patientAllergyHistoryAssertion,
     bucket: {
       findFirst: vi.fn(async (args: unknown) => {
         record("bucket", "findFirst", args);
@@ -514,6 +535,239 @@ function outstandingFingerprints(fake: FlowFake): ReadonlyArray<string> {
 }
 
 // ---------------------------------------------------------------------------
+// The allergy axis, end to end
+// ---------------------------------------------------------------------------
+
+describe("PV1 screening — the allergy axis is per-patient", () => {
+  // What a pharmacist actually meets, for each of the three states the
+  // allergy-capture slice exists to distinguish. Asserted through the
+  // real commands rather than against `resolveInputAvailability`, because
+  // the question these answer is "what happens at sign-off", and that is
+  // decided by the gate reading persisted rows.
+  //
+  // The knowledge source is the shipped empty one throughout, which is
+  // the honest production configuration and is exactly why gate (b)
+  // shows up in every case below: `SCR_KNOWLEDGE_UNAVAILABLE` fires,
+  // graded MINOR because nobody in the pharmacy can license a database.
+  // Having the allergies does not let the engine compare them to
+  // anything — that needs NDC → ingredient resolution — and these tests
+  // pin that the record says so rather than implying otherwise.
+
+  it("a patient nobody has asked: an acknowledge-tier gap that BLOCKS sign-off", async () => {
+    const fake = buildFlowFake({
+      screening: { ...candidateOnly, historyAssertions: [] },
+    });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    await startReview();
+
+    // The gap is graded MODERATE, therefore acknowledge-tier, because
+    // somebody CAN go and take an allergy history. That is the whole
+    // difference from the old NOT_SUPPORTED_BY_PLATFORM value, which
+    // graded MINOR and asked nothing of anybody.
+    expect(outstandingFingerprints(fake)).toEqual([ALLERGY_NOT_RECORDED_FINGERPRINT]);
+
+    const allergyRow = fake.screening.state.persistedFindings.find(
+      (f) => f.code === "SCR_ALLERGY_INPUT_UNAVAILABLE"
+    );
+    expect(allergyRow).toMatchObject({
+      severity: "MODERATE",
+      disposition: "REQUIRES_ACKNOWLEDGEMENT",
+    });
+
+    // And it genuinely gates: an approval without the acknowledgement
+    // is refused, which is what makes the gap more than a label.
+    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
+      await expect(
+        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve-blocked" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED" });
+    });
+    expect(fake.currentStatus()).toBe("PV1_IN_PROGRESS");
+  });
+
+  it("a patient asserted to have no known allergies: the axis screens CLEAR", async () => {
+    const fake = buildFlowFake({ screening: candidateOnly });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    await startReview();
+
+    // No allergy finding of ANY kind — not a gap, not a clinical
+    // finding. The axis ran against an empty list because somebody
+    // asserted the list is empty, which is the one thing an allergy
+    // table alone could never express.
+    expect(
+      fake.screening.state.persistedFindings.filter((f) => f.code.startsWith("SCR_DRUG_ALLERGY"))
+    ).toEqual([]);
+    expect(
+      fake.screening.state.persistedFindings.filter(
+        (f) => f.code === "SCR_ALLERGY_INPUT_UNAVAILABLE"
+      )
+    ).toEqual([]);
+    expect(outstandingFingerprints(fake)).toEqual([]);
+
+    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
+      await expect(
+        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve-clear" })
+      ).resolves.toMatchObject({ currentStatus: "PV1_APPROVED_READY_FOR_FILL" });
+    });
+  });
+
+  it("a patient with recorded allergies: the axis runs, and gate (b) is what stops it", async () => {
+    // THE MOST IMPORTANT TEST IN THIS FILE for reading the slice
+    // honestly. The allergy input is present and passed to the engine —
+    // gate (a) is open. No allergy finding comes back anyway, because
+    // `describeDrug` returns null for the candidate with no knowledge
+    // source wired, so the engine cannot reach the allergy comparison at
+    // all.
+    //
+    // That is not a silent pass. `SCR_KNOWLEDGE_UNAVAILABLE` is on the
+    // record saying no screening could be performed for this
+    // prescription, which is true and covers the allergy axis. The gap
+    // has MOVED from "the platform cannot hold allergies" (false, once
+    // the table exists) to "no drug knowledge is provisioned" (true).
+    const fake = buildFlowFake({
+      screening: {
+        ...candidateOnly,
+        historyAssertions: [],
+        allergies: [screenableStubAllergy({ patientId: PATIENT_ID })],
+      },
+    });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    await startReview();
+
+    const codes = fake.screening.state.persistedFindings.map((f) => f.code);
+    // Gate (a) open: no "nobody recorded allergies" gap.
+    expect(codes).not.toContain("SCR_ALLERGY_INPUT_UNAVAILABLE");
+    // Gate (b) closed, and SAYING so.
+    expect(codes).toContain("SCR_KNOWLEDGE_UNAVAILABLE");
+    // No allergy finding, because no comparison was possible.
+    expect(codes.filter((c) => c.startsWith("SCR_DRUG_ALLERGY"))).toEqual([]);
+
+    // Nothing is outstanding: the knowledge gap is MINOR because no
+    // pharmacist can license a database from a PV1 queue. So the order
+    // approves — with an honest record that nothing was screened.
+    expect(outstandingFingerprints(fake)).toEqual([]);
+    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
+      await expect(
+        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve-recorded" })
+      ).resolves.toMatchObject({ currentStatus: "PV1_APPROVED_READY_FOR_FILL" });
+    });
+  });
+
+  it("with knowledge provisioned, a recorded allergy to the dispensed ingredient HARD STOPS", async () => {
+    // Both gates open, in the one configuration where that is currently
+    // possible: a seeded in-memory knowledge source. This is what the
+    // slice buys the day an RxNorm or licensed adapter is wired, and it
+    // is the reason a dark allergy axis mattered — allergy is the only
+    // axis that can refuse a dispense outright.
+    const fake = buildFlowFake({
+      screening: {
+        ...candidateOnly,
+        historyAssertions: [],
+        allergies: [
+          screenableStubAllergy({
+            patientId: PATIENT_ID,
+            substanceCode: "INGREDIENT_ALFA",
+            criticality: "HIGH",
+            verificationStatus: "CONFIRMED",
+          }),
+        ],
+      },
+    });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithAcknowledgeTierInteraction() });
+
+    await startReview();
+
+    const allergyFinding = fake.screening.state.persistedFindings.find(
+      (f) => f.code === "SCR_DRUG_ALLERGY_DIRECT"
+    );
+    expect(allergyFinding).toMatchObject({
+      severity: "CONTRAINDICATED",
+      certainty: "DEFINITE",
+      disposition: "HARD_STOP",
+    });
+
+    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
+      await expect(
+        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve-hardstop" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_HARD_STOP" });
+    });
+    expect(fake.currentStatus()).toBe("PV1_IN_PROGRESS");
+  });
+
+  it("an allergy recorded between StartPV1 and ApprovePV1 is caught by the re-screen", async () => {
+    // The mid-review case, applied to the axis that can hard stop. The
+    // pharmacist opens an order for a patient nobody has asked, a
+    // technician takes an allergy history while they read it, and the
+    // re-screen at sign-off must see it. Gating on the start-time
+    // snapshot would approve against a world where the allergy was not
+    // yet known.
+    const fake = buildFlowFake({
+      screening: { ...candidateOnly, historyAssertions: [] },
+    });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithAcknowledgeTierInteraction() });
+
+    await startReview();
+    // At start: nobody has asked, so an acknowledge-tier gap. The
+    // pharmacist works through it.
+    expect(outstandingFingerprints(fake)).toEqual([ALLERGY_NOT_RECORDED_FINGERPRINT]);
+    await acknowledge(PHARMACIST_A, outstandingFingerprints(fake), "ack-gap");
+
+    // …and now a technician records a high-criticality allergy to the
+    // ingredient being dispensed.
+    fake.screening.state.allergies.push(
+      screenableStubAllergy({
+        patientId: PATIENT_ID,
+        substanceCode: "INGREDIENT_ALFA",
+        criticality: "HIGH",
+        verificationStatus: "CONFIRMED",
+      })
+    );
+
+    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
+      await expect(
+        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve-rescreen" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_HARD_STOP" });
+    });
+    expect(fake.currentStatus()).toBe("PV1_IN_PROGRESS");
+  });
+
+  it("carries no substance narrative into a persisted finding", async () => {
+    // Findings are codes only. A substance CODE is a code and is
+    // allowed; `substanceLabelEnc` is narrative and must never be
+    // selected by the screening path, let alone persisted. The stub row
+    // cannot even carry a label, which is the structural half of this
+    // guarantee — this is the behavioural half.
+    const fake = buildFlowFake({
+      screening: {
+        ...candidateOnly,
+        historyAssertions: [],
+        allergies: [
+          screenableStubAllergy({ patientId: PATIENT_ID, substanceCode: "INGREDIENT_ALFA" }),
+        ],
+      },
+    });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithAcknowledgeTierInteraction() });
+
+    await startReview();
+
+    const serialized = JSON.stringify(
+      callsOf(fake.calls, "orderScreeningFinding", "createMany").map((c) => c.args)
+    );
+    expect(serialized).not.toContain(PATIENT_ID);
+    expect(serialized).not.toContain("substanceLabel");
+    expect(serialized).not.toContain("reactionNote");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The empty knowledge source — the shipped default
 // ---------------------------------------------------------------------------
 
@@ -537,11 +791,7 @@ describe("PV1 screening — with no drug knowledge configured", () => {
     // and this platform can supply neither an allergy list nor a
     // structured dose.
     expect(rows.map((r) => r["fingerprint"])).toEqual(
-      expect.arrayContaining([
-        GAP_FINGERPRINT,
-        ALLERGY_INPUT_GAP_FINGERPRINT,
-        DOSE_INPUT_GAP_FINGERPRINT,
-      ])
+      expect.arrayContaining([GAP_FINGERPRINT, DOSE_INPUT_GAP_FINGERPRINT])
     );
     for (const row of rows) {
       expect(row).toMatchObject({ kind: "SCREENING_GAP", phase: "PV1_START" });
@@ -551,14 +801,22 @@ describe("PV1 screening — with no drug knowledge configured", () => {
   it("does not charge the pharmacist an acknowledgement for a deficiency they cannot fix", async () => {
     // THE ALERT-FATIGUE INVARIANT, at the level a pharmacist meets it.
     //
-    // In a default-configured deployment all three gaps fire on EVERY
-    // order: nobody has licensed a drug database, nobody can record an
-    // allergy, and no sig carries a structured dose. None of those is
-    // closable from a PV1 queue. Demanding three acknowledgements per
-    // prescription would train the reflex that dismisses the first
-    // genuine MAJOR interaction, and file a documented sign-off
-    // implying a review that could not have happened — worse than no
-    // screening, because it manufactures the evidence too.
+    // In a default-configured deployment two gaps fire on EVERY order:
+    // nobody has licensed a drug database, and no sig carries a
+    // structured dose. Neither is closable from a PV1 queue. Demanding
+    // an acknowledgement each, per prescription, would train the reflex
+    // that dismisses the first genuine MAJOR interaction, and file a
+    // documented sign-off implying a review that could not have
+    // happened — worse than no screening, because it manufactures the
+    // evidence too.
+    //
+    // The allergy gap was a third such gap until allergy capture landed
+    // and is deliberately absent from this test: for a patient nobody
+    // has asked it is now MODERATE and DOES ask for a click, because
+    // somebody can go and take a history. This fixture's patient has one
+    // on file, which is why the axis is silent here. The distinction is
+    // the whole grading model — a gap interrupts exactly when it is
+    // closable.
     //
     // So the approval passes with no clicks, and the gaps are on record.
     const fake = buildFlowFake();
@@ -582,27 +840,27 @@ describe("PV1 screening — with no drug knowledge configured", () => {
       .flatMap((c) => (c.args as { data: Array<Record<string, unknown>> }).data)
       .filter((r) => r["phase"] === "PV1_APPROVE");
     expect(approvePhaseRows.map((r) => r["code"])).toEqual(
-      expect.arrayContaining([
-        "SCR_KNOWLEDGE_UNAVAILABLE",
-        "SCR_ALLERGY_INPUT_UNAVAILABLE",
-        "SCR_DOSE_INPUT_UNAVAILABLE",
-      ])
+      expect.arrayContaining(["SCR_KNOWLEDGE_UNAVAILABLE", "SCR_DOSE_INPUT_UNAVAILABLE"])
     );
+    // And the allergy axis is silent, because this patient's history was
+    // taken. That is the axis reporting CLEAR, not the axis being off.
+    expect(approvePhaseRows.map((r) => r["code"])).not.toContain("SCR_ALLERGY_INPUT_UNAVAILABLE");
   });
 
-  it("records the two axes this platform cannot supply even when the drug IS known", async () => {
+  it("records the axis this platform cannot supply even when the drug IS known", async () => {
     // The regression that motivated the input-availability
     // declaration. Wiring a licensed knowledge source silences
     // SCR_KNOWLEDGE_UNAVAILABLE and makes interaction and duplication
     // screen for real — and, before this, a prescription would then
     // come back CLEAR having never been compared against an allergy
-    // list that does not exist. Allergy is the only axis that can
-    // produce a hard stop, so it was the axis most capable of saving
-    // someone that was silently not running.
+    // list that did not exist. Allergy is the only axis that can produce
+    // a hard stop, so it was the axis most capable of saving someone
+    // that was silently not running.
     //
-    // Recording it is the invariant. Interrupting for it is not: a
-    // licensed database arriving does not give anyone the ability to
-    // record an allergy, so these two are as unfixable as before.
+    // Allergy capture has since landed, so that axis is per-patient and
+    // this fixture's patient has an asserted-empty history: the axis
+    // runs and finds nothing. DOSE_RANGE is what remains unsupportable,
+    // and it is recorded without interrupting.
     const fake = buildFlowFake({ screening: candidateOnly });
     configureBus(fake.client);
     configureClinicalScreening({ knowledgeSource: knowledgeWithAcknowledgeTierInteraction() });
@@ -613,7 +871,7 @@ describe("PV1 screening — with no drug knowledge configured", () => {
       (c) => (c.args as { data: Array<Record<string, unknown>> }).data
     );
     expect(rows.map((r) => r["code"])).toEqual(
-      expect.arrayContaining(["SCR_ALLERGY_INPUT_UNAVAILABLE", "SCR_DOSE_INPUT_UNAVAILABLE"])
+      expect.arrayContaining(["SCR_DOSE_INPUT_UNAVAILABLE"])
     );
     // Nothing pretends the drug is unknown — it is not.
     expect(rows.map((r) => r["code"])).not.toContain("SCR_KNOWLEDGE_UNAVAILABLE");
@@ -669,25 +927,25 @@ describe("PV1 screening — with no drug knowledge configured", () => {
     const screeningRow = rows.find((r) => r["eventType"] === "order.pv1.screening.recorded.v1");
     expect(screeningRow?.["payload"]).toMatchObject({
       outcome: "ADVISORY",
-      // One unprovisioned knowledge source plus the two axes this
+      // One unprovisioned knowledge source plus the one axis this
       // platform cannot supply. `gapCount` equals `findingCount` here,
       // which is the honest summary of an order on which nothing was
-      // screened — and it stays visible in reporting even though none
-      // of the three interrupted the pharmacist. THIS is where the
-      // systemic deficiency has to be legible, because this is the
-      // number a manager can act on.
-      findingCount: 3,
-      gapCount: 3,
+      // screened — and it stays visible in reporting even though
+      // neither interrupted the pharmacist. THIS is where the systemic
+      // deficiency has to be legible, because this is the number a
+      // manager can act on.
+      findingCount: 2,
+      gapCount: 2,
       hardStopCount: 0,
       requiresAcknowledgementCount: 0,
-      informationalCount: 3,
+      informationalCount: 2,
       phase: "PV1_START",
       minimumReportedSeverity: "MINOR",
       workflowPolicyVersion: 1,
     });
   });
 
-  it("keeps counting the unsupplied axes as gaps once the knowledge-source mask lifts", async () => {
+  it("keeps counting the unsupplied axis as a gap once the knowledge-source mask lifts", async () => {
     // With a licensed source wired, the fleet-wide
     // SCR_KNOWLEDGE_UNAVAILABLE disappears. A dashboard reading
     // `gapCount` must not then see zero and conclude these orders
@@ -706,9 +964,9 @@ describe("PV1 screening — with no drug knowledge configured", () => {
     const payload = rows.find((r) => r["eventType"] === "order.pv1.screening.recorded.v1")?.[
       "payload"
     ] as Record<string, unknown>;
-    // One real interaction finding, plus two axes that never ran.
-    expect(payload["findingCount"]).toBe(3);
-    expect(payload["gapCount"]).toBe(2);
+    // One real interaction finding, plus the one axis that never ran.
+    expect(payload["findingCount"]).toBe(2);
+    expect(payload["gapCount"]).toBe(1);
   });
 
   it("still demands the click for a drug an otherwise-working database does not know", async () => {
@@ -953,18 +1211,16 @@ describe("PV1 screening — the profile moves during the review", () => {
 
     await startReview();
 
-    // Clear on the CLINICAL axes at start: the candidate is known and
-    // nothing else is on the profile, so interaction and duplication
-    // both ran and found nothing. The two unsupported axes record
-    // themselves, as they do on every screen, and neither is
+    // Clear on the CLINICAL axes at start: the candidate is known,
+    // nothing else is on the profile, and the patient's allergy history
+    // was taken and found empty — so interaction, duplication and
+    // allergy all ran and found nothing. The one unsupported axis
+    // records itself, as it does on every screen, and it is not
     // outstanding — so the pharmacist begins with nothing to click.
     const startFindings = callsOf(fake.calls, "orderScreeningFinding", "createMany").flatMap(
       (c) => (c.args as { data: Array<Record<string, unknown>> }).data
     );
-    expect(startFindings.map((r) => r["code"]).sort()).toEqual([
-      "SCR_ALLERGY_INPUT_UNAVAILABLE",
-      "SCR_DOSE_INPUT_UNAVAILABLE",
-    ]);
+    expect(startFindings.map((r) => r["code"]).sort()).toEqual(["SCR_DOSE_INPUT_UNAVAILABLE"]);
     expect(outstandingFingerprints(fake)).toEqual([]);
 
     // …and now the profile gains an interacting drug.

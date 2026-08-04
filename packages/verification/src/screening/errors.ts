@@ -80,6 +80,19 @@ export const PV1_SCREENING_NOT_PERFORMED = "PV1_SCREENING_NOT_PERFORMED";
 export const PV1_SCREENING_PROFILE_TOO_LARGE = "PV1_SCREENING_PROFILE_TOO_LARGE";
 
 /**
+ * The patient's recorded allergies exceed the screening cap.
+ *
+ * The allergy analogue of `PV1_SCREENING_PROFILE_TOO_LARGE`, and
+ * refused for the same reason: an allergy screen run against an
+ * arbitrary subset of a patient's allergies may have skipped the one
+ * that mattered, and would report a clean result either way. The usual
+ * cause is a duplicated intake or a patient merge that duplicated rows.
+ *
+ * Class: `InvariantViolationError` (422).
+ */
+export const PV1_SCREENING_ALLERGY_PROFILE_TOO_LARGE = "PV1_SCREENING_ALLERGY_PROFILE_TOO_LARGE";
+
+/**
  * The fingerprint being acknowledged does not match any finding
  * persisted for this order.
  *

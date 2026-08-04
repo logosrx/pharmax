@@ -87,22 +87,38 @@ export { createInMemoryDrugKnowledgeSource } from "./in-memory-knowledge-source.
 export type { InMemoryKnowledgeSeed, SeededInteraction } from "./in-memory-knowledge-source.js";
 
 export {
+  isComparableSubstanceCodeSystem,
+  isScreenableAllergy,
+  isScreenableAllergyCategory,
+  isScreenableAllergyClinicalStatus,
+  isScreenableAllergyVerificationStatus,
+  ALLERGY_CATEGORIES,
+  ALLERGY_CLINICAL_STATUSES,
+  ALLERGY_CRITICALITIES,
+  ALLERGY_SUBSTANCE_CODE_SYSTEMS,
+  ALLERGY_TYPES,
+  ALLERGY_VERIFICATION_STATUSES,
+} from "./allergy.js";
+
+export type {
+  AllergyCategory,
+  AllergyClinicalStatus,
+  AllergyCriticality,
+  AllergyScreenability,
+  AllergySubstanceCodeSystem,
+  AllergyType,
+  AllergyVerificationStatus,
+} from "./allergy.js";
+
+export {
   findingsRequiringAcknowledgement,
   hardStopFindings,
   screenPrescription,
-  ALLERGY_CATEGORIES,
-  ALLERGY_CRITICALITIES,
-  ALLERGY_TYPES,
-  ALLERGY_VERIFICATION_STATUSES,
   DEFAULT_SCREENING_POLICY,
   SCREENING_OUTCOMES,
 } from "./screening.js";
 
 export type {
-  AllergyCategory,
-  AllergyCriticality,
-  AllergyType,
-  AllergyVerificationStatus,
   DoseStatement,
   PrescribedDrug,
   RecordedAllergy,
