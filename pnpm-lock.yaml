@@ -19,14 +19,14 @@ importers:
   .:
     devDependencies:
       '@aws-sdk/client-kms':
-        specifier: ^3.1097.0
-        version: 3.1097.0
+        specifier: ^3.1101.0
+        version: 3.1101.0
       '@aws-sdk/client-rds':
         specifier: ^3.1097.0
         version: 3.1100.0
       '@aws-sdk/client-s3':
-        specifier: ^3.1097.0
-        version: 3.1097.0
+        specifier: ^3.1101.0
+        version: 3.1101.0
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.8.0(jiti@2.7.0))
@@ -227,8 +227,8 @@ importers:
   apps/web:
     dependencies:
       '@aws-sdk/client-s3':
-        specifier: ^3.1097.0
-        version: 3.1097.0
+        specifier: ^3.1101.0
+        version: 3.1101.0
       '@pharmax/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -323,8 +323,8 @@ importers:
         specifier: ^4.0.0
         version: 4.8.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       stripe:
-        specifier: ^22.3.2
-        version: 22.3.2(@types/node@22.20.1)
+        specifier: ^22.4.0
+        version: 22.4.0(@types/node@22.20.1)
       svix:
         specifier: ^1.99.1
         version: 1.99.1
@@ -354,8 +354,8 @@ importers:
   apps/worker:
     dependencies:
       '@aws-sdk/client-s3':
-        specifier: ^3.1097.0
-        version: 3.1097.0
+        specifier: ^3.1101.0
+        version: 3.1101.0
       '@pharmax/billing':
         specifier: workspace:*
         version: link:../../packages/billing
@@ -414,8 +414,8 @@ importers:
         specifier: ^4.0.0
         version: 4.8.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       stripe:
-        specifier: ^22.3.2
-        version: 22.3.2(@types/node@22.20.1)
+        specifier: ^22.4.0
+        version: 22.4.0(@types/node@22.20.1)
       ulid:
         specifier: ^2.3.0
         version: 2.4.0
@@ -698,8 +698,8 @@ importers:
   packages/crypto:
     dependencies:
       '@aws-sdk/client-kms':
-        specifier: ^3.1097.0
-        version: 3.1097.0
+        specifier: ^3.1101.0
+        version: 3.1101.0
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../platform-core
@@ -1172,8 +1172,8 @@ importers:
         specifier: ^9.5.0
         version: 9.14.0
       stripe:
-        specifier: ^22.3.2
-        version: 22.3.2(@types/node@22.20.1)
+        specifier: ^22.4.0
+        version: 22.4.0(@types/node@22.20.1)
       ulid:
         specifier: ^2.3.0
         version: 2.4.0
@@ -1281,11 +1281,11 @@ importers:
   packages/security:
     dependencies:
       '@aws-sdk/client-kms':
-        specifier: ^3.1097.0
-        version: 3.1097.0
+        specifier: ^3.1101.0
+        version: 3.1101.0
       '@aws-sdk/client-s3':
-        specifier: ^3.1097.0
-        version: 3.1097.0
+        specifier: ^3.1101.0
+        version: 3.1101.0
       '@pharmax/audit':
         specifier: workspace:*
         version: link:../audit
@@ -1520,16 +1520,16 @@ packages:
     resolution: {integrity: sha512-7TWLjypP8kk3savsDBRuhZJx7mBuFFA2136BQhwwLllsAnO4Tmq/p+SXZaNxbuulkzUFz3BZzj0bb4YzexZcNQ==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-kms@3.1097.0':
-    resolution: {integrity: sha512-mwPT8TFQ05Cmf7rNKCQ4K6pq/+sSTb++PYeZ4olGdjjb+aBaWrpflJMnmtmrHODs0GAwf5touQAEFA4jGEs8KA==}
+  '@aws-sdk/client-kms@3.1101.0':
+    resolution: {integrity: sha512-qczxakJlFYG9E6nE2yWIJ2nXq0HbMzHxMSWIsyubPZqx1TANHd2CSJWDTkg+IsNKq+94tG+e+EJo3uADwZ6cdw==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-rds@3.1100.0':
     resolution: {integrity: sha512-RNr0t5dZatDBXsFm0AvI81VnBtkRUuu5f8ca/njMUAtK9WDow0m6DVi7to69TkhV2C3on88mmy4Vt4Z8d9ZGdg==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-s3@3.1097.0':
-    resolution: {integrity: sha512-iCBD95hrynpxiOzD301pUW9H3mxKcEfMErLqdg58WcIZnEqJuOd7JwcARsV3/y6OWj1t6j2tpS9lGt6X4OnPFw==}
+  '@aws-sdk/client-s3@3.1101.0':
+    resolution: {integrity: sha512-16EFb1aTEBgPcfUAWAjjlB57IZCyn7B3rlfT+xqE7M6WoH8AMMU3vFZO0UOitwh/xvvzVx73YED1/n0PU4qBMw==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.977.4':
@@ -5442,8 +5442,8 @@ packages:
   strip-literal@3.1.0:
     resolution: {integrity: sha512-8r3mkIM/2+PpjHoOtiAW8Rg3jJLHaV7xPwG+YRGrv6FP0wwk/toTpATxWYOW0BKdWwl82VT2tFYi5DlROa0Mxg==}
 
-  stripe@22.3.2:
-    resolution: {integrity: sha512-O13QOvgEIQvDlTy6Ubb5kB980wpbhmoZNsgCXKILjCMZS67f+bW+6w99k3gnSi/N1lkryoj1WYdpGT5Wc5edjg==}
+  stripe@22.4.0:
+    resolution: {integrity: sha512-LVJ+tcSYeqOSnXr3i+Kz2tZ7y0crLLdP2uwD/4wccrmEVyn0g/Heo0pF7as7rxS/sOjJzrb1lxgZY0Y0Dx1pSA==}
     engines: {node: '>=18'}
     peerDependencies:
       '@types/node': 22.20.1
@@ -5843,7 +5843,7 @@ snapshots:
       '@smithy/types': 4.16.1
       tslib: 2.8.1
 
-  '@aws-sdk/client-kms@3.1097.0':
+  '@aws-sdk/client-kms@3.1101.0':
     dependencies:
       '@aws-sdk/core': 3.977.4
       '@aws-sdk/credential-provider-node': 3.972.76
@@ -5866,7 +5866,7 @@ snapshots:
       '@smithy/types': 4.16.1
       tslib: 2.8.1
 
-  '@aws-sdk/client-s3@3.1097.0':
+  '@aws-sdk/client-s3@3.1101.0':
     dependencies:
       '@aws-sdk/checksums': 3.1000.24
       '@aws-sdk/core': 3.977.4
@@ -10035,7 +10035,7 @@ snapshots:
     dependencies:
       js-tokens: 9.0.1
 
-  stripe@22.3.2(@types/node@22.20.1):
+  stripe@22.4.0(@types/node@22.20.1):
     optionalDependencies:
       '@types/node': 22.20.1
 
