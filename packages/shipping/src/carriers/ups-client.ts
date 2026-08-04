@@ -39,8 +39,13 @@ export class UpsApiError extends Error {
     message: string;
     httpStatus: number;
     providerErrorCode?: string | null;
+    // Optional so existing call sites keep compiling. Thread it
+    // wherever this error wraps a lower-level failure: `wrapUpsError`
+    // in ups-adapter.ts preserves whatever chain it is handed, so a
+    // cause dropped here is a cause Sentry never sees.
+    cause?: unknown;
   }) {
-    super(input.message);
+    super(input.message, input.cause === undefined ? undefined : { cause: input.cause });
     this.name = "UpsApiError";
     this.code = input.code;
     this.httpStatus = input.httpStatus;
@@ -351,6 +356,7 @@ export class UpsClient {
                 code: "UPS_TRACK_FAILED",
                 message: cause instanceof Error ? cause.message : "unknown",
                 httpStatus: 0,
+                cause,
               });
         results.push(Object.freeze({ trackingNumber, package: null, error: wrapped }));
       }
@@ -371,12 +377,14 @@ export class UpsClient {
           code: "UPS_REQUEST_TIMEOUT",
           message: `UPS ${init.method ?? "GET"} ${path} timed out after ${this.timeoutMs}ms.`,
           httpStatus: 0,
+          cause,
         });
       }
       throw new UpsApiError({
         code: "UPS_REQUEST_FAILED",
         message: `UPS ${init.method ?? "GET"} ${path} failed: ${cause instanceof Error ? cause.message : "unknown"}`,
         httpStatus: 0,
+        cause,
       });
     } finally {
       clearTimeout(timeout);
@@ -389,11 +397,12 @@ export class UpsClient {
     if (text.length > 0) {
       try {
         json = JSON.parse(text);
-      } catch {
+      } catch (cause) {
         throw new UpsApiError({
           code: "UPS_RESPONSE_INVALID_JSON",
           message: `UPS ${label} returned non-JSON body (status ${response.status}).`,
           httpStatus: response.status,
+          cause,
         });
       }
     }

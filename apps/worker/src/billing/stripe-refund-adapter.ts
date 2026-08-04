@@ -85,6 +85,7 @@ export function createStripeRefundAdapter(
               stripeChargeId: request.stripeChargeId,
               stripeErrorCode: code,
             },
+            cause,
           });
         }
         throw new errors.InternalError({
@@ -94,6 +95,7 @@ export function createStripeRefundAdapter(
             pharmaxRefundKey: request.pharmaxRefundKey,
             stripeErrorCode: code ?? "unknown",
           },
+          cause,
         });
       }
     },
