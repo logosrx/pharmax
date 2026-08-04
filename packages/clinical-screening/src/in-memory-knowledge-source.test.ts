@@ -105,4 +105,30 @@ describe("createInMemoryDrugKnowledgeSource", () => {
     expect(source.describeDrug("DRUG_ALFA")).toEqual(ALFA);
     expect(source.findIngredientInteraction("ING_ALFA", "ING_BRAVO")).toEqual(FACT);
   });
+
+  it("carries no release identity unless the seed supplies one", () => {
+    // A caller-seeded container holds no publisher's release, and
+    // fabricating one would put false provenance on every persisted
+    // finding the wiring layer stamps.
+    expect(createInMemoryDrugKnowledgeSource().release).toBeNull();
+    const source = createInMemoryDrugKnowledgeSource({
+      release: { source: "TEST_SOURCE", version: "0001" },
+    });
+    expect(source.release).toEqual({ source: "TEST_SOURCE", version: "0001" });
+  });
+
+  it("answers IN_NOMENCLATURE for every code by default — the conservative direction", () => {
+    const source = createInMemoryDrugKnowledgeSource({ drugs: { DRUG_ALFA: ALFA } });
+    expect(source.drugCodeScope("DRUG_ALFA")).toBe("IN_NOMENCLATURE");
+    expect(source.drugCodeScope("NEVER_SEEN")).toBe("IN_NOMENCLATURE");
+  });
+
+  it("declares only the seeded codes OUT_OF_NOMENCLATURE", () => {
+    const source = createInMemoryDrugKnowledgeSource({
+      drugs: { DRUG_ALFA: ALFA },
+      outOfNomenclatureDrugCodes: ["COMPOUND_LOCAL_1"],
+    });
+    expect(source.drugCodeScope("COMPOUND_LOCAL_1")).toBe("OUT_OF_NOMENCLATURE");
+    expect(source.drugCodeScope("DRUG_ALFA")).toBe("IN_NOMENCLATURE");
+  });
 });

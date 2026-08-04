@@ -50,6 +50,13 @@ export interface StubFinding {
    * would be shown has to be able to group the same way.
    */
   readonly commandLogId?: string;
+  /**
+   * Knowledge-release attribution as persisted. `null` is meaningful
+   * (a source with no release identity) and distinct from absent (a
+   * row a test seeded directly rather than writing through a command).
+   */
+  readonly knowledgeSourceCode?: string | null;
+  readonly knowledgeReleaseVersion?: string | null;
 }
 
 export interface StubAcknowledgement {
@@ -248,6 +255,8 @@ export function createScreeningStubs(
             occurredAt: row["occurredAt"] as Date,
             phase: String(row["phase"]),
             commandLogId: String(row["commandLogId"]),
+            knowledgeSourceCode: (row["knowledgeSourceCode"] ?? null) as string | null,
+            knowledgeReleaseVersion: (row["knowledgeReleaseVersion"] ?? null) as string | null,
           });
         }
         return { count: rows.length };

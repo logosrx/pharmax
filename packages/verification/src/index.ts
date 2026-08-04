@@ -322,8 +322,20 @@ export {
   configureClinicalScreening,
   getClinicalScreeningKnowledgeSource,
   resetClinicalScreeningConfigurationForTests,
+  resolveClinicalScreeningKnowledgeSource,
   type ClinicalScreeningConfiguration,
+  type DrugKnowledgeScreenContext,
+  type DrugKnowledgeSourceResolver,
 } from "./screening/configure.js";
+
+// The screening read surface the PV1 commands are built from,
+// exported so the integration suite can prove the knowledge path —
+// real adapter, real Postgres, real gate — end to end without
+// re-implementing either function. These are NOT an alternative entry
+// point for mutating workflow state: they read and evaluate; only the
+// commands above persist and transition.
+export { runOrderScreen, type RunScreenInput, type ScreenResult } from "./screening/run-screen.js";
+export { screeningRefusalForApproval, type ApprovalGateInput } from "./screening/gate.js";
 
 import * as acknowledgePV1ScreeningFindingModule from "./commands/acknowledge-pv1-screening-finding.js";
 import * as approveFinalVerificationModule from "./commands/approve-final-verification.js";

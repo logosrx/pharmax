@@ -302,6 +302,16 @@ export const SCREENING_FINDING_CODES = Object.freeze([
   "SCR_DOSE_ABOVE_DAILY_MAXIMUM",
   "SCR_DOSE_BELOW_DAILY_MINIMUM",
   "SCR_KNOWLEDGE_UNAVAILABLE",
+  // The provisioned knowledge source's nomenclature does not APPLY to
+  // this drug code — an in-house compounded preparation, whose
+  // identifier no national nomenclature has ever contained. Distinct
+  // from `SCR_KNOWLEDGE_UNAVAILABLE` (a code that SHOULD have
+  // resolved and did not) because the two are different operational
+  // facts with different owners: one is a reference-data ticket, the
+  // other a product-capability gap (locally declared compound
+  // ingredients), and a dashboard must be able to count them
+  // separately without parsing reasons.
+  "SCR_KNOWLEDGE_NOT_APPLICABLE",
   "SCR_DOSE_UNIT_NOT_COMPARABLE",
   // One per axis, for the case where the CALLER could not supply the
   // input at all. Distinct from `SCR_KNOWLEDGE_UNAVAILABLE`, which

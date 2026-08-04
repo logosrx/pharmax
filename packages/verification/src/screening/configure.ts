@@ -50,20 +50,47 @@ import {
   createInMemoryDrugKnowledgeSource,
   type DrugKnowledgeSource,
 } from "@pharmax/clinical-screening";
+import type { Prisma } from "@pharmax/database";
 import { runtime } from "@pharmax/platform-core";
 
-export interface ClinicalScreeningConfiguration {
-  /**
-   * The knowledge source every PV1 screen resolves against.
-   *
-   * MUST be pure and synchronous — the engine is a total function and
-   * stays that way so the same call is usable from a command handler,
-   * a UI affordance check, and a `command_log` replay. An adapter
-   * fronting a network service has to resolve its facts BEFORE the
-   * command runs.
-   */
-  readonly knowledgeSource: DrugKnowledgeSource;
+/**
+ * What a per-screen resolver gets: the command's own transaction and
+ * the codes the engine is about to ask about, so the resolver can
+ * prefetch exactly those rows and hand back a synchronous source over
+ * them. Reads inside the caller's transaction are what make one
+ * screen resolve against exactly one knowledge release even while an
+ * ingestion swaps releases mid-command.
+ */
+export interface DrugKnowledgeScreenContext {
+  readonly tx: Prisma.TransactionClient;
+  readonly organizationId: string;
+  /** Candidate + profile drug codes, deduplicated. */
+  readonly drugCodes: ReadonlyArray<string>;
+  /** Screenable allergy substance codes, deduplicated. */
+  readonly allergenCodes: ReadonlyArray<string>;
 }
+
+export type DrugKnowledgeSourceResolver = (
+  context: DrugKnowledgeScreenContext
+) => Promise<DrugKnowledgeSource>;
+
+/**
+ * Either a STATIC source (an in-memory container whose facts never
+ * change — tests, local development) or a per-screen RESOLVER (a
+ * database-backed adapter that prefetches inside the command's
+ * transaction — production). A union rather than two optional fields,
+ * so a configuration that supplies both or neither is unrepresentable
+ * instead of silently tie-broken.
+ *
+ * Either way, what the engine receives MUST be pure and synchronous —
+ * the engine is a total function and stays that way so the same call
+ * is usable from a command handler, a UI affordance check, and a
+ * `command_log` replay. Resolving facts BEFORE the engine runs is the
+ * resolver's whole job.
+ */
+export type ClinicalScreeningConfiguration =
+  | { readonly knowledgeSource: DrugKnowledgeSource }
+  | { readonly knowledgeSourceResolver: DrugKnowledgeSourceResolver };
 
 // globalThis-backed so boot (the Next instrumentation bundle) and use
 // (route bundles) share ONE configuration despite webpack giving each
@@ -86,17 +113,47 @@ const EMPTY_KNOWLEDGE_SOURCE: DrugKnowledgeSource = createInMemoryDrugKnowledgeS
  * `resetClinicalScreeningConfigurationForTests`.
  */
 export function configureClinicalScreening(config: ClinicalScreeningConfiguration): void {
-  box.value = Object.freeze({ knowledgeSource: config.knowledgeSource });
+  box.value = Object.freeze(
+    "knowledgeSource" in config
+      ? { knowledgeSource: config.knowledgeSource }
+      : { knowledgeSourceResolver: config.knowledgeSourceResolver }
+  );
 }
 
 /**
- * The configured source, or the empty in-memory source when boot did
- * not wire one. See the header for why this does not throw.
+ * The source for ONE screen: the configured static source, the
+ * configured resolver applied to this screen's context, or the empty
+ * in-memory source when boot wired nothing. See the header for why
+ * the unconfigured case does not throw.
+ */
+export async function resolveClinicalScreeningKnowledgeSource(
+  context: DrugKnowledgeScreenContext
+): Promise<DrugKnowledgeSource> {
+  const configured = box.value;
+  if (configured === null) return EMPTY_KNOWLEDGE_SOURCE;
+  if ("knowledgeSource" in configured) return configured.knowledgeSource;
+  return configured.knowledgeSourceResolver(context);
+}
+
+/**
+ * The static source, for callers OUTSIDE the screening path (boot
+ * assertions, composition tests). The screening path itself must use
+ * `resolveClinicalScreeningKnowledgeSource`, which is the only way a
+ * per-screen resolver can answer.
+ *
+ * Throws for a resolver configuration rather than returning anything:
+ * a resolver has no single source to return, and handing back the
+ * empty source would tell the caller "nothing is provisioned" about a
+ * deployment that is provisioned per screen.
  */
 export function getClinicalScreeningKnowledgeSource(): DrugKnowledgeSource {
   const configured = box.value;
-  if (configured !== null) return configured.knowledgeSource;
-  return EMPTY_KNOWLEDGE_SOURCE;
+  if (configured === null) return EMPTY_KNOWLEDGE_SOURCE;
+  if ("knowledgeSource" in configured) return configured.knowledgeSource;
+  throw new Error(
+    "A per-screen knowledge source resolver is configured; there is no static source to return. " +
+      "Screening-path callers must use resolveClinicalScreeningKnowledgeSource."
+  );
 }
 
 /**

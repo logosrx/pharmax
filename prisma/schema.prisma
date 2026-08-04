@@ -4005,6 +4005,18 @@ model OrderScreeningFinding {
   commandLogId String     @db.Uuid
   commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
 
+  // Knowledge-release attribution — the same treatment
+  // `workflowPolicyId` + `workflowPolicyVersion` give the policy.
+  // "Why did this not fire in March?" is answerable only if the row
+  // names the body of knowledge the screen resolved against, because
+  // the reference tables move underneath the findings on every
+  // ingestion. NULL means the screen ran against a source that
+  // carries no release identity (the empty in-memory source, or a
+  // deployment predating knowledge provisioning) — which is itself
+  // the honest answer, not a missing stamp.
+  knowledgeSourceCode     String?
+  knowledgeReleaseVersion String?
+
   occurredAt DateTime @default(now())
   createdAt  DateTime @default(now())
 
@@ -4353,6 +4365,29 @@ model AccessReviewSnapshot {
 
 // Drug catalog entry keyed by normalized 11-digit NDC. Plaintext by
 // design — NDC + drug name are not PHI.
+// What kind of identifier a product's `ndc` column actually is.
+//
+// Compounding pharmacies catalog two very different things under one
+// column. A manufactured product carries a REAL National Drug Code:
+// it is registered with the FDA, it appears in national drug
+// nomenclature (RxNorm), and a drug-knowledge lookup that cannot find
+// it indicates a data problem someone should chase. A compounded
+// preparation carries an ORG-LOCAL identifier minted by the pharmacy
+// so that lots, labels and billing have something to key on: no
+// national nomenclature has ever heard of it, and no reference-data
+// update will ever resolve it.
+//
+// The PV1 screening layer grades its knowledge gaps on this
+// distinction: an unresolvable NATIONAL code interrupts the
+// pharmacist ("verify the NDC"), an IN_HOUSE_COMPOUND code is
+// recorded without interrupting, because prompting on every compound
+// order forever trains the dismiss reflex — see
+// `SCR_KNOWLEDGE_NOT_APPLICABLE` in `@pharmax/clinical-screening`.
+enum ProductNdcKind {
+  NATIONAL
+  IN_HOUSE_COMPOUND
+}
+
 model Product {
   id             String       @id @default(uuid()) @db.Uuid
   organizationId String       @db.Uuid
@@ -4362,6 +4397,22 @@ model Product {
   name     String
   strength String?
   form     String?
+
+  // Whether `ndc` is a real National Drug Code or an org-local
+  // compound identifier. Defaults to NATIONAL — the conservative
+  // direction, because an unflagged compound over-prompts (a
+  // pharmacist acknowledges a gap) while a mis-flagged manufactured
+  // product would under-prompt (a real missing-NDC signal is
+  // silenced).
+  //
+  // WRITE-SURFACE REQUIREMENT (screening-suppression vector): flipping
+  // NATIONAL → IN_HOUSE_COMPOUND converts the acknowledge-tier "verify
+  // the NDC" prompt into an informational gap on every order for this
+  // product. No application write path for `product` exists today (the
+  // catalog is seeded/ops-managed); whoever builds product CRUD must
+  // make `ndcKind` changes permission-gated and audit-logged, or that
+  // surface becomes a channel for silencing a screening prompt.
+  ndcKind ProductNdcKind @default(NATIONAL)
 
   // DEA schedule for this NDC (21 CFR part 1308). The catalog is the
   // source of truth; `prescription.controlledSubstanceSchedule` is a
@@ -5543,4 +5594,137 @@ model ClinicCreditEntry {
   @@index([organizationId, clinicId, currency, occurredAt])
   @@index([appliedToInvoiceId])
   @@map("clinic_credit_entry")
+}
+
+// ---------------------------------------------------------------------------
+// RxNorm drug-knowledge reference tables (GLOBAL — deliberately not
+// tenant-scoped).
+//
+// Drug nomenclature is not tenant data: an NDC decomposes into the
+// same ingredients for every pharmacy on the platform, and giving each
+// org its own copy would only let two tenants disagree about
+// pharmacology. So these tables carry no organizationId, no tenant RLS
+// policy, and are absent from TENANT_SCOPED_MODELS — they are
+// classified in TENANT_EXCLUDED_MODELS (the same posture as
+// `permission`) and listed in prisma/migrations/rls-exempt.txt with
+// this rationale.
+//
+// SOURCE AND CLEAN ROOM. Rows are loaded from the NLM's RxNorm
+// "Current Prescribable Content" subset — a public U.S. government
+// artifact explicitly free of the UMLS source-vocabulary license
+// restrictions that encumber the full RxNorm release. See
+// docs/governance/public-sources-reference.md §4. The data is
+// NOMENCLATURE (what a product is made of), not clinical judgement:
+// no interaction facts, no cross-sensitivity groupings, no severity
+// gradings live here or may ever be added here — those are licensed
+// editorial content and adding them is a clean-room incident.
+//
+// VERSIONED, ATOMIC LOADS. Every data row hangs off a release row.
+// Ingestion stages rows under a STAGED release (invisible to
+// screening), then one transaction supersedes the previous LIVE
+// release and promotes the new one. Readers resolve the LIVE release
+// id inside their own transaction and filter every lookup by it, so a
+// half-loaded release is unobservable by construction rather than by
+// scheduling luck. A partial unique index in the migration enforces
+// "at most one LIVE release" at the database layer.
+//
+// WRITE PATH. Only the ingestion job writes here
+// (scripts/operations/ingest-rxnorm-release.ts over
+// @pharmax/drug-knowledge), running under system context with a
+// database role that holds the write grants. `pharmax_app` is granted
+// SELECT only — see the migration.
+
+enum RxnormReleaseStatus {
+  // Rows are loading; invisible to screening.
+  STAGED
+  // The release every screen resolves against. At most one.
+  LIVE
+  // A previous LIVE release, kept so findings stamped with its
+  // version remain interpretable (and prunable once reporting no
+  // longer needs it).
+  SUPERSEDED
+  // Ingestion aborted; rows are garbage awaiting cleanup by a retry.
+  FAILED
+}
+
+model RxnormRelease {
+  id String @id @default(uuid()) @db.Uuid
+
+  // The release version as NLM names it (e.g. "07072026" from
+  // RxNorm_full_prescribe_07072026.zip) — stamped verbatim onto
+  // `order_screening_finding.knowledgeReleaseVersion`.
+  version String
+  // The same version normalized to a date, so "is this release older
+  // than what is live?" is a comparison rather than a string parse at
+  // every call site.
+  releasedOn DateTime @db.Date
+
+  // SHA-256 (hex) over the RRF files ingested, in a canonical order.
+  // The idempotency key: re-running ingestion over byte-identical
+  // input is a no-op, not a duplicate release.
+  checksumSha256 String @unique
+
+  status RxnormReleaseStatus @default(STAGED)
+
+  // Row counts written at promotion time, so "did the load look
+  // sane?" is answerable from the release row without counting a
+  // million-row table.
+  ndcCount            Int @default(0)
+  ingredientLinkCount Int @default(0)
+
+  // Lifecycle timestamps. `loadedAt` is promotion to LIVE.
+  loadedAt     DateTime?
+  supersededAt DateTime?
+  failedReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ndcProducts        RxnormNdcProduct[]
+  productIngredients RxnormProductIngredient[]
+
+  // The partial UNIQUE "at most one LIVE release"
+  // (rxnorm_release_one_live) lives in the SQL migration (Prisma
+  // cannot express the WHERE clause).
+  @@index([status])
+  @@map("rxnorm_release")
+}
+
+// NDC → product concept (RXCUI), one row per NDC per release.
+//
+// `ndc11` is the normalized 11-digit form `@pharmax/drug-identity`
+// produces — the same normalization `prescription.drugNdc` stores, so
+// the adapter's lookup is exact string equality with no reformatting
+// at screen time.
+model RxnormNdcProduct {
+  releaseId String        @db.Uuid
+  release   RxnormRelease @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  ndc11        String
+  productRxcui String
+
+  @@id([releaseId, ndc11])
+  @@index([releaseId, productRxcui])
+  @@map("rxnorm_ndc_product")
+}
+
+// Product concept (RXCUI) → active ingredient (IN, and PIN where the
+// release asserts a precise ingredient), one row per link per release.
+//
+// `ingredientName` is public nomenclature kept for operator
+// diagnostics ("what did the screen think this NDC contains?"); it is
+// never interpolated into a finding, whose vocabulary is codes.
+model RxnormProductIngredient {
+  releaseId String        @db.Uuid
+  release   RxnormRelease @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  productRxcui    String
+  ingredientRxcui String
+  // "IN" (ingredient) or "PIN" (precise ingredient). TEXT rather than
+  // an enum: the vocabulary is NLM's, not ours.
+  ingredientTty   String
+  ingredientName  String
+
+  @@id([releaseId, productRxcui, ingredientRxcui])
+  @@map("rxnorm_product_ingredient")
 }

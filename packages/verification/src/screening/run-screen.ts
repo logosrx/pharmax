@@ -94,6 +94,7 @@
 import {
   screenPrescription,
   severityRank,
+  type DrugKnowledgeRelease,
   type DrugKnowledgeSource,
   type PrescribedDrug,
   type RecordedAllergy,
@@ -106,7 +107,7 @@ import { errors } from "@pharmax/platform-core";
 
 import { loadScreenableAllergies } from "./allergy-input.js";
 import { resolveInputAvailability } from "./axis-capability.js";
-import { getClinicalScreeningKnowledgeSource } from "./configure.js";
+import { resolveClinicalScreeningKnowledgeSource } from "./configure.js";
 import { PV1_SCREENING_NOT_PERFORMED, PV1_SCREENING_PROFILE_TOO_LARGE } from "./errors.js";
 
 /**
@@ -149,6 +150,13 @@ export interface ScreenResult {
   readonly evaluation: ScreeningEvaluation;
   /** Prescription lines actually screened. */
   readonly screenedLineCount: number;
+  /**
+   * The knowledge release the screen resolved against, for stamping
+   * onto every persisted finding — the same treatment
+   * `workflowPolicyId`/`Version` give the policy. `null` when the
+   * source carries no release identity (empty or caller-seeded).
+   */
+  readonly knowledgeRelease: DrugKnowledgeRelease | null;
 }
 
 /**
@@ -162,8 +170,6 @@ export interface ScreenResult {
  * accident.
  */
 export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResult> {
-  const knowledge = input.knowledgeSource ?? getClinicalScreeningKnowledgeSource();
-
   const candidates = await loadCandidateDrugs(input);
   if (candidates.length === 0) {
     throw new errors.InvariantViolationError({
@@ -200,6 +206,20 @@ export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResul
   const allergies: ReadonlyArray<RecordedAllergy> =
     inputAvailability.DRUG_ALLERGY === "AVAILABLE" ? await loadScreenableAllergies(scope) : [];
 
+  // Resolved AFTER the inputs are loaded, because a per-screen
+  // resolver prefetches exactly the codes the engine will ask about —
+  // inside this same transaction, so the whole screen answers from one
+  // knowledge release even if an ingestion swap lands mid-command. A
+  // test-injected source short-circuits all of it.
+  const knowledge =
+    input.knowledgeSource ??
+    (await resolveClinicalScreeningKnowledgeSource({
+      tx: input.tx,
+      organizationId: input.organizationId,
+      drugCodes: [...new Set([...candidates, ...activeMedications].map((drug) => drug.drugCode))],
+      allergenCodes: [...new Set(allergies.map((allergy) => allergy.substanceCode))],
+    }));
+
   // Deduplicate across lines by fingerprint. The engine already merges
   // within one screen; this merges ACROSS the lines of a multi-Rx
   // order, where the same profile interaction can surface twice.
@@ -226,6 +246,7 @@ export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResul
   return {
     evaluation: toEvaluation(findings),
     screenedLineCount: candidates.length,
+    knowledgeRelease: knowledge.release,
   };
 }
 
@@ -342,6 +363,13 @@ export interface PersistFindingsInput {
   readonly workflowPolicyId: string;
   readonly workflowPolicyVersion: number;
   readonly minimumReportedSeverity: string;
+  /**
+   * The knowledge release the screen resolved against
+   * (`ScreenResult.knowledgeRelease`); `null` when the source carried
+   * no release identity. Stamped on every row so "why did this not
+   * fire in March?" survives the reference data moving on.
+   */
+  readonly knowledgeRelease: DrugKnowledgeRelease | null;
   readonly commandLogId: string;
   readonly occurredAt: Date;
 }
@@ -375,6 +403,8 @@ export async function persistFindings(input: PersistFindingsInput): Promise<void
       workflowPolicyId: input.workflowPolicyId,
       workflowPolicyVersion: input.workflowPolicyVersion,
       minimumReportedSeverity: input.minimumReportedSeverity,
+      knowledgeSourceCode: input.knowledgeRelease?.source ?? null,
+      knowledgeReleaseVersion: input.knowledgeRelease?.version ?? null,
       commandLogId: input.commandLogId,
       occurredAt: input.occurredAt,
     })),

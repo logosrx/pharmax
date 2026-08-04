@@ -24,6 +24,7 @@ import {
   LabelStockKind,
   LotStatus,
   OrganizationStatus,
+  ProductNdcKind,
   SiteStatus,
   TeamStatus,
   UserStatus,
@@ -400,6 +401,13 @@ async function seedFillDemoStack(input: {
     },
   });
 
+  // `ndcKind: IN_HOUSE_COMPOUND`: the demo product models what a
+  // compounding pharmacy actually dispenses — a preparation whose
+  // "NDC" is an org-minted identifier (99999…) that no national
+  // nomenclature contains. Flagging it keeps the demo book honest
+  // under PV1 screening: the knowledge gap for it is the
+  // informational SCR_KNOWLEDGE_NOT_APPLICABLE, not a per-order
+  // "verify the NDC" acknowledgement that no one could ever satisfy.
   const product = await prisma.product.upsert({
     where: {
       organizationId_ndc: { organizationId: input.organizationId, ndc: DEMO_PRODUCT_NDC },
@@ -408,6 +416,7 @@ async function seedFillDemoStack(input: {
       name: "Demo Testosterone Cypionate (DEMO)",
       strength: "200mg/mL",
       form: "INJECTABLE",
+      ndcKind: ProductNdcKind.IN_HOUSE_COMPOUND,
     },
     create: {
       organizationId: input.organizationId,
@@ -415,6 +424,7 @@ async function seedFillDemoStack(input: {
       name: "Demo Testosterone Cypionate (DEMO)",
       strength: "200mg/mL",
       form: "INJECTABLE",
+      ndcKind: ProductNdcKind.IN_HOUSE_COMPOUND,
     },
   });
 

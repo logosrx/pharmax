@@ -126,7 +126,6 @@ import type {
   AllergenCode,
   DrugCode,
   DrugKnowledge,
-  DrugKnowledgeCoverage,
   DrugKnowledgeSource,
 } from "./knowledge-source.js";
 import { gapRemediationForCoverage } from "./knowledge-source.js";
@@ -331,7 +330,7 @@ export function screenPrescription(request: ScreeningRequest): ScreeningEvaluati
     // Nothing downstream can run without the candidate's ingredients,
     // so this is the rest of the screen: one unmistakable gap rather
     // than a silent pass.
-    raw.push(knowledgeGapFinding("CANDIDATE_DRUG", request.candidate, request.knowledge.coverage));
+    raw.push(knowledgeGapFinding("CANDIDATE_DRUG", request.candidate, request.knowledge));
   } else {
     // Each collector returns immediately when its own axis was
     // declared unavailable — one rule, applied in one place per axis,
@@ -646,7 +645,7 @@ function collectProfileFindings(
       // otherwise have been screened, so the gap is specific and
       // actionable. When the candidate is unknown no pair is
       // screenable and the candidate's own gap says everything.
-      out.push(knowledgeGapFinding("PROFILE_MEDICATION", med, request.knowledge.coverage));
+      out.push(knowledgeGapFinding("PROFILE_MEDICATION", med, request.knowledge));
       continue;
     }
 
@@ -976,17 +975,64 @@ function finding(draft: FindingDraft): ScreeningFinding {
  * a licence — an acknowledgement per prescription cannot close that
  * and only spends the pharmacist's attention on the way to not closing
  * it. Both are recorded identically; only the interruption differs.
+ *
+ * THE THIRD CASE, and the reason this takes the source rather than
+ * its coverage: a PROVISIONED source that was never going to
+ * recognise the code, because the code is outside its nomenclature —
+ * an in-house compounded preparation, on a platform serving
+ * compounding pharmacies. "Verify the code and request a
+ * reference-data update" would be false on its face (the code is
+ * correct and no update will ever hold it), and demanding an
+ * acknowledgement for it on every compound order forever is the
+ * alert-fatigue machine the header describes. So the source's
+ * `drugCodeScope` splits the provisioned miss: in-nomenclature
+ * misses keep the acknowledge-tier `SCR_KNOWLEDGE_UNAVAILABLE`;
+ * out-of-nomenclature codes are recorded as the informational
+ * `SCR_KNOWLEDGE_NOT_APPLICABLE`, a distinct code so reporting can
+ * count compound coverage separately from reference-data holes.
+ *
+ * Whichever way it grades, the screen DID NOT run for this drug and
+ * the record says so — an out-of-nomenclature compound is not
+ * screened clear, it is honestly unscreened, and the pharmacist
+ * reading the order (with the PV1 allergy panel beside it) remains
+ * the only allergy screen a compound has until locally declared
+ * ingredients exist as a platform capability.
  */
 function knowledgeGapFinding(
   source: "CANDIDATE_DRUG" | "PROFILE_MEDICATION",
   drug: PrescribedDrug,
-  coverage: DrugKnowledgeCoverage
+  knowledge: DrugKnowledgeSource
 ): ScreeningFinding {
   const scope =
     source === "CANDIDATE_DRUG"
       ? "no screening could be performed for this prescription"
       : "this profile medication was excluded from interaction and duplication screening";
-  const remediation = gapRemediationForCoverage(coverage);
+
+  if (
+    knowledge.coverage === "PROVISIONED" &&
+    knowledge.drugCodeScope(drug.drugCode) === "OUT_OF_NOMENCLATURE"
+  ) {
+    return finding({
+      code: "SCR_KNOWLEDGE_NOT_APPLICABLE",
+      kind: "SCREENING_GAP",
+      // PLATFORM_CAPABILITY grading (MINOR → INFORMATIONAL): nobody
+      // touching this order can close the gap, so it is recorded
+      // without interrupting. Never high enough to block.
+      severity: screeningGapSeverity("PLATFORM_CAPABILITY"),
+      certainty: "DEFINITE",
+      reason:
+        `Drug code ${drug.drugCode} is outside the nomenclature the drug knowledge source answers from ` +
+        `(a compounded preparation's identifier appears in no national drug nomenclature); ${scope}. ` +
+        `The code is correct as recorded and no reference-data update can resolve it; ` +
+        `ingredient-level screening for such preparations requires locally declared ingredients, ` +
+        `which this platform does not yet support.`,
+      triggers: [trigger(source, drug.recordId, drug.drugCode)],
+      qualifiers: [`scope=${source}`, `remediation=PLATFORM_CAPABILITY`],
+      citation: null,
+    });
+  }
+
+  const remediation = gapRemediationForCoverage(knowledge.coverage);
   return finding({
     code: "SCR_KNOWLEDGE_UNAVAILABLE",
     kind: "SCREENING_GAP",
