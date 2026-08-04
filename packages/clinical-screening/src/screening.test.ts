@@ -351,6 +351,114 @@ describe("screenPrescription — knowledge gaps", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Out-of-nomenclature drug codes (compounded preparations)
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — codes outside the source's nomenclature", () => {
+  // A compounding pharmacy's own preparation: the code is correct as
+  // recorded and no nomenclature update will ever resolve it. The
+  // seeded source below answers for DRUG_ALFA and declares
+  // COMPOUND_LOCAL_1 out of scope.
+  const compoundAwareKnowledge = createInMemoryDrugKnowledgeSource({
+    drugs: { DRUG_ALFA: DRUGS["DRUG_ALFA"]! },
+    outOfNomenclatureDrugCodes: ["COMPOUND_LOCAL_1"],
+  });
+
+  it("reports SCR_KNOWLEDGE_NOT_APPLICABLE for an out-of-nomenclature candidate", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_LOCAL_1"),
+      knowledge: compoundAwareKnowledge,
+    });
+    expect(codes(result)).toEqual(["SCR_KNOWLEDGE_NOT_APPLICABLE"]);
+    expect(requireFinding(result, "SCR_KNOWLEDGE_NOT_APPLICABLE").kind).toBe("SCREENING_GAP");
+  });
+
+  it("records the compound gap WITHOUT demanding an acknowledgement", () => {
+    // The alert-fatigue case this scope exists for: a compounding
+    // pharmacy dispenses these on most orders, forever. "Verify the
+    // NDC" would be a lie and the per-order click would train the
+    // dismiss reflex. Recorded, never interruptive.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_LOCAL_1"),
+      knowledge: compoundAwareKnowledge,
+    });
+    const gap = requireFinding(result, "SCR_KNOWLEDGE_NOT_APPLICABLE");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+    expect(hardStopFindings(result)).toEqual([]);
+  });
+
+  it("is still an unmistakably unscreened order, not a clean one", () => {
+    // The gap must survive every reporting floor, like every
+    // SCREENING_GAP: an unscreened compound must never read as
+    // screened-and-clear.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_LOCAL_1"),
+      knowledge: compoundAwareKnowledge,
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    expect(codes(result)).toEqual(["SCR_KNOWLEDGE_NOT_APPLICABLE"]);
+  });
+
+  it("keeps the acknowledge-tier gap for an in-nomenclature code the same source cannot resolve", () => {
+    // The contrast that keeps the compound treatment honest: a
+    // manufactured product's NDC missing from an otherwise-answering
+    // source is still a fixable reference-data hole worth a
+    // pharmacist's attention.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_UNKNOWN"),
+      knowledge: compoundAwareKnowledge,
+    });
+    const gap = requireFinding(result, "SCR_KNOWLEDGE_UNAVAILABLE");
+    expect(gap.disposition).toBe("REQUIRES_ACKNOWLEDGEMENT");
+  });
+
+  it("reports an out-of-nomenclature PROFILE medication informationally too", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA"),
+      activeMedications: [drug("line-compound", "COMPOUND_LOCAL_1")],
+      knowledge: compoundAwareKnowledge,
+    });
+    const gap = requireFinding(result, "SCR_KNOWLEDGE_NOT_APPLICABLE");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(gap.triggers).toEqual([
+      { source: "PROFILE_MEDICATION", recordId: "line-compound", code: "COMPOUND_LOCAL_1" },
+    ]);
+  });
+
+  it("out-of-nomenclature matters only for a PROVISIONED source", () => {
+    // Unprovisioned means every code fails identically; a compound
+    // distinction would add a second informational spelling of the
+    // same systemic fact.
+    const unprovisioned = createInMemoryDrugKnowledgeSource({
+      outOfNomenclatureDrugCodes: ["COMPOUND_LOCAL_1"],
+    });
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_LOCAL_1"),
+      knowledge: unprovisioned,
+    });
+    expect(codes(result)).toEqual(["SCR_KNOWLEDGE_UNAVAILABLE"]);
+  });
+
+  it("fingerprints the compound gap apart from both knowledge-unavailable gradings", () => {
+    // A pharmacist's (hypothetical future) disposition of one must
+    // never silence the others; the codes differ, so the fingerprints
+    // must.
+    const candidate = drug("line-candidate", "COMPOUND_LOCAL_1");
+    const notApplicable = requireFinding(
+      screen({ candidate, knowledge: compoundAwareKnowledge }),
+      "SCR_KNOWLEDGE_NOT_APPLICABLE"
+    );
+    const unprovisioned = requireFinding(
+      screen({ candidate, knowledge: createInMemoryDrugKnowledgeSource() }),
+      "SCR_KNOWLEDGE_UNAVAILABLE"
+    );
+    expect(notApplicable.fingerprint).not.toBe(unprovisioned.fingerprint);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Drug-allergy screening
 // ---------------------------------------------------------------------------
 

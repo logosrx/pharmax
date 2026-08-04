@@ -347,6 +347,20 @@ export const TENANT_EXCLUDED_MODELS: ReadonlySet<string> = new Set([
   // the phase5_break_glass_session migration.
   "BreakGlassSession",
   "BreakGlassAction",
+  // RxNorm drug-knowledge reference tables — the platform's first
+  // GLOBAL reference data, deliberately not tenant-scoped (same
+  // posture as Permission). Drug nomenclature is not tenant data:
+  // every org screens against the same public NLM release, rows carry
+  // no organizationId and no PHI, and a per-org copy would only let
+  // two tenants disagree about what an NDC contains. The isolation
+  // control is a WRITE boundary rather than a read boundary:
+  // pharmax_app holds SELECT only, and writes happen solely through
+  // the ingestion job (scripts/operations/ingest-rxnorm-release.ts)
+  // under a role with the write grants — see the
+  // 20260809000000_rxnorm_drug_knowledge migration.
+  "RxnormRelease",
+  "RxnormNdcProduct",
+  "RxnormProductIngredient",
 ]);
 
 /**

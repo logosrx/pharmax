@@ -66,7 +66,11 @@ export type {
   SuggestedPv1RejectionReason,
 } from "./findings.js";
 
-export { gapRemediationForCoverage, DRUG_KNOWLEDGE_COVERAGES } from "./knowledge-source.js";
+export {
+  gapRemediationForCoverage,
+  DRUG_CODE_SCOPES,
+  DRUG_KNOWLEDGE_COVERAGES,
+} from "./knowledge-source.js";
 
 export type {
   AllergenCode,
@@ -74,8 +78,10 @@ export type {
   CrossSensitivityClassCode,
   DoseRange,
   DrugCode,
+  DrugCodeScope,
   DrugKnowledge,
   DrugKnowledgeCoverage,
+  DrugKnowledgeRelease,
   DrugKnowledgeSource,
   IngredientCode,
   InteractionFact,

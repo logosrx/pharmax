@@ -429,6 +429,7 @@ export const ApprovePV1 = defineCommand<ApprovePV1Input, ApprovePV1Output>({
       workflowPolicyId: policy.id,
       workflowPolicyVersion: policy.version,
       minimumReportedSeverity: screeningPolicy.minimumReportedSeverity,
+      knowledgeRelease: screen.knowledgeRelease,
       commandLogId,
       occurredAt: now,
     });

@@ -167,6 +167,63 @@ export function gapRemediationForCoverage(
 }
 
 /**
+ * Whether a code is even a member of the nomenclature this source
+ * answers from.
+ *
+ * `describeDrug` returning `null` from a PROVISIONED source has,
+ * until now, meant one thing: a row is missing from a database that
+ * is otherwise answering, so a pharmacist is interrupted to "verify
+ * the code and request a reference-data update". That instruction is
+ * TRUE for a manufactured product's NDC and FALSE for a compounded
+ * preparation: a compound carries an org-local identifier no national
+ * nomenclature has ever contained, the code is correct as recorded,
+ * and no reference-data update will ever resolve it. Interrupting on
+ * it — on every order for every compound forever, in a platform built
+ * for compounding pharmacies — is the alert-fatigue machine this
+ * package exists to avoid, wearing the knowledge gap's clothes. And
+ * the remediation text would be a lie.
+ *
+ * So the source, which owns the nomenclature, gets to say which of
+ * the two situations a null answer is:
+ *
+ *   - IN_NOMENCLATURE: the code SHOULD resolve. A miss is a fixable
+ *     hole — graded like a missing subject fact, worth a pharmacist's
+ *     attention (`SCR_KNOWLEDGE_UNAVAILABLE`, acknowledge tier).
+ *   - OUT_OF_NOMENCLATURE: the code was never going to resolve.
+ *     Recorded without interrupting
+ *     (`SCR_KNOWLEDGE_NOT_APPLICABLE`, informational), because
+ *     closing it is a product capability — locally declared compound
+ *     ingredients — not anything the pharmacist on this order can do.
+ *
+ * Consulted ONLY after `describeDrug` returned `null`, and only when
+ * `coverage` is PROVISIONED (an unprovisioned source cannot resolve
+ * anything, so the distinction adds no information). A source with no
+ * basis for the judgement answers IN_NOMENCLATURE — over-prompting is
+ * the conservative direction.
+ */
+export const DRUG_CODE_SCOPES = Object.freeze(["IN_NOMENCLATURE", "OUT_OF_NOMENCLATURE"] as const);
+
+export type DrugCodeScope = (typeof DRUG_CODE_SCOPES)[number];
+
+/**
+ * The identity of the body of knowledge a source answers from.
+ *
+ * Findings are persisted verbatim into append-only tables while the
+ * reference data underneath them moves on every ingestion, so "why
+ * did this not fire in March?" is answerable only if each screen
+ * names the release it resolved against — the same treatment
+ * `workflow_policy_id` + `workflow_policy_version` already give the
+ * policy. The wiring layer stamps these two values onto every
+ * persisted finding row.
+ */
+export interface DrugKnowledgeRelease {
+  /** Stable source identifier, e.g. "RXNORM_PRESCRIBABLE". */
+  readonly source: string;
+  /** The release version as the publisher names it, e.g. "07072026". */
+  readonly version: string;
+}
+
+/**
  * The seam. Implement this over a licensed clinical database, behind
  * an adapter, and the engine works unchanged.
  *
@@ -188,7 +245,20 @@ export function gapRemediationForCoverage(
  */
 export interface DrugKnowledgeSource {
   readonly coverage: DrugKnowledgeCoverage;
+  /**
+   * The release this source answers from, or `null` for a source with
+   * no release identity (the caller-seeded in-memory container, or an
+   * unprovisioned deployment). Constant for the lifetime of the
+   * source, for the same reason `coverage` is.
+   */
+  readonly release: DrugKnowledgeRelease | null;
   describeDrug(code: DrugCode): DrugKnowledge | null;
   describeAllergen(code: AllergenCode): AllergenKnowledge | null;
+  /**
+   * Consulted only when `describeDrug(code)` returned `null` and
+   * `coverage` is PROVISIONED, to decide how the resulting gap is
+   * graded. See `DRUG_CODE_SCOPES`. Pure, like every other member.
+   */
+  drugCodeScope(code: DrugCode): DrugCodeScope;
   findIngredientInteraction(a: IngredientCode, b: IngredientCode): InteractionFact | null;
 }

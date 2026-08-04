@@ -19,8 +19,10 @@ import type {
   AllergenCode,
   AllergenKnowledge,
   DrugCode,
+  DrugCodeScope,
   DrugKnowledge,
   DrugKnowledgeCoverage,
+  DrugKnowledgeRelease,
   DrugKnowledgeSource,
   IngredientCode,
   InteractionFact,
@@ -42,6 +44,19 @@ export interface InMemoryKnowledgeSeed {
    * in a particular test.
    */
   readonly coverage?: DrugKnowledgeCoverage;
+  /**
+   * Codes the source declares OUT_OF_NOMENCLATURE — never resolvable,
+   * so their gaps grade informational rather than acknowledge-tier.
+   * Models a compounded preparation's org-local identifier. Every
+   * other code answers IN_NOMENCLATURE, the conservative default.
+   */
+  readonly outOfNomenclatureDrugCodes?: ReadonlyArray<DrugCode>;
+  /**
+   * The release identity the wiring layer stamps onto persisted
+   * findings. Defaults to `null`: a caller-seeded container holds no
+   * publisher's release, and claiming one would fabricate provenance.
+   */
+  readonly release?: DrugKnowledgeRelease;
 }
 
 /**
@@ -84,13 +99,19 @@ export function createInMemoryDrugKnowledgeSource(
   const coverage: DrugKnowledgeCoverage =
     seed.coverage ?? (drugs.size > 0 ? "PROVISIONED" : "NOT_PROVISIONED");
 
+  const outOfNomenclature = new Set(seed.outOfNomenclatureDrugCodes ?? []);
+
   return {
     coverage,
+    release: seed.release ?? null,
     describeDrug(code: DrugCode): DrugKnowledge | null {
       return drugs.get(code) ?? null;
     },
     describeAllergen(code: AllergenCode): AllergenKnowledge | null {
       return allergens.get(code) ?? null;
+    },
+    drugCodeScope(code: DrugCode): DrugCodeScope {
+      return outOfNomenclature.has(code) ? "OUT_OF_NOMENCLATURE" : "IN_NOMENCLATURE";
     },
     findIngredientInteraction(a: IngredientCode, b: IngredientCode): InteractionFact | null {
       return interactions.get(pairKey(a, b)) ?? null;

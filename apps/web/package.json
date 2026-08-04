@@ -19,6 +19,7 @@
     "@pharmax/controlled-substances": "workspace:*",
     "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
+    "@pharmax/drug-knowledge": "workspace:*",
     "@pharmax/fill": "workspace:*",
     "@pharmax/inventory": "workspace:*",
     "@pharmax/labels": "workspace:*",

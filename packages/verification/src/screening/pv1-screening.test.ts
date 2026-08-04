@@ -1634,3 +1634,105 @@ describe("PV1 screening — PHI invariant", () => {
     expect(serialized).toContain("INGREDIENT_ALFA");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Knowledge-release attribution and the per-screen resolver
+// ---------------------------------------------------------------------------
+
+describe("PV1 screening — knowledge-release attribution", () => {
+  it("stamps the source's release onto every persisted finding row", async () => {
+    // The same treatment `workflowPolicyId`/`Version` get: the
+    // reference data moves under the findings on every ingestion, so
+    // "why did this not fire in March?" needs each row to name the
+    // release it was screened against.
+    const fake = buildFlowFake({ screening: candidateAndInteractingProfileDrug });
+    configureBus(fake.client);
+    configureClinicalScreening({
+      knowledgeSource: createInMemoryDrugKnowledgeSource({
+        drugs: {
+          [CANDIDATE_NDC]: {
+            ingredientCodes: ["INGREDIENT_ALFA"],
+            therapeuticClassCodes: [],
+            crossSensitivityClassCodes: [],
+            doseRange: null,
+          },
+          [PROFILE_NDC]: {
+            ingredientCodes: ["INGREDIENT_BRAVO"],
+            therapeuticClassCodes: [],
+            crossSensitivityClassCodes: [],
+            doseRange: null,
+          },
+        },
+        interactions: [
+          {
+            ingredients: ["INGREDIENT_ALFA", "INGREDIENT_BRAVO"],
+            fact: { severity: "MAJOR", certainty: "PROBABLE", citation: null },
+          },
+        ],
+        release: { source: "TEST_KNOWLEDGE_SOURCE", version: "0101" },
+      }),
+    });
+
+    await startReview();
+
+    const rows = fake.screening.state.persistedFindings;
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.knowledgeSourceCode).toBe("TEST_KNOWLEDGE_SOURCE");
+      expect(row.knowledgeReleaseVersion).toBe("0101");
+    }
+  });
+
+  it("stamps NULL for a source with no release identity — the honest answer, not a bug", async () => {
+    const fake = buildFlowFake({ screening: candidateOnly });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    await startReview();
+
+    const rows = fake.screening.state.persistedFindings;
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.knowledgeSourceCode).toBeNull();
+      expect(row.knowledgeReleaseVersion).toBeNull();
+    }
+  });
+});
+
+describe("PV1 screening — the per-screen knowledge source resolver", () => {
+  it("receives the screen's own transaction and drug codes, and its source decides the screen", async () => {
+    // The production shape: a database-backed adapter prefetches
+    // exactly the codes the engine will ask about, inside the
+    // command's transaction. Pinned here with a resolver that records
+    // its context and hands back a seeded source, so the wiring — not
+    // just the adapter — is under test.
+    const fake = buildFlowFake({ screening: candidateAndInteractingProfileDrug });
+    configureBus(fake.client);
+
+    const seenContexts: Array<{ organizationId: string; drugCodes: ReadonlyArray<string> }> = [];
+    configureClinicalScreening({
+      knowledgeSourceResolver: async (context) => {
+        expect(context.tx).toBeDefined();
+        seenContexts.push({
+          organizationId: context.organizationId,
+          drugCodes: context.drugCodes,
+        });
+        return knowledgeWithAcknowledgeTierInteraction();
+      },
+    });
+
+    await startReview();
+
+    expect(seenContexts).toHaveLength(1);
+    expect(seenContexts[0]?.organizationId).toBe(ORG_ID);
+    expect([...(seenContexts[0]?.drugCodes ?? [])].sort()).toEqual(
+      [CANDIDATE_NDC, PROFILE_NDC].sort()
+    );
+
+    // The resolver's source is what screened: the seeded interaction
+    // is on the record.
+    expect(fake.screening.state.persistedFindings.map((f) => f.code)).toContain(
+      "SCR_DRUG_INTERACTION"
+    );
+  });
+});

@@ -60,7 +60,11 @@ import {
   resolveTelemetryConfigFromEnv,
   type TelemetryHandle,
 } from "@pharmax/telemetry";
-import { createInMemoryDrugKnowledgeSource } from "@pharmax/clinical-screening";
+import {
+  assessRxnormStaleness,
+  loadRxnormKnowledgeSourceForScreen,
+  RXNORM_KNOWLEDGE_SOURCE_CODE,
+} from "@pharmax/drug-knowledge";
 import { configureClinicalScreening } from "@pharmax/verification";
 
 import { env } from "./env.js";
@@ -484,40 +488,90 @@ async function doBootstrap(): Promise<void> {
   });
 
   // 5.1 @pharmax/verification — the PV1 clinical-screening knowledge
-  // source.
+  // source: the RxNorm-backed adapter over the global reference
+  // tables (`@pharmax/drug-knowledge`).
   //
-  // Pharmax ships NO drug data. Interaction tables, cross-sensitivity
-  // groupings and severity gradings are licensed proprietary content,
-  // and embedding any of them here is a clean-room incident
-  // regardless of provenance (see
-  // docs/governance/public-sources-reference.md). A deployment whose
-  // customer holds a licence wires an adapter over that database
-  // here; this one wires the empty source.
+  // A PER-SCREEN RESOLVER, not a static source: each PV1 screen
+  // prefetches exactly the NDCs it is about to ask about, inside the
+  // command's own transaction, from whatever release is LIVE in
+  // `rxnorm_release`. The screening path never calls an NLM/RxNav API
+  // — a third-party outage cannot stop a pharmacist verifying a
+  // prescription — and an ingestion swap mid-command cannot split one
+  // screen across two releases.
   //
-  // What that means operationally, stated loudly because it is a
-  // patient-safety fact and not a TODO: with no knowledge source, the
-  // screening engine can answer none of its questions and reports
-  // `SCR_KNOWLEDGE_UNAVAILABLE` on EVERY prescription. The system
-  // says what it did not do; it does not pretend it screened and
-  // found nothing.
+  // WHAT THIS SOURCE ANSWERS, HONESTLY: NDC → ingredient resolution
+  // only, so exact-ingredient allergy matching and ingredient-level
+  // duplication are live. It holds NO interaction facts, NO
+  // cross-sensitivity groupings and NO dose ranges — those are
+  // licensed proprietary content this repository must not contain
+  // (see docs/governance/public-sources-reference.md), so those
+  // checks still return nothing until a customer-licensed adapter is
+  // wired in addition.
   //
-  // The empty source declares itself NOT_PROVISIONED, so that gap is
-  // graded MINOR/INFORMATIONAL: recorded on every order and counted in
-  // `gapCount`, but not demanding a per-order pharmacist
-  // acknowledgement. A prompt that fires on 100% of orders and that no
-  // pharmacist can act on does not add a safety control, it spends the
-  // attention the real findings need — see `screeningGapSeverity` in
-  // `@pharmax/clinical-screening`.
-  //
-  // THIS WARNING IS THEREFORE THE CONTROL, not a footnote to one. It
-  // is addressed to the party who can actually close the gap, which is
-  // whoever provisions this deployment.
-  configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
-  logger.warn("apps/web booted without a licensed drug knowledge source", {
-    event: "clinical_screening.knowledge_source.absent",
-    reason:
-      "PV1 clinical screening has NO drug knowledge coverage: SCR_KNOWLEDGE_UNAVAILABLE is reported on every prescription, and no interaction, duplication, cross-sensitivity or dose check can return a finding. Provision a licensed source to restore screening.",
+  // With EMPTY reference tables (no release ever ingested), the
+  // adapter degrades to NOT_PROVISIONED: `SCR_KNOWLEDGE_UNAVAILABLE`
+  // is recorded (informationally) on every prescription, exactly the
+  // pre-adapter behaviour. The boot statements below are addressed to
+  // the party who can close that gap — whoever operates this
+  // deployment runs scripts/operations/ingest-rxnorm-release.ts.
+  configureClinicalScreening({
+    knowledgeSourceResolver: (context) =>
+      loadRxnormKnowledgeSourceForScreen({
+        // Structurally identical transaction-client views; the
+        // adapter types against @pharmax/database's alias.
+        tx: context.tx,
+        organizationId: context.organizationId,
+        drugCodes: context.drugCodes,
+      }),
   });
+  try {
+    const liveRelease = await prisma.rxnormRelease.findFirst({
+      where: { status: "LIVE" },
+      select: { version: true, releasedOn: true },
+    });
+    if (liveRelease === null) {
+      logger.warn("apps/web booted with no drug-knowledge release loaded", {
+        event: "clinical_screening.knowledge_source.absent",
+        reason:
+          "The rxnorm_release table holds no LIVE release, so PV1 screening has no drug knowledge coverage: " +
+          "SCR_KNOWLEDGE_UNAVAILABLE is recorded on every prescription and no ingredient-level allergy or " +
+          "duplication check can return a finding. Ingest a release with scripts/operations/ingest-rxnorm-release.ts.",
+      });
+    } else {
+      const staleness = assessRxnormStaleness({
+        releasedOn: liveRelease.releasedOn,
+        now: new Date(),
+      });
+      if (staleness.stale) {
+        logger.warn("apps/web booted with a STALE drug-knowledge release", {
+          event: "clinical_screening.knowledge_source.stale",
+          source: RXNORM_KNOWLEDGE_SOURCE_CODE,
+          version: liveRelease.version,
+          ageDays: staleness.ageDays,
+          thresholdDays: staleness.thresholdDays,
+          reason:
+            "PV1 screening is answering from a nomenclature release older than the staleness threshold; " +
+            "newly marketed NDCs will gap. Ingest the current NLM release.",
+        });
+      } else {
+        logger.info("clinical screening drug knowledge source is live", {
+          event: "clinical_screening.knowledge_source.live",
+          source: RXNORM_KNOWLEDGE_SOURCE_CODE,
+          version: liveRelease.version,
+          ageDays: staleness.ageDays,
+        });
+      }
+    }
+  } catch (cause) {
+    // A boot-time visibility probe must not take the process down.
+    // Empty tables degrade the adapter to NOT_PROVISIONED per screen;
+    // an unreachable database fails the surrounding command
+    // transaction on its own, far more loudly than this probe could.
+    logger.warn("could not read drug-knowledge release state at boot", {
+      event: "clinical_screening.knowledge_source.probe_failed",
+      error: cause instanceof Error ? cause.message : String(cause),
+    });
+  }
 
   // 6. @pharmax/auth — the in-house identity engine (ADR-0030).
   //
