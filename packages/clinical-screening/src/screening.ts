@@ -81,6 +81,12 @@
 //      RECORDED IS NOT THE SAME AS INTERRUPTIVE: every gap is still
 //      emitted, persisted and reportable whichever way it is graded.
 //
+//      And a gap is exempt from `minimumReportedSeverity` at every
+//      setting, so no tenant configuration can take a screen back to
+//      being indistinguishable from one that ran clean. See
+//      `isReportable`. The two properties are independent and the
+//      engine holds both: never nag, always record.
+//
 // The vocabulary for allergy records follows HL7 FHIR R4
 // `AllergyIntolerance` — `category`, `type`, `criticality`,
 // `verificationStatus`. Those four public fields carry most of the
@@ -209,7 +215,10 @@ export interface RecordedAllergy {
  */
 export interface ScreeningPolicy {
   /**
-   * Findings below this grade are dropped before the result is built.
+   * CLINICAL findings below this grade are dropped before the result is
+   * built. `SCREENING_GAP` findings are exempt at every setting — see
+   * `isReportable`, which is where that exemption and its reasoning
+   * live.
    *
    * The intended use is raising the floor to `MODERATE` to retire the
    * informational tier once a pharmacy decides it adds nothing.
@@ -360,9 +369,7 @@ export function screenPrescription(request: ScreeningRequest): ScreeningEvaluati
     collectDoseFindings(request, candidateKnowledge, raw);
   }
 
-  const reportable = raw.filter((f) =>
-    isAtLeastAsSevere(f.severity, request.policy.minimumReportedSeverity)
-  );
+  const reportable = raw.filter((f) => isReportable(f, request.policy.minimumReportedSeverity));
   const merged = mergeByFingerprint(reportable);
   const settled = merged.map((f) => applyPriorAcknowledgement(f, request.acknowledgedFingerprints));
   const findings = [...settled].sort(compareFindings);
@@ -374,6 +381,59 @@ export function screenPrescription(request: ScreeningRequest): ScreeningEvaluati
     return { outcome: "BLOCKED", findings };
   }
   return { outcome: "ADVISORY", findings };
+}
+
+/**
+ * Whether a finding survives the pharmacy's reporting floor.
+ *
+ * A `SCREENING_GAP` IS EXEMPT AT EVERY SETTING, and the reason is that
+ * the floor and the gap answer different questions.
+ * `minimumReportedSeverity` is a clinical noise floor: it exists so a
+ * pharmacy can stop being told about findings too mild to change a
+ * decision. A gap is not a finding about the prescription at all — see
+ * `SCREENING_FINDING_KINDS`, where the kind is defined as "a report
+ * that some part of the screen could NOT be performed". It answers
+ * "did verification happen?", and there is no severity at which the
+ * answer to that stops mattering.
+ *
+ * WHAT SUBJECTING GAPS TO THE FLOOR ACTUALLY DID. Filter them out and
+ * an order carries zero gap rows — which is byte-for-byte what an
+ * order that was fully screened and came back clean looks like. That
+ * is precisely the ambiguity this whole finding kind was introduced to
+ * destroy, reintroduced by the floor at the far end of the pipeline.
+ * An auditor asking "was this order screened for allergies?" would
+ * find no row and have to infer the answer from the tenant's policy
+ * configuration at the time. Reconstructible is not recorded, and an
+ * unscreened order that reads as fully screened is a compliance claim
+ * the system did not earn.
+ *
+ * IT ALSO MADE A SAFETY PROPERTY TENANT-CONFIGURABLE, which is the
+ * part that settles it. Whether the record distinguishes "screened" from
+ * "never screened" must not depend on a customer's setting.
+ *
+ * WHY THE WHOLE KIND AND NOT JUST THE SYSTEMIC ONES. It is tempting to
+ * exempt only `PLATFORM_CAPABILITY` gaps, since those are the ones
+ * nobody can close. Three reasons not to:
+ *
+ *   - The invariant is "no screen may read as clear when it did not
+ *     run", and ANY suppressed gap breaks it. A per-patient allergy gap
+ *     dropped by the floor leaves exactly the same zero-row order.
+ *   - It would invert the value ordering. The per-subject gap is the
+ *     MORE actionable signal — somebody can go and obtain the missing
+ *     fact — so exempting only the systemic one would leave the more
+ *     valuable half suppressible by configuration.
+ *   - Severity on a gap is instrumental, not clinical: it encodes
+ *     whether to interrupt (see `screeningGapSeverity`). Filtering an
+ *     instrumental value through a clinical floor is a category error
+ *     whichever remediation it carries.
+ *
+ * This is INDEPENDENT of the interruption question. Gaps are always
+ * recorded; whether one also demands an acknowledgement is decided by
+ * `screeningGapSeverity` and nothing here. Never nag, always record.
+ */
+function isReportable(finding: ScreeningFinding, floor: ScreeningSeverity): boolean {
+  if (finding.kind === "SCREENING_GAP") return true;
+  return isAtLeastAsSevere(finding.severity, floor);
 }
 
 // ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ export {
   dispositionFor,
   fingerprintOf,
   gapRemediationForAvailability,
+  gapRemediationFromSeverity,
   isAtLeastAsSevere,
   leastSevere,
   screeningGapSeverity,

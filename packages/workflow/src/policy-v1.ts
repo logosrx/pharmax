@@ -308,12 +308,22 @@ export interface OrderWorkflowPolicy {
    *
    * This lives on the POLICY VERSION, not in tenant configuration,
    * and the placement is the whole point. `minimumReportedSeverity`
-   * is a way to see fewer findings: raised to `CONTRAINDICATED` it
-   * silences the entire acknowledge tier — the part that actually
-   * changes decisions — and leaves only what the engine would block
-   * on. A knob that can do that must not be editable as loose
-   * per-tenant config, because then "why did nobody get asked about
-   * this interaction in March?" has no answer anyone can reconstruct.
+   * is a way to see fewer CLINICAL findings: raised to
+   * `CONTRAINDICATED` it silences the entire acknowledge tier — the
+   * part that actually changes decisions — and leaves only what the
+   * engine would block on. A knob that can do that must not be
+   * editable as loose per-tenant config, because then "why did nobody
+   * get asked about this interaction in March?" has no answer anyone
+   * can reconstruct.
+   *
+   * WHAT THE FLOOR CANNOT REACH, at any setting or any version:
+   * `SCREENING_GAP` findings. Those record whether a check RAN, not
+   * what it found, and suppressing them would leave an unscreened
+   * order indistinguishable from a fully screened one. The engine
+   * exempts them rather than trusting a policy author to keep the
+   * floor low enough — see `isReportable` in
+   * `@pharmax/clinical-screening`. So the floor is a knob over
+   * clinical noise, never over the coverage record.
    *
    * Here it is versioned instead: changing it means publishing a new
    * `workflow_policy` version through the existing activation

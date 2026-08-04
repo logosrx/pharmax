@@ -261,6 +261,33 @@ export function screeningGapSeverity(remediation: ScreeningGapRemediation): Scre
 }
 
 /**
+ * Recover a gap's remediation from the severity persisted on its row.
+ *
+ * For readers of `order_screening_finding`, which stores the grading but
+ * not the remediation. The console needs it to decide whether to tell a
+ * pharmacist "go and look this up" or "nobody here can close this", and
+ * guessing from the finding CODE gets that wrong: since the same code
+ * can be raised for either reason, a code-based rule would tell a
+ * pharmacist to obtain an allergy history the platform cannot store, or
+ * to look up a drug in a database that does not exist.
+ *
+ * COMPUTED AS THE INVERSE of `screeningGapSeverity` rather than written
+ * out, so the two cannot disagree: regrade a remediation there and this
+ * follows on its own. Returns `null` for a severity no gap can carry,
+ * which is the honest answer for a row this build cannot interpret —
+ * `severity` is TEXT precisely so the vocabulary can grow.
+ *
+ * Only meaningful for `kind = SCREENING_GAP`. A clinical finding's
+ * severity says nothing about remediation and callers must check the
+ * kind first.
+ */
+export function gapRemediationFromSeverity(
+  severity: ScreeningSeverity
+): ScreeningGapRemediation | null {
+  return SCREENING_GAP_REMEDIATIONS.find((r) => screeningGapSeverity(r) === severity) ?? null;
+}
+
+/**
  * Stable finding codes. These are audit vocabulary: they are written
  * into event payloads and rolled up in reporting, so a code may be
  * ADDED but never renamed or repurposed.

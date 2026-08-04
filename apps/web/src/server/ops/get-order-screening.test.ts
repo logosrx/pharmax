@@ -206,7 +206,18 @@ describe("getOrderScreening", () => {
     expect(screening?.outstandingCount).toBe(0);
   });
 
-  it("separates platform-capability gaps from prescription-specific ones", async () => {
+  it("separates platform-capability gaps from prescription-specific ones by remediation", async () => {
+    // Grouped by the grading, NOT by the finding code, and this test is
+    // built to fail if that ever regresses: the SAME code appears twice
+    // with different severities and has to land in different groups.
+    //
+    // A code-based rule cannot be correct here, because every gap code
+    // is raised for both reasons. `SCR_ALLERGY_INPUT_UNAVAILABLE` means
+    // "no allergy capture exists" today and will mean "nobody recorded
+    // allergies for this patient" once it does; `SCR_KNOWLEDGE_UNAVAILABLE`
+    // means "no database is provisioned" or "this one code is missing
+    // from a working one". Getting it wrong hands the pharmacist an
+    // instruction they cannot follow in either direction.
     givenFindings([
       findingRow({
         id: "f-clinical",
@@ -214,29 +225,45 @@ describe("getOrderScreening", () => {
         kind: "DRUG_DRUG_INTERACTION",
         fingerprint: "FP-CLINICAL",
       }),
+      // MODERATE: this database is provisioned and does not hold this
+      // code. Somebody can verify the NDC or chase an update.
       findingRow({
-        id: "f-knowledge",
+        id: "f-knowledge-subject",
         code: "SCR_KNOWLEDGE_UNAVAILABLE",
         kind: "SCREENING_GAP",
         severity: "MODERATE",
         certainty: "DEFINITE",
-        fingerprint: "FP-KNOWLEDGE",
+        fingerprint: "FP-KNOWLEDGE-SUBJECT",
       }),
+      // MINOR: no database is provisioned at all. Same code, and nobody
+      // in the pharmacy can close it.
       findingRow({
-        id: "f-allergy-axis",
+        id: "f-knowledge-platform",
+        code: "SCR_KNOWLEDGE_UNAVAILABLE",
+        kind: "SCREENING_GAP",
+        severity: "MINOR",
+        certainty: "DEFINITE",
+        fingerprint: "FP-KNOWLEDGE-PLATFORM",
+      }),
+      // MINOR: no allergy capture in the product.
+      findingRow({
+        id: "f-allergy-platform",
+        code: "SCR_ALLERGY_INPUT_UNAVAILABLE",
+        kind: "SCREENING_GAP",
+        severity: "MINOR",
+        certainty: "DEFINITE",
+        fingerprint: "FP-ALLERGY-PLATFORM",
+      }),
+      // MODERATE, same code: allergy capture exists and nobody recorded
+      // any for this patient. Actionable, so it must NOT be filed under
+      // "no pharmacist can resolve this".
+      findingRow({
+        id: "f-allergy-subject",
         code: "SCR_ALLERGY_INPUT_UNAVAILABLE",
         kind: "SCREENING_GAP",
         severity: "MODERATE",
         certainty: "DEFINITE",
-        fingerprint: "FP-ALLERGY-AXIS",
-      }),
-      findingRow({
-        id: "f-dose-axis",
-        code: "SCR_DOSE_INPUT_UNAVAILABLE",
-        kind: "SCREENING_GAP",
-        severity: "MODERATE",
-        certainty: "DEFINITE",
-        fingerprint: "FP-DOSE-AXIS",
+        fingerprint: "FP-ALLERGY-SUBJECT",
       }),
     ]);
     givenAcknowledgements([]);
@@ -244,12 +271,31 @@ describe("getOrderScreening", () => {
     const screening = await read();
     const groupByFingerprint = new Map(screening?.findings.map((f) => [f.fingerprint, f.group]));
     expect(groupByFingerprint.get("FP-CLINICAL")).toBe("CLINICAL");
-    // The knowledge source was asked and had no answer for this drug —
-    // the pharmacist can close that themselves.
-    expect(groupByFingerprint.get("FP-KNOWLEDGE")).toBe("PRESCRIPTION_COVERAGE");
-    // These two say the question cannot be asked at all, on any order.
-    expect(groupByFingerprint.get("FP-ALLERGY-AXIS")).toBe("PLATFORM_CAPABILITY");
-    expect(groupByFingerprint.get("FP-DOSE-AXIS")).toBe("PLATFORM_CAPABILITY");
+    expect(groupByFingerprint.get("FP-KNOWLEDGE-SUBJECT")).toBe("PRESCRIPTION_COVERAGE");
+    expect(groupByFingerprint.get("FP-ALLERGY-SUBJECT")).toBe("PRESCRIPTION_COVERAGE");
+    expect(groupByFingerprint.get("FP-KNOWLEDGE-PLATFORM")).toBe("PLATFORM_CAPABILITY");
+    expect(groupByFingerprint.get("FP-ALLERGY-PLATFORM")).toBe("PLATFORM_CAPABILITY");
+  });
+
+  it("files a gap whose grading this build cannot read under prescription coverage", async () => {
+    // `severity` is TEXT so the vocabulary can grow, which means this
+    // build can read a grade it does not know. Falling back to the group
+    // that invites a look is the safe direction: telling somebody to
+    // check is a cheaper error than telling them to ignore.
+    givenFindings([
+      findingRow({
+        id: "f-future",
+        code: "SCR_ALLERGY_INPUT_UNAVAILABLE",
+        kind: "SCREENING_GAP",
+        severity: "SOMETHING_NEW",
+        certainty: "DEFINITE",
+        fingerprint: "FP-FUTURE",
+      }),
+    ]);
+    givenAcknowledgements([]);
+
+    const screening = await read();
+    expect(screening?.findings[0]?.group).toBe("PRESCRIPTION_COVERAGE");
   });
 
   it("orders most severe first so the finding that matters is at the top", async () => {

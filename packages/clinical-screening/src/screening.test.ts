@@ -9,6 +9,7 @@ import {
   DEFAULT_SCREENING_POLICY,
   INPUT_UNAVAILABLE_CODE_FOR_AXIS,
   SCREENING_FINDING_KINDS,
+  SCREENING_SEVERITIES,
   type DrugKnowledge,
   type PrescribedDrug,
   type RecordedAllergy,
@@ -798,6 +799,77 @@ describe("screenPrescription — reporting floor", () => {
       policy: { minimumReportedSeverity: "CONTRAINDICATED" },
     });
     expect(result.outcome).toBe("CLEAR");
+  });
+
+  it("never drops a screening gap, at any floor, for either remediation", () => {
+    // THE COVERAGE-RECORD INVARIANT. The floor is a clinical noise
+    // floor; a gap is not a clinical finding but a statement about
+    // whether a check RAN. Filter one out and the order carries zero
+    // gap rows — identical to an order that was fully screened and came
+    // back clean. An auditor asking "was this screened for allergies?"
+    // would find no row and have to infer the answer from the tenant's
+    // policy configuration, which is a compliance claim the system did
+    // not earn.
+    //
+    // Both remediations, because the invariant is about the record and
+    // not about who can act: a per-subject gap dropped by the floor
+    // leaves exactly the same indistinguishable order.
+    for (const unavailability of [
+      "NOT_RECORDED_FOR_SUBJECT",
+      "NOT_SUPPORTED_BY_PLATFORM",
+    ] as const) {
+      for (const floor of SCREENING_SEVERITIES) {
+        const result = screen({
+          inputAvailability: withoutAxis("DRUG_ALLERGY", unavailability),
+          policy: { minimumReportedSeverity: floor },
+        });
+        const label = `${unavailability} @ ${floor}`;
+        expect(codes(result), label).toContain("SCR_ALLERGY_INPUT_UNAVAILABLE");
+        // Not CLEAR either: an outcome of CLEAR is the very reading the
+        // gap exists to prevent.
+        expect(result.outcome, label).toBe("ADVISORY");
+      }
+    }
+  });
+
+  it("keeps the exemption narrow — a clinical finding at the same floor still drops", () => {
+    // Guards against fixing the coverage record by quietly disabling the
+    // floor. At CONTRAINDICATED the MAJOR duplication must still be
+    // silenced; only the gap survives.
+    const result = screen({
+      inputAvailability: withoutAxis("DRUG_ALLERGY", "NOT_SUPPORTED_BY_PLATFORM"),
+      activeMedications: [drug("line-other", "DRUG_ALFA_GENERIC")],
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    expect(codes(result)).toEqual(["SCR_ALLERGY_INPUT_UNAVAILABLE"]);
+    expect(codes(result)).not.toContain("SCR_DUPLICATE_INGREDIENT");
+  });
+
+  it("keeps a gap exempt without making it interrupt", () => {
+    // The two properties are independent and the engine holds both:
+    // never nag, always record. A raised floor must not smuggle the
+    // acknowledgement prompt back in for a systemic gap.
+    const result = screen({
+      inputAvailability: withoutAxis("DRUG_ALLERGY", "NOT_SUPPORTED_BY_PLATFORM"),
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    const gap = requireFinding(result, "SCR_ALLERGY_INPUT_UNAVAILABLE");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("never drops an unprovisioned knowledge gap either", () => {
+    // The same invariant on the other family of gap. This is the one a
+    // default deployment raises on every order, so a floor that erased
+    // it would erase the coverage record fleet-wide.
+    for (const floor of SCREENING_SEVERITIES) {
+      const result = screen({
+        knowledge: createInMemoryDrugKnowledgeSource(),
+        policy: { minimumReportedSeverity: floor },
+      });
+      expect(codes(result), floor).toContain("SCR_KNOWLEDGE_UNAVAILABLE");
+    }
   });
 });
 
