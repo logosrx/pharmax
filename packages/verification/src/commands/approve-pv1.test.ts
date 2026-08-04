@@ -51,6 +51,7 @@ import {
   createScreeningStubs,
   type ScreeningStubOptions,
   type ScreeningStubs,
+  historyTakenNoKnownAllergies,
 } from "../screening/test-support.js";
 
 import { ApprovePV1 } from "./approve-pv1.js";
@@ -88,42 +89,61 @@ const RX_ID = "00000000-0000-4000-8000-0000000000e1";
 const CANDIDATE_NDC = "00000-0000-01";
 
 /**
- * The three gaps a default-configured deployment reports on EVERY
- * order, all graded MINOR because no pharmacist can close any of them:
- * no licensed knowledge source is wired at all, this platform has no
- * allergy capture, and the sig carries no structured dose.
+ * The two gaps a default-configured deployment reports on EVERY order,
+ * both graded MINOR because no pharmacist can close either of them: no
+ * licensed knowledge source is wired at all, and the sig carries no
+ * structured dose.
  *
  * MINOR means INFORMATIONAL, so none of them gates an approval — see
  * `screeningGapSeverity`. They are still persisted on every screen,
  * which is what these fingerprints are pinned for.
  */
 const KNOWLEDGE_GAP_FINGERPRINT = `SCR_KNOWLEDGE_UNAVAILABLE|MINOR/DEFINITE|${CANDIDATE_NDC}|remediation=PLATFORM_CAPABILITY;scope=CANDIDATE_DRUG`;
-const ALLERGY_INPUT_GAP_FINGERPRINT =
-  "SCR_ALLERGY_INPUT_UNAVAILABLE|MINOR/DEFINITE|DRUG_ALLERGY|remediation=PLATFORM_CAPABILITY";
 const DOSE_INPUT_GAP_FINGERPRINT =
   "SCR_DOSE_INPUT_UNAVAILABLE|MINOR/DEFINITE|DOSE_RANGE|remediation=PLATFORM_CAPABILITY";
 
 const DEFAULT_GAP_FINGERPRINTS: ReadonlyArray<string> = [
   KNOWLEDGE_GAP_FINGERPRINT,
-  ALLERGY_INPUT_GAP_FINGERPRINT,
   DOSE_INPUT_GAP_FINGERPRINT,
 ];
 
 /**
- * One prescription on the order, nothing else on the profile.
+ * The per-patient allergy gap, for a patient nobody has asked. MODERATE
+ * and therefore acknowledge-tier, which is why the default fixture below
+ * gives its patient an asserted-empty history instead: these suites test
+ * transitions, not allergy capture.
+ *
+ * Asserted directly in "refuses to approve for a patient whose allergy
+ * history was never taken", which is what documents that the fixture's
+ * assertion is load-bearing rather than decorative.
+ */
+const ALLERGY_NOT_RECORDED_FINGERPRINT =
+  "SCR_ALLERGY_INPUT_UNAVAILABLE|MODERATE/DEFINITE|DRUG_ALLERGY|remediation=SUBJECT_DATA";
+
+/**
+ * One prescription on the order, nothing else on the profile, and an
+ * allergy history that was taken and found nothing.
  *
  * Against the empty knowledge source — the only source this repository
- * ships — that is three findings, all of them gaps, and NONE of them
- * outstanding. That is deliberately the default state of these tests:
- * a default-configured deployment can screen nothing, says so on every
- * order, and does not make a pharmacist click through a product
+ * ships — that is two findings, both of them gaps, and NEITHER of them
+ * outstanding. That is deliberately the default state of these tests: a
+ * default-configured deployment can screen almost nothing, says so on
+ * every order, and does not make a pharmacist click through a product
  * backlog to sign off. Suites that need an outstanding finding wire a
  * provisioned knowledge source, as the committed-refusal suite below
  * does.
+ *
+ * The allergy assertion is load-bearing for these tests and worth
+ * understanding: WITHOUT it the patient is one nobody has asked, the
+ * DRUG_ALLERGY axis resolves NOT_RECORDED_FOR_SUBJECT, and every
+ * approval below would refuse on an unacknowledged screening gap
+ * instead of testing its own subject. See
+ * `allergy-availability.test.ts` for that path asserted directly.
  */
 const DEFAULT_SCREENING_STUBS: ScreeningStubOptions = {
   patientId: PATIENT_ID,
   orderLinePrescriptionIds: [RX_ID],
+  historyAssertions: [historyTakenNoKnownAllergies(PATIENT_ID)],
   prescriptions: [{ id: RX_ID, patientId: PATIENT_ID, drugNdc: CANDIDATE_NDC, status: "ACTIVE" }],
 };
 
@@ -266,6 +286,8 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     prescription: screening.prescription,
     orderScreeningFinding: screening.orderScreeningFinding,
     orderScreeningAcknowledgement: screening.orderScreeningAcknowledgement,
+    patientAllergy: screening.patientAllergy,
+    patientAllergyHistoryAssertion: screening.patientAllergyHistoryAssertion,
     bucket: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "bucket", op: "findFirst", args });
@@ -1050,18 +1072,17 @@ describe("ApprovePV1 — a gap nobody can close does not gate the approval", () 
     // The behaviour this change exists to produce, asserted at the
     // command that actually gates.
     //
-    // A default-configured deployment reports three gaps on every
-    // order: no licensed knowledge source is wired, there is no
-    // allergy capture, and the sig carries no structured dose. Before,
-    // each demanded its own acknowledgement command — three per
-    // prescription, on 100% of orders, none of them closable by the
-    // pharmacist being asked. That is an override-rate machine, and the
-    // reflex it trains is the one that dismisses the first genuine
-    // MAJOR interaction.
+    // A default-configured deployment reports two gaps on every order
+    // for a correctly-intaked patient: no licensed knowledge source is
+    // wired, and the sig carries no structured dose. Before, each
+    // demanded its own acknowledgement command — on 100% of orders, none
+    // of them closable by the pharmacist being asked. That is an
+    // override-rate machine, and the reflex it trains is the one that
+    // dismisses the first genuine MAJOR interaction.
     //
-    // Both halves matter here: no clicks, AND all three gaps on the
-    // record. Suppressing them would trade alert fatigue for a screen
-    // that reads as clean, which is the worse failure.
+    // Both halves matter here: no clicks, AND both gaps on the record.
+    // Suppressing them would trade alert fatigue for a screen that reads
+    // as clean, which is the worse failure.
     const fake = buildPrismaFake();
     configureBus(fake.client);
 
@@ -1084,6 +1105,41 @@ describe("ApprovePV1 — a gap nobody can close does not gate the approval", () 
       expect(row["workflowPolicyVersion"]).toBe(1);
       expect(row["minimumReportedSeverity"]).toBe("MINOR");
     }
+  });
+
+  it("refuses to approve for a patient whose allergy history was never taken", async () => {
+    // The contrast that makes the grading model do work rather than just
+    // describe itself. The ONLY difference from the test above is that
+    // this patient has no allergy-history assertion — so the allergy axis
+    // resolves NOT_RECORDED_FOR_SUBJECT instead of AVAILABLE, grades
+    // MODERATE instead of not firing, and gates the approval.
+    //
+    // A gap interrupts exactly when somebody can close it. Nobody can
+    // license a drug database from a PV1 queue; somebody can take an
+    // allergy history.
+    const fake = buildPrismaFake({
+      screening: { ...DEFAULT_SCREENING_STUBS, historyAssertions: [] },
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(ApprovePV1, validInput(), { idempotencyKey: "approve-no-allergy-history" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED" });
+    });
+
+    const rows = callsOf(fake.calls, "orderScreeningFinding", "createMany").flatMap(
+      (c) => (c.args as { data: Array<Record<string, unknown>> }).data
+    );
+    expect(rows.map((r) => r["fingerprint"])).toContain(ALLERGY_NOT_RECORDED_FINGERPRINT);
+    const allergyGap = rows.find((r) => r["code"] === "SCR_ALLERGY_INPUT_UNAVAILABLE");
+    expect(allergyGap).toMatchObject({
+      severity: "MODERATE",
+      disposition: "REQUIRES_ACKNOWLEDGEMENT",
+    });
+
+    // Refused, and no approval written.
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(0);
   });
 });
 
@@ -1120,7 +1176,6 @@ describe("ApprovePV1 — a screening refusal is a COMMITTED refusal", () => {
   const OUTSTANDING_KNOWLEDGE_GAP_FINGERPRINT = `SCR_KNOWLEDGE_UNAVAILABLE|MODERATE/DEFINITE|${CANDIDATE_NDC}|remediation=SUBJECT_DATA;scope=CANDIDATE_DRUG`;
   const REFUSED_SCREEN_FINGERPRINTS: ReadonlyArray<string> = [
     OUTSTANDING_KNOWLEDGE_GAP_FINGERPRINT,
-    ALLERGY_INPUT_GAP_FINGERPRINT,
     DOSE_INPUT_GAP_FINGERPRINT,
   ];
 

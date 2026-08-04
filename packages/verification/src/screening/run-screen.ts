@@ -6,71 +6,68 @@
 // writes what came back to `order_screening_finding`.
 //
 // ---------------------------------------------------------------------
-// What this can and cannot feed the engine today
+// What this can and cannot feed the engine
 // ---------------------------------------------------------------------
 //
-// The engine screens four axes. This platform can supply two of them,
-// and `INPUT_AVAILABILITY` below DECLARES the other two unavailable —
-// which makes the engine report each as a `SCREENING_GAP` recorded on
-// the order. The list is therefore a statement of what is enforced,
-// not a warning somebody has to read:
+// The engine screens four axes and NONE of them is decided here any
+// more. `SCREENING_AXIS_CAPABILITY` in `axis-capability.ts` declares
+// what this platform can supply per axis, and
+// `resolveInputAvailability` executes that declaration for the patient
+// on the order. Where the answer is "we cannot supply this", the engine
+// reports a `SCREENING_GAP` persisted on the order.
 //
-//   - DRUG-DRUG INTERACTION and THERAPEUTIC DUPLICATION: supplied.
-//     The candidate is the prescription on each order line; the
-//     profile is the patient's other ACTIVE prescriptions.
-//   - DRUG ALLERGY: NOT supplied, and NOT SUPPORTABLE. Pharmax has no
-//     allergy capture at all — there is no `patient_allergy` table to
-//     read, so no patient can have allergy data for any order.
-//   - DOSE RANGE: NOT supplied, and NOT SUPPORTABLE.
+// As of the allergy-capture slice:
+//
+//   - DRUG-DRUG INTERACTION and THERAPEUTIC DUPLICATION: always
+//     AVAILABLE. The candidate is the prescription on each order line;
+//     the profile is the patient's other ACTIVE prescriptions.
+//     Prescriptions are BORN in Pharmax, so an empty profile is a fact
+//     about the patient, not a gap in our knowledge of them.
+//   - DRUG ALLERGY: PER-PATIENT. AVAILABLE when the patient has at
+//     least one screenable allergy record OR an explicit
+//     NO_KNOWN_ALLERGIES assertion; NOT_RECORDED_FOR_SUBJECT
+//     otherwise. See `allergy-input.ts` for what "screenable" excludes
+//     and why the exclusions are the interesting part.
+//   - DOSE RANGE: still NOT_SUPPORTED_BY_PLATFORM.
 //     `prescription.sigEnc` is encrypted free text with no structured
-//     (amount, unit, frequency) beside it, so no prescription carries
-//     a dose to compare against a range.
+//     (amount, unit, frequency) beside it, so no prescription carries a
+//     dose to compare against a range. That claim is now CHECKED
+//     against the schema — see the forcing function below.
 //
-// Both unavailable axes are declared NOT_SUPPORTED_BY_PLATFORM rather
-// than NOT_RECORDED_FOR_SUBJECT, and the difference is the difference
-// between a gap that interrupts and a gap that is merely recorded.
-// Neither is a fact about a patient: they are facts about this
-// codebase, identical on every order, and no pharmacist can close
-// either one. Asking for an acknowledgement per order would collect
-// three signatures per prescription attesting to a product backlog —
-// which trains the reflex that dismisses the first real MAJOR
-// interaction, and files a sign-off implying a review that could not
-// have happened. See `screeningGapSeverity` for the full argument.
-// The gaps are still emitted, persisted to
-// `order_screening_finding`, carried in the outbox payload's
-// `gapCount`, and countable per code; what they no longer do is tax
-// every order.
+// WHY THE DECLARATION MOVED OUT OF THIS FILE. It used to be a frozen
+// literal here, with a comment promising it would be revisited when the
+// schema gained an allergy table. Adding that table broke nothing: the
+// constant still compiled, every test still passed, and the axis would
+// have gone on reporting "no screen can perform this check" while the
+// data sat unused. The gap between a declaration and the reality it
+// describes had no enforcement across it.
 //
-// Why this is a declaration and not a comment. An empty `allergies`
-// array makes the engine's allergy loop iterate zero times and
-// contribute nothing, and nothing is indistinguishable from clean.
-// Today that is masked: with no licensed knowledge source every
-// prescription raises `SCR_KNOWLEDGE_UNAVAILABLE`, so no screen reads
-// as clear anyway. The mask is the hazard. The day an adapter is
-// wired, that universal gap stops firing, interactions and
-// duplication start screening for real, and a prescription for a
-// patient with documented anaphylaxis would come back CLEAR having
-// never been compared to an allergy list that does not exist —
-// against the one axis that can produce a hard stop at all.
+// It does now. Each entry names the SCHEMA its claim depends on, and
+// `axis-capability.test.ts` asserts every claim against the generated
+// Prisma client — including the negative direction: an axis declared
+// NOT_SUPPORTED_BY_PLATFORM must have its schema ABSENT. The day
+// structured sig columns land on `prescription`, the DOSE_RANGE claim
+// becomes false and the test fails with instructions. Nobody has to
+// remember, because the thing that silences an axis is a statement
+// about the schema they are changing.
 //
-// SELF-HEALING, which is the property to preserve when editing this,
-// and which the three-valued declaration is what buys.
+// The unsafe direction is still the hard one, which is the property to
+// preserve: silencing the allergy axis now means declaring a
+// `patient_allergy` model absent while it exists, and the test says so.
 //
-// Nothing here has to be deleted at the right moment. When allergy
-// capture lands, this constant stops being a constant: it becomes a
-// per-order computation that answers "AVAILABLE" for a patient with
-// records (pass them), and "NOT_RECORDED_FOR_SUBJECT" for a patient
-// with none on file. The second is ACTIONABLE — somebody should go and
-// take an allergy history — so it grades MODERATE and the
-// acknowledgement prompt comes back BY ITSELF, for exactly the
-// patients where a pharmacist can do something about it. Nobody has
-// to remember to re-enable it, because the thing that silenced it was
-// a claim about the platform that will no longer be true.
-//
-// The unsafe direction stays hard. Silencing a per-patient gap would
-// require declaring this platform incapable of allergy capture while
-// the table exists — one visibly false line in one constant, not an
-// omission that hides.
+// GATE (b) IS NOT OPENED BY ANY OF THIS, and the honesty of the record
+// depends on not pretending otherwise. Having the patient's allergies
+// answers "do we know what they react to?". It does not answer "does
+// the prescribed drug contain that allergen?" — that needs NDC →
+// ingredient resolution and cross-reactivity data from a licensed
+// source, and `DrugKnowledgeSource.coverage` is NOT_PROVISIONED in
+// production. So today a patient with recorded allergies still sees
+// `SCR_KNOWLEDGE_UNAVAILABLE`, because `describeDrug` returns null for
+// the candidate and the engine cannot reach the allergy comparison at
+// all. That is the truthful state and the engine already reports it as
+// its own gap with its own remediation. What this slice removes is a
+// FALSE gap ("this platform cannot hold allergies"); what it leaves is
+// a TRUE one ("no drug knowledge is provisioned").
 //
 // ---------------------------------------------------------------------
 // Why acknowledged fingerprints are NOT passed to the engine
@@ -88,25 +85,27 @@
 // itself — which it has to do anyway, because the engine's set is
 // per-patient and the gate is per-PHARMACIST.
 //
-// PHI: the only columns read are `prescription.id` and
-// `prescription.drugNdc` (a public product code, not a drug name) plus
-// `order.patientId`, which is needed to find the profile and never
-// leaves this module. Nothing here is logged.
+// PHI: the columns read are `prescription.id` and
+// `prescription.drugNdc` (a public product code, not a drug name),
+// `order.patientId`, and the CODED columns of `patient_allergy` — never
+// its encrypted narrative. None of it leaves this module and nothing
+// here is logged.
 
 import {
   screenPrescription,
   severityRank,
   type DrugKnowledgeSource,
   type PrescribedDrug,
+  type RecordedAllergy,
   type ScreeningEvaluation,
   type ScreeningFinding,
-  type ScreeningInputAvailability,
-  type ScreeningInputAxis,
   type ScreeningPolicy,
 } from "@pharmax/clinical-screening";
 import { PrescriptionStatus, type Prisma, type ScreeningPhase } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 
+import { loadScreenableAllergies } from "./allergy-input.js";
+import { resolveInputAvailability } from "./axis-capability.js";
 import { getClinicalScreeningKnowledgeSource } from "./configure.js";
 import { PV1_SCREENING_NOT_PERFORMED, PV1_SCREENING_PROFILE_TOO_LARGE } from "./errors.js";
 
@@ -122,33 +121,6 @@ import { PV1_SCREENING_NOT_PERFORMED, PV1_SCREENING_PROFILE_TOO_LARGE } from "./
  * would produce a confident, wrong answer.
  */
 export const MAX_PROFILE_MEDICATIONS = 500;
-
-/**
- * Which clinical axes this platform can currently supply facts for.
- *
- * Written as a literal rather than derived, so adding a fifth axis to
- * the engine fails to compile here until somebody decides what
- * Pharmax can say about it. See the module header for what each entry
- * means and how it self-heals.
- */
-const INPUT_AVAILABILITY: Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>> =
-  Object.freeze({
-    // Both fed from the patient's other ACTIVE prescriptions.
-    DRUG_DRUG_INTERACTION: "AVAILABLE",
-    THERAPEUTIC_DUPLICATION: "AVAILABLE",
-    // No allergy capture exists in this platform at all: `allergy`
-    // appears nowhere in `prisma/schema.prisma`. This is a missing
-    // CAPABILITY, not a missing record — so no patient can ever have
-    // this input, and no pharmacist can supply it. When the table
-    // lands, this becomes a per-patient decision between "AVAILABLE"
-    // (records passed) and "NOT_RECORDED_FOR_SUBJECT" (none on file).
-    DRUG_ALLERGY: "NOT_SUPPORTED_BY_PLATFORM",
-    // `prescription.sigEnc` is encrypted free text and there are no
-    // structured (amount, unit, frequency) columns beside it, so no
-    // prescription in this schema carries a comparable dose. Same
-    // treatment, same self-healing path when a structured sig lands.
-    DOSE_RANGE: "NOT_SUPPORTED_BY_PLATFORM",
-  });
 
 export interface RunScreenInput {
   readonly tx: Prisma.TransactionClient;
@@ -204,6 +176,30 @@ export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResul
 
   const activeMedications = await loadProfileMedications(input);
 
+  // Resolved ONCE per order, not per line. Availability is a fact about
+  // the patient and the platform, so recomputing it per line would ask
+  // the same question of the same rows N times — and, worse, could
+  // answer differently mid-order if a concurrent write landed between
+  // two lines, producing an order whose lines disagree about whether
+  // allergies were screened.
+  const scope = {
+    tx: input.tx,
+    organizationId: input.organizationId,
+    patientId: input.patientId,
+  };
+  const inputAvailability = await resolveInputAvailability(scope);
+
+  // Loaded only when the axis came back AVAILABLE. When it did not, the
+  // engine ignores the list and reads the gap instead — and skipping
+  // the query keeps the two consistent by construction rather than by
+  // the engine's politeness.
+  //
+  // An EMPTY list with AVAILABLE is meaningful and correct: it means
+  // somebody asserted this patient has no known allergies. It is never
+  // "we did not look".
+  const allergies: ReadonlyArray<RecordedAllergy> =
+    inputAvailability.DRUG_ALLERGY === "AVAILABLE" ? await loadScreenableAllergies(scope) : [];
+
   // Deduplicate across lines by fingerprint. The engine already merges
   // within one screen; this merges ACROSS the lines of a multi-Rx
   // order, where the same profile interaction can surface twice.
@@ -211,12 +207,9 @@ export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResul
   for (const candidate of candidates) {
     const evaluation: ScreeningEvaluation = screenPrescription({
       candidate,
-      inputAvailability: INPUT_AVAILABILITY,
+      inputAvailability,
       activeMedications,
-      // Empty because DRUG_ALLERGY is declared UNAVAILABLE above, and
-      // the engine ignores the inputs for an axis it is told we
-      // cannot answer. It is not "this patient has no allergies".
-      allergies: [],
+      allergies,
       knowledge,
       // Deliberately empty. See the header.
       acknowledgedFingerprints: new Set<string>(),

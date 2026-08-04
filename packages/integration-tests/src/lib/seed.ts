@@ -347,6 +347,10 @@ export async function cleanupTenant(client: Client, organizationId: string): Pro
     "order_line",
     '"order"',
     "prescription",
+    // Allergy rows reference patient, clinic and user, so they have to
+    // go before all three.
+    "patient_allergy",
+    "patient_allergy_history_assertion",
     "patient",
     "bucket",
     '"user"',

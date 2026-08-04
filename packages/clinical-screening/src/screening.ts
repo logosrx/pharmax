@@ -94,6 +94,13 @@
 // intake path that already speaks FHIR maps straight in.
 
 import type {
+  AllergyCategory,
+  AllergyCriticality,
+  AllergyType,
+  AllergyVerificationStatus,
+} from "./allergy.js";
+import { isScreenableAllergyCategory, isScreenableAllergyVerificationStatus } from "./allergy.js";
+import type {
   ScreeningCertainty,
   ScreeningFinding,
   ScreeningFindingCode,
@@ -159,40 +166,6 @@ export interface PrescribedDrug {
    */
   readonly dose: DoseStatement | null;
 }
-
-/** FHIR `AllergyIntolerance.category`. */
-export const ALLERGY_CATEGORIES = Object.freeze([
-  "MEDICATION",
-  "BIOLOGIC",
-  "FOOD",
-  "ENVIRONMENT",
-] as const);
-
-export type AllergyCategory = (typeof ALLERGY_CATEGORIES)[number];
-
-/**
- * FHIR `AllergyIntolerance.type`. An intolerance is a non-immune
- * adverse reaction — real and worth surfacing, but not the
- * anaphylaxis risk that could justify refusing to dispense.
- */
-export const ALLERGY_TYPES = Object.freeze(["ALLERGY", "INTOLERANCE"] as const);
-
-export type AllergyType = (typeof ALLERGY_TYPES)[number];
-
-/** FHIR `AllergyIntolerance.criticality`. */
-export const ALLERGY_CRITICALITIES = Object.freeze(["HIGH", "LOW", "UNABLE_TO_ASSESS"] as const);
-
-export type AllergyCriticality = (typeof ALLERGY_CRITICALITIES)[number];
-
-/** FHIR `AllergyIntolerance.verificationStatus`. */
-export const ALLERGY_VERIFICATION_STATUSES = Object.freeze([
-  "CONFIRMED",
-  "UNCONFIRMED",
-  "REFUTED",
-  "ENTERED_IN_ERROR",
-] as const);
-
-export type AllergyVerificationStatus = (typeof ALLERGY_VERIFICATION_STATUSES)[number];
 
 export interface RecordedAllergy {
   readonly recordId: string;
@@ -524,8 +497,13 @@ function collectAllergyFindings(
   if (!isAvailable(request, "DRUG_ALLERGY")) return;
 
   for (const allergy of request.allergies) {
-    if (!isScreenableCategory(allergy.category)) continue;
-    if (!isScreenableVerificationStatus(allergy.verificationStatus)) continue;
+    // Defence in depth. A caller is expected to have filtered these
+    // out already (see `isScreenableAllergy`), but the engine cannot
+    // rely on that and the cost of checking twice is nil. What it
+    // cannot re-check is `clinicalStatus`, which is not on
+    // `RecordedAllergy` at all — that one is the caller's to enforce.
+    if (!isScreenableAllergyCategory(allergy.category)) continue;
+    if (!isScreenableAllergyVerificationStatus(allergy.verificationStatus)) continue;
 
     const certainty = allergyCertainty(allergy);
 
@@ -587,47 +565,6 @@ function collectAllergyFindings(
           citation: null,
         })
       );
-    }
-  }
-}
-
-/**
- * Drug knowledge answers drug questions. Food and environmental
- * allergies are clinically real but unanswerable here, and screening
- * them would produce a permanent gap finding on every prescription for
- * any patient with a shellfish allergy on file. Excluded at the door.
- */
-function isScreenableCategory(category: AllergyCategory): boolean {
-  switch (category) {
-    case "MEDICATION":
-    case "BIOLOGIC":
-      return true;
-    case "FOOD":
-    case "ENVIRONMENT":
-      return false;
-    default: {
-      const exhaustive: never = category;
-      return exhaustive;
-    }
-  }
-}
-
-/**
- * A refuted or erroneously entered allergy is a record the pharmacy
- * has actively decided is wrong. Screening against it would resurrect
- * a correction someone already made.
- */
-function isScreenableVerificationStatus(status: AllergyVerificationStatus): boolean {
-  switch (status) {
-    case "CONFIRMED":
-    case "UNCONFIRMED":
-      return true;
-    case "REFUTED":
-    case "ENTERED_IN_ERROR":
-      return false;
-    default: {
-      const exhaustive: never = status;
-      return exhaustive;
     }
   }
 }
