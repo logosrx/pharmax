@@ -62,7 +62,7 @@ import {
 } from "@pharmax/telemetry";
 import {
   assessRxnormStaleness,
-  loadRxnormKnowledgeSourceForScreen,
+  loadDrugKnowledgeSourceForScreen,
   RXNORM_KNOWLEDGE_SOURCE_CODE,
 } from "@pharmax/drug-knowledge";
 import { configureClinicalScreening } from "@pharmax/verification";
@@ -514,9 +514,17 @@ async function doBootstrap(): Promise<void> {
   // pre-adapter behaviour. The boot statements below are addressed to
   // the party who can close that gap — whoever operates this
   // deployment runs scripts/operations/ingest-rxnorm-release.ts.
+  //
+  // COMPOUNDS ANSWER FROM THE ORG'S OWN FORMULARY. The composite
+  // source routes IN_HOUSE_COMPOUND catalog codes to the ACTIVE coded
+  // compound formula claiming the product (tenant data, screened with
+  // or without a live RxNorm release) and everything else to the
+  // release. An uncoded compound records SCR_COMPOUND_FORMULA_NOT_CODED
+  // (informational, org-closable); a partially-coded one screens the
+  // coded rows and records SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED.
   configureClinicalScreening({
     knowledgeSourceResolver: (context) =>
-      loadRxnormKnowledgeSourceForScreen({
+      loadDrugKnowledgeSourceForScreen({
         // Structurally identical transaction-client views; the
         // adapter types against @pharmax/database's alias.
         tx: context.tx,

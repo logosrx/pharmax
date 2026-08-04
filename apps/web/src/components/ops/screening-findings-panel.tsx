@@ -82,6 +82,13 @@ const GROUPS: Readonly<Record<ScreeningFindingGroup, GroupPresentation>> = Objec
     acknowledgeLabel: "Acknowledge unchecked drug",
     accentBySeverity: false,
   },
+  ORGANIZATION_COVERAGE: {
+    title: "Checks limited by this pharmacy's own reference data",
+    blurb:
+      "A compounded preparation's formula has ingredient rows that are not coded, so those rows were not machine-screened — read them in the ingredient list on the prescription line above. Coding the formula (a formulary task, not a per-order one) closes this for every future order.",
+    acknowledgeLabel: "Acknowledge coverage limit",
+    accentBySeverity: false,
+  },
   PLATFORM_CAPABILITY: {
     title: "Checks Pharmax cannot perform yet",
     blurb:
@@ -95,6 +102,7 @@ const GROUPS: Readonly<Record<ScreeningFindingGroup, GroupPresentation>> = Objec
 const GROUP_ORDER: ReadonlyArray<ScreeningFindingGroup> = Object.freeze([
   "CLINICAL",
   "PRESCRIPTION_COVERAGE",
+  "ORGANIZATION_COVERAGE",
   "PLATFORM_CAPABILITY",
 ]);
 

@@ -57,6 +57,14 @@ export interface StubFinding {
    */
   readonly knowledgeSourceCode?: string | null;
   readonly knowledgeReleaseVersion?: string | null;
+  /**
+   * Compound-formula attribution as persisted — the per-finding
+   * counterpart of the release stamp above. Same null-vs-absent
+   * distinction.
+   */
+  readonly formulaId?: string | null;
+  readonly formulaCode?: string | null;
+  readonly formulaVersion?: number | null;
 }
 
 export interface StubAcknowledgement {
@@ -257,6 +265,9 @@ export function createScreeningStubs(
             commandLogId: String(row["commandLogId"]),
             knowledgeSourceCode: (row["knowledgeSourceCode"] ?? null) as string | null,
             knowledgeReleaseVersion: (row["knowledgeReleaseVersion"] ?? null) as string | null,
+            formulaId: (row["formulaId"] ?? null) as string | null,
+            formulaCode: (row["formulaCode"] ?? null) as string | null,
+            formulaVersion: (row["formulaVersion"] ?? null) as number | null,
           });
         }
         return { count: rows.length };

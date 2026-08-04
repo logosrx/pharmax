@@ -12,6 +12,7 @@ import {
 
 const ALFA: DrugKnowledge = {
   ingredientCodes: ["ING_ALFA"],
+  uncodedIngredientCount: 0,
   therapeuticClassCodes: ["CLASS_ONE"],
   crossSensitivityClassCodes: ["XCLASS_ONE"],
   doseRange: null,
@@ -46,6 +47,7 @@ describe("createInMemoryDrugKnowledgeSource", () => {
       drugs: {
         DRUG_EMPTY: {
           ingredientCodes: [],
+          uncodedIngredientCount: 0,
           therapeuticClassCodes: [],
           crossSensitivityClassCodes: [],
           doseRange: null,

@@ -117,6 +117,10 @@ export async function loadRxnormKnowledgeSourceForScreen(
       describeDrug: () => null,
       describeAllergen: () => null,
       drugCodeScope,
+      // This source answers from published nomenclature only; the
+      // formula-backed answers (and their provenance) come from the
+      // compound source this one is composed with.
+      compoundFormulaProvenance: () => null,
       findIngredientInteraction: () => null,
     };
   }
@@ -169,6 +173,10 @@ export async function loadRxnormKnowledgeSourceForScreen(
     if (ingredientCodes === undefined || ingredientCodes.length === 0) continue;
     knowledgeByCode.set(code, {
       ingredientCodes: Object.freeze([...ingredientCodes].sort((a, b) => a.localeCompare(b))),
+      // A release either names a product's ingredients or does not
+      // hold the product; a partially-known national product is not a
+      // state RxNorm's data model can produce.
+      uncodedIngredientCount: 0,
       therapeuticClassCodes: Object.freeze([]),
       crossSensitivityClassCodes: Object.freeze([]),
       doseRange: null,
@@ -181,6 +189,7 @@ export async function loadRxnormKnowledgeSourceForScreen(
     describeDrug: (code) => knowledgeByCode.get(code) ?? null,
     describeAllergen: () => null,
     drugCodeScope,
+    compoundFormulaProvenance: () => null,
     findIngredientInteraction: () => null,
   };
 }

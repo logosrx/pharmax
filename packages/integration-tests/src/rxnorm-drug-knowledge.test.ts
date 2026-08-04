@@ -23,6 +23,7 @@ import { hardStopFindings } from "@pharmax/clinical-screening";
 import { prisma, readInOrgScope, type Prisma } from "@pharmax/database";
 import {
   ingestRxnormRelease,
+  loadDrugKnowledgeSourceForScreen,
   loadRxnormKnowledgeSourceForScreen,
   RxnormIngestError,
   RXNORM_INGEST_ERRORS,
@@ -370,11 +371,15 @@ describe("rxnorm adapter — per-screen prefetch against Postgres", () => {
 
 describe("end to end — a seeded ingredient allergy hard-stops through the real adapter", () => {
   beforeAll(() => {
-    // The production wiring, verbatim (see apps/web bootstrap): a
-    // per-screen resolver over the live release.
+    // The production wiring, verbatim (see apps/web bootstrap): the
+    // composite per-screen resolver — the live release for national
+    // codes, the org's coded formulas for compound codes. The
+    // compound test below seeds NO formula, which is what makes its
+    // gap the org-closable "formula not coded" rather than the
+    // rxnorm-only source's "not applicable".
     configureClinicalScreening({
       knowledgeSourceResolver: (context) =>
-        loadRxnormKnowledgeSourceForScreen({
+        loadDrugKnowledgeSourceForScreen({
           tx: context.tx,
           organizationId: context.organizationId,
           drugCodes: context.drugCodes,
@@ -471,9 +476,12 @@ describe("end to end — a seeded ingredient allergy hard-stops through the real
     });
 
     // The gap is on the record — an unscreened compound must never
-    // read as screened-and-clear…
+    // read as screened-and-clear. Since the compound-formula slice,
+    // the composite grades it as the ORG-closable "formula not coded"
+    // (this org declared no formula for the code) rather than the
+    // rxnorm-only source's platform-capability "not applicable".
     const compoundGap = screen.evaluation.findings.find(
-      (f) => f.code === "SCR_KNOWLEDGE_NOT_APPLICABLE"
+      (f) => f.code === "SCR_COMPOUND_FORMULA_NOT_CODED"
     );
     expect(compoundGap).toMatchObject({
       kind: "SCREENING_GAP",

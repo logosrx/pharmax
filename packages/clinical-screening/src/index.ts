@@ -28,6 +28,7 @@ export {
   dispositionFor,
   fingerprintOf,
   gapRemediationForAvailability,
+  gapRemediationForFindingCode,
   gapRemediationFromSeverity,
   isAtLeastAsSevere,
   leastSevere,
@@ -75,6 +76,7 @@ export {
 export type {
   AllergenCode,
   AllergenKnowledge,
+  CompoundFormulaProvenance,
   CrossSensitivityClassCode,
   DoseRange,
   DrugCode,

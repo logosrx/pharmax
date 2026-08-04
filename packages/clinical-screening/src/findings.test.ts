@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   dispositionFor,
   fingerprintOf,
+  gapRemediationForFindingCode,
   gapRemediationFromSeverity,
   isAtLeastAsSevere,
   leastSevere,
@@ -24,15 +25,48 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("screening gap grading", () => {
-  it("round-trips every remediation through severity", () => {
-    // `gapRemediationFromSeverity` is how a reader of
-    // `order_screening_finding` recovers what a persisted gap row means,
-    // so the mapping has to be injective. If two remediations ever
-    // shared a severity, the console would silently start telling
-    // pharmacists to chase gaps nobody can close.
+  it("recovers every remediation from what a persisted row carries", () => {
+    // A reader of `order_screening_finding` recovers what a gap row
+    // means from the row's CODE first (`gapRemediationForFindingCode`)
+    // and its SEVERITY second (`gapRemediationFromSeverity`). Since
+    // ORGANIZATION_DATA and PLATFORM_CAPABILITY share MINOR, severity
+    // alone is no longer injective — the codes that carry
+    // ORGANIZATION_DATA were minted with fixed remediation precisely
+    // so the two-step recovery stays exact. If this loop ever fails,
+    // the console has started telling pharmacists to chase gaps
+    // nobody can close (or to ignore gaps their org can).
+    const codeCarrying: Record<string, string> = {
+      ORGANIZATION_DATA: "SCR_COMPOUND_FORMULA_NOT_CODED",
+    };
     for (const remediation of SCREENING_GAP_REMEDIATIONS) {
-      expect(gapRemediationFromSeverity(screeningGapSeverity(remediation))).toBe(remediation);
+      const code = codeCarrying[remediation] ?? "SCR_KNOWLEDGE_UNAVAILABLE";
+      const recovered =
+        gapRemediationForFindingCode(code) ??
+        gapRemediationFromSeverity(screeningGapSeverity(remediation));
+      expect(recovered, remediation).toBe(remediation);
     }
+  });
+
+  it("keeps historical MINOR rows reading as PLATFORM_CAPABILITY", () => {
+    // Every MINOR gap row written before ORGANIZATION_DATA existed
+    // actually carried PLATFORM_CAPABILITY, and severity-based
+    // recovery must keep saying so — the new value is recovered from
+    // its codes, never from the shared severity.
+    expect(gapRemediationFromSeverity("MINOR")).toBe("PLATFORM_CAPABILITY");
+    expect(gapRemediationFromSeverity("MODERATE")).toBe("SUBJECT_DATA");
+  });
+
+  it("fixes the remediation of the compound-coverage codes by construction", () => {
+    expect(gapRemediationForFindingCode("SCR_COMPOUND_FORMULA_NOT_CODED")).toBe(
+      "ORGANIZATION_DATA"
+    );
+    expect(gapRemediationForFindingCode("SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED")).toBe(
+      "ORGANIZATION_DATA"
+    );
+    // Codes that can be raised under more than one remediation answer
+    // null and defer to severity — see gapRemediationFromSeverity.
+    expect(gapRemediationForFindingCode("SCR_KNOWLEDGE_UNAVAILABLE")).toBeNull();
+    expect(gapRemediationForFindingCode("SCR_ALLERGY_INPUT_UNAVAILABLE")).toBeNull();
   });
 
   it("grades no gap at a severity that could block", () => {

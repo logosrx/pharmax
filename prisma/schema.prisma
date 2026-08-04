@@ -4017,6 +4017,24 @@ model OrderScreeningFinding {
   knowledgeSourceCode     String?
   knowledgeReleaseVersion String?
 
+  // Compound-formula attribution — the same treatment again, for the
+  // body of knowledge that is the ORG'S OWN: when a finding was
+  // produced (or a coverage gap reported) against a compound product's
+  // declared ingredient list, these name the formula VERSION the
+  // screen resolved, because recipes are republished and "which recipe
+  // did March's screen read?" must survive that. Code + version are
+  // denormalized beside the id exactly as `CompoundingRecord` does, so
+  // the row stays self-describing in exports that don't join. NULL on
+  // findings that involved no compound formula — the common case.
+  //
+  // When one finding involves two formulas (a duplication between two
+  // compound lines), the CANDIDATE line's formula is stamped; the
+  // other formula's product remains reachable through `triggers`.
+  formulaId      String?          @db.Uuid
+  formula        CompoundFormula? @relation("OrderScreeningFindingFormula", fields: [formulaId], references: [id], onDelete: Restrict)
+  formulaCode    String?
+  formulaVersion Int?
+
   occurredAt DateTime @default(now())
   createdAt  DateTime @default(now())
 
@@ -4428,6 +4446,7 @@ model Product {
   lots                       Lot[]
   pricingRules               PricingRule[]
   compoundFormulaIngredients CompoundFormulaIngredient[]
+  compoundFormulas           CompoundFormula[]           @relation("CompoundFormulaProduct")
 
   @@unique([organizationId, ndc])
   @@index([organizationId, name])
@@ -5384,6 +5403,34 @@ enum CompoundingQualityOutcome {
   FAIL
 }
 
+// How one formula ingredient row relates to machine-readable
+// nomenclature — the per-row statement that makes "this formula is
+// fully coded" a set of attributable claims rather than an inference
+// from absence.
+//
+//   - UNCODED: nobody has made a statement about this row. The default
+//     and the honest starting state; a formula with any UNCODED row is
+//     only PARTIALLY machine-screened and PV1 says so.
+//   - RXNORM_IN: the row names an RxNorm ingredient (IN) RXCUI in
+//     `rxnormInRxcui` — the code space `patient_allergy` RXNORM rows
+//     are recorded in, so the allergy screen's string-equality match
+//     is a real comparison.
+//   - NO_RXNORM_INGREDIENT: a human asserted that no RxNorm ingredient
+//     concept applies to this row — a base, vehicle or excipient that
+//     national nomenclature does not model. The same shape of claim as
+//     the NO_KNOWN_ALLERGIES assertion: a positive statement with a
+//     name on it, not a gap. Without it every real formula (they all
+//     have a base) would read partially-coded forever, and a gap that
+//     fires on every order forever is a gap that gets trained away.
+//
+// A CHECK constraint in the migration ties the enum to the code column
+// in both directions: RXNORM_IN ⇔ `rxnormInRxcui` present.
+enum CompoundIngredientCoding {
+  UNCODED
+  RXNORM_IN
+  NO_RXNORM_INGREDIENT
+}
+
 model CompoundFormula {
   id             String       @id @default(uuid()) @db.Uuid
   organizationId String       @db.Uuid
@@ -5418,6 +5465,29 @@ model CompoundFormula {
   instructions  String
   qualityChecks String?
 
+  // The catalog product this formula is the recipe FOR — the
+  // PV1-time link from a prescription (which carries only the
+  // product's org-local NDC) to the recipe that will be screened.
+  // Distinct from the ingredient rows' `productId` (stocked catalog
+  // components CONSUMED by the recipe).
+  //
+  // On the formula rather than on `Product`, deliberately: the link is
+  // screening-relevant (pointing a product at the wrong recipe screens
+  // the wrong ingredients), and the formula's draft→publish cycle is
+  // already a command surface with permission, audit, events and
+  // append-only versioning — while `product` has no application write
+  // path at all. Changing the link therefore means publishing a new
+  // formula version, which is exactly the discipline a
+  // screening-relevant mutation needs.
+  //
+  // At most one ACTIVE formula may claim a product — the partial
+  // UNIQUE "one ACTIVE per (organizationId, compoundProductId)" lives
+  // in the SQL migration. The fill-time `CompoundingRecord.formulaId`
+  // pin is untouched: that records what was actually compounded,
+  // which may legitimately be a different version than PV1 screened.
+  compoundProductId String?  @db.Uuid
+  compoundProduct   Product? @relation("CompoundFormulaProduct", fields: [compoundProductId], references: [id], onDelete: Restrict)
+
   createdByUserId String @db.Uuid
   createdByUser   User   @relation("CompoundFormulaAuthor", fields: [createdByUserId], references: [id], onDelete: Restrict)
 
@@ -5425,8 +5495,9 @@ model CompoundFormula {
   retiredAt     DateTime?
   retiredReason CompoundFormulaRetireReason?
 
-  ingredients        CompoundFormulaIngredient[]
-  compoundingRecords CompoundingRecord[]
+  ingredients            CompoundFormulaIngredient[]
+  compoundingRecords     CompoundingRecord[]
+  orderScreeningFindings OrderScreeningFinding[]     @relation("OrderScreeningFindingFormula")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -5436,6 +5507,8 @@ model CompoundFormula {
   // clause). It serializes concurrent draft creation for a code.
   @@unique([organizationId, code, version])
   @@index([organizationId, status, code])
+  // The screen's lookup: "the ACTIVE formula claiming this product".
+  @@index([organizationId, compoundProductId, status])
   @@map("compound_formula")
 }
 
@@ -5454,6 +5527,16 @@ model CompoundFormulaIngredient {
   quantity       Decimal @db.Decimal(18, 4)
   unit           String
   sortOrder      Int     @default(0)
+
+  // Machine-readable identity for the row, or the recorded absence of
+  // one. See `CompoundIngredientCoding`. The RXCUI is an RxNorm
+  // ingredient (IN) concept — bare digits, the same code space
+  // `patient_allergy.substanceCode` uses under
+  // `substanceCodeSystem = RXNORM`, which is what the PV1 allergy
+  // screen compares by string equality. CHECK in the migration:
+  // coding = RXNORM_IN ⇔ rxnormInRxcui IS NOT NULL.
+  coding        CompoundIngredientCoding @default(UNCODED)
+  rxnormInRxcui String?
 
   compoundingRecordIngredients CompoundingRecordIngredient[]
 
@@ -5653,7 +5736,7 @@ model RxnormRelease {
   // The release version as NLM names it (e.g. "07072026" from
   // RxNorm_full_prescribe_07072026.zip) — stamped verbatim onto
   // `order_screening_finding.knowledgeReleaseVersion`.
-  version String
+  version    String
   // The same version normalized to a date, so "is this release older
   // than what is live?" is a comparison rather than a string parse at
   // every call site.

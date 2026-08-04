@@ -80,6 +80,7 @@ describe("loadRxnormKnowledgeSourceForScreen", () => {
       drugCodes: ["99999000101"],
     });
     expect(source.describeDrug("99999000101")).toEqual({
+      uncodedIngredientCount: 0,
       ingredientCodes: ["900001", "900002"],
       therapeuticClassCodes: [],
       crossSensitivityClassCodes: [],
