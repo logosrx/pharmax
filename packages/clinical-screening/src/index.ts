@@ -123,11 +123,13 @@ export {
   hardStopFindings,
   screenPrescription,
   DEFAULT_SCREENING_POLICY,
+  DOSE_STATEMENT_BASES,
   SCREENING_OUTCOMES,
 } from "./screening.js";
 
 export type {
   DoseStatement,
+  DoseStatementBasis,
   PrescribedDrug,
   RecordedAllergy,
   ScreeningEvaluation,

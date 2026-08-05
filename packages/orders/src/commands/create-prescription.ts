@@ -66,10 +66,12 @@ import {
 import { encryptField } from "@pharmax/crypto";
 import {
   ControlledSubstanceSchedule,
+  DoseUnit,
   PatientStatus,
   Prisma,
   PrescriptionStatus,
   ProviderStatus,
+  SigStructureKind,
 } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
@@ -98,6 +100,9 @@ export const RX_DATE_WRITTEN_IN_FUTURE = "RX_DATE_WRITTEN_IN_FUTURE";
 export const RX_EXPIRES_NOT_AFTER_WRITTEN = "RX_EXPIRES_NOT_AFTER_WRITTEN";
 export const RX_EXPIRY_EXCEEDS_FEDERAL_HORIZON = "RX_EXPIRY_EXCEEDS_FEDERAL_HORIZON";
 export const RX_EARLIEST_FILL_BEFORE_WRITTEN = "RX_EARLIEST_FILL_BEFORE_WRITTEN";
+export const RX_STRUCTURED_SIG_SHAPE_INVALID = "RX_STRUCTURED_SIG_SHAPE_INVALID";
+export const RX_STRUCTURED_SIG_DAYS_SUPPLY_INCONSISTENT =
+  "RX_STRUCTURED_SIG_DAYS_SUPPLY_INCONSISTENT";
 export const RX_BI_REQUIRED_NULL = "RX_BI_REQUIRED_NULL";
 export const RX_NUMBER_COLLISION = "RX_NUMBER_COLLISION";
 
@@ -134,6 +139,30 @@ const decimalQuantity = z
 
 const scheduleEnum = z.enum(ControlledSubstanceSchedule);
 
+/**
+ * Dose per administration, as a decimal string for the same
+ * IEEE-754-survival reason as `decimalQuantity`; the column is
+ * `DECIMAL(12,4)`, hence the tighter integer-digit bound.
+ */
+const decimalDoseAmount = z
+  .string()
+  .regex(/^\d{1,8}(\.\d{1,4})?$/, "expected a decimal with up to 4 fractional digits")
+  .refine((s) => Number(s) > 0, "must be greater than zero");
+
+/**
+ * Administrations per day. Decimal, not integer: every-other-day is
+ * 0.5 and weekly is 0.1429. Bounded above at hourly dosing — a
+ * frequency beyond 24/day is a transcription error, not a regimen.
+ */
+const decimalDosesPerDay = z
+  .string()
+  .regex(/^\d{1,2}(\.\d{1,4})?$/, "expected a decimal with up to 4 fractional digits")
+  .refine((s) => Number(s) > 0, "must be greater than zero")
+  .refine((s) => Number(s) <= 24, "more than 24 doses per day is not a schedule");
+
+const sigStructureKindEnum = z.enum(SigStructureKind);
+const doseUnitEnum = z.enum(DoseUnit);
+
 const inputSchema = z
   .object({
     clinicId: z.uuid(),
@@ -168,6 +197,23 @@ const inputSchema = z
 
     // Clinical free text — PHI.
     sig: z.string().min(1).max(2000),
+
+    // Structured sig — the machine-comparable summary of `sig`,
+    // captured so the PV1 dose-range screen has an amount, a unit and
+    // a frequency to compare. ALL OPTIONAL: the free-text sig remains
+    // the authoritative label instruction, and a transcription
+    // without these is legal (its dose axis reports an informational
+    // gap instead of screening). What each value means per kind is
+    // documented on `SigStructureKind` in `schema.prisma`; the shape
+    // rules are enforced in the handler
+    // (`validateStructuredSigShape`) with a named error code, and by
+    // the `prescription_structured_sig_shape` CHECK constraint.
+    // Coded values, not PHI narrative — same treatment as `drugNdc`.
+    sigStructureKind: sigStructureKindEnum.optional(),
+    doseAmount: decimalDoseAmount.optional(),
+    doseUnit: doseUnitEnum.optional(),
+    dosesPerDay: decimalDosesPerDay.optional(),
+
     noteToPharmacist: z.string().min(1).max(2000).optional(),
     noteToPatient: z.string().min(1).max(2000).optional(),
     indication: z.string().min(1).max(500).optional(),
@@ -397,6 +443,15 @@ export const CreatePrescription: Command<CreatePrescriptionInput, CreatePrescrip
       });
     }
 
+    // ---- Step 5b: structured sig ------------------------------------
+    // Shape first (which fields a kind requires), then the
+    // days-supply cross-check — a transcription-time arithmetic check
+    // that is cheapest to fix while the operator is holding the
+    // script. Both are named errors rather than schema refinements so
+    // the console can tell the operator which field to fix and why.
+    validateStructuredSigShape(input);
+    validateDaysSupplyConsistency(input);
+
     // ---- Step 6: id, Rx number, encryption -------------------------
     // The id is minted before encryption so the AAD binding can name
     // the row it belongs to: a ciphertext lifted out of this row and
@@ -462,6 +517,16 @@ export const CreatePrescription: Command<CreatePrescriptionInput, CreatePrescrip
           daw: input.daw,
           controlledSubstanceSchedule: schedule,
           ...(earliestFillDate === null ? {} : { earliestFillDate }),
+          ...(input.sigStructureKind === undefined
+            ? {}
+            : { sigStructureKind: input.sigStructureKind }),
+          ...(input.doseAmount === undefined
+            ? {}
+            : { doseAmount: new Prisma.Decimal(input.doseAmount) }),
+          ...(input.doseUnit === undefined ? {} : { doseUnit: input.doseUnit }),
+          ...(input.dosesPerDay === undefined
+            ? {}
+            : { dosesPerDay: new Prisma.Decimal(input.dosesPerDay) }),
           sigEnc,
           ...(noteToPharmacistEnc === null ? {} : { noteToPharmacistEnc }),
           ...(noteToPatientEnc === null ? {} : { noteToPatientEnc }),
@@ -513,6 +578,13 @@ export const CreatePrescription: Command<CreatePrescriptionInput, CreatePrescrip
           hasNoteToPharmacist: input.noteToPharmacist !== undefined,
           hasNoteToPatient: input.noteToPatient !== undefined,
           hasIndication: input.indication !== undefined,
+          // The kind alone — a coded workflow fact ("was this
+          // transcription structured, and how") that coverage
+          // reporting reads. The dose VALUES stay off the audit row:
+          // the row's reader asks whether capture happened, not what
+          // the regimen was, and the regimen is one join away for a
+          // reader entitled to it.
+          sigStructureKind: input.sigStructureKind ?? null,
           commandLogId,
         },
       },
@@ -587,6 +659,128 @@ function resolveSchedule(args: {
   }
 
   return catalogSchedule;
+}
+
+/**
+ * The cross-field rules a structured sig must satisfy, mirrored by
+ * the `prescription_structured_sig_shape` CHECK constraint:
+ *
+ *   - No kind → no values. A dose amount with no kind has no defined
+ *     reading and must not be storable.
+ *   - FIXED and RANGE promise a computable daily figure, so amount,
+ *     unit and frequency are all required.
+ *   - PRN and TAPER may be bare — "structured, with no single
+ *     comparable number" is an honest and legal state — but what IS
+ *     supplied must cohere: an amount and a unit travel together, and
+ *     a frequency without an amount computes nothing.
+ */
+function validateStructuredSigShape(input: CreatePrescriptionInput): void {
+  const { sigStructureKind: kind, doseAmount, doseUnit, dosesPerDay } = input;
+
+  const refuse = (message: string, paths: ReadonlyArray<string>): never => {
+    throw new errors.ValidationError({
+      code: RX_STRUCTURED_SIG_SHAPE_INVALID,
+      message,
+      issues: paths.map((path) => ({ path: [path], message })),
+      metadata: { sigStructureKind: kind ?? null },
+    });
+  };
+
+  if (kind === undefined) {
+    if (doseAmount !== undefined || doseUnit !== undefined || dosesPerDay !== undefined) {
+      refuse(
+        "Structured dose values require a sig structure kind; without one they have no defined reading.",
+        ["sigStructureKind"]
+      );
+    }
+    return;
+  }
+
+  switch (kind) {
+    case SigStructureKind.FIXED:
+    case SigStructureKind.RANGE: {
+      if (doseAmount === undefined || doseUnit === undefined || dosesPerDay === undefined) {
+        refuse(
+          `A ${kind} structured sig requires a dose amount, a unit and a doses-per-day frequency.`,
+          ["doseAmount", "doseUnit", "dosesPerDay"].filter(
+            (field) => (input as Record<string, unknown>)[field] === undefined
+          )
+        );
+      }
+      return;
+    }
+    case SigStructureKind.PRN:
+    case SigStructureKind.TAPER: {
+      if ((doseAmount === undefined) !== (doseUnit === undefined)) {
+        refuse("A dose amount and its unit must be supplied together.", [
+          doseAmount === undefined ? "doseAmount" : "doseUnit",
+        ]);
+      }
+      if (dosesPerDay !== undefined && doseAmount === undefined) {
+        refuse(
+          "A doses-per-day value without a dose amount computes nothing; supply the amount or omit the frequency.",
+          ["doseAmount"]
+        );
+      }
+      return;
+    }
+    default: {
+      const exhaustive: never = kind;
+      throw new Error(`unreachable sig structure kind: ${String(exhaustive)}`);
+    }
+  }
+}
+
+/**
+ * Units in which `quantityAuthorized` is conventionally denominated,
+ * making quantity ÷ (dose × frequency) a days figure rather than a
+ * category error. A dose in MG against a quantity in tablets is not
+ * cross-checkable without the product's strength, which this command
+ * does not resolve — so those transcriptions are simply not checked.
+ */
+const QUANTITY_DENOMINATED_DOSE_UNITS: ReadonlySet<DoseUnit> = new Set([
+  DoseUnit.TABLET,
+  DoseUnit.CAPSULE,
+  DoseUnit.ML,
+  DoseUnit.PATCH,
+]);
+
+/**
+ * The days-supply cross-check: quantityAuthorized ÷ (doseAmount ×
+ * dosesPerDay) against the stated daysSupply, for a FIXED sig in a
+ * quantity-denominated unit.
+ *
+ * A HARD ERROR, not a captured warning, decided on three grounds:
+ * the operator is holding the script when it fires, so the fix is one
+ * field edit now versus a review queue nobody owns later; the
+ * structured dose flows into clinical screening as fact, so an
+ * arithmetic contradiction is exactly the transcription error that
+ * becomes a wrong label; and the band is wide enough (2x either way)
+ * that no legitimate rounding — "dispense 30, 28 days supply",
+ * partial-unit doses — can reach it. Only FIXED is checked: PRN and
+ * TAPER have no fixed consumption rate, and a RANGE's upper bound
+ * legitimately implies a shorter duration than the stated supply.
+ */
+function validateDaysSupplyConsistency(input: CreatePrescriptionInput): void {
+  if (input.sigStructureKind !== SigStructureKind.FIXED) return;
+  if (input.doseAmount === undefined || input.doseUnit === undefined) return;
+  if (input.dosesPerDay === undefined) return;
+  if (!QUANTITY_DENOMINATED_DOSE_UNITS.has(input.doseUnit)) return;
+
+  const dailyConsumption = Number(input.doseAmount) * Number(input.dosesPerDay);
+  const impliedDays = Number(input.quantityAuthorized) / dailyConsumption;
+
+  if (impliedDays > input.daysSupply * 2 || impliedDays < input.daysSupply / 2) {
+    throw new errors.ValidationError({
+      code: RX_STRUCTURED_SIG_DAYS_SUPPLY_INCONSISTENT,
+      message:
+        `At ${input.doseAmount} ${input.doseUnit} x ${input.dosesPerDay}/day, the authorized ` +
+        `quantity lasts about ${Math.round(impliedDays)} day(s), not the stated ${input.daysSupply}. ` +
+        `One of quantity, dose, frequency or days supply was mistranscribed.`,
+      issues: [{ path: ["daysSupply"], message: "contradicts quantity x dose x frequency" }],
+      metadata: { impliedDaysSupply: Math.round(impliedDays), daysSupply: input.daysSupply },
+    });
+  }
 }
 
 /**

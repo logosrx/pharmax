@@ -91,8 +91,10 @@ const CANDIDATE_NDC = "00000-0000-01";
 /**
  * The two gaps a default-configured deployment reports on EVERY order,
  * both graded MINOR because no pharmacist can close either of them: no
- * licensed knowledge source is wired at all, and the sig carries no
- * structured dose.
+ * licensed knowledge source is wired at all, and this fixture's
+ * prescription was transcribed without a structured sig — an immutable
+ * record nobody on the order can add the capture to
+ * (remediation=RECORD_IMMUTABLE since structured sig landed).
  *
  * MINOR means INFORMATIONAL, so none of them gates an approval — see
  * `screeningGapSeverity`. They are still persisted on every screen,
@@ -100,7 +102,7 @@ const CANDIDATE_NDC = "00000-0000-01";
  */
 const KNOWLEDGE_GAP_FINGERPRINT = `SCR_KNOWLEDGE_UNAVAILABLE|MINOR/DEFINITE|${CANDIDATE_NDC}|remediation=PLATFORM_CAPABILITY;scope=CANDIDATE_DRUG`;
 const DOSE_INPUT_GAP_FINGERPRINT =
-  "SCR_DOSE_INPUT_UNAVAILABLE|MINOR/DEFINITE|DOSE_RANGE|remediation=PLATFORM_CAPABILITY";
+  "SCR_DOSE_INPUT_UNAVAILABLE|MINOR/DEFINITE|DOSE_RANGE|remediation=RECORD_IMMUTABLE";
 
 const DEFAULT_GAP_FINGERPRINTS: ReadonlyArray<string> = [
   KNOWLEDGE_GAP_FINGERPRINT,

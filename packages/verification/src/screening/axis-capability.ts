@@ -33,12 +33,13 @@
 //   - an axis declared NOT_SUPPORTED_BY_PLATFORM must have its schema
 //     ABSENT.
 //
-// The second assertion is the forcing function. The day somebody adds
-// `dose_amount` / `dose_unit` / `doses_per_day` to `prescription`, the
-// DOSE_RANGE claim becomes false and the test fails with an error that
-// names the axis and says what to do. That engineer cannot ship a
-// structured sig and leave dose screening dark, because the thing that
-// silenced the axis was a statement about the schema they just changed.
+// The second assertion is the forcing function, and it has now FIRED
+// once, exactly as designed: the day the structured-sig migration
+// added `doseAmount` / `doseUnit` / `dosesPerDay` to `prescription`,
+// the DOSE_RANGE claim became false and the test failed with
+// instructions, which is why that axis is PER_RECORD below rather
+// than dark. The mechanism stays, because the next capability gets
+// the same treatment.
 //
 // WHY THE SCHEMA AND NOT SOMETHING ELSE. Three candidates were
 // considered:
@@ -67,6 +68,7 @@ import { CLINICAL_SCREENING_AXES } from "@pharmax/clinical-screening";
 import { Prisma } from "@pharmax/database";
 
 import { hasScreenableAllergyInput, type PatientScreeningScope } from "./allergy-input.js";
+import { doseInputAvailabilityFor, type StructuredSigRow } from "./dose-input.js";
 
 /**
  * Schema a capability claim depends on: a Prisma model and the fields
@@ -134,13 +136,34 @@ export type ScreeningAxisCapability =
     }
   | {
       /**
+       * The input is a fact about ONE PRESCRIPTION LINE, not about the
+       * patient, so availability cannot be resolved once per order —
+       * a two-line order can carry one structured sig and one legacy
+       * free-text sig, and the two lines' screens must say different
+       * things. `availabilityForRecord` is a PURE mapping from the
+       * already-loaded row (no probe query: the wiring layer selects
+       * the columns alongside the drug code, inside the same
+       * transaction) that `run-screen.ts` applies per candidate.
+       *
+       * On the declaration rather than in the wiring for the same
+       * reason PER_SUBJECT's probe is: an axis cannot be moved to
+       * PER_RECORD without stating the policy, and the policy lives
+       * where the claim about the schema lives.
+       */
+      readonly kind: "PER_RECORD";
+      readonly requiresSchema: ReadonlyArray<SchemaEvidence>;
+      readonly rationale: string;
+      readonly availabilityForRecord: (record: StructuredSigRow) => ScreeningInputAvailability;
+    }
+  | {
+      /**
        * The platform cannot supply this for ANY patient, and the schema
        * named in `absentSchema` is why.
        *
        * `absentSchema` is checked by the test: the claim is honest only
        * while that schema is NOT fully present. When it becomes
        * present, the test fails and this entry has to be converted to
-       * PER_SUBJECT (or ALWAYS_AVAILABLE) with a probe.
+       * PER_SUBJECT or PER_RECORD (or ALWAYS_AVAILABLE) with a probe.
        */
       readonly kind: "NOT_SUPPORTED_BY_PLATFORM";
       readonly absentSchema: ReadonlyArray<SchemaEvidence>;
@@ -216,32 +239,77 @@ export const SCREENING_AXIS_CAPABILITY: Readonly<
     probe: hasScreenableAllergyInput,
   }),
 
+  // The forcing function fired here, as designed: the structured-sig
+  // migration made the old NOT_SUPPORTED_BY_PLATFORM claim false, and
+  // `axis-capability.test.ts` refused the build until this entry told
+  // the truth. Its `whenSchemaArrives` said to convert to PER_SUBJECT
+  // with NOT_RECORDED_FOR_SUBJECT for the doseless case; the
+  // conversion is PER_RECORD with NOT_CAPTURED_FOR_RECORD instead,
+  // deliberately, on two grounds:
+  //
+  //   - A dose is a fact about one prescription LINE, not the
+  //     patient, and PER_SUBJECT's probe cannot see the line. A mixed
+  //     order must screen its structured line and gap its legacy one.
+  //   - NOT_RECORDED_FOR_SUBJECT grades MODERATE — an acknowledgement
+  //     — whose instruction is "obtain it and re-run". A prescription
+  //     is immutable once transcribed and there is no amend command,
+  //     so nobody on the order can follow that instruction; on ship
+  //     day EVERY existing prescription is unstructured, which would
+  //     charge a pharmacist a click per order for a fact nobody can
+  //     change (the machine #86 dismantled). NOT_CAPTURED_FOR_RECORD
+  //     grades informational and is still recorded on every screen —
+  //     never nag, always record — and drains as the legacy
+  //     prescriptions expire.
   DOSE_RANGE: Object.freeze({
-    kind: "NOT_SUPPORTED_BY_PLATFORM",
-    absentSchema: Object.freeze([
+    kind: "PER_RECORD",
+    requiresSchema: Object.freeze([
       Object.freeze({
         model: "Prescription",
-        // `sigEnc` is encrypted free text. A dose comparison needs an
-        // amount, a unit and a frequency as separate values; parsing
-        // them out of a sig inside a safety check is how a wrong
-        // mg/mcg factor becomes a hazard.
-        fields: Object.freeze(["doseAmount", "doseUnit", "dosesPerDay"]),
+        // The three columns the old declaration named as absent, plus
+        // the structure kind that makes "structured as PRN" distinct
+        // from "not structured at all". `sigEnc` remains encrypted
+        // free text and remains the authoritative label instruction;
+        // parsing a dose out of it inside a safety check is still how
+        // a wrong mg/mcg factor becomes a hazard, which is why the
+        // dose is CAPTURED at transcription instead.
+        fields: Object.freeze(["sigStructureKind", "doseAmount", "doseUnit", "dosesPerDay"]),
       }),
     ]),
     rationale:
-      "`prescription.sigEnc` is encrypted free text with no structured amount/unit/frequency beside it, so no prescription in this schema carries a dose the engine could compare against a published range.",
-    whenSchemaArrives:
-      "Structured sig columns now exist on Prescription, so this axis is no longer unsupportable. Convert DOSE_RANGE to kind PER_SUBJECT with a probe that answers whether THIS prescription carries a parseable dose (AVAILABLE) or does not (NOT_RECORDED_FOR_SUBJECT), and pass a DoseStatement on the PrescribedDrug in run-screen.ts. Do not simply flip it to ALWAYS_AVAILABLE: a prescription with a PRN sig and no schedule has no daily total, and claiming otherwise would screen it against a fictional zero.",
+      "A structured sig is captured per prescription at transcription (kind + amount + unit + frequency), so availability is a per-line fact: AVAILABLE when the line carries a structure kind — including PRN/TAPER kinds whose honest DoseStatement may be null — and NOT_CAPTURED_FOR_RECORD when it does not, because a prescription is immutable once written and the capture cannot be added after the fact.",
+    availabilityForRecord: doseInputAvailabilityFor,
   }),
 });
+
+/**
+ * The axes whose availability is a per-line fact — exactly the
+ * PER_RECORD entries above, spelled as a type so `run-screen.ts`
+ * composes a total per-line map by construction: a new PER_RECORD
+ * axis widens this type, which makes the patient-level map's type
+ * narrower and the per-line composition incomplete until the wiring
+ * handles it. `axis-capability.test.ts` pins that the type and the
+ * declaration kinds agree.
+ */
+export type RecordLevelScreeningAxis = "DOSE_RANGE";
+
+export type PatientLevelScreeningAxis = Exclude<ScreeningInputAxis, RecordLevelScreeningAxis>;
+
+export const RECORD_LEVEL_SCREENING_AXES: ReadonlyArray<RecordLevelScreeningAxis> = Object.freeze([
+  "DOSE_RANGE",
+]);
 
 // ---------------------------------------------------------------------
 // Resolving availability for one patient
 // ---------------------------------------------------------------------
 
 /**
- * The availability map to hand `screenPrescription`, computed for THIS
- * patient.
+ * The availability of every PATIENT-LEVEL axis, computed for THIS
+ * patient — everything `screenPrescription` needs except the
+ * PER_RECORD axes, which `resolveDoseInputAvailability` answers per
+ * candidate line. The return type is what makes forgetting the
+ * composition impossible: this map alone does not satisfy
+ * `ScreeningRequest.inputAvailability`, so a call site that skips the
+ * per-line half does not compile.
  *
  * Replaces the module constant that used to sit in `run-screen.ts`.
  * Nothing here decides policy — the policy is the declaration above;
@@ -249,7 +317,7 @@ export const SCREENING_AXIS_CAPABILITY: Readonly<
  */
 export async function resolveInputAvailability(
   input: SubjectProbeInput
-): Promise<Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>>> {
+): Promise<Readonly<Record<PatientLevelScreeningAxis, ScreeningInputAvailability>>> {
   const out: Partial<Record<ScreeningInputAxis, ScreeningInputAvailability>> = {};
 
   for (const axis of CLINICAL_SCREENING_AXES) {
@@ -261,6 +329,10 @@ export async function resolveInputAvailability(
       case "PER_SUBJECT":
         out[axis] = (await capability.probe(input)) ? "AVAILABLE" : "NOT_RECORDED_FOR_SUBJECT";
         break;
+      case "PER_RECORD":
+        // A per-line fact has no per-patient answer. Resolved by the
+        // wiring per candidate — see `resolveDoseInputAvailability`.
+        break;
       case "NOT_SUPPORTED_BY_PLATFORM":
         out[axis] = "NOT_SUPPORTED_BY_PLATFORM";
         break;
@@ -271,7 +343,25 @@ export async function resolveInputAvailability(
     }
   }
 
-  return Object.freeze(out as Record<ScreeningInputAxis, ScreeningInputAvailability>);
+  return Object.freeze(out as Record<PatientLevelScreeningAxis, ScreeningInputAvailability>);
+}
+
+/**
+ * The DOSE_RANGE availability for ONE prescription line, read through
+ * the declaration so the policy has a single home. Pure: the row was
+ * already loaded inside the caller's transaction.
+ */
+export function resolveDoseInputAvailability(record: StructuredSigRow): ScreeningInputAvailability {
+  const capability = SCREENING_AXIS_CAPABILITY.DOSE_RANGE;
+  if (capability.kind !== "PER_RECORD") {
+    // Unreachable while the declaration above stands; if DOSE_RANGE
+    // is ever re-kinded this stops compiling as an always-false
+    // comparison in some toolchains and throws in the rest — either
+    // way the wiring cannot silently keep resolving a per-record
+    // answer for an axis that no longer is one.
+    throw new Error("DOSE_RANGE is no longer a PER_RECORD axis; update run-screen.ts");
+  }
+  return capability.availabilityForRecord(record);
 }
 
 // ---------------------------------------------------------------------

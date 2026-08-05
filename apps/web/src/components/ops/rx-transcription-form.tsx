@@ -57,6 +57,69 @@ export interface TranscriptionPrescriber {
   readonly hasDeaRegistration: boolean;
 }
 
+/**
+ * Structured-dose vocabulary, mirrored from the schema enums as plain
+ * data the same way the schedule vocabulary is: the command validates
+ * the real enums, this only drives the inputs.
+ */
+const SIG_STRUCTURE_KINDS: ReadonlyArray<{
+  readonly kind: string;
+  readonly label: string;
+  readonly amountLabel: string;
+  readonly frequencyLabel: string;
+  readonly valuesRequired: boolean;
+  readonly help: string;
+}> = [
+  {
+    kind: "FIXED",
+    label: "Fixed schedule — same dose every time",
+    amountLabel: "Dose per administration",
+    frequencyLabel: "Doses per day",
+    valuesRequired: true,
+    help: "All three values are required. Every-other-day is 0.5 doses per day.",
+  },
+  {
+    kind: "PRN",
+    label: "As needed (PRN)",
+    amountLabel: "Dose per administration (if stated)",
+    frequencyLabel: "Max doses per day (if stated)",
+    valuesRequired: false,
+    help: "Leave blank whatever the script does not state — a bare PRN is a valid capture.",
+  },
+  {
+    kind: "RANGE",
+    label: "Range — e.g. 1–2 tablets on a schedule",
+    amountLabel: "Highest dose per administration",
+    frequencyLabel: "Doses per day",
+    valuesRequired: true,
+    help: "Enter the UPPER end of the range; screening checks the most the script permits.",
+  },
+  {
+    kind: "TAPER",
+    label: "Taper — stepped schedule",
+    amountLabel: "Largest single dose in the taper (optional)",
+    frequencyLabel: "Doses per day at that step (optional)",
+    valuesRequired: false,
+    help: "Optionally summarize the biggest step; the full taper stays in the sig text.",
+  },
+];
+
+const DOSE_UNITS: ReadonlyArray<{ readonly unit: string; readonly label: string }> = [
+  { unit: "MG", label: "mg" },
+  { unit: "MCG", label: "mcg" },
+  { unit: "G", label: "g" },
+  { unit: "MEQ", label: "mEq" },
+  { unit: "ML", label: "mL" },
+  { unit: "UNIT", label: "units" },
+  { unit: "TABLET", label: "tablet(s)" },
+  { unit: "CAPSULE", label: "capsule(s)" },
+  { unit: "DROP", label: "drop(s)" },
+  { unit: "PUFF", label: "puff(s)" },
+  { unit: "SPRAY", label: "spray(s)" },
+  { unit: "PATCH", label: "patch(es)" },
+  { unit: "APPLICATION", label: "application(s)" },
+];
+
 /** NCPDP "dispense as written" codes. */
 const DAW_CODES: ReadonlyArray<{ readonly code: number; readonly label: string }> = [
   { code: 0, label: "0 — No product selection indicated" },
@@ -99,6 +162,8 @@ export function RxTranscriptionForm({
   const [declaredSchedule, setDeclaredSchedule] = useState(scheduleOptions[0]?.schedule ?? "");
   const [providerId, setProviderId] = useState(prescribers[0]?.providerId ?? "");
   const [refills, setRefills] = useState("0");
+  // "" = not captured; the route drops empty fields, so nothing posts.
+  const [sigKind, setSigKind] = useState("");
 
   const selectedProduct = products.find((p) => p.ndc === ndc);
   const guidance =
@@ -266,6 +331,79 @@ export function RxTranscriptionForm({
                 placeholder="Take 1 tablet by mouth twice daily"
               />
             </Field>
+            {(() => {
+              const selectedKind = SIG_STRUCTURE_KINDS.find((k) => k.kind === sigKind);
+              return (
+                <div className="mt-3">
+                  <div className="grid grid-cols-1 gap-3 @3xl:grid-cols-4">
+                    <Field
+                      label="Structured dose"
+                      help="Optional. Lets PV1 screen the dose against published ranges; the sig text stays the label instruction."
+                    >
+                      <Select
+                        name="sigStructureKind"
+                        value={sigKind}
+                        onChange={(e) => setSigKind(e.target.value)}
+                      >
+                        <option value="">Not captured</option>
+                        {SIG_STRUCTURE_KINDS.map((k) => (
+                          <option key={k.kind} value={k.kind}>
+                            {k.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    {selectedKind === undefined ? null : (
+                      <>
+                        <Field
+                          label={selectedKind.amountLabel}
+                          required={selectedKind.valuesRequired}
+                        >
+                          <Input
+                            name="doseAmount"
+                            inputMode="decimal"
+                            pattern="[0-9]{1,8}([.][0-9]{1,4})?"
+                            required={selectedKind.valuesRequired}
+                            autoComplete="off"
+                            className="font-mono"
+                          />
+                        </Field>
+                        <Field label="Unit" required={selectedKind.valuesRequired}>
+                          <Select
+                            name="doseUnit"
+                            required={selectedKind.valuesRequired}
+                            defaultValue=""
+                          >
+                            <option value="">—</option>
+                            {DOSE_UNITS.map((u) => (
+                              <option key={u.unit} value={u.unit}>
+                                {u.label}
+                              </option>
+                            ))}
+                          </Select>
+                        </Field>
+                        <Field
+                          label={selectedKind.frequencyLabel}
+                          required={selectedKind.valuesRequired}
+                        >
+                          <Input
+                            name="dosesPerDay"
+                            inputMode="decimal"
+                            pattern="[0-9]{1,2}([.][0-9]{1,4})?"
+                            required={selectedKind.valuesRequired}
+                            autoComplete="off"
+                            className="font-mono"
+                          />
+                        </Field>
+                      </>
+                    )}
+                  </div>
+                  {selectedKind === undefined ? null : (
+                    <p className="mt-2 text-xs text-subtle">{selectedKind.help}</p>
+                  )}
+                </div>
+              );
+            })()}
             <div className="mt-3 grid grid-cols-1 gap-3 @3xl:grid-cols-4">
               <Field label="Quantity" required help="Up to four decimal places.">
                 <Input

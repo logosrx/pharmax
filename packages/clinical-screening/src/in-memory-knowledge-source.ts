@@ -46,6 +46,14 @@ export interface InMemoryKnowledgeSeed {
    */
   readonly coverage?: DrugKnowledgeCoverage;
   /**
+   * Overrides the derived dose-range coverage. Supply this to model
+   * a source that licenses dosing content but grades none of the
+   * drugs in a particular test (PROVISIONED with per-drug nulls), or
+   * the production shape where drugs resolve but no dosing content
+   * exists at all (NOT_PROVISIONED despite seeded drugs).
+   */
+  readonly doseRangeCoverage?: DrugKnowledgeCoverage;
+  /**
    * Codes the source declares OUT_OF_NOMENCLATURE — never resolvable,
    * so their gaps grade informational rather than acknowledge-tier.
    * Models a compounded preparation's org-local identifier under a
@@ -116,6 +124,16 @@ export function createInMemoryDrugKnowledgeSource(
   const coverage: DrugKnowledgeCoverage =
     seed.coverage ?? (drugs.size > 0 ? "PROVISIONED" : "NOT_PROVISIONED");
 
+  // Same reading-of-the-caller's-expression derivation as `coverage`:
+  // a seeded dosing envelope IS dose-range content, and its absence
+  // across every seeded drug is the caller expressing an
+  // envelope-less source.
+  const doseRangeCoverage: DrugKnowledgeCoverage =
+    seed.doseRangeCoverage ??
+    ([...drugs.values()].some((drug) => drug.doseRange !== null)
+      ? "PROVISIONED"
+      : "NOT_PROVISIONED");
+
   const outOfNomenclature = new Set(seed.outOfNomenclatureDrugCodes ?? []);
   const locallyDeclarable = new Set(seed.locallyDeclarableDrugCodes ?? []);
   const compoundProvenance = new Map<DrugCode, CompoundFormulaProvenance>(
@@ -124,6 +142,7 @@ export function createInMemoryDrugKnowledgeSource(
 
   return {
     coverage,
+    doseRangeCoverage,
     release: seed.release ?? null,
     describeDrug(code: DrugCode): DrugKnowledge | null {
       return drugs.get(code) ?? null;

@@ -878,6 +878,202 @@ describe("CreatePrescription — allocation and persistence", () => {
 });
 
 // ---------------------------------------------------------------------
+// Structured sig
+// ---------------------------------------------------------------------
+
+describe("CreatePrescription — structured sig", () => {
+  it("persists a FIXED structured sig and names the kind in the audit metadata", async () => {
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await run(
+      validInput({
+        sigStructureKind: "FIXED",
+        doseAmount: "1",
+        doseUnit: "TABLET",
+        dosesPerDay: "1",
+      })
+    );
+
+    const row = createdRow(fake.calls);
+    expect(row["sigStructureKind"]).toBe("FIXED");
+    expect(row["doseAmount"]).toEqual(new Prisma.Decimal("1"));
+    expect(row["doseUnit"]).toBe("TABLET");
+    expect(row["dosesPerDay"]).toEqual(new Prisma.Decimal("1"));
+
+    // The kind is a coded workflow fact and belongs on the audit row;
+    // the dose VALUES do not — the row's reader asks whether capture
+    // happened, not what the regimen was.
+    const audit = findOnly(fake.calls, "auditLog", "create").args as {
+      data: { metadata: Record<string, unknown> };
+    };
+    expect(audit.data.metadata["sigStructureKind"]).toBe("FIXED");
+    expect(audit.data.metadata).not.toHaveProperty("doseAmount");
+  });
+
+  it("leaves every structured column unset for an unstructured transcription", async () => {
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await run(validInput());
+
+    const row = createdRow(fake.calls);
+    expect(row).not.toHaveProperty("sigStructureKind");
+    expect(row).not.toHaveProperty("doseAmount");
+    const audit = findOnly(fake.calls, "auditLog", "create").args as {
+      data: { metadata: Record<string, unknown> };
+    };
+    expect(audit.data.metadata["sigStructureKind"]).toBeNull();
+  });
+
+  it("rejects dose values that arrive without a structure kind", async () => {
+    // An amount with no kind has no defined reading — FIXED's "the
+    // regimen" and RANGE's "the upper bound" are different claims.
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await expect(
+      run(validInput({ doseAmount: "1", doseUnit: "TABLET", dosesPerDay: "1" }))
+    ).rejects.toMatchObject({ code: "RX_STRUCTURED_SIG_SHAPE_INVALID" });
+    expectNoWrites(fake.calls);
+  });
+
+  it("rejects a FIXED sig missing any of amount, unit or frequency", async () => {
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await expect(
+      run(validInput({ sigStructureKind: "FIXED", doseAmount: "1", doseUnit: "TABLET" }))
+    ).rejects.toMatchObject({ code: "RX_STRUCTURED_SIG_SHAPE_INVALID" });
+    expectNoWrites(fake.calls);
+  });
+
+  it("accepts a bare PRN — structured, with no comparable number, is an honest state", async () => {
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await run(validInput({ sigStructureKind: "PRN" }));
+
+    const row = createdRow(fake.calls);
+    expect(row["sigStructureKind"]).toBe("PRN");
+    expect(row).not.toHaveProperty("doseAmount");
+  });
+
+  it("rejects a PRN frequency ceiling without a dose amount", async () => {
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await expect(
+      run(validInput({ sigStructureKind: "PRN", dosesPerDay: "4" }))
+    ).rejects.toMatchObject({ code: "RX_STRUCTURED_SIG_SHAPE_INVALID" });
+    expectNoWrites(fake.calls);
+  });
+
+  it("rejects an amount without its unit, whatever the kind", async () => {
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await expect(
+      run(validInput({ sigStructureKind: "PRN", doseAmount: "10" }))
+    ).rejects.toMatchObject({ code: "RX_STRUCTURED_SIG_SHAPE_INVALID" });
+    expectNoWrites(fake.calls);
+  });
+
+  it("rejects a frequency beyond hourly dosing at the schema boundary", async () => {
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await expect(
+      run(
+        validInput({
+          sigStructureKind: "FIXED",
+          doseAmount: "1",
+          doseUnit: "TABLET",
+          dosesPerDay: "25",
+        })
+      )
+    ).rejects.toMatchObject({ code: "COMMAND_INPUT_INVALID" });
+  });
+
+  it("rejects a FIXED sig whose arithmetic contradicts the days supply", async () => {
+    // 30 tablets at 2 x 2/day lasts 7.5 days, not the stated 30 —
+    // one of the four numbers was mistranscribed, and this is the
+    // last moment the operator is holding the script.
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await expect(
+      run(
+        validInput({
+          sigStructureKind: "FIXED",
+          doseAmount: "2",
+          doseUnit: "TABLET",
+          dosesPerDay: "2",
+        })
+      )
+    ).rejects.toMatchObject({ code: "RX_STRUCTURED_SIG_DAYS_SUPPLY_INCONSISTENT" });
+    expectNoWrites(fake.calls);
+  });
+
+  it("tolerates insurance-cycle rounding in the cross-check", async () => {
+    // "Dispense 30, 28 days supply" is routine, not a transcription
+    // error; the band is 2x either way so rounding never trips it.
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await run(
+      validInput({
+        daysSupply: 28,
+        sigStructureKind: "FIXED",
+        doseAmount: "1",
+        doseUnit: "TABLET",
+        dosesPerDay: "1",
+      })
+    );
+
+    expect(createdRow(fake.calls)["daysSupply"]).toBe(28);
+  });
+
+  it("does not cross-check a dose in a unit the quantity is not denominated in", async () => {
+    // 30 units of SOMETHING against 500mg x 2/day is a category
+    // error, not an inconsistency — without the product's strength
+    // the arithmetic proves nothing either way.
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await run(
+      validInput({
+        sigStructureKind: "FIXED",
+        doseAmount: "500",
+        doseUnit: "MG",
+        dosesPerDay: "2",
+      })
+    );
+
+    expect(createdRow(fake.calls)["doseUnit"]).toBe("MG");
+  });
+
+  it("does not cross-check a RANGE — its upper bound legitimately implies a shorter duration", async () => {
+    // "1–2 tablets daily, 30 tablets, 30 days supply": at the maximum
+    // the supply lasts 15 days, and that is the prescription working
+    // as written, not an error.
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    await run(
+      validInput({
+        sigStructureKind: "RANGE",
+        doseAmount: "2",
+        doseUnit: "TABLET",
+        dosesPerDay: "1",
+      })
+    );
+
+    expect(createdRow(fake.calls)["sigStructureKind"]).toBe("RANGE");
+  });
+});
+
+// ---------------------------------------------------------------------
 // PHI invariants
 // ---------------------------------------------------------------------
 

@@ -135,14 +135,42 @@ import { gapRemediationForCoverage } from "./knowledge-source.js";
 // ---------------------------------------------------------------------------
 
 /**
+ * How a `DoseStatement`'s numbers should be read.
+ *
+ *   - SCHEDULED: the regimen's actual fixed dose and frequency (a
+ *     FIXED structured sig). Every dose check applies, including the
+ *     sub-therapeutic minimum — the daily total IS what the patient
+ *     takes.
+ *   - MAXIMUM_PERMITTED: the largest exposure the prescription
+ *     ALLOWS, not what the patient necessarily takes — a PRN's stated
+ *     per-dose amount and daily ceiling, the upper end of a
+ *     "1–2 tablets" range, or the peak step of a taper. Maximum
+ *     checks apply and are honest (exceeding a published maximum is a
+ *     true finding about what the label permits); the sub-therapeutic
+ *     minimum check does NOT run, because a ceiling says nothing
+ *     about intended steady dosing and flagging every PRN as
+ *     "sub-therapeutic" would be a false statement issued at scale.
+ */
+export const DOSE_STATEMENT_BASES = Object.freeze(["SCHEDULED", "MAXIMUM_PERMITTED"] as const);
+
+export type DoseStatementBasis = (typeof DOSE_STATEMENT_BASES)[number];
+
+/**
  * A prescribed amount, as typed. `dosesPerDay` is 0 for a PRN
- * instruction with no defined schedule — daily-total checks are then
- * skipped rather than evaluated against a fictional zero.
+ * instruction with no defined schedule or stated daily ceiling —
+ * daily-total checks are then skipped rather than evaluated against a
+ * fictional zero.
+ *
+ * `basis` is REQUIRED, not defaulted, for the standing reason: the
+ * default answer is the unsafe one. A caller that passes a PRN
+ * ceiling without saying so would earn the patient a false
+ * sub-therapeutic finding and a misworded overdose reason.
  */
 export interface DoseStatement {
   readonly amount: number;
   readonly unit: string;
   readonly dosesPerDay: number;
+  readonly basis: DoseStatementBasis;
 }
 
 /**
@@ -495,6 +523,8 @@ const REMEDIATION_REASON: Readonly<Record<ScreeningGapRemediation, string>> = Ob
   // compile here rather than interpolate `undefined` into a reason.
   ORGANIZATION_DATA:
     "The pharmacy organization can supply this input as reference data; once it does, every subsequent screen performs this check without further per-order action.",
+  RECORD_IMMUTABLE:
+    "The platform captures this input only when the record it belongs to is created; this record was created without it and is immutable, so nobody handling this order can supply it. New records capture it at creation, and this one ages out.",
 });
 
 // ---------------------------------------------------------------------------
@@ -817,17 +847,51 @@ function collectDoseFindings(
 ): void {
   if (!isAvailable(request, "DOSE_RANGE")) return;
 
-  const range = candidateKnowledge.doseRange;
   const dose = request.candidate.dose;
   // Reached only when the caller declared DOSE_RANGE available, so
-  // neither null here means "we could not read the dose" — that case
-  // is a gap and never gets this far. `range === null` is the
-  // knowledge source answering "no published envelope for this drug",
-  // the same class of answer as having no cross-sensitivity data for
-  // a substance, and gapping on it would fire on every drug a
-  // database chooses not to grade. `dose === null` is the caller
-  // stating this prescription carries no dose to compare.
-  if (range === null || dose === null) return;
+  // null here does not mean "we could not read the dose" — that case
+  // is a gap and never gets this far. It is the caller stating this
+  // prescription carries no dose to compare (a bare PRN or an
+  // unsummarized taper: structured, honestly numberless).
+  if (dose === null) return;
+
+  // A dose was supplied and NO dose-range content exists to compare
+  // it against — not "this drug is ungraded" but "no dosing envelope
+  // is licensed for any drug". Silence here would make a structured
+  // dose over an envelope-less source read exactly like a dose that
+  // was compared and cleared, which is the ambiguity SCREENING_GAP
+  // exists to destroy. Informational, because only procurement can
+  // close it and it fires on every dosed prescription until then —
+  // the same grading, for the same alert-fatigue reason, as an
+  // unprovisioned drug database.
+  if (request.knowledge.doseRangeCoverage === "NOT_PROVISIONED") {
+    out.push(
+      finding({
+        code: "SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED",
+        kind: "SCREENING_GAP",
+        severity: screeningGapSeverity("PLATFORM_CAPABILITY"),
+        certainty: "DEFINITE",
+        reason:
+          `A structured dose is recorded for this prescription, but no dose-range knowledge ` +
+          `is provisioned for this deployment, so the dose was not compared against a published ` +
+          `range. Provisioning licensed dosing content closes this for every subsequent screen; ` +
+          `nothing on this order can.`,
+        triggers: [
+          trigger("CANDIDATE_DRUG", request.candidate.recordId, request.candidate.drugCode),
+        ],
+        qualifiers: [`remediation=PLATFORM_CAPABILITY`],
+        citation: null,
+      })
+    );
+    return;
+  }
+
+  const range = candidateKnowledge.doseRange;
+  // A PROVISIONED dose-range source answering null for THIS drug is
+  // the per-drug "no published envelope" answer, the same class as
+  // having no cross-sensitivity data for a substance; gapping on it
+  // would fire on every drug a database chooses not to grade.
+  if (range === null) return;
 
   if (range.unit !== dose.unit) {
     // Reported, not converted. A wrong mg/mcg factor buried in a
@@ -837,7 +901,15 @@ function collectDoseFindings(
       finding({
         code: "SCR_DOSE_UNIT_NOT_COMPARABLE",
         kind: "SCREENING_GAP",
-        severity: "MODERATE",
+        // Derived, not hardcoded: the pharmacist in front of the
+        // order can reconcile the two units themselves and re-state
+        // the comparison the engine refused to guess at — a
+        // per-prescription fact somebody present can supply, which is
+        // what SUBJECT_DATA means. MODERATE, therefore an
+        // acknowledgement, same value the original hardcoded grade
+        // carried; deriving it keeps this emit site consistent with
+        // every other gap when the grading table moves.
+        severity: screeningGapSeverity("SUBJECT_DATA"),
         certainty: "DEFINITE",
         reason: `The prescribed dose is expressed in ${dose.unit} but the known dosing range for ${request.candidate.drugCode} is expressed in ${range.unit}; no conversion was attempted and the dose was not screened.`,
         triggers: [
@@ -853,6 +925,13 @@ function collectDoseFindings(
     return;
   }
 
+  // The wording carries the basis: "the prescribed dose" and "the
+  // largest dose this prescription permits" are different clinical
+  // sentences, and a pharmacist acts on them differently. The basis
+  // is a qualifier for the standing fingerprint rule — every value
+  // the reason varies on is part of the identity.
+  const scheduled = dose.basis === "SCHEDULED";
+
   if (range.maxSingleDose !== null && exceeds(dose.amount, range.maxSingleDose)) {
     out.push(
       finding({
@@ -863,7 +942,9 @@ function collectDoseFindings(
         // tolerance all exceed it as a matter of correct practice.
         severity: "MAJOR",
         certainty: "DEFINITE",
-        reason: `The prescribed single dose of ${dose.amount} ${dose.unit} is above the known maximum of ${range.maxSingleDose} ${range.unit}.`,
+        reason: scheduled
+          ? `The prescribed single dose of ${dose.amount} ${dose.unit} is above the known maximum of ${range.maxSingleDose} ${range.unit}.`
+          : `The largest single dose this prescription permits, ${dose.amount} ${dose.unit}, is above the known maximum of ${range.maxSingleDose} ${range.unit}.`,
         triggers: [
           trigger("CANDIDATE_DRUG", request.candidate.recordId, request.candidate.drugCode),
         ],
@@ -873,14 +954,15 @@ function collectDoseFindings(
         qualifiers: [
           `dose=${dose.amount}${dose.unit}`,
           `limit=${range.maxSingleDose}${range.unit}`,
+          `basis=${dose.basis}`,
         ],
         citation: range.citation,
       })
     );
   }
 
-  // Without a schedule there is no daily total to test. A PRN sig is
-  // the usual reason, and inventing one from a zero frequency would
+  // Without a schedule (or a stated PRN ceiling) there is no daily
+  // total to test, and inventing one from a zero frequency would
   // report every PRN as sub-therapeutic.
   if (dose.dosesPerDay <= 0) return;
 
@@ -893,7 +975,9 @@ function collectDoseFindings(
         kind: "DOSE_RANGE",
         severity: "MAJOR",
         certainty: "DEFINITE",
-        reason: `The prescribed daily total of ${dailyTotal} ${dose.unit} is above the known maximum of ${range.maxDailyDose} ${range.unit}.`,
+        reason: scheduled
+          ? `The prescribed daily total of ${dailyTotal} ${dose.unit} is above the known maximum of ${range.maxDailyDose} ${range.unit}.`
+          : `The largest daily total this prescription permits, ${dailyTotal} ${dose.unit}, is above the known maximum of ${range.maxDailyDose} ${range.unit}.`,
         triggers: [
           trigger("CANDIDATE_DRUG", request.candidate.recordId, request.candidate.drugCode),
         ],
@@ -903,11 +987,19 @@ function collectDoseFindings(
         qualifiers: [
           `dailyTotal=${dailyTotal}${dose.unit}`,
           `limit=${range.maxDailyDose}${range.unit}`,
+          `basis=${dose.basis}`,
         ],
         citation: range.citation,
       })
     );
   }
+
+  // A ceiling below the usual minimum is not a statement about what
+  // the patient will actually take — a PRN used twice a month is not
+  // "sub-therapeutic", it is symptomatic use working as intended —
+  // so the minimum check runs only for a SCHEDULED regimen, whose
+  // daily total is what the patient takes.
+  if (!scheduled) return;
 
   if (range.minDailyDose !== null && fallsShortOf(dailyTotal, range.minDailyDose)) {
     out.push(
@@ -1116,6 +1208,11 @@ const KNOWLEDGE_REMEDIATION_REASON: Readonly<Record<ScreeningGapRemediation, str
     // new remediation cannot ship without an operator-facing sentence.
     ORGANIZATION_DATA:
       "The pharmacy organization can declare this knowledge as reference data; once it does, subsequent screens answer from it without further per-order action.",
+    // Equally unreachable here — a knowledge source's coverage is
+    // never an immutable per-record fact — and present for the same
+    // totality reason.
+    RECORD_IMMUTABLE:
+      "The record this knowledge would attach to is immutable and cannot be amended; the gap closes prospectively as new records are created with it.",
   });
 
 /**

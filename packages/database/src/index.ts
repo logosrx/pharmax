@@ -111,6 +111,8 @@ export {
   ShipmentTrackingEventKind,
   ShipmentTrackingSource,
   ShippingProvider,
+  SigStructureKind,
+  DoseUnit,
   SiteStatus,
   StripeWebhookEventStatus,
   TeamStatus,

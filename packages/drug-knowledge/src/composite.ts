@@ -62,6 +62,10 @@ export async function loadDrugKnowledgeSourceForScreen(
 
   return {
     coverage: rxnorm.coverage,
+    // The formulary side declares recipes, never dosing envelopes, so
+    // the facet is the RxNorm side's — NOT_PROVISIONED until licensed
+    // dosing content is wired.
+    doseRangeCoverage: rxnorm.doseRangeCoverage,
     release: rxnorm.release,
     describeDrug: (code) =>
       compound.compoundCodes.has(code)

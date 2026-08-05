@@ -43,6 +43,8 @@ export const CREATE_PRESCRIPTION_ERROR_CODES = [
   "RX_EXPIRES_NOT_AFTER_WRITTEN",
   "RX_EXPIRY_EXCEEDS_FEDERAL_HORIZON",
   "RX_EARLIEST_FILL_BEFORE_WRITTEN",
+  "RX_STRUCTURED_SIG_SHAPE_INVALID",
+  "RX_STRUCTURED_SIG_DAYS_SUPPLY_INCONSISTENT",
   "RX_NUMBER_COLLISION",
 ] as const;
 
@@ -136,6 +138,16 @@ const MESSAGES: Readonly<Record<CreatePrescriptionErrorCode, OperatorErrorMessag
       title: "The do-not-fill-before date precedes the date written",
       guidance:
         "A prescriber can stage a fill for later, never for earlier. Correct the date, or clear the field if the script doesn't stage the fill at all.",
+    },
+    RX_STRUCTURED_SIG_SHAPE_INVALID: {
+      title: "The structured dose is incomplete for that kind",
+      guidance:
+        "A fixed schedule or a range needs all three values — dose, unit, and doses per day. As-needed and taper sigs may leave values blank, but a dose always travels with its unit, and a frequency without a dose computes nothing. Fill in what the script states, or set the structured dose back to \u201cNot captured\u201d.",
+    },
+    RX_STRUCTURED_SIG_DAYS_SUPPLY_INCONSISTENT: {
+      title: "The dose arithmetic contradicts the days supply",
+      guidance:
+        "Quantity ÷ (dose × doses per day) is nowhere near the stated days supply, so one of those four numbers was mistyped. Re-read the script and correct whichever it is — this is the last moment the paper is in your hand, and the structured dose feeds the pharmacist's screening as fact.",
     },
     RX_NUMBER_COLLISION: {
       title: "The allocated Rx number was already taken",

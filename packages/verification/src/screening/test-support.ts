@@ -29,6 +29,18 @@ export interface StubPrescription {
    * handing it out.
    */
   readonly drugName?: string;
+  /**
+   * Structured sig, as `run-screen.ts` selects it. Absent means the
+   * legacy default (`null`, an unstructured transcription) — the fake
+   * normalizes to `null` on read so a stub row looks like a real
+   * Prisma row, where an unset optional column is `null`, never
+   * `undefined`. Decimal columns are plain numbers here; the fake
+   * wraps them on the way out for the same reason.
+   */
+  readonly sigStructureKind?: string | null;
+  readonly doseAmount?: number | null;
+  readonly doseUnit?: string | null;
+  readonly dosesPerDay?: number | null;
 }
 
 export interface StubFinding {
@@ -177,6 +189,24 @@ export function screenableStubAllergy(overrides: Partial<StubAllergy> = {}): Stu
 
 export type RecordCall = (table: string, op: string, args: unknown) => void;
 
+/**
+ * A stub row as the dose loader reads it: unset structured-sig fields
+ * become `null` (a real Prisma row never yields `undefined`), and the
+ * decimal columns come back Decimal-shaped, because `run-screen.ts`
+ * calls `.toNumber()` on them exactly as it would on a live client.
+ */
+function withStructuredSigShape(row: StubPrescription): Record<string, unknown> {
+  const decimal = (value: number | null | undefined) =>
+    value === null || value === undefined ? null : { toNumber: () => value };
+  return {
+    ...row,
+    sigStructureKind: row.sigStructureKind ?? null,
+    doseAmount: decimal(row.doseAmount),
+    doseUnit: row.doseUnit ?? null,
+    dosesPerDay: decimal(row.dosesPerDay),
+  };
+}
+
 interface WhereArgs {
   readonly where?: Record<string, unknown>;
   readonly data?: unknown;
@@ -240,11 +270,11 @@ export function createScreeningStubs(
         const idFilter = where["id"] as { in?: ReadonlyArray<string> } | undefined;
         if (idFilter?.in !== undefined) {
           const wanted = new Set(idFilter.in);
-          return state.prescriptions.filter((p) => wanted.has(p.id));
+          return state.prescriptions.filter((p) => wanted.has(p.id)).map(withStructuredSigShape);
         }
-        return state.prescriptions.filter(
-          (p) => p.patientId === where["patientId"] && p.status === where["status"]
-        );
+        return state.prescriptions
+          .filter((p) => p.patientId === where["patientId"] && p.status === where["status"])
+          .map(withStructuredSigShape);
       }),
     },
     orderScreeningFinding: {

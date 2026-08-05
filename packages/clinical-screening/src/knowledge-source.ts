@@ -311,6 +311,32 @@ export interface CompoundFormulaProvenance {
 export interface DrugKnowledgeSource {
   readonly coverage: DrugKnowledgeCoverage;
   /**
+   * Whether this source holds dose-range CONTENT for any drug — the
+   * per-facet counterpart of `coverage`, and the declaration that
+   * keeps the dose axis honest.
+   *
+   * The asymmetry it exists to express: a source can know a drug
+   * perfectly well (RxNorm resolves the NDC and names every
+   * ingredient) while holding no dosing envelope for ANY drug,
+   * because dosing ranges are licensed editorial content that
+   * nomenclature releases do not carry. In that world
+   * `describeDrug(...).doseRange === null` is true for every drug
+   * forever, and reading it as the per-drug "no published envelope
+   * for this one" answer would let a prescription with a fully
+   * structured dose screen SILENT on the dose axis — byte-identical
+   * to a dose that was compared and found fine. The engine consults
+   * this declaration first: NOT_PROVISIONED emits
+   * `SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED` (informational — only
+   * procurement can close it) whenever a comparable dose was
+   * supplied; PROVISIONED lets a per-drug null stay silent, which is
+   * then genuinely the "this drug is ungraded" answer.
+   *
+   * DECLARED, NOT INFERRED, for a real adapter — same rule as
+   * `coverage`, and constant for the source's lifetime for the same
+   * reason.
+   */
+  readonly doseRangeCoverage: DrugKnowledgeCoverage;
+  /**
    * The release this source answers from, or `null` for a source with
    * no release identity (the caller-seeded in-memory container, or an
    * unprovisioned deployment). Constant for the lifetime of the
