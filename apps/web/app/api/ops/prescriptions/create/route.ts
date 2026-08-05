@@ -73,6 +73,14 @@ export async function POST(request: Request): Promise<Response> {
         earliestFillDate: readText(body, "earliestFillDate"),
         daw: readNumber(body, "daw"),
         sig: readText(body, "sig"),
+        // Structured sig — coded values, optional; an empty select or
+        // input is "not captured", which `readText` renders as absent.
+        // The decimals stay STRINGS: the command's schema wants exact
+        // decimal strings, same as quantityAuthorized.
+        sigStructureKind: readText(body, "sigStructureKind"),
+        doseAmount: readText(body, "doseAmount"),
+        doseUnit: readText(body, "doseUnit"),
+        dosesPerDay: readText(body, "dosesPerDay"),
         noteToPharmacist: readText(body, "noteToPharmacist"),
         noteToPatient: readText(body, "noteToPatient"),
         indication: readText(body, "indication"),

@@ -270,13 +270,16 @@ describe("DRUG_ALLERGY availability — scoping and limits", () => {
   });
 });
 
-describe("resolveInputAvailability — the other three axes", () => {
-  it("keeps the profile axes always AVAILABLE and dose unsupported", async () => {
-    // The asymmetry that justifies three availability values. A
+describe("resolveInputAvailability — the other axes", () => {
+  it("keeps the profile axes always AVAILABLE, and answers nothing for the per-line dose axis", async () => {
+    // The asymmetry that justifies the availability values. A
     // prescription is BORN in Pharmax, so an empty profile is a fact
     // about the patient. An allergy is REPORTED to Pharmax, so an empty
-    // list is a fact about our knowledge of them. Those need different
-    // answers, and this is where the difference is visible.
+    // list is a fact about our knowledge of them. And a DOSE is a fact
+    // about one prescription LINE, so it has no per-patient answer at
+    // all — `run-screen.ts` composes it per candidate through
+    // `resolveDoseInputAvailability`, and its absence from this map is
+    // what forces that composition to happen.
     const { scope } = scopeFor();
     const availability = await resolveInputAvailability(scope);
 
@@ -284,7 +287,6 @@ describe("resolveInputAvailability — the other three axes", () => {
       DRUG_DRUG_INTERACTION: "AVAILABLE",
       THERAPEUTIC_DUPLICATION: "AVAILABLE",
       DRUG_ALLERGY: "NOT_RECORDED_FOR_SUBJECT",
-      DOSE_RANGE: "NOT_SUPPORTED_BY_PLATFORM",
     });
   });
 

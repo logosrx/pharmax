@@ -10,6 +10,7 @@ import {
   INPUT_UNAVAILABLE_CODE_FOR_AXIS,
   SCREENING_FINDING_KINDS,
   SCREENING_SEVERITIES,
+  type DoseStatement,
   type DrugKnowledge,
   type PrescribedDrug,
   type RecordedAllergy,
@@ -894,9 +895,14 @@ describe("screenPrescription — therapeutic duplication", () => {
 // ---------------------------------------------------------------------------
 
 describe("screenPrescription — dose range", () => {
-  function dosed(amount: number, dosesPerDay: number, unit = "mg"): ScreeningEvaluation {
+  function dosed(
+    amount: number,
+    dosesPerDay: number,
+    unit = "mg",
+    basis: DoseStatement["basis"] = "SCHEDULED"
+  ): ScreeningEvaluation {
     return screen({
-      candidate: drug("line-candidate", "DRUG_DOSED", { amount, unit, dosesPerDay }),
+      candidate: drug("line-candidate", "DRUG_DOSED", { amount, unit, dosesPerDay, basis }),
     });
   }
 
@@ -943,6 +949,7 @@ describe("screenPrescription — dose range", () => {
         amount: 0.1,
         unit: "mg",
         dosesPerDay: 3,
+        basis: "SCHEDULED",
       }),
     });
     expect(result.outcome).toBe("CLEAR");
@@ -954,6 +961,16 @@ describe("screenPrescription — dose range", () => {
     const result = dosed(5000, 1, "mcg");
     expect(codes(result)).toEqual(["SCR_DOSE_UNIT_NOT_COMPARABLE"]);
     expect(requireFinding(result, "SCR_DOSE_UNIT_NOT_COMPARABLE").kind).toBe("SCREENING_GAP");
+  });
+
+  it("grades the unit mismatch as a pharmacist-closable gap — MODERATE, acknowledge tier", () => {
+    // Derived through screeningGapSeverity(SUBJECT_DATA) rather than
+    // hardcoded: the pharmacist on the order can reconcile the units
+    // themselves, which is what makes this gap worth interrupting for
+    // where the remediation-graded informational gaps are not.
+    const finding = requireFinding(dosed(5000, 1, "mcg"), "SCR_DOSE_UNIT_NOT_COMPARABLE");
+    expect(finding.severity).toBe("MODERATE");
+    expect(finding.disposition).toBe("REQUIRES_ACKNOWLEDGEMENT");
   });
 
   it("skips daily arithmetic when there is no schedule, but still checks the single dose", () => {
@@ -969,9 +986,169 @@ describe("screenPrescription — dose range", () => {
 
   it("screens nothing when the knowledge source has no dosing envelope", () => {
     const result = screen({
-      candidate: drug("line-candidate", "DRUG_ALFA", { amount: 9999, unit: "mg", dosesPerDay: 9 }),
+      candidate: drug("line-candidate", "DRUG_ALFA", {
+        basis: "SCHEDULED",
+        amount: 9999,
+        unit: "mg",
+        dosesPerDay: 9,
+      }),
     });
     expect(result.outcome).toBe("CLEAR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dose range — maximum-permitted basis (PRN, ranges, taper peaks)
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — dose statements read as a maximum permitted", () => {
+  function permitted(amount: number, dosesPerDay: number): ScreeningEvaluation {
+    return screen({
+      candidate: drug("line-candidate", "DRUG_DOSED", {
+        amount,
+        unit: "mg",
+        dosesPerDay,
+        basis: "MAXIMUM_PERMITTED",
+      }),
+    });
+  }
+
+  it("reports a permitted daily ceiling above the known maximum, worded as a ceiling", () => {
+    // A PRN written "10mg, max 4 doses/day" PERMITS 40mg against a
+    // 30mg published maximum. That the patient may take less is the
+    // pharmacist's judgement to apply — the label allows the excess.
+    const finding = requireFinding(permitted(10, 4), "SCR_DOSE_ABOVE_DAILY_MAXIMUM");
+    expect(finding.severity).toBe("MAJOR");
+    expect(finding.reason).toContain("largest daily total this prescription permits");
+    expect(finding.reason).not.toContain("prescribed daily total");
+  });
+
+  it("never calls a ceiling sub-therapeutic", () => {
+    // A PRN used twice a month is symptomatic use working as
+    // intended; "below the daily minimum" would be a false statement
+    // issued on every conservative PRN forever.
+    expect(codes(permitted(2, 1))).not.toContain("SCR_DOSE_BELOW_DAILY_MINIMUM");
+    expect(permitted(2, 1).outcome).toBe("CLEAR");
+  });
+
+  it("still checks the single dose, and words it as a permission", () => {
+    const finding = requireFinding(permitted(11, 0), "SCR_DOSE_ABOVE_SINGLE_MAXIMUM");
+    expect(finding.reason).toContain("largest single dose this prescription permits");
+  });
+
+  it("fingerprints a ceiling and a schedule of the same magnitude apart", () => {
+    // The two render different sentences to a pharmacist, so an
+    // acknowledgement of one must not suppress the other.
+    const asSchedule = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED", {
+        amount: 10,
+        unit: "mg",
+        dosesPerDay: 4,
+        basis: "SCHEDULED",
+      }),
+    });
+    const asCeiling = permitted(10, 4);
+    expect(requireFinding(asSchedule, "SCR_DOSE_ABOVE_DAILY_MAXIMUM").fingerprint).not.toBe(
+      requireFinding(asCeiling, "SCR_DOSE_ABOVE_DAILY_MAXIMUM").fingerprint
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dose range — the knowledge-content gap and the record-immutable gap
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — dose known, dose-range content not provisioned", () => {
+  // A source that KNOWS the drug (ingredients resolve; interaction and
+  // duplication screening run) while holding dosing envelopes for
+  // nothing — the production shape of RxNorm, which publishes
+  // nomenclature, not dosing ranges.
+  const envelopeless = createInMemoryDrugKnowledgeSource({
+    drugs: {
+      DRUG_ALFA: {
+        ingredientCodes: ["ING_ALFA"],
+        uncodedIngredientCount: 0,
+        therapeuticClassCodes: [],
+        crossSensitivityClassCodes: [],
+        doseRange: null,
+      },
+    },
+  });
+
+  const dose: DoseStatement = { amount: 10, unit: "mg", dosesPerDay: 2, basis: "SCHEDULED" };
+
+  it("reports the missing content as an informational gap, not a silent pass", () => {
+    // Without this row, a structured dose over an envelope-less source
+    // is byte-identical to a dose that was compared and cleared.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA", dose),
+      knowledge: envelopeless,
+    });
+    const gap = requireFinding(result, "SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED");
+    expect(gap.kind).toBe("SCREENING_GAP");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("does not report it when the prescription carries no dose to compare", () => {
+    // Two things would be missing; the row is about the one the
+    // caller supplied. A doseless line over an envelope-less source
+    // has nothing to say on this axis.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA"),
+      knowledge: envelopeless,
+    });
+    expect(codes(result)).not.toContain("SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED");
+  });
+
+  it("stays silent per-drug when the source DOES license dosing content", () => {
+    // KNOWLEDGE grades DRUG_DOSED, so its dose-range coverage is
+    // PROVISIONED and DRUG_ALFA's null envelope is the per-drug
+    // "ungraded" answer — gapping on it would fire on every drug a
+    // database chooses not to grade.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA", dose),
+    });
+    expect(codes(result)).not.toContain("SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED");
+  });
+});
+
+describe("screenPrescription — dose input not captured for an immutable record", () => {
+  it("records an informational gap that does not gate, with the record-immutable remediation", () => {
+    // A legacy prescription transcribed before structured sig: the
+    // capture window closed at transcription and prescriptions are
+    // immutable, so nobody on the order can close this. Interrupting
+    // for it would charge a pharmacist per order for a fact nobody
+    // can change — so it is recorded, informationally.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED"),
+      inputAvailability: withoutAxis("DOSE_RANGE", "NOT_CAPTURED_FOR_RECORD"),
+    });
+    const gap = requireFinding(result, "SCR_DOSE_INPUT_UNAVAILABLE");
+    expect(gap.kind).toBe("SCREENING_GAP");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(gap.reason).toContain("immutable");
+    expect(gap.fingerprint).toContain("remediation=RECORD_IMMUTABLE");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("fingerprints apart from the platform-capability spelling of the same code", () => {
+    // Rows persisted before structured sig existed said "no platform
+    // capability"; rows after say "this record predates the capture".
+    // Different statements, different identities.
+    const legacy = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED"),
+      inputAvailability: withoutAxis("DOSE_RANGE", "NOT_SUPPORTED_BY_PLATFORM"),
+    });
+    const immutable = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED"),
+      inputAvailability: withoutAxis("DOSE_RANGE", "NOT_CAPTURED_FOR_RECORD"),
+    });
+    expect(requireFinding(legacy, "SCR_DOSE_INPUT_UNAVAILABLE").fingerprint).not.toBe(
+      requireFinding(immutable, "SCR_DOSE_INPUT_UNAVAILABLE").fingerprint
+    );
   });
 });
 
@@ -1041,14 +1218,24 @@ describe("screenPrescription — prior acknowledgements", () => {
 describe("screenPrescription — reporting floor", () => {
   it("reports the informational tier by default", () => {
     const result = screen({
-      candidate: drug("line-candidate", "DRUG_DOSED", { amount: 2, unit: "mg", dosesPerDay: 1 }),
+      candidate: drug("line-candidate", "DRUG_DOSED", {
+        basis: "SCHEDULED",
+        amount: 2,
+        unit: "mg",
+        dosesPerDay: 1,
+      }),
     });
     expect(codes(result)).toContain("SCR_DOSE_BELOW_DAILY_MINIMUM");
   });
 
   it("drops findings below the configured floor", () => {
     const result = screen({
-      candidate: drug("line-candidate", "DRUG_DOSED", { amount: 2, unit: "mg", dosesPerDay: 1 }),
+      candidate: drug("line-candidate", "DRUG_DOSED", {
+        basis: "SCHEDULED",
+        amount: 2,
+        unit: "mg",
+        dosesPerDay: 1,
+      }),
       policy: { minimumReportedSeverity: "MODERATE" },
     });
     expect(result.outcome).toBe("CLEAR");
@@ -1150,7 +1337,12 @@ describe("screenPrescription — reporting floor", () => {
 
 describe("screenPrescription — completeness and ordering", () => {
   const busy: Partial<ScreeningRequest> = {
-    candidate: drug("line-candidate", "DRUG_DOSED", { amount: 50, unit: "mg", dosesPerDay: 4 }),
+    candidate: drug("line-candidate", "DRUG_DOSED", {
+      basis: "SCHEDULED",
+      amount: 50,
+      unit: "mg",
+      dosesPerDay: 4,
+    }),
     activeMedications: [drug("line-other", "DRUG_UNKNOWN")],
     allergies: [allergy({ substanceCode: "ING_DELTA", criticality: "LOW" })],
   };
@@ -1213,7 +1405,7 @@ describe("screenPrescription — completeness and ordering", () => {
 
 describe("screenPrescription — an acknowledgement suppresses only what was shown", () => {
   function dosedLine(recordId: string, amount: number, dosesPerDay: number): PrescribedDrug {
-    return drug(recordId, "DRUG_DOSED", { amount, unit: "mg", dosesPerDay });
+    return drug(recordId, "DRUG_DOSED", { amount, unit: "mg", dosesPerDay, basis: "SCHEDULED" });
   }
 
   it("does not let an acknowledged overdose suppress a larger one", () => {
@@ -1270,14 +1462,24 @@ describe("screenPrescription — an acknowledgement suppresses only what was sho
 
   it("re-prompts when only the unit pairing changes", () => {
     const inMicrograms = screen({
-      candidate: drug("line-1", "DRUG_DOSED", { amount: 5000, unit: "mcg", dosesPerDay: 1 }),
+      candidate: drug("line-1", "DRUG_DOSED", {
+        basis: "SCHEDULED",
+        amount: 5000,
+        unit: "mcg",
+        dosesPerDay: 1,
+      }),
     });
     const acknowledged = new Set([
       requireFinding(inMicrograms, "SCR_DOSE_UNIT_NOT_COMPARABLE").fingerprint,
     ]);
 
     const inGrams = screen({
-      candidate: drug("line-2", "DRUG_DOSED", { amount: 5, unit: "g", dosesPerDay: 1 }),
+      candidate: drug("line-2", "DRUG_DOSED", {
+        basis: "SCHEDULED",
+        amount: 5,
+        unit: "g",
+        dosesPerDay: 1,
+      }),
       acknowledgedFingerprints: acknowledged,
     });
     expect(requireFinding(inGrams, "SCR_DOSE_UNIT_NOT_COMPARABLE").disposition).toBe(
@@ -1355,15 +1557,21 @@ function maskTriggerCodes(finding: ScreeningFinding): string {
 function findingCorpus(): ReadonlyArray<ScreeningFinding> {
   const doses: ReadonlyArray<PrescribedDrug["dose"]> = [
     null,
-    { amount: 12, unit: "mg", dosesPerDay: 1 },
-    { amount: 200, unit: "mg", dosesPerDay: 1 },
-    { amount: 12, unit: "mg", dosesPerDay: 3 },
-    { amount: 100, unit: "mg", dosesPerDay: 3 },
-    { amount: 50, unit: "mg", dosesPerDay: 4 },
-    { amount: 2, unit: "mg", dosesPerDay: 1 },
-    { amount: 1, unit: "mg", dosesPerDay: 2 },
-    { amount: 5000, unit: "mcg", dosesPerDay: 1 },
-    { amount: 5, unit: "g", dosesPerDay: 2 },
+    { basis: "SCHEDULED", amount: 12, unit: "mg", dosesPerDay: 1 },
+    { basis: "SCHEDULED", amount: 200, unit: "mg", dosesPerDay: 1 },
+    { basis: "SCHEDULED", amount: 12, unit: "mg", dosesPerDay: 3 },
+    { basis: "SCHEDULED", amount: 100, unit: "mg", dosesPerDay: 3 },
+    { basis: "SCHEDULED", amount: 50, unit: "mg", dosesPerDay: 4 },
+    { basis: "SCHEDULED", amount: 2, unit: "mg", dosesPerDay: 1 },
+    { basis: "SCHEDULED", amount: 1, unit: "mg", dosesPerDay: 2 },
+    { basis: "SCHEDULED", amount: 5000, unit: "mcg", dosesPerDay: 1 },
+    { basis: "SCHEDULED", amount: 5, unit: "g", dosesPerDay: 2 },
+    // The same magnitudes as maxima a PRN/range/taper permits, so the
+    // corpus can catch a SCHEDULED finding colliding with a
+    // MAXIMUM_PERMITTED one that renders a different sentence.
+    { basis: "MAXIMUM_PERMITTED", amount: 12, unit: "mg", dosesPerDay: 1 },
+    { basis: "MAXIMUM_PERMITTED", amount: 100, unit: "mg", dosesPerDay: 3 },
+    { basis: "MAXIMUM_PERMITTED", amount: 50, unit: "mg", dosesPerDay: 0 },
   ];
   const candidateCodes = ["DRUG_ALFA", "DRUG_DOSED", "DRUG_COMBO", "DRUG_UNKNOWN"];
   const profiles: ReadonlyArray<ReadonlyArray<string>> = [
@@ -1515,7 +1723,12 @@ describe("screenPrescription — every clinical axis either runs or reports a ga
     [
       "rich inputs",
       {
-        candidate: drug("line-candidate", "DRUG_DOSED", { amount: 50, unit: "mg", dosesPerDay: 4 }),
+        candidate: drug("line-candidate", "DRUG_DOSED", {
+          basis: "SCHEDULED",
+          amount: 50,
+          unit: "mg",
+          dosesPerDay: 4,
+        }),
         activeMedications: [drug("line-other", "DRUG_BRAVO")],
         allergies: [allergy({ substanceCode: "ING_DELTA", criticality: "LOW" })],
       },
@@ -1651,7 +1864,12 @@ describe("screenPrescription — every clinical axis either runs or reports a ga
 
   it("declaring nothing available yields exactly one gap per axis and no clinical finding", () => {
     const result = screen({
-      candidate: drug("line-candidate", "DRUG_DOSED", { amount: 50, unit: "mg", dosesPerDay: 4 }),
+      candidate: drug("line-candidate", "DRUG_DOSED", {
+        basis: "SCHEDULED",
+        amount: 50,
+        unit: "mg",
+        dosesPerDay: 4,
+      }),
       activeMedications: [drug("line-other", "DRUG_ECHO")],
       allergies: [allergy()],
       inputAvailability: everyAxis("NOT_RECORDED_FOR_SUBJECT"),

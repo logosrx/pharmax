@@ -28,6 +28,7 @@ import { CLINICAL_SCREENING_AXES } from "@pharmax/clinical-screening";
 import {
   findCapabilityMismatches,
   prismaSchemaReality,
+  RECORD_LEVEL_SCREENING_AXES,
   SCREENING_AXIS_CAPABILITY,
   type SchemaReality,
   type ScreeningAxisCapability,
@@ -64,12 +65,18 @@ describe("SCREENING_AXIS_CAPABILITY — the declaration matches the schema", () 
     }
   });
 
-  it("gives every PER_SUBJECT axis a probe, and every claim a rationale", () => {
+  it("gives every PER_SUBJECT axis a probe, every PER_RECORD axis a mapping, and every claim a rationale", () => {
     for (const axis of CLINICAL_SCREENING_AXES) {
       const capability = SCREENING_AXIS_CAPABILITY[axis];
       expect(capability.rationale.length, `${axis} has an empty rationale`).toBeGreaterThan(0);
       if (capability.kind === "PER_SUBJECT") {
         expect(typeof capability.probe, `${axis} is PER_SUBJECT with no probe`).toBe("function");
+      }
+      if (capability.kind === "PER_RECORD") {
+        expect(
+          typeof capability.availabilityForRecord,
+          `${axis} is PER_RECORD with no per-record mapping`
+        ).toBe("function");
       }
       if (capability.kind === "NOT_SUPPORTED_BY_PLATFORM") {
         // Without this, the forcing function fires with no instruction
@@ -99,6 +106,62 @@ describe("SCREENING_AXIS_CAPABILITY — the declaration matches the schema", () 
       "PatientAllergy",
       "PatientAllergyHistoryAssertion",
     ]);
+  });
+
+  it("names the structured-sig columns as the schema the DOSE_RANGE axis reads", () => {
+    // The declaration this whole mechanism forced into existence: the
+    // structured-sig migration made the old NOT_SUPPORTED_BY_PLATFORM
+    // claim false, and this entry is the honest replacement. Pinned as
+    // PER_RECORD — not PER_SUBJECT — because a dose is a fact about
+    // one prescription line, and a mixed order must screen its
+    // structured line while gapping its legacy one.
+    const capability = SCREENING_AXIS_CAPABILITY.DOSE_RANGE;
+    expect(capability.kind).toBe("PER_RECORD");
+    if (capability.kind !== "PER_RECORD") return;
+    expect(capability.requiresSchema).toEqual([
+      {
+        model: "Prescription",
+        fields: ["sigStructureKind", "doseAmount", "doseUnit", "dosesPerDay"],
+      },
+    ]);
+  });
+
+  it("answers AVAILABLE for a structured line and NOT_CAPTURED_FOR_RECORD for a legacy one", () => {
+    // NOT_CAPTURED_FOR_RECORD rather than NOT_RECORDED_FOR_SUBJECT is
+    // the grading decision of the slice: a prescription is immutable
+    // once transcribed, so the acknowledge-tier "obtain it and
+    // re-run" instruction cannot be followed by anyone on the order.
+    // Recorded informationally instead — never nag, always record.
+    const capability = SCREENING_AXIS_CAPABILITY.DOSE_RANGE;
+    if (capability.kind !== "PER_RECORD") throw new Error("pinned PER_RECORD above");
+    expect(
+      capability.availabilityForRecord({
+        sigStructureKind: "PRN",
+        doseAmount: null,
+        doseUnit: null,
+        dosesPerDay: null,
+      })
+    ).toBe("AVAILABLE");
+    expect(
+      capability.availabilityForRecord({
+        sigStructureKind: null,
+        doseAmount: null,
+        doseUnit: null,
+        dosesPerDay: null,
+      })
+    ).toBe("NOT_CAPTURED_FOR_RECORD");
+  });
+
+  it("keeps the PER_RECORD axis list and the declaration in agreement", () => {
+    // `run-screen.ts` composes per-line availability from
+    // `RecordLevelScreeningAxis`; an axis declared PER_RECORD that the
+    // type does not name would be resolved per patient (a compile
+    // error today, but this pins the runtime list against the
+    // declaration so neither can drift alone).
+    const declared = CLINICAL_SCREENING_AXES.filter(
+      (axis) => SCREENING_AXIS_CAPABILITY[axis].kind === "PER_RECORD"
+    );
+    expect(declared).toEqual(RECORD_LEVEL_SCREENING_AXES);
   });
 });
 
@@ -214,13 +277,18 @@ describe("prismaSchemaReality", () => {
     expect(reality.hasField("PatientAllergyHistoryAssertion", "status")).toBe(true);
   });
 
-  it("does NOT see the structured sig columns that would un-gap dose screening", () => {
-    // The negative half of the live check, pinned explicitly. If this
-    // starts failing, the schema gained a structured sig and the
-    // DOSE_RANGE declaration is now a lie.
+  it("sees the structured-sig columns the DOSE_RANGE axis now reads", () => {
+    // This assertion used to be the negative half of the live check —
+    // pinning the columns ABSENT while the axis claimed
+    // NOT_SUPPORTED_BY_PLATFORM. The migration landed, the forcing
+    // function fired, and the pin flips with the declaration: if these
+    // start failing, the schema LOST the columns a supported axis
+    // reads, and the mismatch test above names the regression.
     const reality = prismaSchemaReality();
-    expect(reality.hasField("Prescription", "doseAmount")).toBe(false);
-    expect(reality.hasField("Prescription", "dosesPerDay")).toBe(false);
+    expect(reality.hasField("Prescription", "sigStructureKind")).toBe(true);
+    expect(reality.hasField("Prescription", "doseAmount")).toBe(true);
+    expect(reality.hasField("Prescription", "doseUnit")).toBe(true);
+    expect(reality.hasField("Prescription", "dosesPerDay")).toBe(true);
   });
 
   it("answers false for a model that does not exist rather than throwing", () => {

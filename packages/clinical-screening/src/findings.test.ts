@@ -25,25 +25,37 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("screening gap grading", () => {
-  it("recovers every remediation from what a persisted row carries", () => {
+  it("recovers every remediation's operator instruction from what a persisted row carries", () => {
     // A reader of `order_screening_finding` recovers what a gap row
     // means from the row's CODE first (`gapRemediationForFindingCode`)
     // and its SEVERITY second (`gapRemediationFromSeverity`). Since
-    // ORGANIZATION_DATA and PLATFORM_CAPABILITY share MINOR, severity
-    // alone is no longer injective — the codes that carry
-    // ORGANIZATION_DATA were minted with fixed remediation precisely
-    // so the two-step recovery stays exact. If this loop ever fails,
-    // the console has started telling pharmacists to chase gaps
-    // nobody can close (or to ignore gaps their org can).
+    // three remediations share MINOR, severity alone is not injective
+    // — codes minted with a fixed remediation keep the recovery exact
+    // where exactness changes the instruction. If this loop ever
+    // fails, the console has started telling pharmacists to chase
+    // gaps nobody can close (or to ignore gaps their org can).
+    //
+    // RECORD_IMMUTABLE is the deliberate exception: its rows carry
+    // `SCR_DOSE_INPUT_UNAVAILABLE`, a code that has ALSO been raised
+    // under PLATFORM_CAPABILITY (every deployment before structured
+    // sig landed), so code-based recovery cannot be exact for it.
+    // Severity-based recovery answers PLATFORM_CAPABILITY — whose
+    // operator instruction, "nobody touching this order can close
+    // this", is equally true of an immutable record — and the
+    // persisted `reason` carries the precise sentence.
     const codeCarrying: Record<string, string> = {
       ORGANIZATION_DATA: "SCR_COMPOUND_FORMULA_NOT_CODED",
+      PLATFORM_CAPABILITY: "SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED",
+    };
+    const acceptableCollapse: Record<string, string> = {
+      RECORD_IMMUTABLE: "PLATFORM_CAPABILITY",
     };
     for (const remediation of SCREENING_GAP_REMEDIATIONS) {
       const code = codeCarrying[remediation] ?? "SCR_KNOWLEDGE_UNAVAILABLE";
       const recovered =
         gapRemediationForFindingCode(code) ??
         gapRemediationFromSeverity(screeningGapSeverity(remediation));
-      expect(recovered, remediation).toBe(remediation);
+      expect(recovered, remediation).toBe(acceptableCollapse[remediation] ?? remediation);
     }
   });
 

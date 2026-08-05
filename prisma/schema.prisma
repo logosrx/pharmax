@@ -3400,6 +3400,34 @@ model Prescription {
   // NULL = fillable immediately.
   earliestFillDate DateTime? @db.Date
 
+  // --- Structured sig (dose capture) ---
+  //
+  // The machine-comparable summary of the sig, captured at
+  // transcription so the DOSE_RANGE screening axis has an amount, a
+  // unit and a frequency to compare against a published dosing
+  // envelope. The free-text `sigEnc` REMAINS the authoritative label
+  // instruction; these columns never replace it and are all optional —
+  // a prescription without them is legal and merely unscreenable on
+  // this axis.
+  //
+  // NULL `sigStructureKind` means "not structured at all" (a legacy
+  // transcription, or a typist who skipped the optional fields). The
+  // kind exists because not every sig reduces to one number, and
+  // pretending it does is how a screen lies. Vocabulary is modelled on
+  // HL7 FHIR R4 `Dosage` (`asNeeded`, `doseRange` vs `doseQuantity`,
+  // `sequence` for tapers) without building the full structure. What
+  // the three value columns MEAN depends on the kind — see the enum.
+  //
+  // PHI split: these are coded, comparable values under tenant RLS,
+  // the same treatment `drugNdc` and the patient-allergy substance
+  // codes get. The narrative stays encrypted in `sigEnc`. The
+  // screening engine reads these in-transaction and its findings carry
+  // codes and limits, never the narrative.
+  sigStructureKind SigStructureKind?
+  doseAmount       Decimal?          @db.Decimal(12, 4)
+  doseUnit         DoseUnit?
+  dosesPerDay      Decimal?          @db.Decimal(8, 4)
+
   // --- Encrypted PHI ---
   sigEnc              Json
   noteToPharmacistEnc Json?
@@ -5302,6 +5330,79 @@ enum ControlledSubstanceSchedule {
   CIII
   CIV
   CV
+}
+
+// How a prescription's structured sig should be read — because not
+// every sig reduces to one fixed daily dose, and "structured as PRN"
+// must be distinct from "not structured at all" (which is a NULL
+// `sigStructureKind`, not a member here).
+//
+// Vocabulary follows HL7 FHIR R4 `Dosage`: `asNeeded` → PRN,
+// `doseRange` → RANGE, a multi-`sequence` Dosage → TAPER. We capture
+// the minimum honest summary, not the full structure.
+//
+// What the value columns mean per kind (enforced by
+// `prescription_structured_sig_shape` and by `CreatePrescription`):
+//
+//   FIXED — a fixed amount on a fixed schedule. `doseAmount` is the
+//     dose per administration, `dosesPerDay` the scheduled frequency
+//     (decimal: every-other-day is 0.5). All three values required.
+//     Screening compares the single dose and the daily total, and may
+//     flag a sub-therapeutic daily total.
+//
+//   PRN — "as needed". `doseAmount` is the dose per administration if
+//     the script states one; `dosesPerDay` is the prescriber's stated
+//     MAXIMUM administrations per day, if any. Both optional (a bare
+//     PRN kind is legal and honest). Screening compares the maximum
+//     the prescription PERMITS — single dose, and daily total when a
+//     ceiling exists — and never calls a PRN sub-therapeutic.
+//
+//   RANGE — a variable amount on a schedule ("1–2 tablets three times
+//     daily"). `doseAmount` is the UPPER end of the range — the
+//     safety-relevant bound — and `dosesPerDay` the scheduled
+//     frequency. All three required. Screened as a maximum permitted,
+//     like PRN.
+//
+//   TAPER — a stepped schedule that has no single daily dose. If the
+//     values are captured they describe the step with the LARGEST
+//     daily exposure (peak single dose and its frequency); optional,
+//     because summarizing a taper is extra transcription work the
+//     free-text sig already carries. Screened as a maximum permitted
+//     when captured; honestly unscreenable when not.
+enum SigStructureKind {
+  FIXED
+  PRN
+  RANGE
+  TAPER
+}
+
+// The unit `doseAmount` is denominated in. A BOUNDED enum rather than
+// a free-text or full-UCUM string, deliberately: the screening engine
+// compares the prescribed unit against a knowledge source's unit by
+// exact string equality (no conversion inside a safety check), so the
+// unit must be a coded value that cannot drift ("mg" vs "MG " vs
+// "milligram"). A bounded vocabulary keeps
+// `SCR_DOSE_UNIT_NOT_COMPARABLE` meaning "genuinely different
+// dimensions" instead of firing on spelling. Members are UCUM-aligned
+// where UCUM has a code (mg, ug/mcg, g, mL, meq, [IU]-style units)
+// plus the dispensing units prescriptions are actually written in;
+// growing the enum is an additive migration. Adapters over licensed
+// dosing content must normalize their units onto these tokens (see
+// `doseUnitToken` in @pharmax/verification).
+enum DoseUnit {
+  MG
+  MCG
+  G
+  MEQ
+  ML
+  UNIT
+  TABLET
+  CAPSULE
+  DROP
+  PUFF
+  SPRAY
+  PATCH
+  APPLICATION
 }
 
 // Basis on which a controlled substance was partially dispensed.

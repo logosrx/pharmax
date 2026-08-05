@@ -16,7 +16,7 @@
 // on the order. Where the answer is "we cannot supply this", the engine
 // reports a `SCREENING_GAP` persisted on the order.
 //
-// As of the allergy-capture slice:
+// As of the structured-sig slice:
 //
 //   - DRUG-DRUG INTERACTION and THERAPEUTIC DUPLICATION: always
 //     AVAILABLE. The candidate is the prescription on each order line;
@@ -28,11 +28,15 @@
 //     NO_KNOWN_ALLERGIES assertion; NOT_RECORDED_FOR_SUBJECT
 //     otherwise. See `allergy-input.ts` for what "screenable" excludes
 //     and why the exclusions are the interesting part.
-//   - DOSE RANGE: still NOT_SUPPORTED_BY_PLATFORM.
-//     `prescription.sigEnc` is encrypted free text with no structured
-//     (amount, unit, frequency) beside it, so no prescription carries a
-//     dose to compare against a range. That claim is now CHECKED
-//     against the schema — see the forcing function below.
+//   - DOSE RANGE: PER-LINE. AVAILABLE when the prescription carries a
+//     structured sig (any kind — a bare PRN is AVAILABLE with a null
+//     DoseStatement, which is "structured, honestly numberless");
+//     NOT_CAPTURED_FOR_RECORD when it does not, which is recorded
+//     informationally because prescriptions are immutable and nobody
+//     on the order can add the capture after transcription. See
+//     `dose-input.ts` for the per-kind mapping and the grading
+//     argument. Availability is therefore composed per candidate
+//     below — the one axis that cannot be resolved once per order.
 //
 // WHY THE DECLARATION MOVED OUT OF THIS FILE. It used to be a frozen
 // literal here, with a comment promising it would be revisited when the
@@ -69,6 +73,17 @@
 // FALSE gap ("this platform cannot hold allergies"); what it leaves is
 // a TRUE one ("no drug knowledge is provisioned").
 //
+// THE DOSE AXIS HAS THE SAME SPLIT, one facet finer. Structured sig
+// opens gate (a): the prescribed dose is computable. Gate (b) for
+// doses — min/max daily dose per drug — is licensed editorial content
+// that RxNorm does not carry, so
+// `DrugKnowledgeSource.doseRangeCoverage` is NOT_PROVISIONED in
+// production and a structured dose earns
+// `SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED` (informational) rather than a
+// comparison. The axis genuinely computes and screens where a source
+// DOES declare ranges — the seeded test source proves the path end to
+// end — but nothing below pretends production dose screening is live.
+//
 // ---------------------------------------------------------------------
 // Why acknowledged fingerprints are NOT passed to the engine
 // ---------------------------------------------------------------------
@@ -85,11 +100,12 @@
 // itself — which it has to do anyway, because the engine's set is
 // per-patient and the gate is per-PHARMACIST.
 //
-// PHI: the columns read are `prescription.id` and
-// `prescription.drugNdc` (a public product code, not a drug name),
-// `order.patientId`, and the CODED columns of `patient_allergy` — never
-// its encrypted narrative. None of it leaves this module and nothing
-// here is logged.
+// PHI: the columns read are `prescription.id`, `prescription.drugNdc`
+// (a public product code, not a drug name), the prescription's coded
+// structured-sig columns (kind, amount, unit, frequency — never
+// `sigEnc`), `order.patientId`, and the CODED columns of
+// `patient_allergy` — never its encrypted narrative. None of it leaves
+// this module and nothing here is logged.
 
 import {
   screenPrescription,
@@ -102,14 +118,17 @@ import {
   type RecordedAllergy,
   type ScreeningEvaluation,
   type ScreeningFinding,
+  type ScreeningInputAvailability,
+  type ScreeningInputAxis,
   type ScreeningPolicy,
 } from "@pharmax/clinical-screening";
 import { PrescriptionStatus, type Prisma, type ScreeningPhase } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 
 import { loadScreenableAllergies } from "./allergy-input.js";
-import { resolveInputAvailability } from "./axis-capability.js";
+import { resolveDoseInputAvailability, resolveInputAvailability } from "./axis-capability.js";
 import { resolveClinicalScreeningKnowledgeSource } from "./configure.js";
+import { doseStatementFor } from "./dose-input.js";
 import { PV1_SCREENING_NOT_PERFORMED, PV1_SCREENING_PROFILE_TOO_LARGE } from "./errors.js";
 
 /**
@@ -194,18 +213,21 @@ export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResul
 
   const activeMedications = await loadProfileMedications(input);
 
-  // Resolved ONCE per order, not per line. Availability is a fact about
-  // the patient and the platform, so recomputing it per line would ask
-  // the same question of the same rows N times — and, worse, could
-  // answer differently mid-order if a concurrent write landed between
-  // two lines, producing an order whose lines disagree about whether
-  // allergies were screened.
+  // The PATIENT-LEVEL axes are resolved ONCE per order, not per line.
+  // Their availability is a fact about the patient and the platform,
+  // so recomputing it per line would ask the same question of the
+  // same rows N times — and, worse, could answer differently
+  // mid-order if a concurrent write landed between two lines,
+  // producing an order whose lines disagree about whether allergies
+  // were screened. The DOSE_RANGE axis is the deliberate exception:
+  // its availability is a fact about each LINE (already loaded, in
+  // this same transaction, immutable), composed per candidate below.
   const scope = {
     tx: input.tx,
     organizationId: input.organizationId,
     patientId: input.patientId,
   };
-  const inputAvailability = await resolveInputAvailability(scope);
+  const patientAxisAvailability = await resolveInputAvailability(scope);
 
   // Loaded only when the axis came back AVAILABLE. When it did not, the
   // engine ignores the list and reads the gap instead — and skipping
@@ -216,7 +238,9 @@ export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResul
   // somebody asserted this patient has no known allergies. It is never
   // "we did not look".
   const allergies: ReadonlyArray<RecordedAllergy> =
-    inputAvailability.DRUG_ALLERGY === "AVAILABLE" ? await loadScreenableAllergies(scope) : [];
+    patientAxisAvailability.DRUG_ALLERGY === "AVAILABLE"
+      ? await loadScreenableAllergies(scope)
+      : [];
 
   // Resolved AFTER the inputs are loaded, because a per-screen
   // resolver prefetches exactly the codes the engine will ask about —
@@ -228,7 +252,13 @@ export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResul
     (await resolveClinicalScreeningKnowledgeSource({
       tx: input.tx,
       organizationId: input.organizationId,
-      drugCodes: [...new Set([...candidates, ...activeMedications].map((drug) => drug.drugCode))],
+      drugCodes: [
+        ...new Set(
+          [...candidates.map((line) => line.prescribed), ...activeMedications].map(
+            (drug) => drug.drugCode
+          )
+        ),
+      ],
       allergenCodes: [...new Set(allergies.map((allergy) => allergy.substanceCode))],
     }));
 
@@ -237,8 +267,16 @@ export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResul
   // order, where the same profile interaction can surface twice.
   const byFingerprint = new Map<string, ScreeningFinding>();
   for (const candidate of candidates) {
+    // The per-line composition. Spelled as a total record rather than
+    // a spread-with-override so that a new axis — patient-level or
+    // record-level — fails to compile here until somebody states
+    // which it is.
+    const inputAvailability: Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>> = {
+      ...patientAxisAvailability,
+      DOSE_RANGE: candidate.doseAvailability,
+    };
     const evaluation: ScreeningEvaluation = screenPrescription({
-      candidate,
+      candidate: candidate.prescribed,
       inputAvailability,
       activeMedications,
       allergies,
@@ -261,7 +299,7 @@ export async function runOrderScreen(input: RunScreenInput): Promise<ScreenResul
     knowledgeRelease: knowledge.release,
     formulaProvenanceByFingerprint: resolveFormulaProvenance(
       findings,
-      [...candidates, ...activeMedications],
+      [...candidates.map((line) => line.prescribed), ...activeMedications],
       knowledge
     ),
   };
@@ -342,6 +380,16 @@ function toEvaluation(findings: ReadonlyArray<ScreeningFinding>): ScreeningEvalu
 }
 
 /**
+ * One order line's screening inputs: what the engine screens, plus the
+ * per-line half of the availability map. Kept together so the two
+ * cannot be computed from different rows.
+ */
+interface CandidateLine {
+  readonly prescribed: PrescribedDrug;
+  readonly doseAvailability: ScreeningInputAvailability;
+}
+
+/**
  * The prescriptions being dispensed on this order.
  *
  * `recordId` is the PRESCRIPTION id rather than the order-line id, on
@@ -350,7 +398,7 @@ function toEvaluation(findings: ReadonlyArray<ScreeningFinding>): ScreeningEvalu
  * profile that already contains it avoids reporting itself as
  * duplicating itself.
  */
-async function loadCandidateDrugs(input: RunScreenInput): Promise<ReadonlyArray<PrescribedDrug>> {
+async function loadCandidateDrugs(input: RunScreenInput): Promise<ReadonlyArray<CandidateLine>> {
   const lines = await input.tx.orderLine.findMany({
     where: { organizationId: input.organizationId, orderId: input.orderId },
     select: { prescriptionId: true },
@@ -362,10 +410,40 @@ async function loadCandidateDrugs(input: RunScreenInput): Promise<ReadonlyArray<
       organizationId: input.organizationId,
       id: { in: lines.map((l) => l.prescriptionId) },
     },
-    select: { id: true, drugNdc: true },
+    // The structured-sig columns are coded values (kind, amount,
+    // unit, frequency) — the narrative `sigEnc` is never selected.
+    select: {
+      id: true,
+      drugNdc: true,
+      sigStructureKind: true,
+      doseAmount: true,
+      doseUnit: true,
+      dosesPerDay: true,
+    },
   });
 
-  return prescriptions.map(toPrescribedDrug);
+  return prescriptions.map((row) => {
+    const doseAvailability = resolveDoseInputAvailability(row);
+    return {
+      doseAvailability,
+      prescribed: {
+        recordId: row.id,
+        // The NDC is a public product code. `prescription.drugName`
+        // is NOT passed and must never be: the finding vocabulary is
+        // codes, and a name in a persisted finding would put a drug
+        // name into an append-only table and every event payload
+        // derived from it.
+        drugCode: row.drugNdc,
+        // Consistent by construction with the availability above: a
+        // line whose axis is gapped contributes no dose (the engine
+        // would ignore it, but handing it one would let the two
+        // disagree), and an AVAILABLE line contributes whatever its
+        // kind honestly reduces to — including null for a bare
+        // PRN/TAPER, which is "no dose to compare", not a gap.
+        dose: doseAvailability === "AVAILABLE" ? doseStatementFor(row) : null,
+      },
+    };
+  });
 }
 
 /**
@@ -409,14 +487,12 @@ function toPrescribedDrug(row: { readonly id: string; readonly drugNdc: string }
   return {
     recordId: row.id,
     // The NDC is a public product code. `prescription.drugName` is
-    // NOT passed and must never be: the finding vocabulary is codes,
-    // and a name in a persisted finding would put a drug name into an
-    // append-only table and every event payload derived from it.
+    // NOT passed and must never be — see the candidate loader.
     drugCode: row.drugNdc,
-    // Not "this prescription has no dose" — this platform cannot read
-    // one. That claim is made once, structurally, by declaring
-    // DOSE_RANGE unavailable in `INPUT_AVAILABILITY`; the engine then
-    // gaps the axis and never reaches this field.
+    // Profile medications feed the interaction and duplication axes
+    // only; the engine reads a dose off the CANDIDATE alone, so
+    // loading the profile's dose columns would be rows read for
+    // nobody.
     dose: null,
   };
 }

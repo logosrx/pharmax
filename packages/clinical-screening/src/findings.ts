@@ -157,6 +157,23 @@ export const CLINICAL_SCREENING_AXES: ReadonlyArray<ScreeningInputAxis> = Object
  * file start reporting the actionable gap without anyone editing this
  * package.
  *
+ * THE THIRD DISTINCTION, added when structured sig landed and the
+ * dose axis stopped being NOT_SUPPORTED_BY_PLATFORM: a gap the
+ * capture window has CLOSED on. NOT_CAPTURED_FOR_RECORD means the
+ * platform supports the input, but it can only be supplied at the
+ * moment the record it belongs to is created — and this record was
+ * created without it. The motivating case is a prescription
+ * transcribed before (or without) structured sig: prescriptions are
+ * immutable once written, so "go and obtain it" — the instruction
+ * NOT_RECORDED_FOR_SUBJECT carries — is an instruction nobody on the
+ * order can follow. It is not NOT_SUPPORTED_BY_PLATFORM either: the
+ * capability exists, new records capture it, and claiming otherwise
+ * would be the stale-declaration lie the axis-capability forcing
+ * function exists to prevent. The population drains by itself —
+ * prescriptions expire within a year and new transcriptions can carry
+ * the structure — which is exactly why it is recorded without
+ * interrupting (see `screeningGapSeverity` on RECORD_IMMUTABLE).
+ *
  * "PARTIAL" is still deliberately absent: a pharmacist cannot act on
  * "some of this patient's allergies are here", and a caller holding an
  * incomplete list should supply what it has and declare AVAILABLE —
@@ -167,6 +184,7 @@ export const SCREENING_INPUT_AVAILABILITIES = Object.freeze([
   "AVAILABLE",
   "NOT_RECORDED_FOR_SUBJECT",
   "NOT_SUPPORTED_BY_PLATFORM",
+  "NOT_CAPTURED_FOR_RECORD",
 ] as const);
 
 export type ScreeningInputAvailability = (typeof SCREENING_INPUT_AVAILABILITIES)[number];
@@ -226,6 +244,43 @@ export const SCREENING_GAP_REMEDIATIONS = Object.freeze([
    * `gapRemediationForFindingCode` instead — see both functions.
    */
   "ORGANIZATION_DATA",
+  /**
+   * NOBODY can close it for this record, because the input could only
+   * be captured when the record was created and the record is
+   * deliberately immutable. The motivating case: a prescription
+   * transcribed without a structured sig. The prescription cannot be
+   * amended (re-transcribing a valid prescription to add screening
+   * metadata is not a real remediation), so no acknowledgement, no
+   * subject-data errand and no org reference data closes the gap. It
+   * closes PROSPECTIVELY — new records capture the input at creation
+   * — and by attrition, as the immutable records age out.
+   *
+   * Neither existing value tells the truth here. SUBJECT_DATA says
+   * "obtain it and re-run", which cannot be done. PLATFORM_CAPABILITY
+   * says "the platform cannot hold this at all", which stopped being
+   * true the day the capture shipped. ORGANIZATION_DATA says "the org
+   * can close it once for every order", but there is no reference
+   * data to supply.
+   *
+   * Graded like PLATFORM_CAPABILITY (MINOR → INFORMATIONAL), and the
+   * reasoning is the alert-fatigue argument one more time: on the day
+   * the capture ships, EVERY existing prescription carries this gap,
+   * so an acknowledge-tier grading would charge the pharmacist a
+   * click per order for a fact nobody in the building can change —
+   * the precise machine #86 dismantled. Recorded on every screen
+   * under its own qualifiers, so coverage reporting can watch the
+   * unstructured share drain to zero.
+   *
+   * Appended AFTER ORGANIZATION_DATA for the same
+   * `gapRemediationFromSeverity` first-match reason: MINOR rows
+   * written before this value existed must keep reading as
+   * PLATFORM_CAPABILITY. The severity-based recovery therefore never
+   * answers this value; the operator instruction it recovers instead
+   * ("nobody touching this order can close this") remains true for
+   * these rows, and the persisted `reason` carries the precise
+   * sentence.
+   */
+  "RECORD_IMMUTABLE",
 ] as const);
 
 export type ScreeningGapRemediation = (typeof SCREENING_GAP_REMEDIATIONS)[number];
@@ -238,6 +293,8 @@ export function gapRemediationForAvailability(
       return "SUBJECT_DATA";
     case "NOT_SUPPORTED_BY_PLATFORM":
       return "PLATFORM_CAPABILITY";
+    case "NOT_CAPTURED_FOR_RECORD":
+      return "RECORD_IMMUTABLE";
     default: {
       const exhaustive: never = availability;
       return exhaustive;
@@ -270,6 +327,12 @@ export function gapRemediationForAvailability(
  *     anyone touching this order, and it fires identically on every
  *     order for the product until the org's formulary work is done.
  *     See the value's own doc for why neither other value is honest.
+ *   - RECORD_IMMUTABLE → MINOR, therefore INFORMATIONAL, for the same
+ *     reason at its logical limit: the gap is closable by NOBODY for
+ *     this record (the capture window closed when the record was
+ *     created), and it would otherwise fire on every order carrying a
+ *     pre-capture prescription until the last one expired. See the
+ *     value's own doc.
  *
  * WHY NOT KEEP DEMANDING THE CLICK, WHICH IS SAFER-SOUNDING. Because a
  * finding that fires on 100% of orders is not a finding, it is a
@@ -294,6 +357,8 @@ export function screeningGapSeverity(remediation: ScreeningGapRemediation): Scre
       return "MINOR";
     case "ORGANIZATION_DATA":
       return "MINOR";
+    case "RECORD_IMMUTABLE":
+      return "MINOR";
     default: {
       const exhaustive: never = remediation;
       return exhaustive;
@@ -312,14 +377,18 @@ export function screeningGapSeverity(remediation: ScreeningGapRemediation): Scre
  * would tell a pharmacist to obtain an allergy history the platform
  * cannot store, or to look up a drug in a database that does not exist.
  *
- * NO LONGER INJECTIVE since ORGANIZATION_DATA landed: two remediations
- * grade MINOR, and this function keeps answering PLATFORM_CAPABILITY
- * for MINOR — the value every MINOR gap row written before
- * ORGANIZATION_DATA existed actually carried, so historical rows keep
- * reading as they always did. The codes that carry ORGANIZATION_DATA
- * were minted at the same time as the value and can carry nothing
- * else, so readers must consult `gapRemediationForFindingCode` FIRST
- * and fall back here only when it answers `null`.
+ * NO LONGER INJECTIVE since ORGANIZATION_DATA landed (and
+ * RECORD_IMMUTABLE after it): three remediations grade MINOR, and this
+ * function keeps answering PLATFORM_CAPABILITY for MINOR — the value
+ * every MINOR gap row written before the newer values existed actually
+ * carried, so historical rows keep reading as they always did. The
+ * codes minted to carry exactly one of the newer remediations are
+ * recovered by `gapRemediationForFindingCode`, which readers must
+ * consult FIRST and fall back here only when it answers `null`. For
+ * RECORD_IMMUTABLE rows recovered here as PLATFORM_CAPABILITY, the
+ * operator instruction is the same — "nobody touching this order can
+ * close this" — and the persisted `reason` carries the precise
+ * sentence, so the collapse loses no instruction a reader can act on.
  *
  * Returns `null` for a severity no gap can carry, which is the honest
  * answer for a row this build cannot interpret — `severity` is TEXT
@@ -333,9 +402,9 @@ export function gapRemediationFromSeverity(
   severity: ScreeningSeverity
 ): ScreeningGapRemediation | null {
   return (
-    SCREENING_GAP_REMEDIATIONS.filter((r) => r !== "ORGANIZATION_DATA").find(
-      (r) => screeningGapSeverity(r) === severity
-    ) ?? null
+    SCREENING_GAP_REMEDIATIONS.filter(
+      (r) => r !== "ORGANIZATION_DATA" && r !== "RECORD_IMMUTABLE"
+    ).find((r) => screeningGapSeverity(r) === severity) ?? null
   );
 }
 
@@ -359,6 +428,15 @@ export function gapRemediationForFindingCode(code: string): ScreeningGapRemediat
     case "SCR_COMPOUND_FORMULA_NOT_CODED":
     case "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED":
       return "ORGANIZATION_DATA";
+    // Minted with exactly one remediation: no dose-range CONTENT is
+    // licensed for the deployment, which only procurement can change.
+    // (`SCR_DOSE_INPUT_UNAVAILABLE` is deliberately NOT here: it has
+    // been raised under PLATFORM_CAPABILITY historically and under
+    // RECORD_IMMUTABLE since structured sig landed, so the
+    // severity-based recovery decides — see
+    // `gapRemediationFromSeverity` on why that collapse is harmless.)
+    case "SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED":
+      return "PLATFORM_CAPABILITY";
     default:
       return null;
   }
@@ -407,6 +485,19 @@ export const SCREENING_FINDING_CODES = Object.freeze([
   // countable operational facts.
   "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED",
   "SCR_DOSE_UNIT_NOT_COMPARABLE",
+  // The prescription CARRIES a comparable dose, and no dose-range
+  // content exists to compare it against: the knowledge source
+  // declares `doseRangeCoverage = NOT_PROVISIONED` (RxNorm publishes
+  // nomenclature, not dosing envelopes; licensed dosing content is not
+  // wired). Distinct from `SCR_KNOWLEDGE_UNAVAILABLE` (the whole DRUG
+  // is unknown) and from `SCR_DOSE_INPUT_UNAVAILABLE` (the
+  // PRESCRIPTION carries no comparable dose): this is the gap that
+  // remains when both of those are closed, and it is the honest
+  // production shape of the dose axis until dosing content is
+  // licensed — the same shape the allergy axis had between capture
+  // (#87) and its knowledge source (#88). Countable on its own, so a
+  // dashboard can show how many screens are waiting on procurement.
+  "SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED",
   // One per axis, for the case where the CALLER could not supply the
   // input at all. Distinct from `SCR_KNOWLEDGE_UNAVAILABLE`, which
   // reports that the knowledge source did not recognise a drug we DID

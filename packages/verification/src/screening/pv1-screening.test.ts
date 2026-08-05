@@ -101,21 +101,25 @@ const INTERACTION_FINGERPRINT =
   "SCR_DRUG_INTERACTION|MAJOR/PROBABLE|INGREDIENT_ALFA+INGREDIENT_BRAVO";
 
 /**
- * The one axis this platform cannot supply at all: the sig is encrypted
- * free text with no structured dose beside it, so
- * `SCREENING_AXIS_CAPABILITY` declares DOSE_RANGE
- * NOT_SUPPORTED_BY_PLATFORM and every screen RECORDS the gap —
- * including the screens below where the knowledge source knows the
- * drugs perfectly well.
+ * The dose gap every fixture in this suite carries: stub prescriptions
+ * default to NO structured sig (`sigStructureKind` null), which is a
+ * legacy transcription, and a prescription is immutable once written —
+ * so `SCREENING_AXIS_CAPABILITY` resolves DOSE_RANGE to
+ * NOT_CAPTURED_FOR_RECORD for the line and every screen RECORDS the
+ * gap, including the screens below where the knowledge source knows
+ * the drugs perfectly well.
  *
- * MINOR, therefore INFORMATIONAL, and that grading is the point. No
- * patient can ever have this input and no pharmacist can supply it, so
- * an acknowledgement per order would collect a signature per
- * prescription against a product backlog. The gap is still written to
- * `order_screening_finding` and still counted in `gapCount`; what it
- * does not do is gate an approval.
+ * MINOR, therefore INFORMATIONAL, and that grading is the point.
+ * Nobody touching the order can add a capture to an immutable record,
+ * so an acknowledgement per order would collect a signature per
+ * prescription against a fact nobody can change. The gap is still
+ * written to `order_screening_finding` and still counted in
+ * `gapCount`; what it does not do is gate an approval. (Before
+ * structured sig existed this same code carried
+ * remediation=PLATFORM_CAPABILITY — same severity, same disposition,
+ * different sentence and therefore a different fingerprint.)
  *
- * DRUG_ALLERGY used to be the second entry here, and is not any more.
+ * DRUG_ALLERGY used to be an entry here, and is not any more.
  * Allergy capture exists, so the axis is per-patient: AVAILABLE for a
  * patient with screenable records or an asserted-empty history,
  * NOT_RECORDED_FOR_SUBJECT (MODERATE, acknowledge-tier) for a patient
@@ -127,7 +131,7 @@ const INTERACTION_FINGERPRINT =
  * not the prescription.
  */
 const DOSE_INPUT_GAP_FINGERPRINT =
-  "SCR_DOSE_INPUT_UNAVAILABLE|MINOR/DEFINITE|DOSE_RANGE|remediation=PLATFORM_CAPABILITY";
+  "SCR_DOSE_INPUT_UNAVAILABLE|MINOR/DEFINITE|DOSE_RANGE|remediation=RECORD_IMMUTABLE";
 const UNSUPPLIED_AXIS_FINGERPRINTS: ReadonlyArray<string> = [DOSE_INPUT_GAP_FINGERPRINT];
 
 /**
@@ -537,6 +541,233 @@ function outstandingFingerprints(fake: FlowFake): ReadonlyArray<string> {
     ),
   ];
 }
+
+// ---------------------------------------------------------------------------
+// The dose axis, end to end
+// ---------------------------------------------------------------------------
+
+describe("PV1 screening — the dose axis is per-line", () => {
+  // What a pharmacist actually meets for each structured-sig state,
+  // asserted through the real commands for the same reason the allergy
+  // block below is: "what happens at sign-off" is decided by the gate
+  // reading persisted rows, not by any resolver in isolation.
+
+  /** The candidate line, transcribed with a structured FIXED sig. */
+  const structuredFixedCandidate: ScreeningStubOptions = {
+    ...candidateOnly,
+    prescriptions: [
+      {
+        id: CANDIDATE_RX,
+        patientId: PATIENT_ID,
+        drugNdc: CANDIDATE_NDC,
+        status: "ACTIVE",
+        drugName: CANDIDATE_DRUG_NAME,
+        sigStructureKind: "FIXED",
+        doseAmount: 10,
+        doseUnit: "MG",
+        dosesPerDay: 3,
+      },
+    ],
+  };
+
+  /**
+   * A source that knows the drug AND declares a dosing envelope below
+   * the prescribed daily total — the seeded stand-in for licensed
+   * dosing content, which is what proves the end-to-end path today.
+   */
+  function knowledgeWithLowDailyMaximum(): DrugKnowledgeSource {
+    return createInMemoryDrugKnowledgeSource({
+      drugs: {
+        [CANDIDATE_NDC]: {
+          ingredientCodes: ["INGREDIENT_ALFA"],
+          uncodedIngredientCount: 0,
+          therapeuticClassCodes: [],
+          crossSensitivityClassCodes: [],
+          doseRange: {
+            unit: "mg",
+            maxSingleDose: null,
+            maxDailyDose: 20,
+            minDailyDose: null,
+            citation: "synthetic fixture",
+          },
+        },
+      },
+    });
+  }
+
+  it("a structured sig over seeded dose knowledge: a MAJOR finding that gates sign-off until acknowledged", async () => {
+    const fake = buildFlowFake({ screening: structuredFixedCandidate });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithLowDailyMaximum() });
+
+    await startReview();
+
+    // 10mg x3/day against a 20mg/day envelope: the axis genuinely
+    // computed. MAJOR, therefore acknowledge-tier — never a hard
+    // stop, because a dosing range is a population statement.
+    const doseRow = fake.screening.state.persistedFindings.find(
+      (f) => f.code === "SCR_DOSE_ABOVE_DAILY_MAXIMUM"
+    );
+    expect(doseRow).toMatchObject({
+      severity: "MAJOR",
+      disposition: "REQUIRES_ACKNOWLEDGEMENT",
+    });
+    // The magnitude and the basis are the identity — an acknowledged
+    // 30mg must not suppress a later 300mg (see `fingerprintOf`).
+    expect(doseRow?.fingerprint).toContain("dailyTotal=30mg");
+    expect(doseRow?.fingerprint).toContain("basis=SCHEDULED");
+
+    // No dose gap of any kind: the line was structured and the
+    // content was provisioned, so the axis ran for real.
+    const persistedCodes = fake.screening.state.persistedFindings.map((f) => f.code);
+    expect(persistedCodes).not.toContain("SCR_DOSE_INPUT_UNAVAILABLE");
+    expect(persistedCodes).not.toContain("SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED");
+
+    // And it gates until the pharmacist decides.
+    await withTenancyContext(ctxFor(PHARMACIST_A), async () => {
+      await expect(
+        executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve-dose-block" })
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED" });
+    });
+
+    await acknowledge(PHARMACIST_A, outstandingFingerprints(fake), "ack-dose");
+    await withTenancyContext(ctxFor(PHARMACIST_A), () =>
+      executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: "approve-dose-ok" })
+    );
+    expect(fake.currentStatus()).toBe("PV1_APPROVED_READY_FOR_FILL");
+  });
+
+  it("a structured sig with no dose-range content: an informational knowledge gap, not a false clear", async () => {
+    // The honest production shape. The source knows the DRUG (so no
+    // SCR_KNOWLEDGE_UNAVAILABLE) but licenses no dosing envelope for
+    // anything — RxNorm's posture — and the record must say the dose
+    // was not compared rather than reading like a dose that passed.
+    const fake = buildFlowFake({ screening: structuredFixedCandidate });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithAcknowledgeTierInteraction() });
+
+    await startReview();
+
+    const gapRow = fake.screening.state.persistedFindings.find(
+      (f) => f.code === "SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED"
+    );
+    expect(gapRow).toMatchObject({
+      severity: "MINOR",
+      disposition: "INFORMATIONAL",
+    });
+    // Informational: recorded on the order, gating nothing — only
+    // procurement can close it, and the pharmacist begins with
+    // nothing to click.
+    expect(outstandingFingerprints(fake)).toEqual([]);
+  });
+
+  it("a bare PRN sig is structured and honestly numberless: no gap, no finding, no false clear either way", async () => {
+    // "As needed" with no captured amount or ceiling. The axis is
+    // AVAILABLE (somebody structured the sig; PRN is an answer), and
+    // the line contributes no comparable number — which is a fact
+    // about the prescription, not a gap in the platform or the
+    // record.
+    const fake = buildFlowFake({
+      screening: {
+        ...candidateOnly,
+        prescriptions: [
+          {
+            id: CANDIDATE_RX,
+            patientId: PATIENT_ID,
+            drugNdc: CANDIDATE_NDC,
+            status: "ACTIVE",
+            drugName: CANDIDATE_DRUG_NAME,
+            sigStructureKind: "PRN",
+          },
+        ],
+      },
+    });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithLowDailyMaximum() });
+
+    await startReview();
+
+    const persistedCodes = fake.screening.state.persistedFindings.map((f) => f.code);
+    expect(persistedCodes.filter((code) => code.startsWith("SCR_DOSE"))).toEqual([]);
+    expect(outstandingFingerprints(fake)).toEqual([]);
+  });
+
+  it("a PRN with a stated ceiling screens the maximum the prescription permits", async () => {
+    // "10mg as needed, max 4 doses/day" PERMITS 40mg against a
+    // 20mg/day envelope. That the patient may take less is exactly the
+    // pharmacist's judgement to apply, which is why the finding is
+    // acknowledge-tier and worded as a permission.
+    const fake = buildFlowFake({
+      screening: {
+        ...candidateOnly,
+        prescriptions: [
+          {
+            id: CANDIDATE_RX,
+            patientId: PATIENT_ID,
+            drugNdc: CANDIDATE_NDC,
+            status: "ACTIVE",
+            drugName: CANDIDATE_DRUG_NAME,
+            sigStructureKind: "PRN",
+            doseAmount: 10,
+            doseUnit: "MG",
+            dosesPerDay: 4,
+          },
+        ],
+      },
+    });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithLowDailyMaximum() });
+
+    await startReview();
+
+    const doseRow = fake.screening.state.persistedFindings.find(
+      (f) => f.code === "SCR_DOSE_ABOVE_DAILY_MAXIMUM"
+    );
+    expect(doseRow).toMatchObject({ severity: "MAJOR", disposition: "REQUIRES_ACKNOWLEDGEMENT" });
+    expect(doseRow?.fingerprint).toContain("basis=MAXIMUM_PERMITTED");
+  });
+
+  it("a mixed order screens its structured line and gaps only its legacy line", async () => {
+    // The reason the axis is per-LINE. One order, two prescriptions:
+    // the structured one earns a real dose finding, the legacy one an
+    // informational record-immutable gap — and neither statement
+    // bleeds onto the other line.
+    const fake = buildFlowFake({
+      screening: {
+        ...structuredFixedCandidate,
+        orderLinePrescriptionIds: [CANDIDATE_RX, PROFILE_RX],
+        prescriptions: [
+          ...(structuredFixedCandidate.prescriptions ?? []),
+          {
+            id: PROFILE_RX,
+            patientId: PATIENT_ID,
+            drugNdc: CANDIDATE_NDC,
+            status: "ACTIVE",
+            drugName: "PLACEHOLDER-PROFILE-NAME",
+            // No structured sig: a legacy transcription.
+          },
+        ],
+      },
+    });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithLowDailyMaximum() });
+
+    await startReview();
+
+    const persistedCodes = fake.screening.state.persistedFindings.map((f) => f.code);
+    expect(persistedCodes).toContain("SCR_DOSE_ABOVE_DAILY_MAXIMUM");
+    expect(persistedCodes).toContain("SCR_DOSE_INPUT_UNAVAILABLE");
+
+    const gapRow = fake.screening.state.persistedFindings.find(
+      (f) => f.code === "SCR_DOSE_INPUT_UNAVAILABLE"
+    );
+    expect(gapRow).toMatchObject({
+      fingerprint: DOSE_INPUT_GAP_FINGERPRINT,
+      severity: "MINOR",
+      disposition: "INFORMATIONAL",
+    });
+  });
+});
 
 // ---------------------------------------------------------------------------
 // The allergy axis, end to end

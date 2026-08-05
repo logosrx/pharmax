@@ -34,8 +34,13 @@
 //   - `therapeuticClassCodes` is empty (Prescribable Content carries
 //     no classification), so class-level duplication does not fire;
 //     ingredient-level duplication still does.
-//   - `doseRange` is null; the DOSE_RANGE axis is independently
-//     NOT_SUPPORTED_BY_PLATFORM (see axis-capability.ts).
+//   - `doseRange` is null for every drug, and the source SAYS SO
+//     structurally: `doseRangeCoverage` is NOT_PROVISIONED at every
+//     coverage, because RxNorm publishes nomenclature and dosing
+//     envelopes are licensed editorial content. The engine turns that
+//     declaration into `SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED` whenever a
+//     prescription supplies a structured dose — "dose known, range
+//     content not licensed" — instead of a silent pass.
 //
 // CODE SPACES. `describeDrug` is keyed by the prescription's NDC
 // (normalized 11-digit, same normalization `@pharmax/drug-identity`
@@ -113,6 +118,7 @@ export async function loadRxnormKnowledgeSourceForScreen(
   if (live === null) {
     return {
       coverage: "NOT_PROVISIONED",
+      doseRangeCoverage: "NOT_PROVISIONED",
       release: null,
       describeDrug: () => null,
       describeAllergen: () => null,
@@ -185,6 +191,14 @@ export async function loadRxnormKnowledgeSourceForScreen(
 
   return {
     coverage: "PROVISIONED",
+    // CONSTANT, not derived: RxNorm publishes nomenclature, not dosing
+    // envelopes, so `doseRange` is null for every drug at every
+    // release. Declaring the facet unprovisioned is what lets the
+    // engine report "dose known, range content not licensed" instead
+    // of silently passing every structured dose. Flips only when
+    // licensed dosing content (First Databank / Medi-Span class) is
+    // wired behind its own adapter.
+    doseRangeCoverage: "NOT_PROVISIONED",
     release: { source: RXNORM_KNOWLEDGE_SOURCE_CODE, version: live.version },
     describeDrug: (code) => knowledgeByCode.get(code) ?? null,
     describeAllergen: () => null,
