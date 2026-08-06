@@ -219,6 +219,56 @@ describe("the allergy record-state token", () => {
     expect(await allergyToken(tx)).not.toBe(before);
   });
 
+  it("a status CYCLE never returns the token to an earlier value — statusChangedAt is load-bearing", async () => {
+    // The subtle ABA variant: one row amended ENTERED_IN_ERROR and
+    // then amended BACK (the retraction was itself an error). The
+    // hashed status columns end where they began; only the
+    // status-change stamp distinguishes the third state from the
+    // first. Drop `statusChangedAt` from the hash and this test is
+    // what fails — without it, an acknowledgement recorded at state
+    // one would silently satisfy the gate at state three.
+    const { tx, stubs } = stubTx({
+      allergies: [screenableStubAllergy({ patientId: PATIENT_ID })],
+    });
+    const initial = await allergyToken(tx);
+
+    stubs.state.allergies[0] = {
+      ...stubs.state.allergies[0]!,
+      verificationStatus: "ENTERED_IN_ERROR",
+      statusChangedAt: new Date("2026-08-05T10:00:00.000Z"),
+    };
+    const retracted = await allergyToken(tx);
+    expect(retracted).not.toBe(initial);
+
+    stubs.state.allergies[0] = {
+      ...stubs.state.allergies[0]!,
+      verificationStatus: "CONFIRMED",
+      statusChangedAt: new Date("2026-08-06T10:00:00.000Z"),
+    };
+    const reinstated = await allergyToken(tx);
+    expect(reinstated).not.toBe(initial);
+    expect(reinstated).not.toBe(retracted);
+  });
+
+  it("hashes exactly the documented serialization — the golden token", async () => {
+    // Pins the byte-level hash input: version prefix, the A-line's
+    // field order (id, clinicalStatus, verificationStatus,
+    // statusChangedAt), the H-line's (id, status, assertedAt), and
+    // the allergies-before-assertions section order. ANY change to
+    // the serialization — a dropped input, a reordered field, a new
+    // column — must land here, and the correct response is to bump
+    // the "allergy-record-state-v1" version prefix (staling every
+    // stored token, the safe direction) and update this constant in
+    // the same reviewed change.
+    const { tx } = stubTx({
+      allergies: [screenableStubAllergy({ patientId: PATIENT_ID })],
+      historyAssertions: [historyTakenNoKnownAllergies(PATIENT_ID)],
+    });
+    expect(await allergyToken(tx)).toBe(
+      "b6a28b66f4b66b20ccf86b3111ab2df4b8c37508dba055265f6befd597ba8099"
+    );
+  });
+
   it("refuses a record over the row cap rather than hashing a subset", async () => {
     const { tx, stubs } = stubTx();
     for (let i = 0; i <= MAX_RECORD_STATE_ROWS; i += 1) {
