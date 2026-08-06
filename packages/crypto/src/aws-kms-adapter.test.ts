@@ -191,6 +191,22 @@ function defaultKeys(): Record<string, FakeKey> {
   };
 }
 
+/**
+ * Build an error shaped like an AWS SDK v3 modeled exception.
+ *
+ * The SDK sets `name` to the shape name (`AccessDeniedException`,
+ * `NotFoundException`, ...) and that name is the ONLY discriminator
+ * the adapter has, because the crypto package deliberately does not
+ * depend on `@aws-sdk/client-kms`. A fake that leaves `name` as
+ * `"Error"` and merely prefixes the message would silently exercise
+ * the unclassified path instead.
+ */
+function awsSdkError(name: string, message: string): Error {
+  const error = new Error(message);
+  error.name = name;
+  return error;
+}
+
 function makeAdapter(overrides?: {
   keys?: Record<string, FakeKey>;
   dataKeyKeyId?: string;
@@ -761,7 +777,7 @@ describe("AwsKmsAdapter — validate() additional coverage", () => {
     const fake: AwsKmsClient = {
       ...createFakeKmsClient(defaultKeys()),
       describeKey: async () => {
-        throw new Error("AccessDeniedException: kms:DescribeKey is required");
+        throw awsSdkError("AccessDeniedException", "kms:DescribeKey is required");
       },
     };
     const adapter = new AwsKmsAdapter({
@@ -770,7 +786,7 @@ describe("AwsKmsAdapter — validate() additional coverage", () => {
       searchKeyKeyId: SEARCH_KEY,
       keyIdLabel: "app-phi",
     });
-    await expect(adapter.validate()).rejects.toMatchObject({ code: "KMS_KEY_NOT_FOUND" });
+    await expect(adapter.validate()).rejects.toMatchObject({ code: "KMS_ACCESS_DENIED" });
   });
 
   it("rejects when DescribeKey returns metadata missing KeyUsage", async () => {
@@ -1238,7 +1254,7 @@ describe("AwsKmsAdapter — validate() covers historical CMKs", () => {
       ...baseClient,
       describeKey: async (input) => {
         if (input.KeyId === PREVIOUS_DATA_KEY_1) {
-          throw new Error("AccessDeniedException: missing kms:DescribeKey on historical key");
+          throw awsSdkError("AccessDeniedException", "missing kms:DescribeKey on historical key");
         }
         return baseClient.describeKey(input);
       },
@@ -1250,7 +1266,13 @@ describe("AwsKmsAdapter — validate() covers historical CMKs", () => {
       keyIdLabel: "app-phi",
       previousDataKeyKeyIds: [PREVIOUS_DATA_KEY_1],
     });
-    await expect(adapter.validate()).rejects.toMatchObject({ code: "KMS_KEY_NOT_FOUND" });
+    // The failing key must be named in `kid` — during a rotation the
+    // operator has three or more ARNs in play and "one of them is
+    // denied" is not an actionable page.
+    await expect(adapter.validate()).rejects.toMatchObject({
+      code: "KMS_ACCESS_DENIED",
+      metadata: { kid: PREVIOUS_DATA_KEY_1 },
+    });
   });
 
   it("rejects a historical key with wrong KeyUsage at boot", async () => {
@@ -1528,6 +1550,256 @@ describe("AwsKmsAdapter — unwrapDataKey fall-through across historical CMKs", 
     // but the current key matches, so the loop never executes.
     expect(client.decryptCalls.length - callsBefore).toBe(1);
     expect(client.decryptCalls[callsBefore]?.KeyId).toBe(ROTATED_DATA_KEY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Boot-path diagnostics.
+// ---------------------------------------------------------------------------
+//
+// When `validate()` fails in production the application cannot
+// decrypt PHI, so the boot error IS the incident's first artifact.
+// These tests pin the three properties an on-call engineer depends
+// on, each of which was previously absent:
+//
+//   1. The AWS error survives the throw as `cause` — its type, its
+//      message and its stack.
+//   2. `kid` holds a key identifier and nothing else. It is read
+//      programmatically and rendered as a log field / alarm
+//      dimension; an English sentence there corrupts every consumer.
+//   3. AccessDenied is distinguishable from NotFound, because the
+//      remedies are disjoint (IAM vs. a wrong ARN/region).
+//
+// A PHI guard rides along: the AWS message may echo request detail,
+// so it must reach `message` and `cause` but never indexed metadata.
+
+// A distinctive substring so we can assert exactly where the AWS
+// error text is allowed to appear.
+const AWS_DETAIL = "sentinel-aws-request-detail-9f3c";
+
+describe("AwsKmsAdapter — boot-path KMS failure diagnostics", () => {
+  function adapterWhoseDescribeFails(error: unknown): AwsKmsAdapter {
+    const fake: AwsKmsClient = {
+      ...createFakeKmsClient(defaultKeys()),
+      describeKey: async () => {
+        throw error;
+      },
+    };
+    return new AwsKmsAdapter({
+      client: fake,
+      dataKeyKeyId: DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+    });
+  }
+
+  async function captureValidateError(error: unknown): Promise<
+    Error & {
+      code: string;
+      metadata: Record<string, unknown>;
+    }
+  > {
+    const adapter = adapterWhoseDescribeFails(error);
+    try {
+      await adapter.validate();
+    } catch (thrown) {
+      return thrown as Error & { code: string; metadata: Record<string, unknown> };
+    }
+    throw new Error("expected validate() to reject");
+  }
+
+  it("threads the original AWS error through as `cause`", async () => {
+    const awsError = awsSdkError("NotFoundException", `Key not found: ${AWS_DETAIL}`);
+    const thrown = await captureValidateError(awsError);
+    // Identity, not a copy: the type, the stack and any nested cause
+    // are only intact if the same object arrives.
+    expect(thrown.cause).toBe(awsError);
+    expect((thrown.cause as Error).name).toBe("NotFoundException");
+    expect((thrown.cause as Error).stack).toBeDefined();
+  });
+
+  it("preserves a nested cause chain below the AWS error", async () => {
+    const socketError = new Error("ECONNRESET");
+    const awsError = new Error("KMS unreachable", { cause: socketError });
+    awsError.name = "TimeoutError";
+    const thrown = await captureValidateError(awsError);
+    expect((thrown.cause as Error).cause).toBe(socketError);
+  });
+
+  it("puts the key identifier in `kid`, not a sentence about the failure", async () => {
+    const thrown = await captureValidateError(
+      awsSdkError("NotFoundException", `Key not found: ${AWS_DETAIL}`)
+    );
+    expect(thrown.metadata.kid).toBe(DATA_KEY);
+    // Guard against a regression to the flattened form, which read
+    // `aws-kms describe(<id>) failed for <field>: <aws message>`.
+    const kid = String(thrown.metadata.kid);
+    expect(kid).not.toContain("failed");
+    expect(kid).not.toContain(" ");
+    expect(kid).not.toContain(AWS_DETAIL);
+  });
+
+  it("names the failing config field and the AWS exception in the message", async () => {
+    const thrown = await captureValidateError(
+      awsSdkError("NotFoundException", `Key not found: ${AWS_DETAIL}`)
+    );
+    expect(thrown.message).toContain("dataKeyKeyId");
+    expect(thrown.message).toContain("NotFoundException");
+    expect(thrown.message).toContain(AWS_DETAIL);
+  });
+
+  it("records the modeled AWS exception name in metadata as its own field", async () => {
+    const thrown = await captureValidateError(awsSdkError("NotFoundException", "Key not found"));
+    expect(thrown.metadata.awsErrorName).toBe("NotFoundException");
+  });
+
+  it("keeps the AWS error text out of indexed metadata", async () => {
+    const thrown = await captureValidateError(
+      awsSdkError("NotFoundException", `Key not found: ${AWS_DETAIL}`)
+    );
+    // Metadata is what becomes log fields and alarm dimensions. The
+    // AWS message can echo request detail, so it rides on `message`
+    // and `cause` only.
+    expect(JSON.stringify(thrown.metadata)).not.toContain(AWS_DETAIL);
+    expect(Object.keys(thrown.metadata).sort()).toEqual(["awsErrorName", "kid", "tenantId"]);
+  });
+
+  it("does not serialize `cause` through toJSON (PHI-adjacent chain guard)", async () => {
+    const thrown = await captureValidateError(
+      awsSdkError("NotFoundException", `Key not found: ${AWS_DETAIL}`)
+    );
+    const json = (thrown as unknown as { toJSON(): Record<string, unknown> }).toJSON();
+    expect(json).not.toHaveProperty("cause");
+    expect(JSON.stringify(json.metadata)).not.toContain(AWS_DETAIL);
+  });
+
+  it("distinguishes AccessDeniedException from a missing key", async () => {
+    const denied = await captureValidateError(
+      awsSdkError("AccessDeniedException", "not authorized to perform kms:DescribeKey")
+    );
+    const missing = await captureValidateError(
+      awsSdkError("NotFoundException", "Key 'arn:aws:kms:...' does not exist")
+    );
+    expect(denied.code).toBe("KMS_ACCESS_DENIED");
+    expect(missing.code).toBe("KMS_KEY_NOT_FOUND");
+    // An IAM problem must not tell the responder the key is missing —
+    // that sends them to Terraform instead of the task role.
+    expect(denied.message).not.toContain("could not resolve");
+    expect(denied.message).toContain("denied access");
+  });
+
+  it("treats the KMS-prefixed access-denied shape as access denied too", async () => {
+    const thrown = await captureValidateError(
+      awsSdkError("KMSAccessDeniedException", "not authorized")
+    );
+    expect(thrown.code).toBe("KMS_ACCESS_DENIED");
+  });
+
+  it("leaves unclassifiable transport failures on KMS_KEY_NOT_FOUND", async () => {
+    // Throttling and timeouts are neither "denied" nor "missing".
+    // They keep the pre-existing code so the boot contract holds;
+    // `awsErrorName` is what separates them on a dashboard.
+    const thrown = await captureValidateError(awsSdkError("ThrottlingException", "slow down"));
+    expect(thrown.code).toBe("KMS_KEY_NOT_FOUND");
+    expect(thrown.metadata.awsErrorName).toBe("ThrottlingException");
+  });
+
+  it("does not guess a classification from a non-Error throw", async () => {
+    const thrown = await captureValidateError("AccessDeniedException");
+    expect(thrown.code).toBe("KMS_KEY_NOT_FOUND");
+    expect(thrown.metadata.awsErrorName).toBe("unknown");
+    expect(thrown.cause).toBe("AccessDeniedException");
+  });
+
+  it("a disabled key names the key id in `kid` and explains itself in the message", async () => {
+    const keys = defaultKeys();
+    keys[DATA_KEY] = { ...keys[DATA_KEY]!, Enabled: false };
+    const { adapter } = makeAdapter({ keys });
+    await expect(adapter.validate()).rejects.toMatchObject({
+      code: "KMS_KEY_NOT_FOUND",
+      metadata: { kid: DATA_KEY },
+    });
+    await expect(adapter.validate()).rejects.toThrow(/Enabled=false/);
+  });
+
+  it("a disabled search key names the search key, not the data key", async () => {
+    const keys = defaultKeys();
+    keys[SEARCH_KEY] = { ...keys[SEARCH_KEY]!, Enabled: false };
+    const { adapter } = makeAdapter({ keys });
+    await expect(adapter.validate()).rejects.toMatchObject({
+      code: "KMS_KEY_NOT_FOUND",
+      metadata: { kid: SEARCH_KEY },
+    });
+  });
+});
+
+describe("AwsKmsAdapter — unwrap-path and by-design failures keep `kid` a kid", () => {
+  it("a failed unwrap threads the last KMS decrypt error as `cause`", async () => {
+    const decryptError = awsSdkError("InvalidCiphertextException", `bad blob: ${AWS_DETAIL}`);
+    const base = createFakeKmsClient(defaultKeys());
+    const client: AwsKmsClient = {
+      ...base,
+      decrypt: async () => {
+        throw decryptError;
+      },
+    };
+    const adapter = new AwsKmsAdapter({
+      client,
+      dataKeyKeyId: DATA_KEY,
+      searchKeyKeyId: SEARCH_KEY,
+      keyIdLabel: "app-phi",
+    });
+    let thrown: unknown;
+    try {
+      await adapter.unwrapDataKey({
+        tenantId: "org-1",
+        kid: "aws:kek:app-phi:org-1:v1",
+        wrappedDek: Buffer.alloc(64, 1),
+      });
+    } catch (caught) {
+      thrown = caught;
+    }
+    expect((thrown as { code: string }).code).toBe("DECRYPT_FAILED");
+    expect((thrown as { cause: unknown }).cause).toBe(decryptError);
+  });
+
+  const signRootInput = {
+    tenantId: "org-1",
+    windowStart: new Date("2026-01-01T00:00:00.000Z"),
+    windowEnd: new Date("2026-01-02T00:00:00.000Z"),
+    root: Buffer.alloc(32, 7),
+    leafCount: 3,
+  } as const;
+
+  it("signRoot's by-design refusal keeps a parseable kid and explains itself", async () => {
+    const { adapter } = makeAdapter({ keyIdLabel: "app-phi" });
+    let thrown: unknown;
+    try {
+      await adapter.signRoot(signRootInput);
+    } catch (caught) {
+      thrown = caught;
+    }
+    const metadata = (thrown as { metadata: Record<string, unknown> }).metadata;
+    expect(metadata.kid).toBe("aws:kek:app-phi:org-1:v1");
+    expect((thrown as Error).message).toContain("KmsAsymmetricSigner");
+  });
+
+  it("verifyRoot's by-design refusal keeps a parseable kid", async () => {
+    const { adapter } = makeAdapter({ keyIdLabel: "app-phi" });
+    let thrown: unknown;
+    try {
+      await adapter.verifyRoot({
+        ...signRootInput,
+        signature: Buffer.alloc(64, 1),
+        kmsKeyId: "arn:aws:kms:us-east-1:111111111111:key/abc-123",
+        signatureAlgorithm: "ECDSA_SHA_256",
+      });
+    } catch (caught) {
+      thrown = caught;
+    }
+    const metadata = (thrown as { metadata: Record<string, unknown> }).metadata;
+    expect(metadata.kid).toBe("aws:kek:app-phi:org-1:v1");
+    expect((thrown as Error).message).toContain("EcdsaP256SignatureVerifier");
   });
 });
 

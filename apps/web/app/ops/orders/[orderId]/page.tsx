@@ -10,10 +10,18 @@
 //
 // PHI rendering rule: every decrypted value renders inside a <dd>,
 // "—" for null fields.
+//
+// This is also the PV1 clinical-screening review surface. The findings
+// panel sits directly under the prescription lines, because a finding
+// is a claim about a drug ("no drug knowledge is available for
+// <NDC>") and the pharmacist has to have the drug, strength and sig in
+// front of them to judge it. It is the only place an acknowledgement
+// can be recorded; see `screening-findings-panel.tsx`.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { OrderStatus } from "@pharmax/database";
 import { PERMISSIONS } from "@pharmax/rbac";
 
 import {
@@ -23,6 +31,9 @@ import {
 import { resolveOperatorTenancyContext } from "../../../../src/server/auth/resolve-tenancy.js";
 import { auditPatientView } from "../../../../src/server/ops/audit-patient-view.js";
 import { getOrderDetail } from "../../../../src/server/ops/get-order-detail.js";
+import { getOrderScreening } from "../../../../src/server/ops/get-order-screening.js";
+import { getPatientAllergies } from "../../../../src/server/ops/get-patient-allergies.js";
+import { PatientAllergyPanel } from "../../../../src/components/ops/patient-allergy-panel.js";
 import { resolveOrderSearchToken } from "../../../../src/server/ops/resolve-order-search-token.js";
 import { PageHeader, Section } from "../../../../src/components/ui/page.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../../src/components/ui/card.js";
@@ -32,8 +43,19 @@ import { DataList, Table, THead, TH, TBody, TR, TD } from "../../../../src/compo
 import { buttonClass } from "../../../../src/components/ui/button.js";
 import { Icon } from "../../../../src/components/ui/icon.js";
 import { priorityMeta, statusMeta } from "../../../../src/components/ui/workflow.js";
+import { QueueFlash } from "../../../../src/components/ops/flash.js";
+import { describePv1ScreeningError } from "../../../../src/components/ops/pv1-screening-errors.js";
+import {
+  ScreeningFindingsPanel,
+  type AcknowledgeGate,
+} from "../../../../src/components/ops/screening-findings-panel.js";
 import { StageTimeline } from "../../../../src/components/ops/stage-timeline.js";
 import type { Tone } from "../../../../src/components/ui/badge.js";
+
+const ORDER_FLASH: Readonly<Record<string, string>> = {
+  screening_acknowledged: "Screening finding acknowledged — recorded against your user.",
+  screening_already_acknowledged: "You had already acknowledged that finding; nothing changed.",
+};
 
 function dash(value: string | null): string {
   return value ?? "—";
@@ -149,10 +171,13 @@ function GuardPage({ grant }: { readonly grant: string }) {
 
 export default async function OrderDetailPage({
   params,
+  searchParams,
 }: {
   readonly params: Promise<{ readonly orderId: string }>;
+  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { orderId } = await params;
+  const query = await searchParams;
   const session = await resolveOperatorTenancyContext();
   if (!session.ok) return null;
 
@@ -241,6 +266,47 @@ export default async function OrderDetailPage({
   const sm = statusMeta(detail.currentStatus);
   const pm = priorityMeta(detail.priority);
 
+  // The findings the GATE will evaluate, read from the persisted rows
+  // and scoped to this operator's own acknowledgements.
+  const screening = await getOrderScreening({
+    organizationId: session.tenancy.organizationId,
+    orderId: detail.orderId,
+    pharmacistUserId: session.operator.userId,
+  });
+
+  // The allergy profile, beside the prescription it matters for.
+  //
+  // NOT a duplicate of the screening panel, and the difference is the
+  // point. The screening panel says what the ENGINE concluded; with no
+  // licensed drug-knowledge source wired it concludes almost nothing,
+  // because it cannot resolve an NDC to its ingredients. This panel is
+  // the input, rendered so a pharmacist can do the comparison the engine
+  // cannot — which for an uncoded allergen is the only comparison there
+  // will ever be. Read-only here: capture belongs on the patient record,
+  // not mid-verification.
+  const allergyProfile = hasOperatorPermission(permissions, PERMISSIONS.PATIENTS_ALLERGIES_READ)
+    ? await getPatientAllergies({
+        organizationId: session.tenancy.organizationId,
+        patientId: detail.patient.patientId,
+      })
+    : null;
+
+  // UI convenience only — `AcknowledgePV1ScreeningFinding` re-checks
+  // both the permission and the order's stage, and it is the control.
+  const acknowledgeGate: AcknowledgeGate = !hasOperatorPermission(
+    permissions,
+    PERMISSIONS.PV1_APPROVE
+  )
+    ? { kind: "NO_PERMISSION" }
+    : detail.currentStatus !== OrderStatus.PV1_IN_PROGRESS
+      ? { kind: "REVIEW_CLOSED" }
+      : { kind: "OPEN" };
+
+  const screeningError = describePv1ScreeningError(
+    typeof query["error"] === "string" ? query["error"] : null
+  );
+  const flashParams = screeningError === null ? query : { ...query, error: undefined };
+
   return (
     <div className="space-y-6 animate-fade-in">
       <Link
@@ -273,6 +339,17 @@ export default async function OrderDetailPage({
           <StageTimeline status={detail.currentStatus} />
         </CardContent>
       </Card>
+
+      <QueueFlash params={flashParams} messages={ORDER_FLASH} />
+
+      {screeningError !== null ? (
+        <Banner tone={screeningError.tone} title={screeningError.title}>
+          {screeningError.guidance}
+          <p className="mt-2 text-xs opacity-80">
+            Refusal code <code>{screeningError.code}</code>
+          </p>
+        </Banner>
+      ) : null}
 
       {audit.output.wasShredded ? (
         <Banner tone="warning" title="Patient was crypto-shredded (right-to-be-forgotten)">
@@ -373,12 +450,101 @@ export default async function OrderDetailPage({
                       },
                     ]}
                   />
+                  {/* Compound screening coverage, per recipe row. The
+                      findings panel below says WHAT the screen
+                      concluded; this says WHICH rows it read — and
+                      which ones only the pharmacist will ever read,
+                      the same per-row honesty the allergy panel gives
+                      uncoded allergens. */}
+                  {line.compound === null ? null : line.compound.formula === null ? (
+                    <Banner
+                      tone="warning"
+                      title="Compounded preparation — no active formula linked"
+                    >
+                      No published formula claims this compound product, so none of its ingredients
+                      were machine-screened against the patient&rsquo;s allergies. Screen it by
+                      reading the preparation&rsquo;s recipe yourself. Linking and coding a formula
+                      (a formulary task) closes this for every future order.
+                    </Banner>
+                  ) : (
+                    <div className="space-y-1.5 border-t border-subtle pt-2">
+                      <p className="text-xs text-subtle">
+                        Compound formula{" "}
+                        <code className="font-mono text-muted">
+                          {line.compound.formula.formulaCode} v
+                          {line.compound.formula.formulaVersion}
+                        </code>{" "}
+                        — {line.compound.formula.formulaName}.{" "}
+                        {line.compound.formula.ingredients.some((i) => i.coding === "UNCODED")
+                          ? "Rows marked below were NOT machine-screened; read them."
+                          : "Every ingredient row is coded or accounted for."}
+                      </p>
+                      <ul className="space-y-1">
+                        {line.compound.formula.ingredients.map((ingredient) => (
+                          <li
+                            key={ingredient.ingredientId}
+                            className="flex flex-wrap items-center gap-2 text-sm"
+                          >
+                            <span className="text-fg">{ingredient.ingredientName}</span>
+                            <span className="font-mono text-xs text-subtle">
+                              {ingredient.quantity} {ingredient.unit}
+                            </span>
+                            {ingredient.coding === "RXNORM_IN" ? (
+                              <Badge tone="success">
+                                screened · RXCUI {ingredient.rxnormInRxcui}
+                              </Badge>
+                            ) : ingredient.coding === "NO_RXNORM_INGREDIENT" ? (
+                              <Badge tone="neutral">asserted non-drug — base/excipient</Badge>
+                            ) : (
+                              <Badge tone="warning">not machine-screened — read this row</Badge>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             ))}
           </div>
         )}
       </Section>
+
+      {/* ABOVE the findings panel, deliberately. The findings panel is
+          where a pharmacist signs; the allergy list is what they should
+          have read before signing. Ordering it after would put the
+          control before the evidence. */}
+      {allergyProfile === null ? null : (
+        <PatientAllergyPanel
+          profile={allergyProfile}
+          // Read-only at PV1. Capture is intake work and belongs on the
+          // patient record; a form here would invite a pharmacist to
+          // enter a history they are taking from the prescription in
+          // front of them rather than from the patient.
+          capabilities={{ canRecord: false, canAmendStatus: false }}
+          actionBase={`/api/ops/admin/patients/${detail.patient.patientId}`}
+          title="Patient allergies (verification input)"
+          footnote={
+            <p className="text-xs text-subtle">
+              To record or correct an allergy, open the{" "}
+              <Link
+                href={`/ops/admin/patients/${detail.patient.patientId}`}
+                className="underline hover:text-fg"
+              >
+                patient record
+              </Link>
+              . Findings below reflect the screen that ran at PV1; a change made now is picked up by
+              the re-screen at approval.
+            </p>
+          }
+        />
+      )}
+
+      <ScreeningFindingsPanel
+        orderId={detail.orderId}
+        screening={screening}
+        gate={acknowledgeGate}
+      />
 
       <Section title="Shipment">
         {detail.shipment === null ? (

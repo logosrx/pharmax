@@ -68,6 +68,29 @@
 //   command sets it to the pharmacist. ApprovePV1 / RejectPV1 will
 //   each clear it again as the order moves to the next queue.
 //
+// Clinical screening:
+//
+//   This command runs the PV1 clinical screen and persists its
+//   findings to `order_screening_finding` (phase PV1_START), so the
+//   pharmacist's console has interaction / allergy / duplication /
+//   dose findings in front of it the moment the review opens rather
+//   than depending on the pharmacist remembering to look.
+//
+//   The snapshot taken here GATES NOTHING. `ApprovePV1` screens
+//   again and gates on that second result. A PV1 review is not
+//   instantaneous — between opening it and signing it, the patient's
+//   profile can gain a medication and the prescription can be edited
+//   — and that interval is precisely where a new interaction would
+//   appear. Gating on the start-time snapshot would approve against a
+//   world that no longer exists.
+//
+//   A screen that CANNOT run fails this command (an order with no
+//   prescription lines; a profile too large to screen honestly). That
+//   is deliberate: failing at review-open is visible, whereas failing
+//   at sign-off wastes the pharmacist's work. What a failing screen
+//   must never do is return "no findings", which reads identically to
+//   "clinically clear".
+//
 // SLA interval invariant:
 //
 //   Same as the typing-stage commands — no `order_stage_interval`
@@ -83,10 +106,12 @@
 //   reference scope (orderId, organizationId, siteId,
 //   pharmacistUserId, bucketIdAfter) and workflow identity
 //   (fromState, toState, transitionId, policyId, policyVersion) —
-//   zero patient PHI.
+//   zero patient PHI. The screening payload adds finding codes,
+//   gradings and fingerprints; `patientId` is read to resolve the
+//   medication profile and never leaves the transaction.
 
 import { defineCommand, ORDER_VERSION_MISMATCH } from "@pharmax/command-bus";
-import { OrderStatus } from "@pharmax/database";
+import { OrderStatus, ScreeningPhase } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { applyCommandStageIntervalTransition } from "@pharmax/sla";
@@ -101,6 +126,10 @@ import {
   type OrderState,
 } from "@pharmax/workflow";
 import { z } from "zod";
+
+import { projectScreening } from "../screening/projection.js";
+import { persistFindings, runOrderScreen } from "../screening/run-screen.js";
+import { loadPatientIdForOrder } from "../screening/order-patient.js";
 
 import { PV1_BUCKET_NOT_CONFIGURED } from "./complete-typing-review.js";
 
@@ -279,6 +308,49 @@ export const StartPV1 = defineCommand<StartPV1Input, StartPV1Output>({
 
     const now = clock.now();
 
+    // Clinical screening. Runs here, inside the same transaction that
+    // claims the order, so the pharmacist's console has findings to
+    // render the moment the review opens — and so a screen that
+    // cannot run (an order with no lines, a profile too large to
+    // screen honestly) stops the review from opening rather than
+    // surfacing at sign-off, when the pharmacist has already done the
+    // work.
+    //
+    // This snapshot does NOT gate anything. `ApprovePV1` screens
+    // again and gates on that result: a PV1 review takes minutes,
+    // during which the profile can gain a medication, and approving
+    // against a snapshot taken at the start means approving against a
+    // world that may no longer exist.
+    const screeningPolicy = (policy.merged?.merged ?? ORDER_STANDARD_V1).screening;
+    const patientId = await loadPatientIdForOrder({
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+    });
+    const screen = await runOrderScreen({
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+      patientId,
+      policy: screeningPolicy,
+    });
+    await persistFindings({
+      tx,
+      organizationId: ctx.organizationId,
+      orderId: target.id,
+      phase: ScreeningPhase.PV1_START,
+      screenedForUserId: pharmacistUserId,
+      findings: screen.evaluation.findings,
+      workflowPolicyId: policy.id,
+      workflowPolicyVersion: policy.version,
+      minimumReportedSeverity: screeningPolicy.minimumReportedSeverity,
+      knowledgeRelease: screen.knowledgeRelease,
+      formulaProvenanceByFingerprint: screen.formulaProvenanceByFingerprint,
+      commandLogId,
+      occurredAt: now,
+    });
+    const projectedScreening = projectScreening(screen.evaluation);
+
     await applyCommandStageIntervalTransition({
       commandName: "StartPV1",
       tx,
@@ -314,6 +386,14 @@ export const StartPV1 = defineCommand<StartPV1Input, StartPV1Output>({
           bucketIdAfter: pv1Bucket.id,
           pharmacistUserId,
           commandLogId,
+          // Counts, not findings. The audit row answers "was a screen
+          // performed, and what did it come back with?"; the findings
+          // themselves live in `order_screening_finding`.
+          screeningOutcome: projectedScreening.outcome,
+          screeningFindingCount: projectedScreening.findingCount,
+          screeningHardStopCount: projectedScreening.hardStopCount,
+          screeningRequiresAcknowledgementCount: projectedScreening.requiresAcknowledgementCount,
+          screeningGapCount: projectedScreening.gapCount,
         },
       },
       emits: [
@@ -330,6 +410,24 @@ export const StartPV1 = defineCommand<StartPV1Input, StartPV1Output>({
             transitionId: transition.transitionId,
             fromState: transition.fromState,
             toState: transition.toState,
+            occurredAt: now.toISOString(),
+          },
+        },
+        {
+          eventType: "order.pv1.screening.recorded.v1",
+          aggregateType: "Order",
+          aggregateId: target.id,
+          payload: {
+            orderId: target.id,
+            organizationId: ctx.organizationId,
+            siteId: target.siteId,
+            pharmacistUserId,
+            phase: ScreeningPhase.PV1_START,
+            screenedLineCount: screen.screenedLineCount,
+            workflowPolicyId: policy.id,
+            workflowPolicyVersion: policy.version,
+            minimumReportedSeverity: screeningPolicy.minimumReportedSeverity,
+            ...projectedScreening,
             occurredAt: now.toISOString(),
           },
         },

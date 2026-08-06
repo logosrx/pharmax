@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@pharmax/clinical-screening": "workspace:*",
     "@pharmax/platform-core": "workspace:*"
   },
   "devDependencies": {

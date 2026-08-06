@@ -155,4 +155,38 @@ describe("EasyPostClient", () => {
       })
     ).rejects.toBeInstanceOf(EasyPostApiError);
   });
+
+  it("threads the underlying network error through as `cause`", async () => {
+    // `wrapEasyPostError` in easypost-adapter.ts preserves whatever
+    // chain it is handed, so this is the only place the socket-level
+    // error can be retained. Without it, a shipping outage reaches
+    // Sentry as an EasyPostApiError with no root cause and no stack
+    // below this client.
+    const socketError = new Error("ECONNREFUSED");
+    const fetchImpl = fakeFetch(() => {
+      throw socketError;
+    });
+    const client = new EasyPostClient({ apiKey: API_KEY, fetch: fetchImpl });
+    let thrown: unknown;
+    try {
+      await client.buyShipment("shp_5", { rate: { id: "rate_1" } });
+    } catch (caught) {
+      thrown = caught;
+    }
+    expect(thrown).toBeInstanceOf(EasyPostApiError);
+    expect((thrown as Error).cause).toBe(socketError);
+  });
+
+  it("threads the JSON parse failure through as `cause`", async () => {
+    const fetchImpl = fakeFetch(() => new Response("not json", { status: 502 }));
+    const client = new EasyPostClient({ apiKey: API_KEY, fetch: fetchImpl });
+    let thrown: unknown;
+    try {
+      await client.buyShipment("shp_6", { rate: { id: "rate_1" } });
+    } catch (caught) {
+      thrown = caught;
+    }
+    expect((thrown as { code: string }).code).toBe("EASYPOST_RESPONSE_INVALID_JSON");
+    expect((thrown as Error).cause).toBeInstanceOf(SyntaxError);
+  });
 });

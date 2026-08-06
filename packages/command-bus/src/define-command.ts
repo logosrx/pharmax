@@ -250,12 +250,11 @@ export interface DefineCommandExecDeps<TInput> extends HandlerDeps<TInput> {
 }
 
 /**
- * Return shape from the `exec` callback. The factory turns this
- * into a `HandlerResult<TOutput>` for the bus AND performs the
- * version CAS / order_event writeback steps.
+ * The parts of an `exec` result that both outcomes carry. The factory
+ * turns them into a `HandlerResult<TOutput>` for the bus AND performs
+ * the version CAS / order_event writeback steps.
  */
-export interface DefineCommandExecResult<TOutput> {
-  readonly output: TOutput;
+interface DefineCommandExecResultCommon {
   /**
    * The audit draft the bus will pass to the chained writer.
    * Same shape as `HandlerResult.audit`.
@@ -275,9 +274,34 @@ export interface DefineCommandExecResult<TOutput> {
    * on an order aggregate.
    */
   readonly targetOrderId?: string;
-  /** Optimistic-lock CAS instruction; see `BumpVersionInstruction`. */
-  readonly bumpVersion?: BumpVersionInstruction;
 }
+
+/**
+ * Return shape from the `exec` callback: either the command's output,
+ * or a COMMITTED REFUSAL (see `HandlerResult`).
+ *
+ * On the refusal branch the factory still writes the `order_event`
+ * rows for `emits` — the refused attempt belongs on the order's
+ * timeline — and the bus still writes audit + outbox. Only the error
+ * is deferred, to after the commit.
+ *
+ * `bumpVersion` is absent from the refusal branch on purpose: a
+ * refusal performs no transition, so moving the order's version would
+ * invalidate a concurrent command's CAS on behalf of an act that did
+ * not happen. The factory also asserts this at runtime, because a
+ * hand-widened type is not a guarantee.
+ */
+export type DefineCommandExecResult<TOutput> =
+  | (DefineCommandExecResultCommon & {
+      readonly output: TOutput;
+      readonly bumpVersion?: BumpVersionInstruction;
+      readonly refusal?: undefined;
+    })
+  | (DefineCommandExecResultCommon & {
+      readonly output?: undefined;
+      readonly bumpVersion?: undefined;
+      readonly refusal: errors.PharmaxError;
+    });
 
 /** Top-level `defineCommand` input. */
 export interface DefineCommandSpec<TInput, TOutput> {
@@ -318,7 +342,9 @@ export const DEFINE_COMMAND_CONFIG_INVALID = "DEFINE_COMMAND_CONFIG_INVALID";
  *   4. Invoke caller's `exec` with the resolved deps.
  *   5. (optional) CAS bump target's `version`.
  *   6. (optional) Write `order_event` per emit.
- *   7. Return `HandlerResult` to the bus.
+ *   7. Return `HandlerResult` to the bus — carrying `refusal` when
+ *      the handler declared a committed refusal, which the bus
+ *      throws AFTER the commit.
  *
  * Saga compensation: if any of steps 4–6 throw AND the handler
  * registered any `saga.step()` calls before the throw, those
@@ -391,6 +417,13 @@ export function defineCommand<TInput, TOutput>(
       };
       const result = await spec.exec(execDeps);
 
+      if (result.refusal !== undefined && result.bumpVersion !== undefined) {
+        throw new errors.InternalError({
+          code: DEFINE_COMMAND_CONFIG_INVALID,
+          message: `Command ${spec.name} returned a refusal alongside bumpVersion. A refused act performs no transition and must not move the order's version.`,
+        });
+      }
+
       // Step 5 — version CAS.
       if (result.bumpVersion !== undefined) {
         if (target === undefined) {
@@ -420,12 +453,14 @@ export function defineCommand<TInput, TOutput>(
         });
       }
 
-      return {
-        output: result.output,
+      const common = {
         audit: result.audit,
         outboxEvents: result.emits,
         ...(result.targetOrderId === undefined ? {} : { targetOrderId: result.targetOrderId }),
       };
+      return result.refusal === undefined
+        ? { ...common, output: result.output }
+        : { ...common, refusal: result.refusal };
     } catch (err) {
       // Saga compensation in LIFO order. Compensations are async
       // and may themselves throw; we collect those into a

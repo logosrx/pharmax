@@ -111,8 +111,21 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // ORM layer prevents cross-tenant *row* leaks even before crypto
   // would refuse a cross-tenant decrypt (defense in depth).
   ["Patient", { kind: "organizationId" }] as const,
+  // Allergy capture. Auto-scoping is load-bearing beyond the usual row
+  // isolation: the PV1 screening engine reads these rows to decide
+  // whether the allergy axis can be screened at all, so a query that
+  // escaped its tenant would not merely leak — it would screen one
+  // patient's prescription against another patient's allergies.
+  ["PatientAllergy", { kind: "organizationId" }] as const,
+  ["PatientAllergyHistoryAssertion", { kind: "organizationId" }] as const,
   ["Provider", { kind: "organizationId" }] as const,
   ["Prescription", { kind: "organizationId" }] as const,
+  // Rx-number allocator. Carries no PHI, but auto-scoping matters for
+  // a different reason: an unscoped increment would hand one tenant's
+  // clinic a number out of another tenant's series, and the resulting
+  // collision would surface as a unique-constraint failure at the far
+  // end of a transcription rather than as an isolation error here.
+  ["RxNumberSequence", { kind: "organizationId" }] as const,
   ["Order", { kind: "organizationId" }] as const,
   ["OrderLine", { kind: "organizationId" }] as const,
   // OrderCancellation carries `organizationId` and is per-order
@@ -140,6 +153,31 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // is enforced at the command-handler layer by stamping those
   // columns from the loaded policy.
   ["VerificationRecord", { kind: "organizationId" }] as const,
+  // PV1 clinical screening (pv1_clinical_screening migration).
+  //
+  // OrderScreeningFinding is what the screening engine told a
+  // pharmacist during a PV1 pass; OrderScreeningAcknowledgement is
+  // that pharmacist's recorded judgement on one finding. Both carry a
+  // NON-NULLABLE organizationId (rule 1) and both are append-only at
+  // the DB layer (SELECT + INSERT grants, no UPDATE/DELETE policy) —
+  // same posture as VerificationRecord.
+  //
+  // Auto-scoping matters more than usual for the acknowledgement
+  // table: ApprovePV1's gate is a READ ("which fingerprints has this
+  // pharmacist settled on this order?"), and an unscoped read there
+  // would let one tenant's acknowledgement satisfy another tenant's
+  // approval gate. Neither table stores PHI.
+  ["OrderScreeningFinding", { kind: "organizationId" }] as const,
+  ["OrderScreeningAcknowledgement", { kind: "organizationId" }] as const,
+  // PatientScreeningAcknowledgement is the patient-scoped sibling
+  // (patient_scoped_screening_acknowledgement migration): one
+  // pharmacist's judgement on a PATIENT-RECORD gap, honored across
+  // that patient's orders while the record-state token still matches.
+  // Same append-only posture, and the same reason auto-scoping is
+  // load-bearing: the gate READS this table on ApprovePV1, and an
+  // unscoped read would let one tenant's acknowledgement open another
+  // tenant's safety gate.
+  ["PatientScreeningAcknowledgement", { kind: "organizationId" }] as const,
   ["Product", { kind: "organizationId" }] as const,
   ["Lot", { kind: "organizationId" }] as const,
   ["LotAssignment", { kind: "organizationId" }] as const,
@@ -341,6 +379,20 @@ export const TENANT_EXCLUDED_MODELS: ReadonlySet<string> = new Set([
   // Same plane: a model-drafted proposal about the platform's own
   // control program has no tenant to belong to either.
   "ComplianceAiDraft",
+  // RxNorm drug-knowledge reference tables — the platform's first
+  // GLOBAL reference data, deliberately not tenant-scoped (same
+  // posture as Permission). Drug nomenclature is not tenant data:
+  // every org screens against the same public NLM release, rows carry
+  // no organizationId and no PHI, and a per-org copy would only let
+  // two tenants disagree about what an NDC contains. The isolation
+  // control is a WRITE boundary rather than a read boundary:
+  // pharmax_app holds SELECT only, and writes happen solely through
+  // the ingestion job (scripts/operations/ingest-rxnorm-release.ts)
+  // under a role with the write grants — see the
+  // 20260809000000_rxnorm_drug_knowledge migration.
+  "RxnormRelease",
+  "RxnormNdcProduct",
+  "RxnormProductIngredient",
 ]);
 
 /**

@@ -61,7 +61,11 @@ ecs_container_insights_enabled = true
 
 # ---- WAF / Alarms -----------------------------------------------------------
 waf_rate_limit_per_5min = 2000
-alarm_sns_topic_arn     = "REPLACE_arn:aws:sns:us-east-1:<account>:pharmax-staging-alerts"
+# Alerting off by default in staging (see terraform.tfvars for the reasoning).
+# Set true and supply TF_VAR_alerting_* endpoints if this staging stack is
+# used for on-call rehearsal.
+enable_alerting     = false
+alarm_sns_topic_arn = ""
 
 # ---- Audit archive ----------------------------------------------------------
 audit_archive_retention_years         = 7

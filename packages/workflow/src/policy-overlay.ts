@@ -338,6 +338,13 @@ export function mergePolicyWithOverlay(
     states: base.states,
     terminalStates: base.terminalStates,
     transitions: Object.freeze(filteredTransitions),
+    // Copied from base verbatim, and deliberately not derivable from
+    // the overlay. An overlay is per-tenant configuration; the
+    // screening floor decides which findings a pharmacist is ever
+    // shown, so letting a tenant set it here would reintroduce
+    // exactly the unversioned, unreviewable knob that putting it on
+    // the policy version was meant to remove.
+    screening: base.screening,
     ...(attestationsByTransitionId === undefined ? {} : { attestationsByTransitionId }),
   });
   return merged;

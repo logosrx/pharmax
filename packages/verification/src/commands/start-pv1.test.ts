@@ -29,6 +29,13 @@ import {
 } from "@pharmax/rbac";
 import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
+import {
+  createScreeningStubs,
+  historyTakenNoKnownAllergies,
+  type ScreeningStubOptions,
+  type ScreeningStubs,
+} from "../screening/test-support.js";
+
 import { StartPV1 } from "./start-pv1.js";
 
 // ---------------------------------------------------------------------------
@@ -42,6 +49,29 @@ const ORDER_ID = "00000000-0000-4000-8000-0000000000aa";
 const POLICY_ID = "00000000-0000-4000-8000-000000000008";
 const USER_ID = "00000000-0000-4000-8000-000000000009";
 const PV1_BUCKET_ID = "00000000-0000-4000-8000-0000000000bb";
+
+const PATIENT_ID = "00000000-0000-4000-8000-0000000000d1";
+const RX_ID = "00000000-0000-4000-8000-0000000000e1";
+
+/**
+ * One prescription on the order, nothing else on the profile.
+ *
+ * Screened against the empty knowledge source — the only source this
+ * repository ships, deliberately — that produces exactly one finding:
+ * `SCR_KNOWLEDGE_UNAVAILABLE`, MODERATE / DEFINITE, disposition
+ * REQUIRES_ACKNOWLEDGEMENT. The NDC is synthetic.
+ */
+const DEFAULT_SCREENING_STUBS: ScreeningStubOptions = {
+  patientId: PATIENT_ID,
+  orderLinePrescriptionIds: [RX_ID],
+  // History taken and empty, so the DRUG_ALLERGY axis is AVAILABLE and
+  // screens clear. A fixture that said nothing about allergies would be
+  // a patient nobody has asked, which raises an acknowledge-tier gap —
+  // correct, and not what these tests are about. See
+  // `allergy-availability.test.ts` for that path.
+  historyAssertions: [historyTakenNoKnownAllergies(PATIENT_ID)],
+  prescriptions: [{ id: RX_ID, patientId: PATIENT_ID, drugNdc: "00000-0000-01", status: "ACTIVE" }],
+};
 
 const orgWidePV1StartGrants: ReadonlyArray<ResolvedGrant> = [
   {
@@ -92,13 +122,25 @@ interface FakeOverrides {
   orderUpdateManyCount?: number;
   /** Head of `order_event` for sequence numbering. Default seq=3 (Create=1, StartTyping=2, CompleteTyping=3). */
   orderEventHead?: { sequenceNumber: number } | null;
+  /**
+   * Clinical-screening inputs. The default is one prescription line
+   * on the order and nothing else on the patient's profile, which
+   * against the empty knowledge source produces exactly one finding:
+   * `SCR_KNOWLEDGE_UNAVAILABLE`.
+   */
+  screening?: ScreeningStubOptions;
 }
 
 function buildPrismaFake(overrides: FakeOverrides = {}): {
   client: unknown;
   calls: FakeCall[];
+  screening: ScreeningStubs;
 } {
   const calls: FakeCall[] = [];
+  const screening = createScreeningStubs(
+    (table, op, args) => calls.push({ table, op, args }),
+    overrides.screening ?? DEFAULT_SCREENING_STUBS
+  );
 
   const lockedRow =
     overrides.lockedRow === undefined
@@ -127,6 +169,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
       }),
     },
     order: {
+      ...screening.order,
       update: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "update", args });
         return { id: ORDER_ID };
@@ -136,6 +179,13 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return { count: orderUpdateManyCount };
       }),
     },
+    orderLine: screening.orderLine,
+    prescription: screening.prescription,
+    orderScreeningFinding: screening.orderScreeningFinding,
+    orderScreeningAcknowledgement: screening.orderScreeningAcknowledgement,
+    patientScreeningAcknowledgement: screening.patientScreeningAcknowledgement,
+    patientAllergy: screening.patientAllergy,
+    patientAllergyHistoryAssertion: screening.patientAllergyHistoryAssertion,
     bucket: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "bucket", op: "findFirst", args });
@@ -264,7 +314,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     $transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
   };
 
-  return { client, calls };
+  return { client, calls, screening };
 }
 
 function callsOf(calls: FakeCall[], table: string, op: string): FakeCall[] {
@@ -362,15 +412,24 @@ describe("StartPV1 — happy path", () => {
     expect(casArgs.where).toEqual({ id: ORDER_ID, organizationId: ORG_ID, version: 2 });
     expect(casArgs.data).toEqual({ version: 3 });
 
-    // order_event written with seq = head+1 = 4.
+    // Two order_event rows: the transition (seq = head+1 = 4) and the
+    // screening record that rode along with it (seq 5). The screening
+    // event is a sibling rather than a field on the transition event
+    // because a screen also happens at ApprovePV1, and one event type
+    // for "a screen ran" keeps the two comparable.
     const oeCreate = callsOf(fake.calls, "orderEvent", "create");
-    expect(oeCreate).toHaveLength(1);
+    expect(oeCreate).toHaveLength(2);
     const oeData = (oeCreate[0]!.args as { data: Record<string, unknown> }).data;
     expect(oeData).toMatchObject({
       organizationId: ORG_ID,
       orderId: ORDER_ID,
       eventType: "order.pv1.started.v1",
       sequenceNumber: 4,
+      actorUserId: USER_ID,
+    });
+    expect((oeCreate[1]!.args as { data: Record<string, unknown> }).data).toMatchObject({
+      eventType: "order.pv1.screening.recorded.v1",
+      sequenceNumber: 5,
       actorUserId: USER_ID,
     });
 
@@ -428,7 +487,7 @@ describe("StartPV1 — happy path", () => {
 
     const outboxCall = callsOf(fake.calls, "eventOutbox", "createMany")[0];
     const rows = (outboxCall!.args as { data: Array<Record<string, unknown>> }).data;
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
       organizationId: ORG_ID,
       eventType: "order.pv1.started.v1",

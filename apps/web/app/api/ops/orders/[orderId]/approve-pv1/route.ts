@@ -23,7 +23,10 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
     idempotencyKeyPrefix: `route:approve-pv1:${orderId}`,
     buildInput: () => ({ orderId }),
     successRedirect: () => `/ops/pv1?flash=approved&orderId=${orderId}`,
-    failureRedirect: `/ops/pv1`,
+    // Carries the order so a screening refusal can point at the
+    // findings panel that holds the outstanding findings, rather than
+    // leaving the pharmacist to work out which row it was.
+    failureRedirect: `/ops/pv1?orderId=${orderId}`,
     successLogEvent: "ops.pv1.approve.applied",
     failureLogEvent: "ops.pv1.approve.failed",
   });

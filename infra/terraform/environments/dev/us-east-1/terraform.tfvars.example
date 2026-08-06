@@ -63,7 +63,9 @@ ecs_container_insights_enabled = true
 
 # ---- WAF / Alarms -----------------------------------------------------------
 waf_rate_limit_per_5min = 5000
-alarm_sns_topic_arn     = ""
+# Alerting off in dev: alarms evaluate, nobody is notified. Intentional.
+enable_alerting     = false
+alarm_sns_topic_arn = ""
 
 # ---- Audit archive ----------------------------------------------------------
 audit_archive_retention_years         = 7

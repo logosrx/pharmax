@@ -128,6 +128,12 @@ const ALLOWLIST: ReadonlySet<string> = new Set<string>([
   "packages/tenancy/src/session-guc.ts",
 ]);
 
+// Substring gate applied before parsing. Both `*Unsafe` variants
+// contain a non-Unsafe name as a prefix, so these two needles cover
+// all four methods in RAW_SQL_METHODS — a file that matches neither
+// cannot contain a property access the AST walk would flag.
+const RAW_SQL_NEEDLES: ReadonlyArray<string> = ["$queryRaw", "$executeRaw"];
+
 /**
  * Pure scanner: returns every raw-SQL method call (by name + line)
  * in `sourceText`. A "call" is a property access whose name is one
@@ -140,6 +146,15 @@ const ALLOWLIST: ReadonlySet<string> = new Set<string>([
  * without filesystem access.
  */
 export function findRawSqlCalls(sourceText: string, fileName: string): ReadonlyArray<RawSqlCall> {
+  // Building a TypeScript AST costs far more than a substring search,
+  // and the overwhelming majority of the ~900 scanned files never
+  // mention raw SQL. Parsing all of them put the live-repo sentinel
+  // test over Vitest's timeout on a contended CI runner. Text that
+  // clears this gate is still parsed — the gate only decides whether
+  // there is anything worth parsing for, never whether it is a
+  // violation.
+  if (!RAW_SQL_NEEDLES.some((needle) => sourceText.includes(needle))) return [];
+
   const source = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.ESNext, true);
   const calls: RawSqlCall[] = [];
 

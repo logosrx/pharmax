@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "sh scripts/wip-report.sh",
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": "sh scripts/wip-report.sh",
+        "timeout": 10
+      }
+    ]
+  }
+}

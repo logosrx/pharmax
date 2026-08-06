@@ -169,7 +169,7 @@ describe("POST /api/v1/webhook-subscriptions/{id}/rotate-secret", () => {
     expect(res.status).toBe(404);
   });
 
-  it("422s the disabled-subscription conflict with its code", async () => {
+  it("409s the disabled-subscription conflict with its code", async () => {
     executeCommandDetailedMock.mockRejectedValue(
       new errors.ConflictError({
         code: "ROTATE_WEBHOOK_SUBSCRIPTION_SECRET_DISABLED",
@@ -177,7 +177,7 @@ describe("POST /api/v1/webhook-subscriptions/{id}/rotate-secret", () => {
       })
     );
     const res = await call({ subscriptionId: SUB_ID, idempotencyKey: "rotate-attempt-1" });
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.error.code).toBe("ROTATE_WEBHOOK_SUBSCRIPTION_SECRET_DISABLED");
   });

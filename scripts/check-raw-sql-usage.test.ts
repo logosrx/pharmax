@@ -65,9 +65,31 @@ describe("findRawSqlCalls", () => {
     const src = "// the claim query's $queryRaw is system-context only\nconst x = 1;";
     expect(findRawSqlCalls(src, "x.ts")).toEqual([]);
   });
+
+  it("returns nothing for a file that never mentions raw SQL", () => {
+    const src = "export const total = (a: number, b: number): number => a + b;";
+    expect(findRawSqlCalls(src, "x.ts")).toEqual([]);
+  });
+
+  // The scanner skips parsing files whose text contains none of the
+  // method names. That gate must never hide a real call, so pin the
+  // riskiest shape: a method reached on a deeply nested receiver, with
+  // the name split across lines by the formatter.
+  it("still detects a call when the receiver is nested and wrapped", () => {
+    const src = ["await ctx.deps.db.client", "  .$executeRawUnsafe('DELETE FROM t');"].join("\n");
+    expect(findRawSqlCalls(src, "x.ts").map((c) => c.method)).toEqual(["$executeRawUnsafe"]);
+  });
 });
 
 describe("checkRawSqlUsage (real workspace sentinel)", () => {
+  // Unlike the pure cases above, this one reads every non-test source
+  // file under apps/ and packages/ — around 900 of them. That is well
+  // inside Vitest's 5s default locally, but the default is calibrated
+  // for tests that do no I/O, and this suite runs 350+ files with
+  // coverage on a 2-core runner. Under that contention the wall clock
+  // stopped tracking the actual work and the sentinel timed out. The
+  // budget is deliberately loose: a whole-repo walk that takes longer
+  // than this is a real regression in the walk, not a slow machine.
   it("reports zero violations across the live repo", () => {
     const { checked, violations } = checkRawSqlUsage(REPO_ROOT);
     expect(checked).toBeGreaterThan(0);
@@ -75,5 +97,5 @@ describe("checkRawSqlUsage (real workspace sentinel)", () => {
       violations.map((v) => v.file),
       "unapproved raw-SQL call(s) — scope them through the tenancy-enforced client or add to the allowlist in scripts/check-raw-sql-usage.ts with a justification"
     ).toEqual([]);
-  });
+  }, 60_000);
 });

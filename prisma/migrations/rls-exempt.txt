@@ -126,3 +126,16 @@ compliance_task
 # "a model wrote this and a person approved it" is only an answer if
 # the person cannot be deleted out of the record.
 compliance_ai_draft
+
+# RxNorm drug-knowledge reference tables (global, deliberately not
+# tenant-scoped — same posture as `permission`). Drug nomenclature is
+# not tenant data: every organization screens against the same public
+# NLM release, the rows contain no organizationId and no PHI, and a
+# per-org copy would only let two tenants disagree about what an NDC
+# contains. Isolation is replaced by a write boundary instead of a
+# read boundary: pharmax_app is granted SELECT only, and writes happen
+# solely through the ingestion job (see the
+# 20260809000000_rxnorm_drug_knowledge migration's GRANT block).
+rxnorm_release
+rxnorm_ndc_product
+rxnorm_product_ingredient

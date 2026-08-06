@@ -77,6 +77,14 @@ module "stack" {
   waf_rate_limit_per_5min = var.waf_rate_limit_per_5min
   alarm_sns_topic_arn     = var.alarm_sns_topic_arn
 
+  # Alerting: severity-split SNS topics. The DR region owns its own topics —
+  # cross-region SNS subscriptions would depend on the region that just failed.
+  enable_alerting                       = var.enable_alerting
+  alerting_critical_email_subscriptions = var.alerting_critical_email_subscriptions
+  alerting_warning_email_subscriptions  = var.alerting_warning_email_subscriptions
+  alerting_critical_https_subscriptions = var.alerting_critical_https_subscriptions
+  alerting_warning_https_subscriptions  = var.alerting_warning_https_subscriptions
+
   audit_archive_retention_years         = var.audit_archive_retention_years
   audit_archive_glacier_transition_days = var.audit_archive_glacier_transition_days
 }

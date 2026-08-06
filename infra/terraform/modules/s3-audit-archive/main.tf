@@ -100,18 +100,16 @@ resource "aws_s3_bucket_ownership_controls" "this" {
 }
 
 # ---- Bucket policy ----------------------------------------------------------
-# Two denies (DENY > ALLOW):
-#   1. Deny any non-TLS request.
-#   2. Deny any PUT not using SSE-KMS (we don't want plain AES256 uploads).
-
-# ---- Bucket policy ----------------------------------------------------------
 # DENY > ALLOW. The default action on the bucket is no-action; these explicit
 # DENY statements are the floor.
 #
-#   1. Deny any non-TLS request.
-#   2. Deny any PUT not using SSE-KMS (no plain AES256 uploads).
-#   3. Deny any PUT that targets a CMK other than this bucket's dedicated CMK.
-#   4. Deny any PUT that bypasses Object-Lock retention metadata.
+# `local.bucket_policy_denies` below — NOT this comment — is the authoritative
+# enumeration. The `precondition` on `aws_s3_bucket_policy.this` fails the plan
+# when the rendered policy's sids diverge from that map, so the two cannot
+# drift apart silently. This matters because an earlier prose-only enumeration
+# claimed a fourth DENY that was never implemented, and the gap survived every
+# subsequent review of the file: the comment was updated, the code was not, and
+# nothing compared them.
 #
 # We do NOT need a separate "principal must have kms:Encrypt" statement —
 # the dedicated audit-archive CMK's resource policy already enumerates the
@@ -119,6 +117,34 @@ resource "aws_s3_bucket_ownership_controls" "this" {
 # and a worker IAM grant adds `kms:GenerateDataKey` for the worker role
 # only. A principal without kms:Encrypt on the CMK simply cannot encrypt
 # the put-object data and the upload fails at the KMS layer.
+
+locals {
+  # sid => the exposure that statement closes.
+  bucket_policy_denies = {
+    DenyInsecureTransport = "Any non-TLS request."
+
+    DenyUnEncryptedObjectUploads = "Any PUT not using SSE-KMS (no plain AES256 uploads)."
+
+    DenyWrongKmsKey = "Any PUT targeting a CMK other than this bucket's dedicated CMK."
+
+    # Per-object Object Lock headers OVERRIDE the bucket's default retention
+    # rule. A PUT carrying `x-amz-object-lock-mode: GOVERNANCE` therefore
+    # lands an object whose retention any holder of
+    # `s3:BypassGovernanceRetention` can lift — deletable, in the one bucket
+    # whose entire purpose is that nothing in it can be deleted. A PUT that
+    # sends no Object Lock headers at all is unaffected: it inherits the
+    # bucket default (COMPLIANCE), which is why the test below must be the
+    # `IfExists` form.
+    DenyNonComplianceObjectLockMode = "Any PUT naming an Object Lock mode other than COMPLIANCE."
+
+    # Mode alone is not sufficient. `COMPLIANCE` with a retain-until date of
+    # tomorrow is COMPLIANCE-mode for exactly one day, after which the object
+    # is deletable by anyone with `s3:DeleteObject`. The floor is deliberately
+    # below the bucket default so legitimate explicit-retention writers clear
+    # it with a wide margin.
+    DenyShortObjectLockRetention = "Any PUT whose requested retention is under the HIPAA six-year floor."
+  }
+}
 
 data "aws_iam_policy_document" "bucket" {
   statement {
@@ -181,11 +207,83 @@ data "aws_iam_policy_document" "bucket" {
       values   = [var.kms_key_arn]
     }
   }
+
+  statement {
+    sid     = "DenyNonComplianceObjectLockMode"
+    effect  = "Deny"
+    actions = ["s3:PutObject"]
+    resources = [
+      "${aws_s3_bucket.this.arn}/*",
+    ]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    # `StringNotEqualsIfExists`, NOT `StringNotEquals`. The plain form
+    # evaluates to true when the key is absent, which would deny every
+    # header-less PUT — including the Merkle-manifest and evidence-pack
+    # writes that deliberately inherit the bucket's COMPLIANCE default.
+    # The `IfExists` form denies only a PUT that names a mode AND names one
+    # other than COMPLIANCE, which is exactly the GOVERNANCE downgrade.
+    condition {
+      test     = "StringNotEqualsIfExists"
+      variable = "s3:object-lock-mode"
+      values   = ["COMPLIANCE"]
+    }
+  }
+
+  statement {
+    sid     = "DenyShortObjectLockRetention"
+    effect  = "Deny"
+    actions = ["s3:PutObject"]
+    resources = [
+      "${aws_s3_bucket.this.arn}/*",
+    ]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    # Separate statement rather than a second condition on the mode DENY:
+    # conditions within one statement are AND-ed, so combining them would
+    # only deny a PUT that was BOTH non-COMPLIANCE AND short-retention. We
+    # want either one to be refused on its own.
+    #
+    # `IfExists` again: absent the header the key is unset and the bucket
+    # default (`retention_years`) applies.
+    condition {
+      test     = "NumericLessThanIfExists"
+      variable = "s3:object-lock-remaining-retention-days"
+      values   = [tostring(var.min_put_retention_days)]
+    }
+  }
 }
 
 resource "aws_s3_bucket_policy" "this" {
   bucket = aws_s3_bucket.this.id
   policy = data.aws_iam_policy_document.bucket.json
+
+  lifecycle {
+    # The enumeration in `local.bucket_policy_denies` is documentation that
+    # the plan verifies. Add a statement without documenting it — or document
+    # one without adding it, which is the failure this module actually
+    # suffered — and the plan stops here.
+    precondition {
+      condition = sort([
+        for statement in jsondecode(data.aws_iam_policy_document.bucket.json).Statement :
+        statement.Sid
+      ]) == keys(local.bucket_policy_denies)
+
+      error_message = format(
+        "Audit-archive bucket policy drift: rendered sids %v do not match the documented set %v in local.bucket_policy_denies.",
+        sort([for s in jsondecode(data.aws_iam_policy_document.bucket.json).Statement : s.Sid]),
+        keys(local.bucket_policy_denies)
+      )
+    }
+  }
 }
 
 # ---- Lifecycle --------------------------------------------------------------

@@ -6,7 +6,7 @@
 // constant-time hash compare; the command layer stamps `usedAt` so a
 // code is never redeemable twice.
 
-import { randomBytes } from "node:crypto";
+import { randomInt } from "node:crypto";
 
 import type { PasswordHasher } from "../password/hasher.js";
 
@@ -51,14 +51,13 @@ export async function verifyRecoveryCode(
 }
 
 function randomGroup(): string {
-  // Rejection-free mapping: use a byte per char, modulo the alphabet.
-  // The tiny modulo bias over a 30-char alphabet is irrelevant for a
-  // one-time recovery code whose entropy comes from length, not from
-  // perfect uniformity.
-  const bytes = randomBytes(GROUP_LEN);
+  // `randomInt` draws uniformly over [0, 30) — it rejects the values
+  // that would not divide evenly instead of folding them in. Reducing a
+  // raw byte to the alphabet by hand, with either `% 30` or `/ 30`,
+  // biases the low characters because 256 is not a multiple of 30.
   let out = "";
   for (let i = 0; i < GROUP_LEN; i += 1) {
-    out += ALPHABET[bytes[i]! % ALPHABET.length];
+    out += ALPHABET[randomInt(ALPHABET.length)]!;
   }
   return out;
 }

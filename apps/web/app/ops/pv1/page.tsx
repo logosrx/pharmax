@@ -11,6 +11,23 @@
 //
 // PHI: order rows are non-PHI; the order-detail page is the
 // PHI-decrypting read a pharmacist opens before approving.
+//
+// CLINICAL SCREENING IS NOT SUMMARIZED HERE, AND THAT IS DELIBERATE.
+// The obvious move is a per-row badge counting outstanding findings.
+// It would fire on every row of every queue: with no licensed drug
+// knowledge source and neither allergy capture nor a structured sig,
+// every order raises three MODERATE screening gaps. A badge that is
+// always lit carries no information and teaches operators to read past
+// the place a real hard stop would appear. Worse, an accurate badge
+// needs the LATEST screen per order — findings are insert-only, so an
+// older screen's finding may no longer apply — which is an unbounded
+// read on a page that renders a hundred rows.
+//
+// So the row carries a link to the review surface instead. It is never
+// stale, it costs nothing, and it points at the one page where a
+// finding can actually be read and settled.
+
+import Link from "next/link";
 
 import { PERMISSIONS } from "@pharmax/rbac";
 import { PV1_REJECTION_REASONS } from "@pharmax/verification";
@@ -24,7 +41,9 @@ import { listOrdersInBucketByCode } from "../../../src/server/ops/list-orders-in
 import { PageHeader } from "../../../src/components/ui/page.js";
 import { EmptyState, PermissionDenied, Banner } from "../../../src/components/ui/feedback.js";
 import { Field, Select } from "../../../src/components/ui/field.js";
+import { buttonClass } from "../../../src/components/ui/button.js";
 import { QueueFlash } from "../../../src/components/ops/flash.js";
+import { describePv1ScreeningError } from "../../../src/components/ops/pv1-screening-errors.js";
 import { QueueLiveRefresher } from "../../../src/components/ops/queue-live-refresher.js";
 import { QueueRow } from "../../../src/components/ops/queue-row.js";
 import { ActionForm, SubmitButton } from "../../../src/components/ops/action-form.js";
@@ -63,6 +82,15 @@ export default async function Pv1QueuePage({
   });
   const now = new Date();
 
+  // A screening refusal gets its own wording and its own destination.
+  // When it is recognized the generic "that action didn't go through"
+  // banner is withheld, so the pharmacist reads one explanation rather
+  // than an error code stacked on top of it.
+  const rawError = typeof params["error"] === "string" ? params["error"] : null;
+  const screeningRefusal = describePv1ScreeningError(rawError);
+  const refusedOrderId = typeof params["orderId"] === "string" ? params["orderId"] : null;
+  const flashParams = screeningRefusal === null ? params : { ...params, error: undefined };
+
   return (
     <div className="space-y-6 animate-fade-in">
       <PageHeader
@@ -71,7 +99,29 @@ export default async function Pv1QueuePage({
         description="Pharmacist verification. Claim a ready order to begin, or approve / reject the one you're working."
       />
 
-      <QueueFlash params={params} messages={PV1_FLASH} />
+      <QueueFlash params={flashParams} messages={PV1_FLASH} />
+
+      {screeningRefusal !== null ? (
+        <Banner tone={screeningRefusal.tone} title={screeningRefusal.title}>
+          {screeningRefusal.guidance}
+          {refusedOrderId !== null ? (
+            <div className="mt-2">
+              <Link
+                href={`/ops/orders/${refusedOrderId}`}
+                className={buttonClass({ variant: "secondary", size: "sm" })}
+              >
+                {screeningRefusal.resolvableByAcknowledgement
+                  ? "Open the order · acknowledge findings"
+                  : "Open the order · read what blocked it"}
+              </Link>
+            </div>
+          ) : null}
+          <p className="mt-2 text-xs opacity-80">
+            Refusal code <code>{screeningRefusal.code}</code>
+          </p>
+        </Banner>
+      ) : null}
+
       <QueueLiveRefresher codes={["PV1"]} />
 
       {!queue.bucketExists ? (
@@ -108,6 +158,18 @@ export default async function Pv1QueuePage({
                     <ActionForm action={`/api/ops/orders/${row.orderId}/start-pv1`}>
                       <SubmitButton icon="verify">Claim · Start PV1</SubmitButton>
                     </ActionForm>
+                  ) : null}
+
+                  {/* The review surface. Findings are only readable
+                      beside the prescription they are about, and an
+                      acknowledgement can only be recorded there. */}
+                  {isMine ? (
+                    <Link
+                      href={`/ops/orders/${row.orderId}`}
+                      className={buttonClass({ variant: "secondary", size: "md" })}
+                    >
+                      Review · clinical screening
+                    </Link>
                   ) : null}
 
                   {isMine && canApprove ? (

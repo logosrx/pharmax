@@ -1,4 +1,4 @@
-// Flat config for ESLint 9.
+// Flat config for ESLint 10.
 //
 // Boundary rules below codify the architectural promises in
 // `docs/ARCHITECTURE_PRINCIPLES.md` §D. They are the cheapest layer

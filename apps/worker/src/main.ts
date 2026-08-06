@@ -58,11 +58,10 @@ import { createInvoiceAutoFinalizeLoop } from "./billing/invoice-auto-finalize-l
 import { createPaymentLedgerReconciliationLoop } from "./billing/payment-ledger-reconciliation-loop.js";
 import { createStripeInvoiceAdapter } from "./billing/stripe-invoice-adapter.js";
 import { createStripeRefundAdapter } from "./billing/stripe-refund-adapter.js";
-import {
-  createQuarterlyAccessReviewLoop,
-  FilesystemEvidencePublisher,
-} from "./compliance/access-review-job.js";
+import { createQuarterlyAccessReviewLoop } from "./compliance/access-review-job.js";
+import { buildEvidencePublisher } from "./compliance/build-evidence-publisher.js";
 import { createComplianceCheckScheduler } from "./compliance/check-scheduler.js";
+import { S3ObjectLockEvidencePublisher } from "./compliance/s3-evidence-publisher.js";
 import { NotificationChannelComplianceNotifier } from "./compliance/notification-channel-compliance-notifier.js";
 import { PrismaNotificationDeliveryStore } from "./notifications/prisma-notification-delivery-store.js";
 import { ResendNotificationChannel } from "./notifications/resend-notification-channel.js";
@@ -301,6 +300,31 @@ async function main(): Promise<void> {
         })
       : undefined;
 
+  // Access-review evidence publisher selection — resolved here, with
+  // the other publisher selections, so the boot-log dump below and the
+  // loop construction later reference the same object.
+  //
+  // Production writes into the audit-archive Object Lock bucket; dev
+  // and test keep the filesystem publisher. When the job is enabled in
+  // production but the bucket is unconfigured this THROWS, failing the
+  // boot rather than degrading to a write the next deployment discards
+  // — see `build-evidence-publisher.ts` for why boot is the right place
+  // to fail. Only resolved when the loop is enabled, so an operator who
+  // has deliberately turned the job off is not blocked from booting by
+  // a bucket the job will never use.
+  const evidencePublisher = env.QUARTERLY_ACCESS_REVIEW_ENABLED
+    ? await buildEvidencePublisher({
+        logger,
+        env: {
+          NODE_ENV: env.NODE_ENV,
+          AWS_REGION: env.AWS_REGION,
+          AUDIT_ARCHIVE_S3_BUCKET: env.AUDIT_ARCHIVE_S3_BUCKET,
+          AUDIT_ARCHIVE_S3_KMS_KEY_ID: env.AUDIT_ARCHIVE_S3_KMS_KEY_ID,
+          QUARTERLY_ACCESS_REVIEW_EVIDENCE_ROOT: env.QUARTERLY_ACCESS_REVIEW_EVIDENCE_ROOT,
+        },
+      })
+    : null;
+
   // @pharmax/shipping factory registry. The FedEx + UPS tracking
   // pollers instantiate clients directly (they decrypt the
   // credential then build a typed client), but `PurchaseShipmentLabel`
@@ -420,6 +444,14 @@ async function main(): Promise<void> {
       lookbackDays: env.QUARTERLY_ACCESS_REVIEW_LOOKBACK_DAYS,
       notifier: complianceNotifier !== undefined ? "notification-channel" : "logging-stub",
       notifyRecipientConfigured: complianceRecipientConfigured,
+      evidencePublisher:
+        evidencePublisher === null
+          ? "disabled"
+          : evidencePublisher instanceof S3ObjectLockEvidencePublisher
+            ? "s3-object-lock"
+            : "filesystem",
+      // Only meaningful for the filesystem publisher; the S3 publisher
+      // writes under the audit-archive bucket reported above.
       evidenceRoot: env.QUARTERLY_ACCESS_REVIEW_EVIDENCE_ROOT,
     },
     auditChainVerifier: {
@@ -748,25 +780,18 @@ async function main(): Promise<void> {
   // identity. That preserves the SOC 2 model where each snapshot
   // row carries a verifiable human attestation.
   //
-  // The default `FilesystemEvidencePublisher` writes under
-  // `QUARTERLY_ACCESS_REVIEW_EVIDENCE_ROOT`. Production deployments
-  // SHOULD swap this for an S3 Object Lock publisher — tracked
-  // under the Terraform / Lane 2 work; until that lands, the worker
-  // emits the production warning below so operators see the gap.
-  const evidencePublisher = new FilesystemEvidencePublisher({
-    rootDir: env.QUARTERLY_ACCESS_REVIEW_EVIDENCE_ROOT,
-  });
-  const quarterlyAccessReviewLoop = env.QUARTERLY_ACCESS_REVIEW_ENABLED
-    ? createQuarterlyAccessReviewLoop({
-        prisma,
-        logger,
-        utcHour: env.QUARTERLY_ACCESS_REVIEW_HOUR_UTC,
-        utcMinute: env.QUARTERLY_ACCESS_REVIEW_MINUTE_UTC,
-        evidencePublisher,
-        lookbackDays: env.QUARTERLY_ACCESS_REVIEW_LOOKBACK_DAYS,
-        ...(complianceNotifier !== undefined ? { notifier: complianceNotifier } : {}),
-      })
-    : null;
+  const quarterlyAccessReviewLoop =
+    env.QUARTERLY_ACCESS_REVIEW_ENABLED && evidencePublisher !== null
+      ? createQuarterlyAccessReviewLoop({
+          prisma,
+          logger,
+          utcHour: env.QUARTERLY_ACCESS_REVIEW_HOUR_UTC,
+          utcMinute: env.QUARTERLY_ACCESS_REVIEW_MINUTE_UTC,
+          evidencePublisher,
+          lookbackDays: env.QUARTERLY_ACCESS_REVIEW_LOOKBACK_DAYS,
+          ...(complianceNotifier !== undefined ? { notifier: complianceNotifier } : {}),
+        })
+      : null;
   if (
     env.NODE_ENV === "production" &&
     quarterlyAccessReviewLoop !== null &&
@@ -778,15 +803,6 @@ async function main(): Promise<void> {
       ? "COMPLIANCE_NOTIFY_RECIPIENT_EMAIL is unset; access-review notices will be logged at INFO only and the compliance reviewer will not receive an email."
       : "RESEND_API_KEY or NOTIFICATION_FROM_EMAIL is unset; the worker's notification channel is the in-memory fallback, so access-review notices will be logged at INFO only.";
     logger.warn("worker.quarterly_access_review.log_only_notifier", { reason });
-  }
-  if (env.NODE_ENV === "production" && quarterlyAccessReviewLoop !== null) {
-    logger.warn("worker.quarterly_access_review.filesystem_publisher", {
-      reason:
-        "Quarterly access-review evidence pack is being written to the local filesystem. " +
-        "Production SHOULD use an S3 Object Lock publisher; see " +
-        "apps/worker/src/compliance/evidence-publisher.ts and the Terraform slice.",
-      evidenceRoot: env.QUARTERLY_ACCESS_REVIEW_EVIDENCE_ROOT,
-    });
   }
   if (env.NODE_ENV === "production" && quarterlyAccessReviewLoop === null) {
     logger.warn("worker.quarterly_access_review.disabled", {

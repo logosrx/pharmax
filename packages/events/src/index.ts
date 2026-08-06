@@ -94,6 +94,7 @@ export type { PatientRegisteredV1Payload } from "./events/patient/registered-v1.
 export type { PatientUpdatedV1Payload } from "./events/patient/updated-v1.js";
 export type { PatientCryptoShreddedV1Payload } from "./events/patient/crypto-shredded-v1.js";
 export type { PatientViewedV1Payload } from "./events/patient/viewed-v1.js";
+export type { PrescriptionCreatedV1Payload } from "./events/prescription/created-v1.js";
 
 export type { ProviderDeactivatedV1Payload } from "./events/provider/deactivated-v1.js";
 export type { ProviderReactivatedV1Payload } from "./events/provider/reactivated-v1.js";
