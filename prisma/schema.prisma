@@ -4003,6 +4003,20 @@ model OrderScreeningFinding {
   certainty   String
   disposition String
 
+  // Who can close a SCREENING_GAP (`ScreeningGapRemediation`:
+  // SUBJECT_DATA, PLATFORM_CAPABILITY, ORGANIZATION_DATA,
+  // RECORD_IMMUTABLE — a growing TEXT vocabulary like `code`). NULL
+  // exactly when the row is not a gap: a CHECK in the migration
+  // forbids a value on clinical findings, so a coverage query can
+  // GROUP BY this column without a kind filter and get only gaps.
+  // Stated by the engine's emit site at write time; rows written
+  // before the column existed were backfilled by the recovery rules
+  // readers used until then (`gapRemediationForFindingCode` first,
+  // `gapRemediationFromSeverity` second), and a row written by a
+  // pre-column binary during its deploy window is NULL, which readers
+  // treat as "recover by inference" rather than "not a gap".
+  remediation String?
+
   // Stable identity of the clinical situation. An acknowledgement
   // matches a finding on this value; see `fingerprintOf`.
   fingerprint String
@@ -4080,6 +4094,12 @@ model OrderScreeningFinding {
   // alert-fatigue reporting, which is the metric that decides whether
   // the screening tiers are set correctly.
   @@index([organizationId, code, severity, occurredAt])
+  // "What fraction of screens could not run, and whose fault?" —
+  // coverage reporting straight off the column. NULL rows (clinical
+  // findings) are dead weight in this index but Prisma cannot express
+  // a partial index, and gap rows dominate it until licensed content
+  // lands anyway.
+  @@index([organizationId, remediation, occurredAt])
   @@map("order_screening_finding")
 }
 

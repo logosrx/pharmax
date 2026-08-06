@@ -579,6 +579,26 @@ export interface ScreeningFinding {
   readonly severity: ScreeningSeverity;
   readonly certainty: ScreeningCertainty;
   readonly disposition: ScreeningDisposition;
+  /**
+   * Who can close the gap — `null` exactly when the finding is not a
+   * gap (`kind !== "SCREENING_GAP"`); a clinical finding is not
+   * "closable" by anyone, it is a fact about the prescription.
+   *
+   * Stated by the emit site rather than recovered by readers: every
+   * gap already decides its remediation to grade itself
+   * (`screeningGapSeverity`) and to word its reason, so dropping the
+   * value here forced persistence-side readers to re-derive it from
+   * severity — an inference that is lossy by design
+   * (`gapRemediationFromSeverity` collapses three MINOR remediations
+   * into one). Carrying it makes "what fraction of screens could not
+   * run, and whose fault" a column, not a reconstruction.
+   *
+   * NOT part of the fingerprint. Identity is decided by `qualifiers`,
+   * where every gap already lists its remediation — this field is the
+   * same fact made queryable, and folding it into `fingerprintOf`
+   * would re-key every persisted acknowledgement for nothing.
+   */
+  readonly remediation: ScreeningGapRemediation | null;
   /** Operator-facing explanation, templated from codes. Never PHI. */
   readonly reason: string;
   readonly triggers: ReadonlyArray<ScreeningTrigger>;

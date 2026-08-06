@@ -5,6 +5,7 @@ import {
   findingsRequiringAcknowledgement,
   hardStopFindings,
   screenPrescription,
+  screeningGapSeverity,
   CLINICAL_SCREENING_AXES,
   DEFAULT_SCREENING_POLICY,
   INPUT_UNAVAILABLE_CODE_FOR_AXIS,
@@ -1932,5 +1933,192 @@ describe("screenPrescription — every clinical axis either runs or reports a ga
       )
     );
     expect(seen.size).toBe(CLINICAL_SCREENING_AXES.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Remediation on the finding
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — every gap states its remediation on the finding", () => {
+  // Evaluations chosen to hit every gap emit site AND a clinical
+  // finding of every kind, so the two invariants below run over the
+  // whole vocabulary rather than a convenient corner of it.
+  const evaluations: ReadonlyArray<readonly [string, ScreeningEvaluation]> = [
+    [
+      "rich clinical mix",
+      screen({
+        candidate: drug("line-candidate", "DRUG_DOSED", {
+          basis: "SCHEDULED",
+          amount: 50,
+          unit: "mg",
+          dosesPerDay: 4,
+        }),
+        activeMedications: [drug("line-other", "DRUG_ALFA"), drug("line-echo", "DRUG_ECHO")],
+        allergies: [allergy({ substanceCode: "ING_DELTA", criticality: "LOW" })],
+      }),
+    ],
+    ["unknown candidate, provisioned source", screen({ candidate: drug("l", "DRUG_UNKNOWN") })],
+    ["no source provisioned", screen({ knowledge: createInMemoryDrugKnowledgeSource() })],
+    [
+      "every axis unsupplied per-subject",
+      screen({ inputAvailability: everyAxis("NOT_RECORDED_FOR_SUBJECT") }),
+    ],
+    [
+      "every axis unsupported systemically",
+      screen({ inputAvailability: everyAxis("NOT_SUPPORTED_BY_PLATFORM") }),
+    ],
+    [
+      "dose axis not captured for an immutable record",
+      screen({
+        candidate: drug("line-candidate", "DRUG_DOSED"),
+        inputAvailability: withoutAxis("DOSE_RANGE", "NOT_CAPTURED_FOR_RECORD"),
+      }),
+    ],
+    [
+      "dose unit mismatch",
+      screen({
+        candidate: drug("line-candidate", "DRUG_DOSED", {
+          basis: "SCHEDULED",
+          amount: 5000,
+          unit: "mcg",
+          dosesPerDay: 1,
+        }),
+      }),
+    ],
+    [
+      "uncoded and partially-coded compounds",
+      // The partially-coded compound must be the CANDIDATE: when the
+      // candidate's own knowledge lookup fails, the screen is over and
+      // no profile medication is examined at all, so an uncoded
+      // candidate would suppress the partial-coding gap this fixture
+      // exists to produce. The uncoded compound rides on the profile,
+      // where its gap is still emitted.
+      screen({
+        candidate: drug("line-candidate", "COMPOUND_PARTIAL"),
+        activeMedications: [drug("line-uncoded", "COMPOUND_UNCODED")],
+        knowledge: createInMemoryDrugKnowledgeSource({
+          drugs: {
+            COMPOUND_PARTIAL: {
+              ingredientCodes: ["ING_BRAVO"],
+              uncodedIngredientCount: 2,
+              therapeuticClassCodes: [],
+              crossSensitivityClassCodes: [],
+              doseRange: null,
+            },
+          },
+          locallyDeclarableDrugCodes: ["COMPOUND_UNCODED"],
+        }),
+      }),
+    ],
+  ];
+
+  it("carries a remediation exactly when the finding is a gap", () => {
+    // The invariant `order_screening_finding` CHECK-constrains in one
+    // direction and coverage reporting relies on in both: a clinical
+    // finding claiming a remediation would count a real alert as a
+    // coverage note, and a gap without one would make the unscreened
+    // fraction under-report.
+    for (const [label, evaluation] of evaluations) {
+      for (const finding of evaluation.findings) {
+        expect(finding.remediation !== null, `${label} / ${finding.code}`).toBe(
+          finding.kind === "SCREENING_GAP"
+        );
+      }
+    }
+  });
+
+  it("grades every gap from the remediation it states", () => {
+    // The severity is derived from the remediation at every emit site
+    // (`screeningGapSeverity`), so the persisted column and the
+    // persisted grading can never disagree. A gap failing this would
+    // mean an emit site graded itself from one remediation and
+    // reported another.
+    for (const [label, evaluation] of evaluations) {
+      for (const finding of evaluation.findings) {
+        if (finding.kind !== "SCREENING_GAP" || finding.remediation === null) continue;
+        expect(finding.severity, `${label} / ${finding.code}`).toBe(
+          screeningGapSeverity(finding.remediation)
+        );
+      }
+    }
+  });
+
+  it("states the remediation each situation actually carries", () => {
+    // Point pins, one per emit-site decision, so a regression names
+    // the exact site that changed rather than failing a sweep.
+    const remediationOf = (evaluationLabel: string, code: ScreeningFindingCode): string | null => {
+      const hit = evaluations.find(([label]) => label === evaluationLabel);
+      if (hit === undefined) throw new Error(`no evaluation labelled ${evaluationLabel}`);
+      return requireFinding(hit[1], code).remediation;
+    };
+
+    expect(
+      remediationOf("every axis unsupplied per-subject", "SCR_ALLERGY_INPUT_UNAVAILABLE")
+    ).toBe("SUBJECT_DATA");
+    expect(
+      remediationOf("every axis unsupported systemically", "SCR_ALLERGY_INPUT_UNAVAILABLE")
+    ).toBe("PLATFORM_CAPABILITY");
+    expect(
+      remediationOf("dose axis not captured for an immutable record", "SCR_DOSE_INPUT_UNAVAILABLE")
+    ).toBe("RECORD_IMMUTABLE");
+    expect(
+      remediationOf("unknown candidate, provisioned source", "SCR_KNOWLEDGE_UNAVAILABLE")
+    ).toBe("SUBJECT_DATA");
+    expect(remediationOf("no source provisioned", "SCR_KNOWLEDGE_UNAVAILABLE")).toBe(
+      "PLATFORM_CAPABILITY"
+    );
+    expect(remediationOf("dose unit mismatch", "SCR_DOSE_UNIT_NOT_COMPARABLE")).toBe(
+      "SUBJECT_DATA"
+    );
+    expect(
+      remediationOf("uncoded and partially-coded compounds", "SCR_COMPOUND_FORMULA_NOT_CODED")
+    ).toBe("ORGANIZATION_DATA");
+    expect(
+      remediationOf(
+        "uncoded and partially-coded compounds",
+        "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED"
+      )
+    ).toBe("ORGANIZATION_DATA");
+  });
+
+  it("states PLATFORM_CAPABILITY on the out-of-nomenclature gap", () => {
+    // Separate from the sweep because the fixture needs a provisioned
+    // source that declares the code out of scope.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_LOCAL_1"),
+      knowledge: createInMemoryDrugKnowledgeSource({
+        drugs: { DRUG_ALFA: DRUGS["DRUG_ALFA"]! },
+        outOfNomenclatureDrugCodes: ["COMPOUND_LOCAL_1"],
+      }),
+    });
+    expect(requireFinding(result, "SCR_KNOWLEDGE_NOT_APPLICABLE").remediation).toBe(
+      "PLATFORM_CAPABILITY"
+    );
+  });
+
+  it("states PLATFORM_CAPABILITY on the dose-content gap", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA", {
+        amount: 10,
+        unit: "mg",
+        dosesPerDay: 2,
+        basis: "SCHEDULED",
+      }),
+      knowledge: createInMemoryDrugKnowledgeSource({
+        drugs: {
+          DRUG_ALFA: {
+            ingredientCodes: ["ING_ALFA"],
+            uncodedIngredientCount: 0,
+            therapeuticClassCodes: [],
+            crossSensitivityClassCodes: [],
+            doseRange: null,
+          },
+        },
+      }),
+    });
+    expect(requireFinding(result, "SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED").remediation).toBe(
+      "PLATFORM_CAPABILITY"
+    );
   });
 });

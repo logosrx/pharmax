@@ -81,6 +81,7 @@ interface FindingRowOverrides {
   readonly severity?: string;
   readonly certainty?: string;
   readonly disposition?: string;
+  readonly remediation?: string | null;
   readonly fingerprint?: string;
   readonly reason?: string;
   readonly citation?: string | null;
@@ -97,6 +98,11 @@ function findingRow(overrides: FindingRowOverrides = {}) {
     severity: overrides.severity ?? "MAJOR",
     certainty: overrides.certainty ?? "PROBABLE",
     disposition: overrides.disposition ?? "REQUIRES_ACKNOWLEDGEMENT",
+    // Defaulted NULL, which is what a row written by a pre-column
+    // binary carries — so every fixture that says nothing about
+    // remediation keeps exercising the severity-recovery fallback the
+    // pre-column tests were written against.
+    remediation: overrides.remediation ?? null,
     fingerprint: overrides.fingerprint ?? "FP-INTERACTION",
     reason:
       overrides.reason ?? "Synthetic interaction between INGREDIENT_ALFA and INGREDIENT_BRAVO.",
@@ -363,6 +369,106 @@ describe("getOrderScreening", () => {
     expect(groupByFingerprint.get("FP-COMPOUND-UNCODED")).toBe("ORGANIZATION_COVERAGE");
     expect(groupByFingerprint.get("FP-COMPOUND-PARTIAL")).toBe("ORGANIZATION_COVERAGE");
     expect(groupByFingerprint.get("FP-KNOWLEDGE-PLATFORM")).toBe("PLATFORM_CAPABILITY");
+  });
+
+  it("trusts the persisted remediation over what code and severity would recover", async () => {
+    // Rows written since the `remediation` column landed carry the
+    // engine's own answer, and it wins over BOTH recovery rules: the
+    // column is the engine's statement at screen time, the rules are a
+    // reader's best reconstruction of it. Each fixture is built so the
+    // recovery would answer differently — if the column were ignored,
+    // every assertion here fails.
+    givenFindings([
+      // Severity recovery would say MODERATE → SUBJECT_DATA →
+      // PRESCRIPTION_COVERAGE; the column says the org's formulary
+      // team owns it.
+      findingRow({
+        id: "f-column-org",
+        code: "SCR_KNOWLEDGE_UNAVAILABLE",
+        kind: "SCREENING_GAP",
+        severity: "MODERATE",
+        certainty: "DEFINITE",
+        remediation: "ORGANIZATION_DATA",
+        fingerprint: "FP-COLUMN-ORG",
+      }),
+      // Code recovery would say SCR_COMPOUND_FORMULA_NOT_CODED →
+      // ORGANIZATION_DATA; the column says somebody on this order can
+      // close it.
+      findingRow({
+        id: "f-column-subject",
+        code: "SCR_COMPOUND_FORMULA_NOT_CODED",
+        kind: "SCREENING_GAP",
+        severity: "MINOR",
+        certainty: "DEFINITE",
+        disposition: "INFORMATIONAL",
+        remediation: "SUBJECT_DATA",
+        fingerprint: "FP-COLUMN-SUBJECT",
+      }),
+      // A clinical finding never reads the column, whatever a corrupt
+      // row claims: kind decides first, exactly as the migration CHECK
+      // assumes.
+      findingRow({
+        id: "f-clinical-stray",
+        code: "SCR_DRUG_INTERACTION",
+        kind: "DRUG_DRUG_INTERACTION",
+        remediation: "ORGANIZATION_DATA",
+        fingerprint: "FP-CLINICAL-STRAY",
+      }),
+    ]);
+    givenAcknowledgements([]);
+
+    const screening = await read();
+    const groupByFingerprint = new Map(screening?.findings.map((f) => [f.fingerprint, f.group]));
+    expect(groupByFingerprint.get("FP-COLUMN-ORG")).toBe("ORGANIZATION_COVERAGE");
+    expect(groupByFingerprint.get("FP-COLUMN-SUBJECT")).toBe("PRESCRIPTION_COVERAGE");
+    expect(groupByFingerprint.get("FP-CLINICAL-STRAY")).toBe("CLINICAL");
+  });
+
+  it("files a persisted RECORD_IMMUTABLE gap where its severity always filed it", async () => {
+    // The one remediation severity recovery could never express. It
+    // still groups under PLATFORM_CAPABILITY — the operative sentence
+    // for both is "nobody handling this order can close this", and
+    // re-filing findings pharmacists have already learned the place of
+    // is a cost with no buyer. The persisted `reason` carries the
+    // precise story.
+    givenFindings([
+      findingRow({
+        id: "f-immutable",
+        code: "SCR_DOSE_INPUT_UNAVAILABLE",
+        kind: "SCREENING_GAP",
+        severity: "MINOR",
+        certainty: "DEFINITE",
+        disposition: "INFORMATIONAL",
+        remediation: "RECORD_IMMUTABLE",
+        fingerprint: "FP-IMMUTABLE",
+      }),
+    ]);
+    givenAcknowledgements([]);
+
+    const screening = await read();
+    expect(screening?.findings[0]?.group).toBe("PLATFORM_CAPABILITY");
+  });
+
+  it("falls back to recovery for a persisted remediation this build does not know", async () => {
+    // The vocabulary is designed to grow, so a NEWER binary can have
+    // written a value this build has no group for. Recovery — here
+    // MINOR → PLATFORM_CAPABILITY — is the same answer this build gave
+    // before the column existed, which is the least surprising one.
+    givenFindings([
+      findingRow({
+        id: "f-future-remediation",
+        code: "SCR_KNOWLEDGE_UNAVAILABLE",
+        kind: "SCREENING_GAP",
+        severity: "MINOR",
+        certainty: "DEFINITE",
+        remediation: "SOMETHING_NEW",
+        fingerprint: "FP-FUTURE-REMEDIATION",
+      }),
+    ]);
+    givenAcknowledgements([]);
+
+    const screening = await read();
+    expect(screening?.findings[0]?.group).toBe("PLATFORM_CAPABILITY");
   });
 
   it("files a gap whose grading this build cannot read under prescription coverage", async () => {

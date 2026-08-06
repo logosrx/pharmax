@@ -2031,6 +2031,75 @@ describe("PV1 screening — knowledge-release attribution", () => {
   });
 });
 
+describe("PV1 screening — remediation is persisted on the row", () => {
+  it("persists the engine's remediation on every gap row and NULL on every clinical row", async () => {
+    // The column exists so coverage reporting can GROUP BY remediation
+    // without re-deriving "whose fault" from severity. That is only
+    // safe if the write path stamps every gap and never a clinical
+    // finding — the same invariant the migration CHECK holds in the
+    // forbidding direction.
+    const fake = buildFlowFake({ screening: candidateAndInteractingProfileDrug });
+    configureBus(fake.client);
+    configureClinicalScreening({
+      knowledgeSource: createInMemoryDrugKnowledgeSource({
+        drugs: {
+          [CANDIDATE_NDC]: {
+            ingredientCodes: ["INGREDIENT_ALFA"],
+            uncodedIngredientCount: 0,
+            therapeuticClassCodes: [],
+            crossSensitivityClassCodes: [],
+            doseRange: null,
+          },
+          [PROFILE_NDC]: {
+            ingredientCodes: ["INGREDIENT_BRAVO"],
+            uncodedIngredientCount: 0,
+            therapeuticClassCodes: [],
+            crossSensitivityClassCodes: [],
+            doseRange: null,
+          },
+        },
+        interactions: [
+          {
+            ingredients: ["INGREDIENT_ALFA", "INGREDIENT_BRAVO"],
+            fact: { severity: "MAJOR", certainty: "PROBABLE", citation: null },
+          },
+        ],
+      }),
+    });
+
+    await startReview();
+
+    const rows = fake.screening.state.persistedFindings;
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.remediation !== null, row.code).toBe(row.kind === "SCREENING_GAP");
+    }
+
+    const interaction = rows.find((row) => row.code === "SCR_DRUG_INTERACTION");
+    expect(interaction?.remediation).toBeNull();
+
+    // Every stub prescription is a legacy transcription (no structured
+    // sig) and prescriptions are immutable, so the dose gap carries the
+    // one remediation severity recovery could never express — which is
+    // exactly the row the column was added for.
+    const doseGap = rows.find((row) => row.code === "SCR_DOSE_INPUT_UNAVAILABLE");
+    expect(doseGap?.remediation).toBe("RECORD_IMMUTABLE");
+  });
+
+  it("persists PLATFORM_CAPABILITY on the unprovisioned-knowledge gap", async () => {
+    const fake = buildFlowFake({ screening: candidateOnly });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    await startReview();
+
+    const gap = fake.screening.state.persistedFindings.find(
+      (row) => row.code === "SCR_KNOWLEDGE_UNAVAILABLE"
+    );
+    expect(gap?.remediation).toBe("PLATFORM_CAPABILITY");
+  });
+});
+
 describe("PV1 screening — the per-screen knowledge source resolver", () => {
   it("receives the screen's own transaction and drug codes, and its source decides the screen", async () => {
     // The production shape: a database-backed adapter prefetches
