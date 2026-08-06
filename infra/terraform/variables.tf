@@ -381,9 +381,57 @@ variable "waf_rate_limit_per_5min" {
 # ---- Alarms / SNS -----------------------------------------------------------
 
 variable "alarm_sns_topic_arn" {
-  description = "ARN of an existing SNS topic to receive CloudWatch alarms. Empty disables actions (alarm still fires)."
+  description = <<-EOT
+    LEGACY: ARN of a pre-existing SNS topic to receive every CloudWatch alarm,
+    regardless of severity. Empty disables actions (the alarm still evaluates and
+    its state is visible in CloudWatch). Kept as the fallback for stacks that
+    already point at an externally-managed topic; prefer `enable_alerting = true`,
+    which provisions the severity-split topics in `modules/alerting`.
+  EOT
   type        = string
   default     = ""
+}
+
+variable "enable_alerting" {
+  description = <<-EOT
+    Provision the alerting SNS topics (critical + warning) and route alarms to
+    them. Required in production — `pnpm check:alarm-actions` fails the build if a
+    prod env-region leaves this off, because the alternative is 16 alarms that
+    evaluate correctly and notify nobody.
+  EOT
+  type        = bool
+  default     = false
+}
+
+# Subscription endpoints. NEVER set these in terraform.tfvars: an on-call
+# address is personal data and a paging webhook URL is a bearer credential.
+# Supply them at apply time from the CI secret store, e.g.
+# `TF_VAR_alerting_critical_https_subscriptions='["https://..."]'`. See
+# `infra/terraform/modules/alerting/variables.tf` for the full rationale and
+# `docs/runbooks/alerting.md` for the operator procedure.
+
+variable "alerting_critical_email_subscriptions" {
+  description = "Email endpoints for the CRITICAL topic. Supplied via TF_VAR_ at apply time, never committed."
+  type        = list(string)
+  default     = []
+}
+
+variable "alerting_warning_email_subscriptions" {
+  description = "Email endpoints for the warning topic. Supplied via TF_VAR_ at apply time, never committed."
+  type        = list(string)
+  default     = []
+}
+
+variable "alerting_critical_https_subscriptions" {
+  description = "HTTPS (paging provider) endpoints for the CRITICAL topic. Supplied via TF_VAR_ at apply time, never committed."
+  type        = list(string)
+  default     = []
+}
+
+variable "alerting_warning_https_subscriptions" {
+  description = "HTTPS (ticketing) endpoints for the warning topic. Supplied via TF_VAR_ at apply time, never committed."
+  type        = list(string)
+  default     = []
 }
 
 # ---- Secrets ----------------------------------------------------------------

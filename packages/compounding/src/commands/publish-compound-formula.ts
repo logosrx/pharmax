@@ -18,12 +18,16 @@
 // publish of the same draft loses on the status recheck.
 
 import type { Command, HandlerResult } from "@pharmax/command-bus";
-import { CompoundFormulaStatus } from "@pharmax/database";
+import { CompoundFormulaStatus, Prisma } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
 
-import { COMPOUND_FORMULA_INVALID_STATE, COMPOUND_FORMULA_NOT_FOUND } from "../shared.js";
+import {
+  COMPOUND_FORMULA_INVALID_STATE,
+  COMPOUND_FORMULA_NOT_FOUND,
+  COMPOUND_FORMULA_PRODUCT_ALREADY_CLAIMED,
+} from "../shared.js";
 
 const inputSchema = z
   .object({
@@ -99,14 +103,35 @@ export const PublishCompoundFormula: Command<
       });
     }
 
-    await tx.compoundFormula.update({
-      where: { id: formula.id },
-      data: {
-        status: CompoundFormulaStatus.ACTIVE,
-        publishedAt: now,
-      },
-      select: { id: true },
-    });
+    try {
+      await tx.compoundFormula.update({
+        where: { id: formula.id },
+        data: {
+          status: CompoundFormulaStatus.ACTIVE,
+          publishedAt: now,
+        },
+        select: { id: true },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        // The partial unique "one ACTIVE formula per (org,
+        // compoundProductId)": an ACTIVE formula of a DIFFERENT code
+        // already claims this draft's product. Same-code succession
+        // never lands here — the predecessor was retired above in
+        // this transaction. Two recipes both claiming to be "the"
+        // recipe for one dispensable product would make the PV1
+        // screen's answer ambiguous, so the second publisher gets a
+        // typed conflict and a decision to make, not a race to win.
+        throw new errors.ConflictError({
+          code: COMPOUND_FORMULA_PRODUCT_ALREADY_CLAIMED,
+          message:
+            "Another ACTIVE formula already claims this draft's compound product. " +
+            "Retire it (or publish a new version of it without the product link) before publishing this one.",
+          metadata: { formulaId: formula.id, code: formula.code },
+        });
+      }
+      throw err;
+    }
 
     return {
       output: {

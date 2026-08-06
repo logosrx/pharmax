@@ -44,8 +44,14 @@ Before the first `terraform apply` against a new env-region:
 - [ ] The ACM certificate for `app.pharmax.example.com` (or your domain)
       is `ISSUED` in the target region. The ALB module looks it up by
       data source; no cert = apply fails fast.
-- [ ] An SNS topic for alarms exists, or you've accepted that alarms
-      will record state but not page. Topic ARN goes in `terraform.tfvars`.
+- [ ] The alerting subscription endpoints exist and are available to
+      the apply as `TF_VAR_alerting_*` (a paging-provider webhook for
+      the critical topic, a mailbox for warnings). Terraform provisions
+      the topics themselves when `enable_alerting = true`, which is
+      mandatory for prod; the endpoints are never committed. Confirming
+      that a page actually reaches a human is a separate step — see
+      [`docs/runbooks/alerting.md`](../runbooks/alerting.md) §
+      "Proving the pipe works".
 - [ ] You've read this entire document.
 
 ---

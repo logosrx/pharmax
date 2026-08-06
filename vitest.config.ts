@@ -22,6 +22,14 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // `apps/web/tsconfig.json` sets `jsx: "preserve"` because Next.js
+  // owns that transform in the real build. Vitest reads the same
+  // tsconfig and esbuild then falls back to the CLASSIC runtime, so
+  // importing any component blows up with "React is not defined".
+  // Pinning the automatic runtime lets a test render a component to
+  // static markup, which is the only way to assert that a control is
+  // ABSENT rather than merely disabled.
+  esbuild: { jsx: "automatic" },
   resolve: {
     alias: {
       // Next.js's `server-only` and `client-only` packages are virtual

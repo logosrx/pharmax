@@ -19,7 +19,9 @@ import {
 } from "../../../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../../../src/server/auth/resolve-tenancy.js";
 import { auditPatientView } from "../../../../../src/server/ops/audit-patient-view.js";
+import { getPatientAllergies } from "../../../../../src/server/ops/get-patient-allergies.js";
 import { getPatientDetail } from "../../../../../src/server/ops/get-patient-detail.js";
+import { PatientAllergyPanel } from "../../../../../src/components/ops/patient-allergy-panel.js";
 import { PageHeader, Section } from "../../../../../src/components/ui/page.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../../../src/components/ui/card.js";
 import { Badge, type Tone } from "../../../../../src/components/ui/badge.js";
@@ -70,11 +72,24 @@ export default async function PatientDetailPage({
   }
   const canUpdate = hasOperatorPermission(permissions, PERMISSIONS.PATIENTS_UPDATE);
   const canCryptoShred = hasOperatorPermission(permissions, PERMISSIONS.PATIENTS_CRYPTO_SHRED);
+  const canReadAllergies = hasOperatorPermission(permissions, PERMISSIONS.PATIENTS_ALLERGIES_READ);
+  const canRecordAllergies = hasOperatorPermission(
+    permissions,
+    PERMISSIONS.PATIENTS_ALLERGIES_RECORD
+  );
+  const canAmendAllergyStatus = hasOperatorPermission(
+    permissions,
+    PERMISSIONS.PATIENTS_ALLERGIES_AMEND_STATUS
+  );
 
-  const detail = await getPatientDetail({
-    organizationId: session.tenancy.organizationId,
-    patientId,
-  });
+  // Loaded before the audit gate below, alongside the identity read, but
+  // rendered only after it passes — same posture as the identity block.
+  const [detail, allergyProfile] = await Promise.all([
+    getPatientDetail({ organizationId: session.tenancy.organizationId, patientId }),
+    canReadAllergies
+      ? getPatientAllergies({ organizationId: session.tenancy.organizationId, patientId })
+      : Promise.resolve(null),
+  ]);
   if (detail === null) {
     return (
       <div className="space-y-6">
@@ -212,6 +227,29 @@ export default async function PatientDetailPage({
           </CardContent>
         </Card>
       </Section>
+
+      {/* Above the edit form on purpose. An allergy history is a
+          clinical safety fact and it gates PV1; a phone number is
+          neither, and burying the allergy panel under a contact-details
+          form would tell an operator which one the product thinks
+          matters. */}
+      {allergyProfile === null ? (
+        <Section title="Allergies & intolerances">
+          <PermissionDenied grant="patients.allergies.read" />
+        </Section>
+      ) : (
+        <PatientAllergyPanel
+          profile={allergyProfile}
+          capabilities={{
+            // A shredded patient's PHI has been destroyed; writing new
+            // clinical narrative against the row would quietly undo the
+            // erasure, and the command refuses it anyway.
+            canRecord: canRecordAllergies && !isShredded,
+            canAmendStatus: canAmendAllergyStatus && !isShredded,
+          }}
+          actionBase={`/api/ops/admin/patients/${detail.patientId}`}
+        />
+      )}
 
       {canUpdate && !isShredded ? (
         <Section title="Edit patient">

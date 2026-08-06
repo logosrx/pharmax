@@ -231,17 +231,13 @@ export async function openBreakGlassSession(input: {
       assertNotExpired(active.record, input.clock);
 
       const startedAt = input.clock.now();
-      let success = false;
-      let errorMessage: string | null = null;
       let outcome: T;
       try {
         outcome = await input.client.withSystemContextTx(
           { reason: `break-glass:${active.record.id}` },
           fn
         );
-        success = true;
       } catch (cause) {
-        errorMessage = describeError(cause);
         const completedAt = input.clock.now();
         await input.client.recordAction({
           id: input.actionIdFactory(),
@@ -249,7 +245,7 @@ export async function openBreakGlassSession(input: {
           actionLabel: args.actionLabel,
           parameters: args.parameters ?? null,
           success: false,
-          errorMessage,
+          errorMessage: describeError(cause),
           commandLogId: args.commandLogId ?? null,
           startedAt,
           completedAt,
@@ -257,14 +253,17 @@ export async function openBreakGlassSession(input: {
         throw cause;
       }
 
+      // The catch above always rethrows, so reaching here means the
+      // operation committed — the failure ledger row is written on
+      // that path, never this one.
       const completedAt = input.clock.now();
       await input.client.recordAction({
         id: input.actionIdFactory(),
         sessionId: active.record.id,
         actionLabel: args.actionLabel,
         parameters: args.parameters ?? null,
-        success,
-        errorMessage,
+        success: true,
+        errorMessage: null,
         commandLogId: args.commandLogId ?? null,
         startedAt,
         completedAt,

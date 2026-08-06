@@ -94,3 +94,16 @@ break_glass_session
 # rationale). INSERT-only at the grant layer — rows are immutable
 # audit evidence of exactly what was executed under the bypass.
 break_glass_action
+
+# RxNorm drug-knowledge reference tables (global, deliberately not
+# tenant-scoped — same posture as `permission`). Drug nomenclature is
+# not tenant data: every organization screens against the same public
+# NLM release, the rows contain no organizationId and no PHI, and a
+# per-org copy would only let two tenants disagree about what an NDC
+# contains. Isolation is replaced by a write boundary instead of a
+# read boundary: pharmax_app is granted SELECT only, and writes happen
+# solely through the ingestion job (see the
+# 20260809000000_rxnorm_drug_knowledge migration's GRANT block).
+rxnorm_release
+rxnorm_ndc_product
+rxnorm_product_ingredient

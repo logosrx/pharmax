@@ -1025,8 +1025,19 @@ state where some rows are searchable under no current key.
 of these messages:
 
 - `Refusing to boot apps/web in production: AWS_REGION, AWS_KMS_DATA_KEY_ID, and AWS_KMS_SEARCH_KEY_ID must all be set.`
-- `KMS_KEY_NOT_FOUND` / `CRYPTO_VALIDATION` thrown from
-  `AwsKmsAdapter.validate()`.
+- `KMS_ACCESS_DENIED` / `KMS_KEY_NOT_FOUND` / `CRYPTO_VALIDATION`
+  thrown from `AwsKmsAdapter.validate()`.
+
+The error code tells you which branch of the tree below to start on,
+and it is load-bearing — `KMS_ACCESS_DENIED` means IAM (step 2) and
+`KMS_KEY_NOT_FOUND` means the key id, region, or key state (steps 1
+and 3). The `metadata.kid` field names the exact key that failed
+(useful during a rotation, when three or more ARNs are in play) and
+`metadata.awsErrorName` carries the modeled AWS exception
+(`AccessDeniedException`, `NotFoundException`, `ThrottlingException`).
+The raw AWS error rides on the exception's `cause`, so Sentry shows
+its type and stack; it is deliberately absent from `toJSON()` output
+because an AWS message can echo request detail.
 
 The container immediately health-checks unhealthy; ECS will keep
 spinning up replacement tasks until the underlying problem is
@@ -1042,8 +1053,11 @@ this.
    ARN (e.g. after re-creating the secret) is the most common
    "missing env" cause.
 
-2. **IAM AccessDenied on `kms:DescribeKey`.** CloudWatch Logs
-   will show the underlying SDK error. Check:
+2. **IAM AccessDenied on `kms:DescribeKey`** — the error code is
+   `KMS_ACCESS_DENIED` and `metadata.awsErrorName` is
+   `AccessDeniedException`. The key itself is probably healthy;
+   do not go looking for a missing key. CloudWatch Logs show the
+   underlying SDK error. Check:
    - Does the ECS task role include `kms:DescribeKey` for BOTH
      key ARNs? Both keys are required.
    - Is the key policy on the CMK itself allowing the task

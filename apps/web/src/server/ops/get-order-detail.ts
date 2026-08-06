@@ -33,6 +33,7 @@ import "server-only";
 
 import { decryptField } from "@pharmax/crypto";
 import {
+  type CompoundIngredientCoding,
   type PackagePhotoMatchStrategy,
   type PackagePhotoTrackingSource,
   readInOrgScope,
@@ -69,6 +70,37 @@ export interface OrderDetailPatient {
   readonly postalCode: string | null;
 }
 
+/**
+ * One recipe row of a compound line's ACTIVE formula, with its
+ * machine-readability state — what lets the page mark, per row,
+ * whether the allergy screen compared it or a human must. Recipe
+ * data, not PHI.
+ */
+export interface OrderDetailCompoundIngredient {
+  readonly ingredientId: string;
+  readonly ingredientName: string;
+  readonly quantity: string;
+  readonly unit: string;
+  readonly coding: CompoundIngredientCoding;
+  readonly rxnormInRxcui: string | null;
+}
+
+/**
+ * The screening-relevant compound context of a prescription line
+ * whose product is an in-house compound. `formula` is null when no
+ * ACTIVE formula claims the product — the wholly-unscreened state the
+ * `SCR_COMPOUND_FORMULA_NOT_CODED` finding reports.
+ */
+export interface OrderDetailCompoundInfo {
+  readonly formula: {
+    readonly formulaId: string;
+    readonly formulaCode: string;
+    readonly formulaVersion: number;
+    readonly formulaName: string;
+    readonly ingredients: ReadonlyArray<OrderDetailCompoundIngredient>;
+  } | null;
+}
+
 export interface OrderDetailPrescriptionLine {
   readonly orderLineId: string;
   readonly prescriptionId: string;
@@ -87,6 +119,8 @@ export interface OrderDetailPrescriptionLine {
   readonly assignedLotNumber: string | null;
   readonly assignedLotExpiry: Date | null;
   readonly vialLabelId: string | null;
+  /** Non-null exactly when the line's product is an in-house compound. */
+  readonly compound: OrderDetailCompoundInfo | null;
 }
 
 export interface OrderDetailEvent {
@@ -323,6 +357,81 @@ export async function getOrderDetail(input: {
 
   if (order === null) return null;
 
+  // Phase 1b — compound screening context, per line NDC: which lines
+  // dispense an in-house compound, and what its ACTIVE formula's
+  // ingredient rows declare. This is what lets the page tell the
+  // pharmacist, per row, "the screen compared this" vs "you are the
+  // only reader this row has" — the same per-row honesty the allergy
+  // panel gives uncoded allergens. Recipe data only; no PHI.
+  const lineNdcs = [...new Set(order.orderLines.map((line) => line.prescription.drugNdc))];
+  const compoundProducts =
+    lineNdcs.length === 0
+      ? []
+      : await readInOrgScope(input.organizationId, (tx) =>
+          tx.product.findMany({
+            where: {
+              organizationId: input.organizationId,
+              ndc: { in: lineNdcs },
+              ndcKind: "IN_HOUSE_COMPOUND",
+            },
+            select: {
+              ndc: true,
+              compoundFormulas: {
+                // At most one, by the partial unique index.
+                where: { status: "ACTIVE" },
+                select: {
+                  id: true,
+                  code: true,
+                  version: true,
+                  name: true,
+                  ingredients: {
+                    select: {
+                      id: true,
+                      ingredientName: true,
+                      quantity: true,
+                      unit: true,
+                      coding: true,
+                      rxnormInRxcui: true,
+                    },
+                    orderBy: { sortOrder: "asc" },
+                  },
+                },
+              },
+            },
+          })
+        );
+  const compoundByNdc = new Map<string, OrderDetailCompoundInfo>(
+    compoundProducts.map((product) => {
+      const formula = product.compoundFormulas[0];
+      return [
+        product.ndc,
+        Object.freeze({
+          formula:
+            formula === undefined
+              ? null
+              : Object.freeze({
+                  formulaId: formula.id,
+                  formulaCode: formula.code,
+                  formulaVersion: formula.version,
+                  formulaName: formula.name,
+                  ingredients: Object.freeze(
+                    formula.ingredients.map((row) =>
+                      Object.freeze({
+                        ingredientId: row.id,
+                        ingredientName: row.ingredientName,
+                        quantity: String(row.quantity),
+                        unit: row.unit,
+                        coding: row.coding,
+                        rxnormInRxcui: row.rxnormInRxcui,
+                      })
+                    )
+                  ),
+                }),
+        }),
+      ];
+    })
+  );
+
   // ---- Decrypt patient PHI fields in parallel ----
   const patientId = order.patient.id;
   const decryptBinding = (column: string) =>
@@ -420,6 +529,7 @@ export async function getOrderDetail(input: {
         assignedLotNumber: line.lot?.lotNumber ?? null,
         assignedLotExpiry: line.lot?.expirationDate ?? null,
         vialLabelId: line.vialLabelId,
+        compound: compoundByNdc.get(line.prescription.drugNdc) ?? null,
       });
     })
   );

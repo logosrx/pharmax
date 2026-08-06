@@ -36,6 +36,25 @@ export const PERMISSIONS = Object.freeze({
   PATIENTS_UPDATE: "patients.update",
   PATIENTS_CRYPTO_SHRED: "patients.crypto_shred",
 
+  // Allergy profile. Three grants rather than one, split on which
+  // direction the change moves patient safety.
+  //
+  // RECORD covers both adding an allergy and asserting that a history
+  // was taken and found nothing. Deliberately ONE grant: split them and
+  // the predictable outcome is staff who can add allergies but cannot
+  // record their absence, so nobody ever records the absence and the
+  // per-patient screening gap never closes for a genuinely allergy-free
+  // patient. Both are the same act — taking a history.
+  //
+  // AMEND_STATUS is separate and set higher because it is the only one
+  // that REMOVES a safety check: refuting an allergy, or marking it
+  // entered-in-error, stops it driving the PV1 screen. Adding a wrong
+  // allergy costs a false alert; retracting a right one costs the alert
+  // that mattered.
+  PATIENTS_ALLERGIES_READ: "patients.allergies.read",
+  PATIENTS_ALLERGIES_RECORD: "patients.allergies.record",
+  PATIENTS_ALLERGIES_AMEND_STATUS: "patients.allergies.amend_status",
+
   // Provider (prescriber) roster.
   PROVIDERS_CREATE: "providers.create",
   PROVIDERS_READ: "providers.read",
@@ -48,6 +67,12 @@ export const PERMISSIONS = Object.freeze({
   // decision on the NEEDS_REVIEW queue.
   PROVIDERS_ONBOARDING_SUBMIT: "providers.onboarding.submit",
   PROVIDERS_ONBOARDING_REVIEW: "providers.onboarding.review",
+
+  // Prescription intake. Transcribing a prescription is the act that
+  // brings a clinical order into the system; it is deliberately a
+  // separate grant from ORDERS_ADD_PRESCRIPTION, which only attaches
+  // an already-transcribed prescription to an order.
+  PRESCRIPTIONS_CREATE: "prescriptions.create",
 
   // Clinic (practice) directory.
   CLINICS_READ: "clinics.read",
@@ -241,6 +266,26 @@ export const PERMISSION_METADATA: Readonly<
     description:
       "Crypto-shred a patient: render PHI permanently unreadable (right-to-be-forgotten, compliance action; OrgAdmin only by default).",
     category: "Patients",
+  },
+  [PERMISSIONS.PATIENTS_ALLERGIES_READ]: {
+    description:
+      "Read a patient's allergy and intolerance profile, including whether an allergy history has been taken at all.",
+    category: "Patients",
+  },
+  [PERMISSIONS.PATIENTS_ALLERGIES_RECORD]: {
+    description:
+      "Record an allergy or intolerance, or assert that an allergy history was taken (no known allergies / unable to assess).",
+    category: "Patients",
+  },
+  [PERMISSIONS.PATIENTS_ALLERGIES_AMEND_STATUS]: {
+    description:
+      "Change the clinical or verification status of a recorded allergy — resolve, refute, or mark entered-in-error. Stops the record driving PV1 screening, so it is a pharmacist-level grant.",
+    category: "Patients",
+  },
+  [PERMISSIONS.PRESCRIPTIONS_CREATE]: {
+    description:
+      "Transcribe a new prescription (encrypts the sig; enforces DEA Part 1306 authorization limits for controlled substances).",
+    category: "Prescriptions",
   },
   [PERMISSIONS.PROVIDERS_CREATE]: {
     description: "Register a new prescribing provider.",

@@ -1,6 +1,6 @@
 import { buildVialBarcodeValue } from "@pharmax/labels";
 
-import { normalizeNdc } from "./normalize-ndc.js";
+import { normalizeNdc } from "@pharmax/drug-identity";
 import { parseScannedValue } from "./parse-scanned-value.js";
 
 export type ScanValidationResult = "SUCCESS" | "HARD_STOP" | "FAILED";

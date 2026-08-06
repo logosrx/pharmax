@@ -1,0 +1,2124 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  createInMemoryDrugKnowledgeSource,
+  findingsRequiringAcknowledgement,
+  hardStopFindings,
+  screenPrescription,
+  screeningGapSeverity,
+  CLINICAL_SCREENING_AXES,
+  DEFAULT_SCREENING_POLICY,
+  INPUT_UNAVAILABLE_CODE_FOR_AXIS,
+  SCREENING_FINDING_KINDS,
+  SCREENING_SEVERITIES,
+  type DoseStatement,
+  type DrugKnowledge,
+  type PrescribedDrug,
+  type RecordedAllergy,
+  type ScreeningEvaluation,
+  type ScreeningFinding,
+  type ScreeningFindingCode,
+  type ScreeningInputAvailability,
+  type ScreeningInputAxis,
+  type ScreeningRequest,
+} from "./index.js";
+
+// ---------------------------------------------------------------------------
+// Fixtures
+//
+// Every code below is synthetic. Real drug names are avoided on
+// purpose: they would invite a reader to treat a fixture as clinical
+// guidance, and a reviewer to wonder where the pharmacology came from.
+// Neither question can be asked of ING_ALFA.
+// ---------------------------------------------------------------------------
+
+const DRUGS: Readonly<Record<string, DrugKnowledge>> = {
+  // Single ingredient, one therapeutic class, one cross-sensitivity class.
+  DRUG_ALFA: {
+    ingredientCodes: ["ING_ALFA"],
+    uncodedIngredientCount: 0,
+    therapeuticClassCodes: ["CLASS_ONE"],
+    crossSensitivityClassCodes: ["XCLASS_ONE"],
+    doseRange: null,
+  },
+  // Same ingredient as DRUG_ALFA under a different product code — the
+  // duplicate-ingredient case.
+  DRUG_ALFA_GENERIC: {
+    ingredientCodes: ["ING_ALFA"],
+    uncodedIngredientCount: 0,
+    therapeuticClassCodes: ["CLASS_ONE"],
+    crossSensitivityClassCodes: ["XCLASS_ONE"],
+    doseRange: null,
+  },
+  // Different ingredient, unrelated class.
+  DRUG_BRAVO: {
+    ingredientCodes: ["ING_BRAVO"],
+    uncodedIngredientCount: 0,
+    therapeuticClassCodes: ["CLASS_TWO"],
+    crossSensitivityClassCodes: [],
+    doseRange: null,
+  },
+  // Different ingredient, SAME class as DRUG_ALFA — class duplication
+  // without ingredient duplication.
+  DRUG_CHARLIE: {
+    ingredientCodes: ["ING_CHARLIE"],
+    uncodedIngredientCount: 0,
+    therapeuticClassCodes: ["CLASS_ONE"],
+    crossSensitivityClassCodes: [],
+    doseRange: null,
+  },
+  // Combination product sharing one ingredient with DRUG_ALFA.
+  DRUG_COMBO: {
+    ingredientCodes: ["ING_ALFA", "ING_BRAVO"],
+    uncodedIngredientCount: 0,
+    therapeuticClassCodes: ["CLASS_ONE", "CLASS_TWO"],
+    crossSensitivityClassCodes: [],
+    doseRange: null,
+  },
+  // Carries an absolute contraindication against DRUG_ALFA.
+  DRUG_ECHO: {
+    ingredientCodes: ["ING_ECHO"],
+    uncodedIngredientCount: 0,
+    therapeuticClassCodes: ["CLASS_THREE"],
+    crossSensitivityClassCodes: [],
+    doseRange: null,
+  },
+  DRUG_DOSED: {
+    ingredientCodes: ["ING_DELTA"],
+    uncodedIngredientCount: 0,
+    therapeuticClassCodes: ["CLASS_FOUR"],
+    crossSensitivityClassCodes: [],
+    doseRange: {
+      unit: "mg",
+      maxSingleDose: 10,
+      maxDailyDose: 30,
+      minDailyDose: 5,
+      citation: "synthetic fixture",
+    },
+  },
+  // Limits chosen so an exactly-correct regimen lands off a binary
+  // floating-point boundary. See the tolerance test.
+  DRUG_FRACTIONAL: {
+    ingredientCodes: ["ING_FOXTROT"],
+    uncodedIngredientCount: 0,
+    therapeuticClassCodes: [],
+    crossSensitivityClassCodes: [],
+    doseRange: {
+      unit: "mg",
+      maxSingleDose: 0.1,
+      maxDailyDose: 0.3,
+      minDailyDose: 0.3,
+      citation: null,
+    },
+  },
+};
+
+const KNOWLEDGE = createInMemoryDrugKnowledgeSource({
+  drugs: DRUGS,
+  allergens: {
+    // Not an ingredient of anything here — reaches the candidate only
+    // through the shared cross-sensitivity class.
+    ALLERGEN_XRAY: { crossSensitivityClassCodes: ["XCLASS_ONE"] },
+    // An ingredient that is ALSO cross-sensitivity-classed, so a
+    // direct hit and a class hit are both available at once.
+    ING_ALFA: { crossSensitivityClassCodes: ["XCLASS_ONE"] },
+  },
+  interactions: [
+    {
+      ingredients: ["ING_ALFA", "ING_BRAVO"],
+      fact: { severity: "MODERATE", certainty: "PROBABLE", citation: "synthetic fixture" },
+    },
+    {
+      ingredients: ["ING_ALFA", "ING_ECHO"],
+      fact: { severity: "CONTRAINDICATED", certainty: "DEFINITE", citation: "synthetic fixture" },
+    },
+  ],
+});
+
+function drug(
+  recordId: string,
+  drugCode: string,
+  dose: PrescribedDrug["dose"] = null
+): PrescribedDrug {
+  return { recordId, drugCode, dose };
+}
+
+function allergy(overrides: Partial<RecordedAllergy> = {}): RecordedAllergy {
+  return {
+    recordId: "allergy-1",
+    substanceCode: "ING_ALFA",
+    category: "MEDICATION",
+    type: "ALLERGY",
+    criticality: "HIGH",
+    verificationStatus: "CONFIRMED",
+    ...overrides,
+  };
+}
+
+/**
+ * Availability declaration for a caller that can supply everything.
+ *
+ * Written out rather than derived from `CLINICAL_SCREENING_AXES`, and
+ * that is the point: a fifth axis breaks this literal, so the suite
+ * cannot keep compiling while quietly asserting the new axis is
+ * screened. Tests that want a gap call `withoutAxis`.
+ */
+const ALL_INPUTS_AVAILABLE: Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>> =
+  Object.freeze({
+    DRUG_DRUG_INTERACTION: "AVAILABLE",
+    DRUG_ALLERGY: "AVAILABLE",
+    THERAPEUTIC_DUPLICATION: "AVAILABLE",
+    DOSE_RANGE: "AVAILABLE",
+  });
+
+/**
+ * Defaults to the ACTIONABLE unavailability, because that is the one
+ * whose behaviour most of this suite is about: a platform that could
+ * have supplied the input and did not for this subject. Tests about the
+ * systemic case pass "NOT_SUPPORTED_BY_PLATFORM" explicitly.
+ */
+function withoutAxis(
+  axis: ScreeningInputAxis,
+  unavailability: Exclude<ScreeningInputAvailability, "AVAILABLE"> = "NOT_RECORDED_FOR_SUBJECT"
+): Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>> {
+  return { ...ALL_INPUTS_AVAILABLE, [axis]: unavailability };
+}
+
+function everyAxis(
+  unavailability: Exclude<ScreeningInputAvailability, "AVAILABLE">
+): Readonly<Record<ScreeningInputAxis, ScreeningInputAvailability>> {
+  return Object.fromEntries(
+    CLINICAL_SCREENING_AXES.map((axis) => [axis, unavailability])
+  ) as Record<ScreeningInputAxis, ScreeningInputAvailability>;
+}
+
+function screen(overrides: Partial<ScreeningRequest> = {}): ScreeningEvaluation {
+  return screenPrescription({
+    candidate: drug("line-candidate", "DRUG_ALFA"),
+    inputAvailability: ALL_INPUTS_AVAILABLE,
+    activeMedications: [],
+    allergies: [],
+    knowledge: KNOWLEDGE,
+    acknowledgedFingerprints: new Set<string>(),
+    policy: DEFAULT_SCREENING_POLICY,
+    ...overrides,
+  });
+}
+
+function allFindings(evaluation: ScreeningEvaluation): ReadonlyArray<ScreeningFinding> {
+  return evaluation.findings;
+}
+
+function codes(evaluation: ScreeningEvaluation): ReadonlyArray<ScreeningFindingCode> {
+  return allFindings(evaluation).map((f) => f.code);
+}
+
+function requireFinding(
+  evaluation: ScreeningEvaluation,
+  code: ScreeningFindingCode
+): ScreeningFinding {
+  const found = allFindings(evaluation).find((f) => f.code === code);
+  if (found === undefined) {
+    throw new Error(`expected a ${code} finding; got [${codes(evaluation).join(", ")}]`);
+  }
+  return found;
+}
+
+// ---------------------------------------------------------------------------
+// The clear case
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — nothing to report", () => {
+  it("returns CLEAR with an empty findings array", () => {
+    const result = screen();
+    expect(result.outcome).toBe("CLEAR");
+    expect(result.findings).toEqual([]);
+  });
+
+  it("is CLEAR against a profile medication with no relationship to the candidate", () => {
+    // DRUG_DOSED shares no ingredient, no therapeutic class and no
+    // asserted interaction with DRUG_ALFA. A known drug pair that the
+    // knowledge source has nothing to say about must produce silence,
+    // not a gap.
+    const result = screen({ activeMedications: [drug("line-other", "DRUG_DOSED")] });
+    expect(result.outcome).toBe("CLEAR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Screening gaps — the "we did not check this" reports
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — knowledge gaps", () => {
+  it("reports an unknown candidate drug instead of screening clean", () => {
+    // The dangerous failure mode: an unrecognised drug code silently
+    // passing as "no findings".
+    const result = screen({ candidate: drug("line-candidate", "DRUG_UNKNOWN") });
+    expect(result.outcome).toBe("ADVISORY");
+    expect(codes(result)).toEqual(["SCR_KNOWLEDGE_UNAVAILABLE"]);
+    expect(requireFinding(result, "SCR_KNOWLEDGE_UNAVAILABLE").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+
+  it("never blocks on a gap", () => {
+    // Our reference data being incomplete must not become the
+    // patient's problem.
+    const result = screen({ candidate: drug("line-candidate", "DRUG_UNKNOWN") });
+    expect(hardStopFindings(result)).toEqual([]);
+  });
+
+  it("performs no other screening when the candidate is unknown", () => {
+    // Without ingredients there is nothing to compare, and reporting a
+    // second gap per profile row would bury the one that matters.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_UNKNOWN"),
+      activeMedications: [drug("line-a", "DRUG_ALSO_UNKNOWN"), drug("line-b", "DRUG_BRAVO")],
+      allergies: [allergy()],
+    });
+    expect(codes(result)).toEqual(["SCR_KNOWLEDGE_UNAVAILABLE"]);
+  });
+
+  it("reports an unknown profile medication when the pair could otherwise be screened", () => {
+    const result = screen({
+      activeMedications: [drug("line-other", "DRUG_UNKNOWN")],
+    });
+    const gap = requireFinding(result, "SCR_KNOWLEDGE_UNAVAILABLE");
+    expect(gap.triggers).toEqual([
+      { source: "PROFILE_MEDICATION", recordId: "line-other", code: "DRUG_UNKNOWN" },
+    ]);
+  });
+
+  it("merges repeated gaps for the same unknown drug but keeps both record ids", () => {
+    const result = screen({
+      activeMedications: [drug("line-a", "DRUG_UNKNOWN"), drug("line-b", "DRUG_UNKNOWN")],
+    });
+    expect(codes(result)).toEqual(["SCR_KNOWLEDGE_UNAVAILABLE"]);
+    expect(
+      requireFinding(result, "SCR_KNOWLEDGE_UNAVAILABLE").triggers.map((t) => t.recordId)
+    ).toEqual(["line-a", "line-b"]);
+  });
+
+  it("keeps gaps for different unknown drugs separate", () => {
+    const result = screen({
+      activeMedications: [drug("line-a", "DRUG_UNKNOWN_ONE"), drug("line-b", "DRUG_UNKNOWN_TWO")],
+    });
+    expect(allFindings(result)).toHaveLength(2);
+  });
+
+  it("still reports the gap when no knowledge source is provisioned at all", () => {
+    // The deployment with no licensed database. Every lookup fails for
+    // every drug, and the record must say so — a screen that came back
+    // CLEAR here would be the single most dangerous output this engine
+    // could produce.
+    const result = screen({ knowledge: createInMemoryDrugKnowledgeSource() });
+    expect(result.outcome).toBe("ADVISORY");
+    expect(codes(result)).toEqual(["SCR_KNOWLEDGE_UNAVAILABLE"]);
+    expect(requireFinding(result, "SCR_KNOWLEDGE_UNAVAILABLE").kind).toBe("SCREENING_GAP");
+  });
+
+  it("does not demand an acknowledgement when no knowledge source is provisioned", () => {
+    // Nobody can license a drug database from the PV1 queue. With no
+    // source wired this gap fires on 100% of prescriptions, so a
+    // required click would be a per-order tax that buys nothing and
+    // spends the attention the real findings need. The deficiency is
+    // stated at boot and in coverage reporting instead.
+    const result = screen({ knowledge: createInMemoryDrugKnowledgeSource() });
+    const gap = requireFinding(result, "SCR_KNOWLEDGE_UNAVAILABLE");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("does demand an acknowledgement for one unknown code in a provisioned source", () => {
+    // The contrast that makes the grading meaningful rather than a
+    // blanket downgrade. A database that answers for other drugs and
+    // not this one has a hole somebody can act on today: verify the
+    // NDC, or chase a reference-data update.
+    const result = screen({ candidate: drug("line-candidate", "DRUG_UNKNOWN") });
+    const gap = requireFinding(result, "SCR_KNOWLEDGE_UNAVAILABLE");
+    expect(gap.severity).toBe("MODERATE");
+    expect(gap.disposition).toBe("REQUIRES_ACKNOWLEDGEMENT");
+  });
+
+  it("fingerprints the unprovisioned and unknown-code gaps differently", () => {
+    // Same reason as the per-axis case: an acknowledgement matches on
+    // fingerprint alone, so a settled "this code is unknown" must not be
+    // able to silence — or be silenced by — "no database exists".
+    //
+    // The drug code is held constant on both sides, so the only thing
+    // that can separate these fingerprints is the remediation. Were it
+    // omitted from the identity, this would pass by accident on any two
+    // different codes and fail to protect anything.
+    const candidate = drug("line-candidate", "DRUG_UNKNOWN");
+    const unprovisioned = requireFinding(
+      screen({ candidate, knowledge: createInMemoryDrugKnowledgeSource() }),
+      "SCR_KNOWLEDGE_UNAVAILABLE"
+    );
+    const unknownCode = requireFinding(screen({ candidate }), "SCR_KNOWLEDGE_UNAVAILABLE");
+    expect(unprovisioned.fingerprint).not.toBe(unknownCode.fingerprint);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Out-of-nomenclature drug codes (compounded preparations)
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — codes outside the source's nomenclature", () => {
+  // A compounding pharmacy's own preparation: the code is correct as
+  // recorded and no nomenclature update will ever resolve it. The
+  // seeded source below answers for DRUG_ALFA and declares
+  // COMPOUND_LOCAL_1 out of scope.
+  const compoundAwareKnowledge = createInMemoryDrugKnowledgeSource({
+    drugs: { DRUG_ALFA: DRUGS["DRUG_ALFA"]! },
+    outOfNomenclatureDrugCodes: ["COMPOUND_LOCAL_1"],
+  });
+
+  it("reports SCR_KNOWLEDGE_NOT_APPLICABLE for an out-of-nomenclature candidate", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_LOCAL_1"),
+      knowledge: compoundAwareKnowledge,
+    });
+    expect(codes(result)).toEqual(["SCR_KNOWLEDGE_NOT_APPLICABLE"]);
+    expect(requireFinding(result, "SCR_KNOWLEDGE_NOT_APPLICABLE").kind).toBe("SCREENING_GAP");
+  });
+
+  it("records the compound gap WITHOUT demanding an acknowledgement", () => {
+    // The alert-fatigue case this scope exists for: a compounding
+    // pharmacy dispenses these on most orders, forever. "Verify the
+    // NDC" would be a lie and the per-order click would train the
+    // dismiss reflex. Recorded, never interruptive.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_LOCAL_1"),
+      knowledge: compoundAwareKnowledge,
+    });
+    const gap = requireFinding(result, "SCR_KNOWLEDGE_NOT_APPLICABLE");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+    expect(hardStopFindings(result)).toEqual([]);
+  });
+
+  it("is still an unmistakably unscreened order, not a clean one", () => {
+    // The gap must survive every reporting floor, like every
+    // SCREENING_GAP: an unscreened compound must never read as
+    // screened-and-clear.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_LOCAL_1"),
+      knowledge: compoundAwareKnowledge,
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    expect(codes(result)).toEqual(["SCR_KNOWLEDGE_NOT_APPLICABLE"]);
+  });
+
+  it("keeps the acknowledge-tier gap for an in-nomenclature code the same source cannot resolve", () => {
+    // The contrast that keeps the compound treatment honest: a
+    // manufactured product's NDC missing from an otherwise-answering
+    // source is still a fixable reference-data hole worth a
+    // pharmacist's attention.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_UNKNOWN"),
+      knowledge: compoundAwareKnowledge,
+    });
+    const gap = requireFinding(result, "SCR_KNOWLEDGE_UNAVAILABLE");
+    expect(gap.disposition).toBe("REQUIRES_ACKNOWLEDGEMENT");
+  });
+
+  it("reports an out-of-nomenclature PROFILE medication informationally too", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA"),
+      activeMedications: [drug("line-compound", "COMPOUND_LOCAL_1")],
+      knowledge: compoundAwareKnowledge,
+    });
+    const gap = requireFinding(result, "SCR_KNOWLEDGE_NOT_APPLICABLE");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(gap.triggers).toEqual([
+      { source: "PROFILE_MEDICATION", recordId: "line-compound", code: "COMPOUND_LOCAL_1" },
+    ]);
+  });
+
+  it("out-of-nomenclature matters only for a PROVISIONED source", () => {
+    // Unprovisioned means every code fails identically; a compound
+    // distinction would add a second informational spelling of the
+    // same systemic fact.
+    const unprovisioned = createInMemoryDrugKnowledgeSource({
+      outOfNomenclatureDrugCodes: ["COMPOUND_LOCAL_1"],
+    });
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_LOCAL_1"),
+      knowledge: unprovisioned,
+    });
+    expect(codes(result)).toEqual(["SCR_KNOWLEDGE_UNAVAILABLE"]);
+  });
+
+  it("fingerprints the compound gap apart from both knowledge-unavailable gradings", () => {
+    // A pharmacist's (hypothetical future) disposition of one must
+    // never silence the others; the codes differ, so the fingerprints
+    // must.
+    const candidate = drug("line-candidate", "COMPOUND_LOCAL_1");
+    const notApplicable = requireFinding(
+      screen({ candidate, knowledge: compoundAwareKnowledge }),
+      "SCR_KNOWLEDGE_NOT_APPLICABLE"
+    );
+    const unprovisioned = requireFinding(
+      screen({ candidate, knowledge: createInMemoryDrugKnowledgeSource() }),
+      "SCR_KNOWLEDGE_UNAVAILABLE"
+    );
+    expect(notApplicable.fingerprint).not.toBe(unprovisioned.fingerprint);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locally-declarable drug codes (compound formulas)
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — locally declarable codes and partially-coded formulas", () => {
+  // A source that supports org-declared compound formulas: it answers
+  // for a fully-coded compound, answers a coded SUBSET for a
+  // partially-coded one, and declares an uncoded compound's code
+  // locally declarable rather than out of nomenclature.
+  const formulaAwareKnowledge = createInMemoryDrugKnowledgeSource({
+    drugs: {
+      DRUG_ALFA: DRUGS["DRUG_ALFA"]!,
+      COMPOUND_CODED: {
+        ingredientCodes: ["ING_ALFA"],
+        uncodedIngredientCount: 0,
+        therapeuticClassCodes: [],
+        crossSensitivityClassCodes: [],
+        doseRange: null,
+      },
+      COMPOUND_PARTIAL: {
+        ingredientCodes: ["ING_BRAVO"],
+        uncodedIngredientCount: 2,
+        therapeuticClassCodes: [],
+        crossSensitivityClassCodes: [],
+        doseRange: null,
+      },
+    },
+    locallyDeclarableDrugCodes: ["COMPOUND_UNCODED"],
+  });
+
+  it("hard-stops a fully-coded compound on a confirmed exact-ingredient allergy", () => {
+    // The bar this feature exists to reach: the compound path ends at
+    // the same unoverridable refusal a national product's does.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_CODED"),
+      allergies: [allergy()],
+      knowledge: formulaAwareKnowledge,
+    });
+    expect(result.outcome).toBe("BLOCKED");
+    const finding = requireFinding(result, "SCR_DRUG_ALLERGY_DIRECT");
+    expect(finding.severity).toBe("CONTRAINDICATED");
+    expect(finding.disposition).toBe("HARD_STOP");
+  });
+
+  it("screens a fully-coded compound CLEAR when nothing matches", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_CODED"),
+      allergies: [],
+      knowledge: formulaAwareKnowledge,
+    });
+    expect(result.outcome).toBe("CLEAR");
+  });
+
+  it("reports SCR_COMPOUND_FORMULA_NOT_CODED for an uncoded compound, informationally", () => {
+    // Org-closable, so recorded without interrupting: the formulary
+    // team codes the formula once; the pharmacist in the queue cannot.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_UNCODED"),
+      knowledge: formulaAwareKnowledge,
+    });
+    expect(codes(result)).toEqual(["SCR_COMPOUND_FORMULA_NOT_CODED"]);
+    const gap = requireFinding(result, "SCR_COMPOUND_FORMULA_NOT_CODED");
+    expect(gap.kind).toBe("SCREENING_GAP");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("grades the locally-declarable gap at ANY coverage, unlike out-of-nomenclature", () => {
+    // The org's formulary answers independently of national
+    // licensing: "code the formula" is true whether or not a release
+    // is provisioned, and the acknowledge-tier "no source is wired"
+    // spelling would drown it.
+    const unprovisioned = createInMemoryDrugKnowledgeSource({
+      locallyDeclarableDrugCodes: ["COMPOUND_UNCODED"],
+    });
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_UNCODED"),
+      knowledge: unprovisioned,
+    });
+    expect(codes(result)).toEqual(["SCR_COMPOUND_FORMULA_NOT_CODED"]);
+  });
+
+  it("screens the coded subset of a partially-coded compound AND reports the remainder", () => {
+    // The deliberate alternative to a PARTIAL state: real findings
+    // from the coded rows, plus the report that makes the subset
+    // honest. Both at once, neither displacing the other.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_PARTIAL"),
+      allergies: [allergy({ substanceCode: "ING_BRAVO" })],
+      knowledge: formulaAwareKnowledge,
+    });
+    expect(result.outcome).toBe("BLOCKED");
+    requireFinding(result, "SCR_DRUG_ALLERGY_DIRECT");
+    const gap = requireFinding(result, "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED");
+    expect(gap.kind).toBe("SCREENING_GAP");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(gap.reason).toContain("2 declared ingredient row(s)");
+  });
+
+  it("survives every reporting floor, like every gap", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_PARTIAL"),
+      knowledge: formulaAwareKnowledge,
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    expect(codes(result)).toEqual(["SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED"]);
+  });
+
+  it("re-fingerprints the partial gap when the uncoded count changes", () => {
+    // Coding two more rows changes what the finding says, so it must
+    // change what it is: a stale identity would let the old row's
+    // (hypothetical future) disposition suppress the new statement.
+    const partialTwo = requireFinding(
+      screen({
+        candidate: drug("line-candidate", "COMPOUND_PARTIAL"),
+        knowledge: formulaAwareKnowledge,
+      }),
+      "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED"
+    );
+    const oneUncodedRow = createInMemoryDrugKnowledgeSource({
+      drugs: {
+        COMPOUND_PARTIAL: {
+          ingredientCodes: ["ING_BRAVO"],
+          uncodedIngredientCount: 1,
+          therapeuticClassCodes: [],
+          crossSensitivityClassCodes: [],
+          doseRange: null,
+        },
+      },
+    });
+    const partialOne = requireFinding(
+      screen({
+        candidate: drug("line-candidate", "COMPOUND_PARTIAL"),
+        knowledge: oneUncodedRow,
+      }),
+      "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED"
+    );
+    expect(partialTwo.fingerprint).not.toBe(partialOne.fingerprint);
+  });
+
+  it("reports a partially-coded PROFILE medication the same way", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA"),
+      activeMedications: [drug("line-partial", "COMPOUND_PARTIAL")],
+      knowledge: formulaAwareKnowledge,
+    });
+    const gap = requireFinding(result, "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED");
+    expect(gap.triggers).toEqual([
+      { source: "PROFILE_MEDICATION", recordId: "line-partial", code: "COMPOUND_PARTIAL" },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Drug-allergy screening
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — direct drug allergy", () => {
+  it("blocks on a confirmed high-criticality allergy to the exact ingredient", () => {
+    // The one clinical situation this engine refuses outright.
+    const result = screen({ allergies: [allergy()] });
+    expect(result.outcome).toBe("BLOCKED");
+    const finding = requireFinding(result, "SCR_DRUG_ALLERGY_DIRECT");
+    expect(finding.severity).toBe("CONTRAINDICATED");
+    expect(finding.certainty).toBe("DEFINITE");
+    expect(finding.disposition).toBe("HARD_STOP");
+  });
+
+  it("does not block on an UNCONFIRMED allergy, however critical", () => {
+    // An unconfirmed record is usually an intake self-report. Enough
+    // to interrupt for; not enough to refuse on.
+    const result = screen({
+      allergies: [allergy({ verificationStatus: "UNCONFIRMED" })],
+    });
+    expect(result.outcome).toBe("ADVISORY");
+    const finding = requireFinding(result, "SCR_DRUG_ALLERGY_DIRECT");
+    expect(finding.severity).toBe("CONTRAINDICATED");
+    expect(finding.certainty).toBe("PROBABLE");
+    expect(finding.disposition).toBe("REQUIRES_ACKNOWLEDGEMENT");
+  });
+
+  it("grades a LOW-criticality allergy as MAJOR, not blocking", () => {
+    const result = screen({ allergies: [allergy({ criticality: "LOW" })] });
+    expect(requireFinding(result, "SCR_DRUG_ALLERGY_DIRECT").severity).toBe("MAJOR");
+    expect(result.outcome).toBe("ADVISORY");
+  });
+
+  it("grades an unassessed criticality conservatively but below the blocking tier", () => {
+    const result = screen({ allergies: [allergy({ criticality: "UNABLE_TO_ASSESS" })] });
+    expect(requireFinding(result, "SCR_DRUG_ALLERGY_DIRECT").severity).toBe("MAJOR");
+  });
+
+  it("caps an INTOLERANCE at MODERATE even when recorded as high criticality", () => {
+    // Otherwise a documented tolerability problem — nausea — inherits
+    // HIGH and hard-stops the dispense.
+    const result = screen({
+      allergies: [allergy({ type: "INTOLERANCE", criticality: "HIGH" })],
+    });
+    expect(requireFinding(result, "SCR_DRUG_ALLERGY_DIRECT").severity).toBe("MODERATE");
+    expect(result.outcome).toBe("ADVISORY");
+  });
+
+  it.each(["REFUTED", "ENTERED_IN_ERROR"] as const)(
+    "ignores a %s allergy record entirely",
+    (verificationStatus) => {
+      // Someone already decided this record was wrong. Screening
+      // against it would undo their correction.
+      expect(screen({ allergies: [allergy({ verificationStatus })] }).outcome).toBe("CLEAR");
+    }
+  );
+
+  it.each(["FOOD", "ENVIRONMENT"] as const)(
+    "does not screen a %s allergy, and does not report it as a gap either",
+    (category) => {
+      // A drug knowledge base cannot answer these. Reporting a gap for
+      // each would fire on every prescription for the patient forever,
+      // which is the failure this engine exists to avoid.
+      expect(screen({ allergies: [allergy({ category })] }).outcome).toBe("CLEAR");
+    }
+  );
+
+  it("screens a BIOLOGIC allergy alongside MEDICATION", () => {
+    const result = screen({ allergies: [allergy({ category: "BIOLOGIC" })] });
+    expect(codes(result)).toContain("SCR_DRUG_ALLERGY_DIRECT");
+  });
+
+  it("carries the allergy record id and the candidate line id for the audit trail", () => {
+    const finding = requireFinding(
+      screen({ allergies: [allergy({ recordId: "allergy-77" })] }),
+      "SCR_DRUG_ALLERGY_DIRECT"
+    );
+    expect(finding.triggers).toEqual([
+      { source: "RECORDED_ALLERGY", recordId: "allergy-77", code: "ING_ALFA" },
+      { source: "CANDIDATE_DRUG", recordId: "line-candidate", code: "ING_ALFA" },
+    ]);
+  });
+});
+
+describe("screenPrescription — cross-sensitivity", () => {
+  it("reports a class-level match as a distinct, non-blocking finding", () => {
+    const result = screen({
+      allergies: [allergy({ substanceCode: "ALLERGEN_XRAY" })],
+    });
+    const finding = requireFinding(result, "SCR_DRUG_ALLERGY_CROSS_SENSITIVITY");
+    expect(finding.certainty).toBe("POSSIBLE");
+    expect(finding.disposition).toBe("REQUIRES_ACKNOWLEDGEMENT");
+    expect(result.outcome).toBe("ADVISORY");
+  });
+
+  it("never blocks on cross-sensitivity even at the highest criticality", () => {
+    // Class membership is an inference about this patient, never an
+    // observation of them — the pharmacist may know they tolerate it.
+    const result = screen({
+      allergies: [
+        allergy({
+          substanceCode: "ALLERGEN_XRAY",
+          criticality: "HIGH",
+          verificationStatus: "CONFIRMED",
+        }),
+      ],
+    });
+    expect(hardStopFindings(result)).toEqual([]);
+  });
+
+  it("names the shared class in the trigger so the inference is auditable", () => {
+    const finding = requireFinding(
+      screen({ allergies: [allergy({ substanceCode: "ALLERGEN_XRAY" })] }),
+      "SCR_DRUG_ALLERGY_CROSS_SENSITIVITY"
+    );
+    expect(finding.triggers).toContainEqual({
+      source: "CANDIDATE_DRUG",
+      recordId: "line-candidate",
+      code: "XCLASS_ONE",
+    });
+  });
+
+  it("suppresses the class match when the same allergy already matched the ingredient exactly", () => {
+    // ING_ALFA is seeded both as an ingredient of DRUG_ALFA and as an
+    // allergen in XCLASS_ONE, so both paths are available. Reporting
+    // both would describe one conversation with the prescriber twice.
+    const result = screen({ allergies: [allergy({ substanceCode: "ING_ALFA" })] });
+    expect(codes(result)).toEqual(["SCR_DRUG_ALLERGY_DIRECT"]);
+  });
+
+  it("stays silent when the allergen is unknown and did not match an ingredient", () => {
+    // No cross-sensitivity data available, and the exact comparison
+    // needed no lookup and already ran.
+    expect(screen({ allergies: [allergy({ substanceCode: "ALLERGEN_UNKNOWN" })] }).outcome).toBe(
+      "CLEAR"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Drug-drug interactions
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — drug-drug interactions", () => {
+  it("reports an asserted interaction with the source's own grading", () => {
+    const result = screen({ activeMedications: [drug("line-other", "DRUG_BRAVO")] });
+    const finding = requireFinding(result, "SCR_DRUG_INTERACTION");
+    expect(finding.severity).toBe("MODERATE");
+    expect(finding.certainty).toBe("PROBABLE");
+    expect(finding.citation).toBe("synthetic fixture");
+    expect(finding.triggers).toEqual([
+      { source: "CANDIDATE_DRUG", recordId: "line-candidate", code: "ING_ALFA" },
+      { source: "PROFILE_MEDICATION", recordId: "line-other", code: "ING_BRAVO" },
+    ]);
+  });
+
+  it("blocks when the knowledge source grades the interaction CONTRAINDICATED and DEFINITE", () => {
+    // The second and last route to a hard stop: an explicit "do not
+    // dispense" claim by the licensed authority.
+    const result = screen({ activeMedications: [drug("line-other", "DRUG_ECHO")] });
+    expect(result.outcome).toBe("BLOCKED");
+    expect(requireFinding(result, "SCR_DRUG_INTERACTION").disposition).toBe("HARD_STOP");
+  });
+
+  it("finds the interaction whichever drug is the one being dispensed", () => {
+    const dispensingAlfa = screen({
+      candidate: drug("line-1", "DRUG_ALFA"),
+      activeMedications: [drug("line-2", "DRUG_BRAVO")],
+    });
+    const dispensingBravo = screen({
+      candidate: drug("line-2", "DRUG_BRAVO"),
+      activeMedications: [drug("line-1", "DRUG_ALFA")],
+    });
+    expect(codes(dispensingAlfa)).toContain("SCR_DRUG_INTERACTION");
+    expect(codes(dispensingBravo)).toContain("SCR_DRUG_INTERACTION");
+    // Same clinical situation, therefore the same acknowledgement key.
+    expect(requireFinding(dispensingBravo, "SCR_DRUG_INTERACTION").fingerprint).toBe(
+      requireFinding(dispensingAlfa, "SCR_DRUG_INTERACTION").fingerprint
+    );
+  });
+
+  it("screens every ingredient of a combination product", () => {
+    // DRUG_COMBO contributes ING_BRAVO, which interacts with the
+    // candidate's ING_ALFA.
+    const result = screen({ activeMedications: [drug("line-other", "DRUG_COMBO")] });
+    expect(codes(result)).toContain("SCR_DRUG_INTERACTION");
+  });
+
+  it("does not ask whether an ingredient interacts with itself", () => {
+    // Same ingredient on both sides is duplication, and is reported as
+    // exactly that.
+    const result = screen({ activeMedications: [drug("line-other", "DRUG_ALFA_GENERIC")] });
+    expect(codes(result)).not.toContain("SCR_DRUG_INTERACTION");
+  });
+
+  it("merges one interaction arising from two profile rows, keeping both record ids", () => {
+    const result = screen({
+      activeMedications: [drug("line-a", "DRUG_BRAVO"), drug("line-b", "DRUG_BRAVO")],
+    });
+    const finding = requireFinding(result, "SCR_DRUG_INTERACTION");
+    expect(allFindings(result).filter((f) => f.code === "SCR_DRUG_INTERACTION")).toHaveLength(1);
+    expect(finding.triggers.map((t) => t.recordId).sort()).toEqual([
+      "line-a",
+      "line-b",
+      "line-candidate",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Therapeutic duplication
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — therapeutic duplication", () => {
+  it("reports a duplicated ingredient as MAJOR but never blocks on it", () => {
+    // Overlapping the same ingredient is standard during a cross-taper
+    // or a scheduled-plus-PRN regimen; the intent is on the sig, which
+    // the engine cannot read.
+    const result = screen({ activeMedications: [drug("line-other", "DRUG_ALFA_GENERIC")] });
+    const finding = requireFinding(result, "SCR_DUPLICATE_INGREDIENT");
+    expect(finding.severity).toBe("MAJOR");
+    expect(finding.certainty).toBe("DEFINITE");
+    expect(finding.disposition).toBe("REQUIRES_ACKNOWLEDGEMENT");
+    expect(result.outcome).toBe("ADVISORY");
+  });
+
+  it("reports a shared therapeutic class as a weaker, inferential finding", () => {
+    const result = screen({ activeMedications: [drug("line-other", "DRUG_CHARLIE")] });
+    const finding = requireFinding(result, "SCR_DUPLICATE_THERAPEUTIC_CLASS");
+    expect(finding.severity).toBe("MODERATE");
+    expect(finding.certainty).toBe("POSSIBLE");
+  });
+
+  it("suppresses the class duplication that a shared ingredient necessarily implies", () => {
+    // DRUG_ALFA_GENERIC shares both ING_ALFA and CLASS_ONE. One
+    // clinical situation, one finding.
+    const result = screen({ activeMedications: [drug("line-other", "DRUG_ALFA_GENERIC")] });
+    expect(codes(result)).not.toContain("SCR_DUPLICATE_THERAPEUTIC_CLASS");
+  });
+
+  it("reports a partial overlap with a combination product", () => {
+    const result = screen({ activeMedications: [drug("line-other", "DRUG_COMBO")] });
+    const finding = requireFinding(result, "SCR_DUPLICATE_INGREDIENT");
+    expect(finding.triggers.map((t) => t.code)).toEqual(["ING_ALFA", "ING_ALFA"]);
+  });
+
+  it("skips a profile row that IS the candidate line", () => {
+    // A refill re-screened against a profile that already contains it
+    // would otherwise report the drug as duplicating itself.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA"),
+      activeMedications: [drug("line-candidate", "DRUG_ALFA")],
+    });
+    expect(result.outcome).toBe("CLEAR");
+  });
+
+  it("still reports a genuine duplicate under a different line id", () => {
+    // Guard on the skip above: it must key on the record id, not on
+    // the drug code.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA"),
+      activeMedications: [drug("line-earlier", "DRUG_ALFA")],
+    });
+    expect(codes(result)).toContain("SCR_DUPLICATE_INGREDIENT");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dose range
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — dose range", () => {
+  function dosed(
+    amount: number,
+    dosesPerDay: number,
+    unit = "mg",
+    basis: DoseStatement["basis"] = "SCHEDULED"
+  ): ScreeningEvaluation {
+    return screen({
+      candidate: drug("line-candidate", "DRUG_DOSED", { amount, unit, dosesPerDay, basis }),
+    });
+  }
+
+  it("reports a single dose above the known maximum", () => {
+    const finding = requireFinding(dosed(11, 1), "SCR_DOSE_ABOVE_SINGLE_MAXIMUM");
+    expect(finding.severity).toBe("MAJOR");
+    expect(finding.citation).toBe("synthetic fixture");
+  });
+
+  it("permits a single dose exactly at the maximum", () => {
+    expect(codes(dosed(10, 1))).not.toContain("SCR_DOSE_ABOVE_SINGLE_MAXIMUM");
+  });
+
+  it("reports a daily total above the known maximum", () => {
+    // 10mg is a legal single dose; four of them a day is not.
+    expect(codes(dosed(10, 4))).toContain("SCR_DOSE_ABOVE_DAILY_MAXIMUM");
+    expect(codes(dosed(10, 3))).not.toContain("SCR_DOSE_ABOVE_DAILY_MAXIMUM");
+  });
+
+  it("never blocks on a dose finding, however far above the range", () => {
+    // A dosing range is a population statement. Oncology, palliative
+    // care and opioid tolerance all exceed it correctly.
+    const result = dosed(1000, 4);
+    expect(hardStopFindings(result)).toEqual([]);
+    expect(result.outcome).toBe("ADVISORY");
+  });
+
+  it("treats a sub-therapeutic daily total as informational only", () => {
+    // Titration and renal adjustment start below the range often
+    // enough that interrupting would cost more attention than it saves.
+    const result = dosed(2, 1);
+    const finding = requireFinding(result, "SCR_DOSE_BELOW_DAILY_MINIMUM");
+    expect(finding.severity).toBe("MINOR");
+    expect(finding.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("does not fire on a regimen that is exactly at the limit in decimal but not in binary", () => {
+    // 0.1 x 3 is 0.30000000000000004. Comparing strictly would report
+    // a MAJOR finding on a correct prescription — the most expensive
+    // kind of false positive there is.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_FRACTIONAL", {
+        amount: 0.1,
+        unit: "mg",
+        dosesPerDay: 3,
+        basis: "SCHEDULED",
+      }),
+    });
+    expect(result.outcome).toBe("CLEAR");
+  });
+
+  it("reports a unit mismatch as a gap and screens no dose at all", () => {
+    // No conversion is attempted: a wrong mg/mcg factor buried in a
+    // safety check is worse than no check.
+    const result = dosed(5000, 1, "mcg");
+    expect(codes(result)).toEqual(["SCR_DOSE_UNIT_NOT_COMPARABLE"]);
+    expect(requireFinding(result, "SCR_DOSE_UNIT_NOT_COMPARABLE").kind).toBe("SCREENING_GAP");
+  });
+
+  it("grades the unit mismatch as a pharmacist-closable gap — MODERATE, acknowledge tier", () => {
+    // Derived through screeningGapSeverity(SUBJECT_DATA) rather than
+    // hardcoded: the pharmacist on the order can reconcile the units
+    // themselves, which is what makes this gap worth interrupting for
+    // where the remediation-graded informational gaps are not.
+    const finding = requireFinding(dosed(5000, 1, "mcg"), "SCR_DOSE_UNIT_NOT_COMPARABLE");
+    expect(finding.severity).toBe("MODERATE");
+    expect(finding.disposition).toBe("REQUIRES_ACKNOWLEDGEMENT");
+  });
+
+  it("skips daily arithmetic when there is no schedule, but still checks the single dose", () => {
+    // dosesPerDay 0 is a PRN sig with no defined frequency. Inventing
+    // a daily total of zero would report every PRN as sub-therapeutic.
+    const result = dosed(50, 0);
+    expect(codes(result)).toEqual(["SCR_DOSE_ABOVE_SINGLE_MAXIMUM"]);
+  });
+
+  it("screens nothing when the prescription carries no dose", () => {
+    expect(screen({ candidate: drug("line-candidate", "DRUG_DOSED") }).outcome).toBe("CLEAR");
+  });
+
+  it("screens nothing when the knowledge source has no dosing envelope", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA", {
+        basis: "SCHEDULED",
+        amount: 9999,
+        unit: "mg",
+        dosesPerDay: 9,
+      }),
+    });
+    expect(result.outcome).toBe("CLEAR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dose range — maximum-permitted basis (PRN, ranges, taper peaks)
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — dose statements read as a maximum permitted", () => {
+  function permitted(amount: number, dosesPerDay: number): ScreeningEvaluation {
+    return screen({
+      candidate: drug("line-candidate", "DRUG_DOSED", {
+        amount,
+        unit: "mg",
+        dosesPerDay,
+        basis: "MAXIMUM_PERMITTED",
+      }),
+    });
+  }
+
+  it("reports a permitted daily ceiling above the known maximum, worded as a ceiling", () => {
+    // A PRN written "10mg, max 4 doses/day" PERMITS 40mg against a
+    // 30mg published maximum. That the patient may take less is the
+    // pharmacist's judgement to apply — the label allows the excess.
+    const finding = requireFinding(permitted(10, 4), "SCR_DOSE_ABOVE_DAILY_MAXIMUM");
+    expect(finding.severity).toBe("MAJOR");
+    expect(finding.reason).toContain("largest daily total this prescription permits");
+    expect(finding.reason).not.toContain("prescribed daily total");
+  });
+
+  it("never calls a ceiling sub-therapeutic", () => {
+    // A PRN used twice a month is symptomatic use working as
+    // intended; "below the daily minimum" would be a false statement
+    // issued on every conservative PRN forever.
+    expect(codes(permitted(2, 1))).not.toContain("SCR_DOSE_BELOW_DAILY_MINIMUM");
+    expect(permitted(2, 1).outcome).toBe("CLEAR");
+  });
+
+  it("still checks the single dose, and words it as a permission", () => {
+    const finding = requireFinding(permitted(11, 0), "SCR_DOSE_ABOVE_SINGLE_MAXIMUM");
+    expect(finding.reason).toContain("largest single dose this prescription permits");
+  });
+
+  it("fingerprints a ceiling and a schedule of the same magnitude apart", () => {
+    // The two render different sentences to a pharmacist, so an
+    // acknowledgement of one must not suppress the other.
+    const asSchedule = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED", {
+        amount: 10,
+        unit: "mg",
+        dosesPerDay: 4,
+        basis: "SCHEDULED",
+      }),
+    });
+    const asCeiling = permitted(10, 4);
+    expect(requireFinding(asSchedule, "SCR_DOSE_ABOVE_DAILY_MAXIMUM").fingerprint).not.toBe(
+      requireFinding(asCeiling, "SCR_DOSE_ABOVE_DAILY_MAXIMUM").fingerprint
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dose range — the knowledge-content gap and the record-immutable gap
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — dose known, dose-range content not provisioned", () => {
+  // A source that KNOWS the drug (ingredients resolve; interaction and
+  // duplication screening run) while holding dosing envelopes for
+  // nothing — the production shape of RxNorm, which publishes
+  // nomenclature, not dosing ranges.
+  const envelopeless = createInMemoryDrugKnowledgeSource({
+    drugs: {
+      DRUG_ALFA: {
+        ingredientCodes: ["ING_ALFA"],
+        uncodedIngredientCount: 0,
+        therapeuticClassCodes: [],
+        crossSensitivityClassCodes: [],
+        doseRange: null,
+      },
+    },
+  });
+
+  const dose: DoseStatement = { amount: 10, unit: "mg", dosesPerDay: 2, basis: "SCHEDULED" };
+
+  it("reports the missing content as an informational gap, not a silent pass", () => {
+    // Without this row, a structured dose over an envelope-less source
+    // is byte-identical to a dose that was compared and cleared.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA", dose),
+      knowledge: envelopeless,
+    });
+    const gap = requireFinding(result, "SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED");
+    expect(gap.kind).toBe("SCREENING_GAP");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("does not report it when the prescription carries no dose to compare", () => {
+    // Two things would be missing; the row is about the one the
+    // caller supplied. A doseless line over an envelope-less source
+    // has nothing to say on this axis.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA"),
+      knowledge: envelopeless,
+    });
+    expect(codes(result)).not.toContain("SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED");
+  });
+
+  it("stays silent per-drug when the source DOES license dosing content", () => {
+    // KNOWLEDGE grades DRUG_DOSED, so its dose-range coverage is
+    // PROVISIONED and DRUG_ALFA's null envelope is the per-drug
+    // "ungraded" answer — gapping on it would fire on every drug a
+    // database chooses not to grade.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA", dose),
+    });
+    expect(codes(result)).not.toContain("SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED");
+  });
+});
+
+describe("screenPrescription — dose input not captured for an immutable record", () => {
+  it("records an informational gap that does not gate, with the record-immutable remediation", () => {
+    // A legacy prescription transcribed before structured sig: the
+    // capture window closed at transcription and prescriptions are
+    // immutable, so nobody on the order can close this. Interrupting
+    // for it would charge a pharmacist per order for a fact nobody
+    // can change — so it is recorded, informationally.
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED"),
+      inputAvailability: withoutAxis("DOSE_RANGE", "NOT_CAPTURED_FOR_RECORD"),
+    });
+    const gap = requireFinding(result, "SCR_DOSE_INPUT_UNAVAILABLE");
+    expect(gap.kind).toBe("SCREENING_GAP");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(gap.reason).toContain("immutable");
+    expect(gap.fingerprint).toContain("remediation=RECORD_IMMUTABLE");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("fingerprints apart from the platform-capability spelling of the same code", () => {
+    // Rows persisted before structured sig existed said "no platform
+    // capability"; rows after say "this record predates the capture".
+    // Different statements, different identities.
+    const legacy = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED"),
+      inputAvailability: withoutAxis("DOSE_RANGE", "NOT_SUPPORTED_BY_PLATFORM"),
+    });
+    const immutable = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED"),
+      inputAvailability: withoutAxis("DOSE_RANGE", "NOT_CAPTURED_FOR_RECORD"),
+    });
+    expect(requireFinding(legacy, "SCR_DOSE_INPUT_UNAVAILABLE").fingerprint).not.toBe(
+      requireFinding(immutable, "SCR_DOSE_INPUT_UNAVAILABLE").fingerprint
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Acknowledgement carry-forward
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — prior acknowledgements", () => {
+  it("downgrades a previously acknowledged finding to informational", () => {
+    const first = screen({ activeMedications: [drug("line-other", "DRUG_BRAVO")] });
+    const fingerprint = requireFinding(first, "SCR_DRUG_INTERACTION").fingerprint;
+
+    const second = screen({
+      activeMedications: [drug("line-other", "DRUG_BRAVO")],
+      acknowledgedFingerprints: new Set([fingerprint]),
+    });
+    expect(requireFinding(second, "SCR_DRUG_INTERACTION").disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(second)).toEqual([]);
+    // Still reported — downgraded, not hidden.
+    expect(second.outcome).toBe("ADVISORY");
+  });
+
+  it("does not downgrade a hard stop", () => {
+    // An unoverridable finding that a prior acknowledgement could
+    // switch off would not be unoverridable, only slower.
+    const first = screen({ allergies: [allergy()] });
+    const fingerprint = requireFinding(first, "SCR_DRUG_ALLERGY_DIRECT").fingerprint;
+
+    const second = screen({
+      allergies: [allergy()],
+      acknowledgedFingerprints: new Set([fingerprint]),
+    });
+    expect(second.outcome).toBe("BLOCKED");
+    expect(requireFinding(second, "SCR_DRUG_ALLERGY_DIRECT").disposition).toBe("HARD_STOP");
+  });
+
+  it("carries an acknowledgement across a refill under a new line id", () => {
+    const january = screen({
+      candidate: drug("line-january", "DRUG_ALFA"),
+      activeMedications: [drug("line-other", "DRUG_BRAVO")],
+    });
+    const acknowledged = new Set([requireFinding(january, "SCR_DRUG_INTERACTION").fingerprint]);
+
+    const february = screen({
+      candidate: drug("line-february", "DRUG_ALFA"),
+      activeMedications: [drug("line-other", "DRUG_BRAVO")],
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(requireFinding(february, "SCR_DRUG_INTERACTION").disposition).toBe("INFORMATIONAL");
+  });
+
+  it("ignores an acknowledgement for an unrelated situation", () => {
+    const result = screen({
+      activeMedications: [drug("line-other", "DRUG_BRAVO")],
+      acknowledgedFingerprints: new Set(["SCR_DRUG_INTERACTION|ING_ZULU+ING_YANKEE"]),
+    });
+    expect(requireFinding(result, "SCR_DRUG_INTERACTION").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Policy
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — reporting floor", () => {
+  it("reports the informational tier by default", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED", {
+        basis: "SCHEDULED",
+        amount: 2,
+        unit: "mg",
+        dosesPerDay: 1,
+      }),
+    });
+    expect(codes(result)).toContain("SCR_DOSE_BELOW_DAILY_MINIMUM");
+  });
+
+  it("drops findings below the configured floor", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED", {
+        basis: "SCHEDULED",
+        amount: 2,
+        unit: "mg",
+        dosesPerDay: 1,
+      }),
+      policy: { minimumReportedSeverity: "MODERATE" },
+    });
+    expect(result.outcome).toBe("CLEAR");
+  });
+
+  it("keeps a blocking finding at the highest possible floor", () => {
+    const result = screen({
+      allergies: [allergy()],
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    expect(result.outcome).toBe("BLOCKED");
+  });
+
+  it("silences the acknowledge tier at the highest floor, which is why raising it is discouraged", () => {
+    // Pinned deliberately: the knob CAN switch off the part of the
+    // engine that changes decisions, and a reader should see that.
+    const result = screen({
+      activeMedications: [drug("line-other", "DRUG_ALFA_GENERIC")],
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    expect(result.outcome).toBe("CLEAR");
+  });
+
+  it("never drops a screening gap, at any floor, for either remediation", () => {
+    // THE COVERAGE-RECORD INVARIANT. The floor is a clinical noise
+    // floor; a gap is not a clinical finding but a statement about
+    // whether a check RAN. Filter one out and the order carries zero
+    // gap rows — identical to an order that was fully screened and came
+    // back clean. An auditor asking "was this screened for allergies?"
+    // would find no row and have to infer the answer from the tenant's
+    // policy configuration, which is a compliance claim the system did
+    // not earn.
+    //
+    // Both remediations, because the invariant is about the record and
+    // not about who can act: a per-subject gap dropped by the floor
+    // leaves exactly the same indistinguishable order.
+    for (const unavailability of [
+      "NOT_RECORDED_FOR_SUBJECT",
+      "NOT_SUPPORTED_BY_PLATFORM",
+    ] as const) {
+      for (const floor of SCREENING_SEVERITIES) {
+        const result = screen({
+          inputAvailability: withoutAxis("DRUG_ALLERGY", unavailability),
+          policy: { minimumReportedSeverity: floor },
+        });
+        const label = `${unavailability} @ ${floor}`;
+        expect(codes(result), label).toContain("SCR_ALLERGY_INPUT_UNAVAILABLE");
+        // Not CLEAR either: an outcome of CLEAR is the very reading the
+        // gap exists to prevent.
+        expect(result.outcome, label).toBe("ADVISORY");
+      }
+    }
+  });
+
+  it("keeps the exemption narrow — a clinical finding at the same floor still drops", () => {
+    // Guards against fixing the coverage record by quietly disabling the
+    // floor. At CONTRAINDICATED the MAJOR duplication must still be
+    // silenced; only the gap survives.
+    const result = screen({
+      inputAvailability: withoutAxis("DRUG_ALLERGY", "NOT_SUPPORTED_BY_PLATFORM"),
+      activeMedications: [drug("line-other", "DRUG_ALFA_GENERIC")],
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    expect(codes(result)).toEqual(["SCR_ALLERGY_INPUT_UNAVAILABLE"]);
+    expect(codes(result)).not.toContain("SCR_DUPLICATE_INGREDIENT");
+  });
+
+  it("keeps a gap exempt without making it interrupt", () => {
+    // The two properties are independent and the engine holds both:
+    // never nag, always record. A raised floor must not smuggle the
+    // acknowledgement prompt back in for a systemic gap.
+    const result = screen({
+      inputAvailability: withoutAxis("DRUG_ALLERGY", "NOT_SUPPORTED_BY_PLATFORM"),
+      policy: { minimumReportedSeverity: "CONTRAINDICATED" },
+    });
+    const gap = requireFinding(result, "SCR_ALLERGY_INPUT_UNAVAILABLE");
+    expect(gap.severity).toBe("MINOR");
+    expect(gap.disposition).toBe("INFORMATIONAL");
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+
+  it("never drops an unprovisioned knowledge gap either", () => {
+    // The same invariant on the other family of gap. This is the one a
+    // default deployment raises on every order, so a floor that erased
+    // it would erase the coverage record fleet-wide.
+    for (const floor of SCREENING_SEVERITIES) {
+      const result = screen({
+        knowledge: createInMemoryDrugKnowledgeSource(),
+        policy: { minimumReportedSeverity: floor },
+      });
+      expect(codes(result), floor).toContain("SCR_KNOWLEDGE_UNAVAILABLE");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Aggregation, ordering, and the audit payload
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — completeness and ordering", () => {
+  const busy: Partial<ScreeningRequest> = {
+    candidate: drug("line-candidate", "DRUG_DOSED", {
+      basis: "SCHEDULED",
+      amount: 50,
+      unit: "mg",
+      dosesPerDay: 4,
+    }),
+    activeMedications: [drug("line-other", "DRUG_UNKNOWN")],
+    allergies: [allergy({ substanceCode: "ING_DELTA", criticality: "LOW" })],
+  };
+
+  it("returns every finding at once rather than stopping at the first", () => {
+    const result = screen(busy);
+    expect(new Set(codes(result))).toEqual(
+      new Set([
+        "SCR_DRUG_ALLERGY_DIRECT",
+        "SCR_DOSE_ABOVE_SINGLE_MAXIMUM",
+        "SCR_DOSE_ABOVE_DAILY_MAXIMUM",
+        "SCR_KNOWLEDGE_UNAVAILABLE",
+      ])
+    );
+  });
+
+  it("orders the most severe finding first", () => {
+    const result = screen(busy);
+    const severities = allFindings(result).map((f) => f.severity);
+    expect(severities[0]).toBe("MAJOR");
+    expect(severities[severities.length - 1]).toBe("MODERATE");
+  });
+
+  it("is deterministic across repeated evaluation of the same facts", () => {
+    // Two replays of the same command must produce byte-identical
+    // event payloads.
+    expect(JSON.stringify(screen(busy))).toBe(JSON.stringify(screen(busy)));
+  });
+
+  it("produces a plain JSON-serializable payload safe to persist on an event", () => {
+    const result = screen(busy);
+    expect(JSON.parse(JSON.stringify(result)) as unknown).toEqual(result);
+  });
+
+  it("carries no identifier the caller did not supply as a record id or a code", () => {
+    // The PHI invariant, mechanically: everything in a finding traces
+    // back to a code or an opaque record id that the caller chose.
+    const permitted = new Set([
+      "line-candidate",
+      "line-other",
+      "allergy-1",
+      "DRUG_DOSED",
+      "DRUG_UNKNOWN",
+      "ING_DELTA",
+    ]);
+    const seen: string[] = [];
+    for (const finding of allFindings(screen(busy))) {
+      for (const trigger of finding.triggers) {
+        seen.push(trigger.recordId, trigger.code);
+      }
+    }
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.filter((value) => !permitted.has(value))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fingerprint identity — what keeps carry-forward from becoming a hole
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — an acknowledgement suppresses only what was shown", () => {
+  function dosedLine(recordId: string, amount: number, dosesPerDay: number): PrescribedDrug {
+    return drug(recordId, "DRUG_DOSED", { amount, unit: "mg", dosesPerDay, basis: "SCHEDULED" });
+  }
+
+  it("does not let an acknowledged overdose suppress a larger one", () => {
+    // The regression this guards: acknowledge 12mg against a 10mg
+    // maximum in January, meet 200mg in February, and be shown
+    // nothing — with the absence of an alert now actively reassuring.
+    const january = screen({ candidate: dosedLine("line-january", 12, 1) });
+    const acknowledged = new Set([
+      requireFinding(january, "SCR_DOSE_ABOVE_SINGLE_MAXIMUM").fingerprint,
+    ]);
+
+    const february = screen({
+      candidate: dosedLine("line-february", 200, 1),
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(requireFinding(february, "SCR_DOSE_ABOVE_SINGLE_MAXIMUM").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+
+  it("does not let an acknowledged daily total suppress a larger one", () => {
+    const january = screen({ candidate: dosedLine("line-january", 12, 3) });
+    const acknowledged = new Set([
+      requireFinding(january, "SCR_DOSE_ABOVE_DAILY_MAXIMUM").fingerprint,
+    ]);
+
+    const february = screen({
+      candidate: dosedLine("line-february", 100, 3),
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(requireFinding(february, "SCR_DOSE_ABOVE_DAILY_MAXIMUM").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+
+  it("still stops re-prompting a patient stable on the same above-range dose", () => {
+    // The case worth protecting: palliative and oncology regimens sit
+    // above the population range indefinitely and correctly. Asking
+    // every month is how the acknowledgement becomes reflexive.
+    const january = screen({ candidate: dosedLine("line-january", 50, 4) });
+    const acknowledged = new Set(
+      allFindings(january)
+        .filter((f) => f.disposition === "REQUIRES_ACKNOWLEDGEMENT")
+        .map((f) => f.fingerprint)
+    );
+    expect(acknowledged.size).toBeGreaterThan(0);
+
+    const february = screen({
+      candidate: dosedLine("line-february", 50, 4),
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(findingsRequiringAcknowledgement(february)).toEqual([]);
+  });
+
+  it("re-prompts when only the unit pairing changes", () => {
+    const inMicrograms = screen({
+      candidate: drug("line-1", "DRUG_DOSED", {
+        basis: "SCHEDULED",
+        amount: 5000,
+        unit: "mcg",
+        dosesPerDay: 1,
+      }),
+    });
+    const acknowledged = new Set([
+      requireFinding(inMicrograms, "SCR_DOSE_UNIT_NOT_COMPARABLE").fingerprint,
+    ]);
+
+    const inGrams = screen({
+      candidate: drug("line-2", "DRUG_DOSED", {
+        basis: "SCHEDULED",
+        amount: 5,
+        unit: "g",
+        dosesPerDay: 1,
+      }),
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(requireFinding(inGrams, "SCR_DOSE_UNIT_NOT_COMPARABLE").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+
+  it("does not let an acknowledged unscreened profile entry suppress an unscreened prescription", () => {
+    // Same drug code, same finding code, but one of them means "we
+    // screened nothing at all for this prescription".
+    const asProfileEntry = screen({
+      activeMedications: [drug("line-other", "DRUG_UNKNOWN")],
+    });
+    const acknowledged = new Set([
+      requireFinding(asProfileEntry, "SCR_KNOWLEDGE_UNAVAILABLE").fingerprint,
+    ]);
+
+    const asCandidate = screen({
+      candidate: drug("line-candidate", "DRUG_UNKNOWN"),
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(requireFinding(asCandidate, "SCR_KNOWLEDGE_UNAVAILABLE").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+
+  it("does not let an acknowledged intolerance suppress the same substance recorded as an allergy", () => {
+    const asIntolerance = screen({
+      allergies: [allergy({ type: "INTOLERANCE", criticality: "HIGH" })],
+    });
+    const acknowledged = new Set([
+      requireFinding(asIntolerance, "SCR_DRUG_ALLERGY_DIRECT").fingerprint,
+    ]);
+
+    const asAllergy = screen({
+      allergies: [allergy({ type: "ALLERGY", criticality: "LOW" })],
+      acknowledgedFingerprints: acknowledged,
+    });
+    expect(requireFinding(asAllergy, "SCR_DRUG_ALLERGY_DIRECT").disposition).toBe(
+      "REQUIRES_ACKNOWLEDGEMENT"
+    );
+  });
+});
+
+/**
+ * Replace every trigger code in the reason with a placeholder.
+ *
+ * The fingerprint holds trigger codes as an unordered SET, on purpose,
+ * so an A-against-B finding and a B-against-A finding share an identity
+ * while their reasons name the two codes in opposite order. Masking
+ * removes exactly that legitimate difference and leaves the sentence
+ * template plus every magnitude, unit and varying word — which is
+ * precisely what the fingerprint's qualifiers are supposed to cover.
+ *
+ * Longest code first, so one code that is a prefix of another cannot
+ * mask it half way.
+ */
+function maskTriggerCodes(finding: ScreeningFinding): string {
+  const codes = [...new Set(finding.triggers.map((t) => t.code))].sort(
+    (a, b) => b.length - a.length
+  );
+  let masked = finding.reason;
+  for (const code of codes) {
+    masked = masked.split(code).join("<code>");
+  }
+  return masked;
+}
+
+/**
+ * Every finding produced across a wide sweep of inputs.
+ *
+ * Deliberately combinatorial rather than curated: the point is to
+ * catch a collision nobody thought to write a case for.
+ */
+function findingCorpus(): ReadonlyArray<ScreeningFinding> {
+  const doses: ReadonlyArray<PrescribedDrug["dose"]> = [
+    null,
+    { basis: "SCHEDULED", amount: 12, unit: "mg", dosesPerDay: 1 },
+    { basis: "SCHEDULED", amount: 200, unit: "mg", dosesPerDay: 1 },
+    { basis: "SCHEDULED", amount: 12, unit: "mg", dosesPerDay: 3 },
+    { basis: "SCHEDULED", amount: 100, unit: "mg", dosesPerDay: 3 },
+    { basis: "SCHEDULED", amount: 50, unit: "mg", dosesPerDay: 4 },
+    { basis: "SCHEDULED", amount: 2, unit: "mg", dosesPerDay: 1 },
+    { basis: "SCHEDULED", amount: 1, unit: "mg", dosesPerDay: 2 },
+    { basis: "SCHEDULED", amount: 5000, unit: "mcg", dosesPerDay: 1 },
+    { basis: "SCHEDULED", amount: 5, unit: "g", dosesPerDay: 2 },
+    // The same magnitudes as maxima a PRN/range/taper permits, so the
+    // corpus can catch a SCHEDULED finding colliding with a
+    // MAXIMUM_PERMITTED one that renders a different sentence.
+    { basis: "MAXIMUM_PERMITTED", amount: 12, unit: "mg", dosesPerDay: 1 },
+    { basis: "MAXIMUM_PERMITTED", amount: 100, unit: "mg", dosesPerDay: 3 },
+    { basis: "MAXIMUM_PERMITTED", amount: 50, unit: "mg", dosesPerDay: 0 },
+  ];
+  const candidateCodes = ["DRUG_ALFA", "DRUG_DOSED", "DRUG_COMBO", "DRUG_UNKNOWN"];
+  const profiles: ReadonlyArray<ReadonlyArray<string>> = [
+    [],
+    ["DRUG_BRAVO"],
+    ["DRUG_ALFA_GENERIC"],
+    ["DRUG_CHARLIE"],
+    ["DRUG_ECHO"],
+    ["DRUG_UNKNOWN"],
+    ["DRUG_BRAVO", "DRUG_UNKNOWN"],
+    ["DRUG_COMBO", "DRUG_CHARLIE"],
+  ];
+  const allergyLists: ReadonlyArray<ReadonlyArray<RecordedAllergy>> = [
+    [],
+    [allergy()],
+    [allergy({ type: "INTOLERANCE" })],
+    [allergy({ criticality: "LOW" })],
+    [allergy({ criticality: "UNABLE_TO_ASSESS" })],
+    [allergy({ verificationStatus: "UNCONFIRMED" })],
+    [allergy({ substanceCode: "ALLERGEN_XRAY" })],
+    [allergy({ substanceCode: "ALLERGEN_XRAY", type: "INTOLERANCE" })],
+    [allergy({ substanceCode: "ING_DELTA", criticality: "LOW" })],
+  ];
+
+  const found: ScreeningFinding[] = [];
+  for (const candidateCode of candidateCodes) {
+    for (const dose of doses) {
+      for (const profile of profiles) {
+        for (const allergies of allergyLists) {
+          found.push(
+            ...allFindings(
+              screen({
+                candidate: drug("line-candidate", candidateCode, dose),
+                activeMedications: profile.map((code, index) => drug(`line-${index}`, code)),
+                allergies,
+              })
+            )
+          );
+        }
+      }
+    }
+  }
+  return found;
+}
+
+describe("screenPrescription — fingerprint identity holds across every finding kind", () => {
+  // These two are the general guard the specific cases above are
+  // examples of. A future finding kind that interpolates a magnitude
+  // into its reason without declaring it as a qualifier fails here,
+  // whether or not anyone remembers to write a case for it.
+  it("gives two findings the same fingerprint only when they say the same thing", () => {
+    const seenByFingerprint = new Map<string, ScreeningFinding>();
+    // A set, not a list: the same clash recurs across hundreds of
+    // screens in the corpus, and a thousand copies of one line would
+    // hide how many DISTINCT problems there are.
+    const collisions = new Set<string>();
+
+    for (const finding of findingCorpus()) {
+      const seen = seenByFingerprint.get(finding.fingerprint);
+      if (seen === undefined) {
+        seenByFingerprint.set(finding.fingerprint, finding);
+        continue;
+      }
+      if (maskTriggerCodes(seen) !== maskTriggerCodes(finding)) {
+        collisions.add(
+          `${finding.fingerprint}\n    "${maskTriggerCodes(seen)}"\n    "${maskTriggerCodes(finding)}"`
+        );
+      }
+    }
+
+    // Collisions first: when this trips, the list of clashing
+    // sentences is the whole diagnosis, and a corpus-size failure
+    // ahead of it would bury the useful output.
+    expect([...collisions]).toEqual([]);
+    // Guard the guard: a corpus that produced almost nothing would
+    // pass the above vacuously.
+    expect(seenByFingerprint.size).toBeGreaterThan(20);
+  });
+
+  it("gives two findings the same fingerprint only when they are graded the same", () => {
+    // "Never a more severe instance" stated directly. Severity and
+    // certainty are in the fingerprint, so this holds by construction
+    // — pinned because it is the invariant, not an implementation
+    // detail of it.
+    const gradingByFingerprint = new Map<string, string>();
+    const collisions = new Set<string>();
+
+    for (const finding of findingCorpus()) {
+      const grading = `${finding.severity}/${finding.certainty}`;
+      const seen = gradingByFingerprint.get(finding.fingerprint);
+      if (seen === undefined) {
+        gradingByFingerprint.set(finding.fingerprint, grading);
+        continue;
+      }
+      if (seen !== grading) {
+        collisions.add(`${finding.fingerprint}: ${seen} vs ${grading}`);
+      }
+    }
+
+    expect([...collisions]).toEqual([]);
+  });
+});
+
+describe("selectors", () => {
+  it("partition findings by what the workflow must do about them", () => {
+    const result = screen({
+      allergies: [allergy()],
+      activeMedications: [drug("line-other", "DRUG_ALFA_GENERIC")],
+    });
+    expect(hardStopFindings(result).map((f) => f.code)).toEqual(["SCR_DRUG_ALLERGY_DIRECT"]);
+    expect(findingsRequiringAcknowledgement(result).map((f) => f.code)).toEqual([
+      "SCR_DUPLICATE_INGREDIENT",
+    ]);
+  });
+
+  it("return empty arrays for a clear evaluation", () => {
+    const result = screen();
+    expect(hardStopFindings(result)).toEqual([]);
+    expect(findingsRequiringAcknowledgement(result)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// No axis contributes nothing in silence
+//
+// The general guard, in the same spirit as the fingerprint invariant
+// above: a case written for allergies would pass forever while the
+// next axis someone adds repeats the bug. These iterate
+// `CLINICAL_SCREENING_AXES`, which is derived from the finding kinds,
+// so a fifth clinical question is covered the day it is declared.
+//
+// The bug being guarded, concretely: `allergies: []` made the allergy
+// loop iterate zero times and contribute no findings, and `dose:
+// null` made the dose collector return early with no finding. On both
+// axes the engine reported nothing, and nothing is indistinguishable
+// from clean — while the allergy axis is the only one that can reach
+// a hard stop at all.
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — every clinical axis either runs or reports a gap", () => {
+  /**
+   * Request shapes the sweep runs each axis against. Deliberately
+   * includes the unknown-candidate case, where the engine already
+   * reports one gap of its own: an unsupplied input is a different
+   * fact with a different owner, and must not be swallowed by it.
+   */
+  const shapes: ReadonlyArray<readonly [string, Partial<ScreeningRequest>]> = [
+    ["bare candidate", {}],
+    [
+      "rich inputs",
+      {
+        candidate: drug("line-candidate", "DRUG_DOSED", {
+          basis: "SCHEDULED",
+          amount: 50,
+          unit: "mg",
+          dosesPerDay: 4,
+        }),
+        activeMedications: [drug("line-other", "DRUG_BRAVO")],
+        allergies: [allergy({ substanceCode: "ING_DELTA", criticality: "LOW" })],
+      },
+    ],
+    [
+      "candidate the knowledge source does not recognise",
+      { candidate: drug("line-candidate", "DRUG_UNKNOWN") },
+    ],
+  ];
+
+  it("the axis list is exactly the clinical finding kinds", () => {
+    // The join between the two vocabularies. If a finding kind is
+    // added without becoming an axis, every guarantee below silently
+    // stops covering it — so the derivation is pinned rather than
+    // trusted.
+    expect(new Set(CLINICAL_SCREENING_AXES)).toEqual(
+      new Set(SCREENING_FINDING_KINDS.filter((kind) => kind !== "SCREENING_GAP"))
+    );
+  });
+
+  it("reports a gap naming any axis whose input the caller could not supply", () => {
+    for (const axis of CLINICAL_SCREENING_AXES) {
+      for (const [label, shape] of shapes) {
+        const result = screen({ ...shape, inputAvailability: withoutAxis(axis) });
+        const gaps = allFindings(result).filter(
+          (f) => f.code === INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+        );
+        expect(gaps, `${axis} / ${label}`).toHaveLength(1);
+        expect(gaps[0]?.kind).toBe("SCREENING_GAP");
+      }
+    }
+  });
+
+  it("contributes no finding of its own kind for an axis it could not screen", () => {
+    // The other half: a gap that fired while the axis ALSO produced
+    // findings would mean the declaration was ignored, and a caller
+    // would be told both that we could not check and what we found.
+    for (const axis of CLINICAL_SCREENING_AXES) {
+      for (const [label, shape] of shapes) {
+        const result = screen({ ...shape, inputAvailability: withoutAxis(axis) });
+        expect(
+          allFindings(result).filter((f) => f.kind === axis),
+          `${axis} / ${label}`
+        ).toEqual([]);
+      }
+    }
+  });
+
+  it("grades a gap somebody can close so it interrupts but never blocks", () => {
+    // The platform holds this input for other patients and nobody
+    // supplied it for this one. That is a job for a human on this
+    // order, so the pharmacist is asked — and still never blocked,
+    // because a missing record is not grounds for refusing to
+    // dispense.
+    for (const axis of CLINICAL_SCREENING_AXES) {
+      const gap = requireFinding(
+        screen({ inputAvailability: withoutAxis(axis, "NOT_RECORDED_FOR_SUBJECT") }),
+        INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+      );
+      expect(gap.severity, axis).toBe("MODERATE");
+      expect(gap.certainty, axis).toBe("DEFINITE");
+      expect(gap.disposition, axis).toBe("REQUIRES_ACKNOWLEDGEMENT");
+    }
+  });
+
+  it("records a gap nobody in the pharmacy can close without interrupting for it", () => {
+    // THE ALERT-FATIGUE INVARIANT. A capability this platform does not
+    // have produces an identical finding on every order forever, and no
+    // pharmacist can close it. Demanding an acknowledgement would train
+    // the reflex that dismisses the alert that mattered, and file a
+    // sign-off implying a review that could not have happened.
+    //
+    // It is still REPORTED. That is the half this test pins hardest:
+    // the finding exists, keeps its code and its SCREENING_GAP kind, and
+    // remains persistable and countable. Only the interruption is gone.
+    for (const axis of CLINICAL_SCREENING_AXES) {
+      const gap = requireFinding(
+        screen({ inputAvailability: withoutAxis(axis, "NOT_SUPPORTED_BY_PLATFORM") }),
+        INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+      );
+      expect(gap.kind, axis).toBe("SCREENING_GAP");
+      expect(gap.severity, axis).toBe("MINOR");
+      expect(gap.certainty, axis).toBe("DEFINITE");
+      expect(gap.disposition, axis).toBe("INFORMATIONAL");
+    }
+  });
+
+  it("distinguishes a systemic gap from a per-subject one by fingerprint", () => {
+    // An acknowledgement is carried forward on fingerprint alone, so
+    // the two must never share one. Otherwise settling "nobody recorded
+    // allergies for this patient" would also settle — or be settled by
+    // — "this platform cannot record allergies", and the actionable
+    // signal would inherit the silence of the systemic one.
+    for (const axis of CLINICAL_SCREENING_AXES) {
+      const subject = requireFinding(
+        screen({ inputAvailability: withoutAxis(axis, "NOT_RECORDED_FOR_SUBJECT") }),
+        INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+      );
+      const platform = requireFinding(
+        screen({ inputAvailability: withoutAxis(axis, "NOT_SUPPORTED_BY_PLATFORM") }),
+        INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+      );
+      expect(platform.fingerprint, axis).not.toBe(subject.fingerprint);
+      expect(platform.reason, axis).not.toBe(subject.reason);
+    }
+  });
+
+  it("restores the per-subject prompt the moment an axis becomes supportable", () => {
+    // The self-healing property, which is the whole reason the
+    // distinction lives on the DECLARATION rather than on the finding
+    // code. A caller that gains a capability can no longer honestly say
+    // NOT_SUPPORTED_BY_PLATFORM; the day it starts answering
+    // per-subject, the patients with nothing on file begin asking for
+    // an acknowledgement again with no change to this package.
+    const axis = "DRUG_ALLERGY";
+    const whileUnsupported = requireFinding(
+      screen({ inputAvailability: withoutAxis(axis, "NOT_SUPPORTED_BY_PLATFORM") }),
+      INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+    );
+    expect(whileUnsupported.disposition).toBe("INFORMATIONAL");
+
+    const onceSupported = requireFinding(
+      screen({ inputAvailability: withoutAxis(axis, "NOT_RECORDED_FOR_SUBJECT") }),
+      INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+    );
+    expect(onceSupported.disposition).toBe("REQUIRES_ACKNOWLEDGEMENT");
+
+    // And a patient who DOES have records screens the axis for real
+    // rather than reporting any gap at all.
+    const screened = screen({ allergies: [allergy()] });
+    expect(codes(screened)).not.toContain(INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]);
+  });
+
+  it("declaring nothing available yields exactly one gap per axis and no clinical finding", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_DOSED", {
+        basis: "SCHEDULED",
+        amount: 50,
+        unit: "mg",
+        dosesPerDay: 4,
+      }),
+      activeMedications: [drug("line-other", "DRUG_ECHO")],
+      allergies: [allergy()],
+      inputAvailability: everyAxis("NOT_RECORDED_FOR_SUBJECT"),
+    });
+
+    expect(new Set(codes(result))).toEqual(
+      new Set(CLINICAL_SCREENING_AXES.map((axis) => INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]))
+    );
+    // Nothing was screened, so nothing can block — including the
+    // contraindicated pair and the confirmed high-criticality allergy
+    // sitting unread in the inputs.
+    expect(hardStopFindings(result)).toEqual([]);
+    expect(result.outcome).toBe("ADVISORY");
+  });
+
+  it("does not gap an axis whose inputs are genuinely empty", () => {
+    // The distinction the whole design turns on: "this patient has no
+    // recorded allergies" is not "this platform cannot tell you about
+    // allergies". If emptiness implied a gap, every clean patient
+    // would meet a permanent alert, and an alert that always fires is
+    // one that gets trained away.
+    const result = screen({ allergies: [], activeMedications: [] });
+    expect(result.outcome).toBe("CLEAR");
+    expect(codes(result)).toEqual([]);
+  });
+
+  it("fingerprints an unsupplied axis identically across drugs and lines", () => {
+    // One acknowledgement per pharmacist settles "we cannot screen
+    // allergies" for the whole order. Were the drug code part of the
+    // identity, a three-line order would ask three times for the same
+    // platform-level fact — the fastest possible route to a reflexive
+    // click-through.
+    const first = requireFinding(
+      screen({
+        candidate: drug("line-1", "DRUG_ALFA"),
+        inputAvailability: withoutAxis("DRUG_ALLERGY"),
+      }),
+      "SCR_ALLERGY_INPUT_UNAVAILABLE"
+    );
+    const second = requireFinding(
+      screen({
+        candidate: drug("line-2", "DRUG_BRAVO"),
+        inputAvailability: withoutAxis("DRUG_ALLERGY"),
+      }),
+      "SCR_ALLERGY_INPUT_UNAVAILABLE"
+    );
+    expect(second.fingerprint).toBe(first.fingerprint);
+  });
+
+  it("gives two unsupplied axes different fingerprints", () => {
+    // An acknowledgement of "we cannot screen doses" must not settle
+    // "we cannot screen allergies".
+    const seen = new Set(
+      CLINICAL_SCREENING_AXES.map(
+        (axis) =>
+          requireFinding(
+            screen({ inputAvailability: withoutAxis(axis) }),
+            INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis]
+          ).fingerprint
+      )
+    );
+    expect(seen.size).toBe(CLINICAL_SCREENING_AXES.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Remediation on the finding
+// ---------------------------------------------------------------------------
+
+describe("screenPrescription — every gap states its remediation on the finding", () => {
+  // Evaluations chosen to hit every gap emit site AND a clinical
+  // finding of every kind, so the two invariants below run over the
+  // whole vocabulary rather than a convenient corner of it.
+  const evaluations: ReadonlyArray<readonly [string, ScreeningEvaluation]> = [
+    [
+      "rich clinical mix",
+      screen({
+        candidate: drug("line-candidate", "DRUG_DOSED", {
+          basis: "SCHEDULED",
+          amount: 50,
+          unit: "mg",
+          dosesPerDay: 4,
+        }),
+        activeMedications: [drug("line-other", "DRUG_ALFA"), drug("line-echo", "DRUG_ECHO")],
+        allergies: [allergy({ substanceCode: "ING_DELTA", criticality: "LOW" })],
+      }),
+    ],
+    ["unknown candidate, provisioned source", screen({ candidate: drug("l", "DRUG_UNKNOWN") })],
+    ["no source provisioned", screen({ knowledge: createInMemoryDrugKnowledgeSource() })],
+    [
+      "every axis unsupplied per-subject",
+      screen({ inputAvailability: everyAxis("NOT_RECORDED_FOR_SUBJECT") }),
+    ],
+    [
+      "every axis unsupported systemically",
+      screen({ inputAvailability: everyAxis("NOT_SUPPORTED_BY_PLATFORM") }),
+    ],
+    [
+      "dose axis not captured for an immutable record",
+      screen({
+        candidate: drug("line-candidate", "DRUG_DOSED"),
+        inputAvailability: withoutAxis("DOSE_RANGE", "NOT_CAPTURED_FOR_RECORD"),
+      }),
+    ],
+    [
+      "dose unit mismatch",
+      screen({
+        candidate: drug("line-candidate", "DRUG_DOSED", {
+          basis: "SCHEDULED",
+          amount: 5000,
+          unit: "mcg",
+          dosesPerDay: 1,
+        }),
+      }),
+    ],
+    [
+      "uncoded and partially-coded compounds",
+      // The partially-coded compound must be the CANDIDATE: when the
+      // candidate's own knowledge lookup fails, the screen is over and
+      // no profile medication is examined at all, so an uncoded
+      // candidate would suppress the partial-coding gap this fixture
+      // exists to produce. The uncoded compound rides on the profile,
+      // where its gap is still emitted.
+      screen({
+        candidate: drug("line-candidate", "COMPOUND_PARTIAL"),
+        activeMedications: [drug("line-uncoded", "COMPOUND_UNCODED")],
+        knowledge: createInMemoryDrugKnowledgeSource({
+          drugs: {
+            COMPOUND_PARTIAL: {
+              ingredientCodes: ["ING_BRAVO"],
+              uncodedIngredientCount: 2,
+              therapeuticClassCodes: [],
+              crossSensitivityClassCodes: [],
+              doseRange: null,
+            },
+          },
+          locallyDeclarableDrugCodes: ["COMPOUND_UNCODED"],
+        }),
+      }),
+    ],
+  ];
+
+  it("carries a remediation exactly when the finding is a gap", () => {
+    // The invariant `order_screening_finding` CHECK-constrains in one
+    // direction and coverage reporting relies on in both: a clinical
+    // finding claiming a remediation would count a real alert as a
+    // coverage note, and a gap without one would make the unscreened
+    // fraction under-report.
+    for (const [label, evaluation] of evaluations) {
+      for (const finding of evaluation.findings) {
+        expect(finding.remediation !== null, `${label} / ${finding.code}`).toBe(
+          finding.kind === "SCREENING_GAP"
+        );
+      }
+    }
+  });
+
+  it("grades every gap from the remediation it states", () => {
+    // The severity is derived from the remediation at every emit site
+    // (`screeningGapSeverity`), so the persisted column and the
+    // persisted grading can never disagree. A gap failing this would
+    // mean an emit site graded itself from one remediation and
+    // reported another.
+    for (const [label, evaluation] of evaluations) {
+      for (const finding of evaluation.findings) {
+        if (finding.kind !== "SCREENING_GAP" || finding.remediation === null) continue;
+        expect(finding.severity, `${label} / ${finding.code}`).toBe(
+          screeningGapSeverity(finding.remediation)
+        );
+      }
+    }
+  });
+
+  it("states the remediation each situation actually carries", () => {
+    // Point pins, one per emit-site decision, so a regression names
+    // the exact site that changed rather than failing a sweep.
+    const remediationOf = (evaluationLabel: string, code: ScreeningFindingCode): string | null => {
+      const hit = evaluations.find(([label]) => label === evaluationLabel);
+      if (hit === undefined) throw new Error(`no evaluation labelled ${evaluationLabel}`);
+      return requireFinding(hit[1], code).remediation;
+    };
+
+    expect(
+      remediationOf("every axis unsupplied per-subject", "SCR_ALLERGY_INPUT_UNAVAILABLE")
+    ).toBe("SUBJECT_DATA");
+    expect(
+      remediationOf("every axis unsupported systemically", "SCR_ALLERGY_INPUT_UNAVAILABLE")
+    ).toBe("PLATFORM_CAPABILITY");
+    expect(
+      remediationOf("dose axis not captured for an immutable record", "SCR_DOSE_INPUT_UNAVAILABLE")
+    ).toBe("RECORD_IMMUTABLE");
+    expect(
+      remediationOf("unknown candidate, provisioned source", "SCR_KNOWLEDGE_UNAVAILABLE")
+    ).toBe("SUBJECT_DATA");
+    expect(remediationOf("no source provisioned", "SCR_KNOWLEDGE_UNAVAILABLE")).toBe(
+      "PLATFORM_CAPABILITY"
+    );
+    expect(remediationOf("dose unit mismatch", "SCR_DOSE_UNIT_NOT_COMPARABLE")).toBe(
+      "SUBJECT_DATA"
+    );
+    expect(
+      remediationOf("uncoded and partially-coded compounds", "SCR_COMPOUND_FORMULA_NOT_CODED")
+    ).toBe("ORGANIZATION_DATA");
+    expect(
+      remediationOf(
+        "uncoded and partially-coded compounds",
+        "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED"
+      )
+    ).toBe("ORGANIZATION_DATA");
+  });
+
+  it("states PLATFORM_CAPABILITY on the out-of-nomenclature gap", () => {
+    // Separate from the sweep because the fixture needs a provisioned
+    // source that declares the code out of scope.
+    const result = screen({
+      candidate: drug("line-candidate", "COMPOUND_LOCAL_1"),
+      knowledge: createInMemoryDrugKnowledgeSource({
+        drugs: { DRUG_ALFA: DRUGS["DRUG_ALFA"]! },
+        outOfNomenclatureDrugCodes: ["COMPOUND_LOCAL_1"],
+      }),
+    });
+    expect(requireFinding(result, "SCR_KNOWLEDGE_NOT_APPLICABLE").remediation).toBe(
+      "PLATFORM_CAPABILITY"
+    );
+  });
+
+  it("states PLATFORM_CAPABILITY on the dose-content gap", () => {
+    const result = screen({
+      candidate: drug("line-candidate", "DRUG_ALFA", {
+        amount: 10,
+        unit: "mg",
+        dosesPerDay: 2,
+        basis: "SCHEDULED",
+      }),
+      knowledge: createInMemoryDrugKnowledgeSource({
+        drugs: {
+          DRUG_ALFA: {
+            ingredientCodes: ["ING_ALFA"],
+            uncodedIngredientCount: 0,
+            therapeuticClassCodes: [],
+            crossSensitivityClassCodes: [],
+            doseRange: null,
+          },
+        },
+      }),
+    });
+    expect(requireFinding(result, "SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED").remediation).toBe(
+      "PLATFORM_CAPABILITY"
+    );
+  });
+});

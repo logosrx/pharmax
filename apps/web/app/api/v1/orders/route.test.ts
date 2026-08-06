@@ -8,6 +8,11 @@
 // Idempotency-Key requirement, the platform-owned `intakeSourceKind`
 // (a client claim is REJECTED, not coerced), the caller-namespaced
 // idempotency key, and the 201-vs-replay-200 contract.
+//
+// It also pins the error-status contract, which used to flatten every
+// rejection to 422: the status now comes from the error CLASS, so a
+// state race is a retryable 409 and one of our own misconfigurations
+// is a 5xx that error-rate alerting can see.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -309,7 +314,7 @@ describe("POST /api/v1/orders (intake)", () => {
     expect(body.meta).toEqual({ idempotentReplay: true });
   });
 
-  it("422s command-level rejections with their typed code", async () => {
+  it("surfaces command-level rejections with their typed code, at the status of their class", async () => {
     executeCommandDetailedMock.mockRejectedValue(
       new errors.NotFoundError({
         code: "ORDER_PATIENT_NOT_FOUND",
@@ -317,8 +322,37 @@ describe("POST /api/v1/orders (intake)", () => {
       })
     );
     const res = await POST(postRequest({ idempotencyKey: "intake-1" }));
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(404);
     const body = await res.json();
     expect(body.error.code).toBe("ORDER_PATIENT_NOT_FOUND");
+  });
+
+  it("409s a state race so a partner client can retry it", async () => {
+    executeCommandDetailedMock.mockRejectedValue(
+      new errors.ConflictError({
+        code: "ORDER_SITE_NOT_LINKED_TO_CLINIC",
+        message: "Site is not linked to this clinic.",
+      })
+    );
+    const res = await POST(postRequest({ idempotencyKey: "intake-1" }));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.code).toBe("ORDER_SITE_NOT_LINKED_TO_CLINIC");
+  });
+
+  it("500s a misconfiguration on OUR side instead of blaming the partner's payload", async () => {
+    // `CreateOrder` raises both of these as InternalError. Reported as
+    // 422 they told the partner their request was defective and stayed
+    // invisible to error-rate alerting.
+    executeCommandDetailedMock.mockRejectedValue(
+      new errors.InternalError({
+        code: "ORDER_INTAKE_BUCKET_NOT_CONFIGURED",
+        message: "No INBOX bucket is provisioned for org org-1.",
+      })
+    );
+    const res = await POST(postRequest({ idempotencyKey: "intake-1" }));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error.code).toBe("ORDER_INTAKE_BUCKET_NOT_CONFIGURED");
+    expect(body.error.message).not.toContain("org-1");
   });
 });

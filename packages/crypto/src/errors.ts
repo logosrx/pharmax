@@ -32,6 +32,16 @@ export const DECRYPT_FAILED = "DECRYPT_FAILED" as const;
 /** KMS could not find / unwrap the requested key. */
 export const KMS_KEY_NOT_FOUND = "KMS_KEY_NOT_FOUND" as const;
 
+/**
+ * The IAM principal is not authorized for the KMS operation. Split
+ * out from `KMS_KEY_NOT_FOUND` because the remedy is disjoint: an
+ * `AccessDeniedException` is fixed in the task role or the CMK key
+ * policy, whereas a `NotFoundException` is fixed in
+ * `AWS_KMS_DATA_KEY_ID` / `AWS_KMS_SEARCH_KEY_ID` or `AWS_REGION`.
+ * Both page as 500s; the code is what routes the responder.
+ */
+export const KMS_ACCESS_DENIED = "KMS_ACCESS_DENIED" as const;
+
 /** Caller supplied an invalid argument (e.g. empty tenantId). */
 export const CRYPTO_VALIDATION = "CRYPTO_VALIDATION" as const;
 
@@ -79,6 +89,12 @@ export function decryptFailedError(detail: {
   readonly table: string;
   readonly column: string;
   readonly recordId: string;
+  /**
+   * The underlying provider or GCM failure. Optional so existing
+   * callers keep compiling; thread it wherever one exists, because
+   * a decrypt failure with no stack is unactionable at 3am.
+   */
+  readonly cause?: unknown;
 }): errors.InternalError {
   return new errors.InternalError({
     code: DECRYPT_FAILED,
@@ -89,18 +105,71 @@ export function decryptFailedError(detail: {
       column: detail.column,
       recordId: detail.recordId,
     },
+    ...(detail.cause === undefined ? {} : { cause: detail.cause }),
   });
 }
 
-export function kmsKeyNotFoundError(detail: {
+/**
+ * Shared detail shape for the two KMS key-resolution failures.
+ *
+ * `kid` is a key IDENTIFIER and nothing else — an envelope kid
+ * (`aws:kek:<label>:<tenant>:v1`) on the unwrap path, or the
+ * configured KMS key id / ARN / alias on the boot path. It is read
+ * programmatically and lands in log fields and alarm dimensions, so
+ * prose in this slot corrupts every downstream consumer.
+ *
+ * The human explanation belongs in `reason` (which the factory folds
+ * into `message`). The underlying provider error belongs in `cause`,
+ * NOT in metadata: `PharmaxError.toJSON` deliberately drops `cause`,
+ * and an AWS error message can echo request detail we do not want in
+ * an indexed field. `awsErrorName` is the modeled exception shape
+ * name only (`AccessDeniedException`, `NotFoundException`), which is
+ * a bounded, non-sensitive value and therefore safe to index.
+ */
+interface KmsKeyErrorDetail {
   readonly tenantId: string;
   readonly kid: string;
-}): errors.InternalError {
+  readonly reason?: string;
+  readonly awsErrorName?: string;
+  readonly cause?: unknown;
+}
+
+function kmsKeyError(
+  code: string,
+  summary: string,
+  detail: KmsKeyErrorDetail
+): errors.InternalError {
   return new errors.InternalError({
-    code: KMS_KEY_NOT_FOUND,
-    message: `KMS could not resolve key "${detail.kid}" for tenant.`,
-    metadata: detail,
+    code,
+    message: detail.reason === undefined ? `${summary}.` : `${summary}: ${detail.reason}`,
+    metadata: {
+      tenantId: detail.tenantId,
+      kid: detail.kid,
+      ...(detail.awsErrorName === undefined ? {} : { awsErrorName: detail.awsErrorName }),
+    },
+    ...(detail.cause === undefined ? {} : { cause: detail.cause }),
   });
+}
+
+export function kmsKeyNotFoundError(detail: KmsKeyErrorDetail): errors.InternalError {
+  return kmsKeyError(
+    KMS_KEY_NOT_FOUND,
+    `KMS could not resolve key "${detail.kid}" for tenant`,
+    detail
+  );
+}
+
+/**
+ * KMS refused the operation on authorization grounds. The key may
+ * well exist and be perfectly healthy — do not send the responder
+ * looking for a missing key.
+ */
+export function kmsAccessDeniedError(detail: KmsKeyErrorDetail): errors.InternalError {
+  return kmsKeyError(
+    KMS_ACCESS_DENIED,
+    `KMS denied access to key "${detail.kid}" for tenant`,
+    detail
+  );
 }
 
 export function cryptoValidationError(detail: {

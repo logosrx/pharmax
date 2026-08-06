@@ -22,6 +22,16 @@ describe("ORDER_STANDARD_V1 — structural invariants", () => {
     expect(ORDER_STANDARD_V1.version).toBe(1);
   });
 
+  it("carries the clinical-screening floor, bound to this policy version", () => {
+    // `minimumReportedSeverity` decides which findings a pharmacist
+    // is ever shown — raised to CONTRAINDICATED it silences the whole
+    // acknowledge tier. It lives HERE, on the versioned policy, so
+    // changing it is a reviewed, audited act with a version number
+    // attached, rather than a tenant setting nobody can reconstruct
+    // after the fact. v1 reports everything.
+    expect(ORDER_STANDARD_V1.screening.minimumReportedSeverity).toBe("MINOR");
+  });
+
   it("states equals the canonical ALL_ORDER_STATES set", () => {
     expect(new Set(ORDER_STANDARD_V1.states)).toEqual(new Set(ALL_ORDER_STATES));
   });

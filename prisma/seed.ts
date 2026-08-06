@@ -24,6 +24,7 @@ import {
   LabelStockKind,
   LotStatus,
   OrganizationStatus,
+  ProductNdcKind,
   SiteStatus,
   TeamStatus,
   UserStatus,
@@ -64,6 +65,21 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     description:
       "Crypto-shred a patient: render PHI permanently unreadable (right-to-be-forgotten)",
   },
+  {
+    code: "patients.allergies.read",
+    description:
+      "Read a patient's allergy and intolerance profile, including whether a history has been taken at all",
+  },
+  {
+    code: "patients.allergies.record",
+    description:
+      "Record an allergy or intolerance, or assert that an allergy history was taken (no known allergies / unable to assess)",
+  },
+  {
+    code: "patients.allergies.amend_status",
+    description:
+      "Resolve, refute, or mark entered-in-error a recorded allergy — stops it driving PV1 screening",
+  },
   { code: "providers.create", description: "Register a new prescribing provider" },
   { code: "providers.read", description: "Read provider directory" },
   {
@@ -90,6 +106,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     code: "providers.onboarding.review",
     description:
       "Approve or reject prescriber onboarding applications in the NEEDS_REVIEW queue; human reviewer permission, MFA-gated in the ops console (ADR-0033)",
+  },
+  {
+    code: "prescriptions.create",
+    description:
+      "Transcribe a new prescription (encrypts the sig; enforces DEA Part 1306 authorization limits for controlled substances)",
   },
   {
     code: "clinics.read",
@@ -380,6 +401,13 @@ async function seedFillDemoStack(input: {
     },
   });
 
+  // `ndcKind: IN_HOUSE_COMPOUND`: the demo product models what a
+  // compounding pharmacy actually dispenses — a preparation whose
+  // "NDC" is an org-minted identifier (99999…) that no national
+  // nomenclature contains. Flagging it keeps the demo book honest
+  // under PV1 screening: the knowledge gap for it is the
+  // informational SCR_KNOWLEDGE_NOT_APPLICABLE, not a per-order
+  // "verify the NDC" acknowledgement that no one could ever satisfy.
   const product = await prisma.product.upsert({
     where: {
       organizationId_ndc: { organizationId: input.organizationId, ndc: DEMO_PRODUCT_NDC },
@@ -388,6 +416,7 @@ async function seedFillDemoStack(input: {
       name: "Demo Testosterone Cypionate (DEMO)",
       strength: "200mg/mL",
       form: "INJECTABLE",
+      ndcKind: ProductNdcKind.IN_HOUSE_COMPOUND,
     },
     create: {
       organizationId: input.organizationId,
@@ -395,6 +424,7 @@ async function seedFillDemoStack(input: {
       name: "Demo Testosterone Cypionate (DEMO)",
       strength: "200mg/mL",
       form: "INJECTABLE",
+      ndcKind: ProductNdcKind.IN_HOUSE_COMPOUND,
     },
   });
 

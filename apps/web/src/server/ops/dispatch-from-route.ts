@@ -160,14 +160,19 @@ export async function dispatchOpsCommand<TIn, TOut>(
   const resolveFailureRedirect = (): string =>
     typeof input.failureRedirect === "function" ? input.failureRedirect() : input.failureRedirect;
 
+  // `error` is SET on the parsed target rather than templated onto the
+  // end of it, so a failure target may carry its own query string. The
+  // PV1 approve route uses that to name the order that was refused,
+  // which is how the queue links the pharmacist to the findings that
+  // blocked it instead of showing a code with no destination.
+  const failureRedirect = (payload: string): Response => {
+    const url = new URL(resolveFailureRedirect(), "http://internal");
+    url.searchParams.set("error", payload);
+    return NextResponse.redirect(url.toString(), { status: 303 });
+  };
+
   if (prepared.kind === "error") {
-    return NextResponse.redirect(
-      new URL(
-        `${resolveFailureRedirect()}?error=${encodeURIComponent(prepared.error)}`,
-        "http://internal"
-      ).toString(),
-      { status: 303 }
-    );
+    return failureRedirect(prepared.error);
   }
   const built = prepared.built;
   const tenancyExtras = prepared.tenancyExtras;
@@ -252,13 +257,7 @@ export async function dispatchOpsCommand<TIn, TOut>(
           code,
           error: cause,
         });
-        return NextResponse.redirect(
-          new URL(
-            `${resolveFailureRedirect()}?error=${encodeURIComponent(`${code}: ${message}`)}`,
-            "http://internal"
-          ).toString(),
-          { status: 303 }
-        );
+        return failureRedirect(`${code}: ${message}`);
       }
     }
   );

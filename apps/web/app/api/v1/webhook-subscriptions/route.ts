@@ -17,12 +17,12 @@ import {
   generateWebhookSecret,
   listWebhookEligibleEventTypes,
 } from "@pharmax/partner-api";
-import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { withTenancyContext } from "@pharmax/tenancy";
 import { NextResponse } from "next/server";
 
 import {
+  partnerCommandError,
   partnerJsonError,
   requireIdempotencyKeyHeader,
   requirePartnerScope,
@@ -115,9 +115,8 @@ export async function POST(request: Request): Promise<Response> {
       { status: replayed ? 200 : 201 }
     );
   } catch (cause) {
-    if (cause instanceof errors.PharmaxError) {
-      return partnerJsonError({ status: 422, code: cause.code, message: cause.message });
-    }
+    const mapped = partnerCommandError(cause);
+    if (mapped !== null) return mapped;
     throw cause;
   }
 }

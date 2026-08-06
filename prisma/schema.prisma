@@ -307,6 +307,153 @@ enum ProviderStatus {
   INACTIVE
 }
 
+// ---------- Patient allergy capture -----------------------------------
+//
+// Vocabulary is HL7 FHIR R4 `AllergyIntolerance`
+// (https://hl7.org/fhir/R4/allergyintolerance.html), which is a
+// permitted public source. Member values match the string unions in
+// `@pharmax/clinical-screening` exactly where the two overlap, and
+// `packages/verification/src/screening/allergy-input.test.ts` asserts
+// that equality so the two vocabularies cannot drift apart.
+//
+// PHI: every column on `patient_allergy` is PHI once joined to a
+// patient. The split between plaintext and envelope columns is
+// explained on the model itself.
+
+/// FHIR `AllergyIntolerance.category`. FOOD and ENVIRONMENT are
+/// recorded because intake staff take a whole history, and excluded
+/// from drug screening because a drug knowledge base cannot answer
+/// them.
+enum AllergyCategory {
+  MEDICATION
+  BIOLOGIC
+  FOOD
+  ENVIRONMENT
+}
+
+/// FHIR `AllergyIntolerance.type`. An intolerance is a non-immune
+/// adverse reaction: real, worth showing a pharmacist, and never the
+/// anaphylaxis risk that could justify refusing to dispense.
+enum AllergyIntoleranceType {
+  ALLERGY
+  INTOLERANCE
+}
+
+/// FHIR `AllergyIntolerance.criticality` — the potential of a FUTURE
+/// exposure to be life-threatening, which is the question a pharmacist
+/// is actually asking. Distinct from the severity of what happened
+/// last time (`AllergyReactionSeverity`).
+enum AllergyCriticality {
+  HIGH
+  LOW
+  UNABLE_TO_ASSESS
+}
+
+/// FHIR `AllergyIntolerance.clinicalStatus` — whether the propensity
+/// still exists. Only ACTIVE records are screened; INACTIVE and
+/// RESOLVED stay visible in the console because a pharmacist wants to
+/// see an outgrown childhood penicillin allergy even when the engine
+/// will not act on it.
+enum AllergyClinicalStatus {
+  ACTIVE
+  INACTIVE
+  RESOLVED
+}
+
+/// FHIR `AllergyIntolerance.verificationStatus`. REFUTED and
+/// ENTERED_IN_ERROR are the retraction path: clinical data is
+/// corrected, never deleted, so a wrong record stops screening while
+/// staying in history.
+enum AllergyVerificationStatus {
+  CONFIRMED
+  UNCONFIRMED
+  REFUTED
+  ENTERED_IN_ERROR
+}
+
+/// FHIR `AllergyIntolerance.reaction.severity` — how bad the reaction
+/// that was OBSERVED was. Recorded for the pharmacist and deliberately
+/// not fed to the screening engine, which grades on `criticality`.
+enum AllergyReactionSeverity {
+  MILD
+  MODERATE
+  SEVERE
+}
+
+/// A coded stand-in for FHIR `AllergyIntolerance.reaction.manifestation`.
+///
+/// A closed code list rather than free text, because the difference
+/// between hives and airway compromise is the difference a pharmacist
+/// decides on, and a decision should not depend on parsing prose.
+/// Anything this list cannot express is OTHER plus the encrypted
+/// narrative note.
+enum AllergyReactionManifestation {
+  ANAPHYLAXIS
+  ANGIOEDEMA
+  BRONCHOSPASM
+  HYPOTENSION
+  URTICARIA
+  RASH
+  PRURITUS
+  SEVERE_CUTANEOUS_REACTION
+  NAUSEA_OR_VOMITING
+  DIARRHEA
+  ABDOMINAL_PAIN
+  HEADACHE
+  DIZZINESS
+  HEPATOTOXICITY
+  NEPHROTOXICITY
+  CYTOPENIA
+  OTHER
+}
+
+/// Which code space `patient_allergy.substanceCode` is expressed in.
+///
+/// The screening engine compares substance codes to a knowledge
+/// source's ingredient codes by STRING EQUALITY and owns no code space
+/// of its own, so a record's code system decides whether the
+/// comparison can mean anything at all.
+///
+/// UNCODED is the honest representation of "the patient said sulfa and
+/// nobody could code it". Such a record is shown to the pharmacist and
+/// is NOT counted as screenable input — see
+/// `packages/verification/src/screening/allergy-input.ts`, because an
+/// uncodeable allergen compared against an ingredient list matches
+/// nothing and would read as a clean allergy screen.
+enum AllergySubstanceCodeSystem {
+  /// RxNorm ingredient RXCUI (public, NLM).
+  RXNORM
+  /// NDC product code (public, FDA).
+  NDC
+  /// SNOMED CT substance concept.
+  SNOMED_CT
+  /// A Pharmax-defined allergen class code, for groupings recorded
+  /// above the level of a single ingredient.
+  PHARMAX_ALLERGEN_CLASS
+  /// No code could be assigned. `substanceCode` is NULL and
+  /// `substanceLabelEnc` carries what was said.
+  UNCODED
+}
+
+/// A patient-level statement ABOUT the allergy history itself, as
+/// opposed to a statement about one substance.
+///
+/// This exists because an empty allergy list is ambiguous between
+/// "asked, and there is nothing" and "nobody has asked", and a
+/// pharmacist reads the safer meaning into the more dangerous state.
+/// FHIR expresses the first with a `code` of "no known allergy"; we
+/// give it its own record so it carries an asserter and a time without
+/// pretending to be an allergy to a substance called "none".
+enum AllergyHistoryAssertionStatus {
+  /// History taken; the patient reports no allergies or intolerances.
+  /// This is the assertion that lets the allergy axis screen CLEAR.
+  NO_KNOWN_ALLERGIES
+  /// History attempted and could not be obtained (no historian,
+  /// patient unable to answer). Deliberately does NOT satisfy the
+  /// screening axis: "we tried" is not "we know".
+  UNABLE_TO_ASSESS
+}
+
 // ---------- NPI Registry sync (SyncFromNpiRegistry slice 3) ----------
 //
 // The worker that reconciles local provider rows against the public
@@ -768,12 +915,16 @@ model Organization {
   patients                       Patient[]
   providers                      Provider[]
   prescriptions                  Prescription[]
+  rxNumberSequences              RxNumberSequence[]
   orders                         Order[]
   orderLines                     OrderLine[]
   orderCancellations             OrderCancellation[]
   orderHolds                     OrderHold[]
   orderCorrectionReopens         OrderCorrectionReopen[]
   verificationRecords            VerificationRecord[]
+  screeningFindings              OrderScreeningFinding[]
+  screeningAcknowledgements      OrderScreeningAcknowledgement[]
+  patientScreeningAcknowledgements PatientScreeningAcknowledgement[]
   products                       Product[]
   lots                           Lot[]
   lotAssignments                 LotAssignment[]
@@ -824,6 +975,9 @@ model Organization {
   dscsaTransactions            DscsaTransaction[]
 
   controlledSubstanceDispensings ControlledSubstanceDispensing[]
+
+  patientAllergies                PatientAllergy[]
+  patientAllergyHistoryAssertions PatientAllergyHistoryAssertion[]
 
   @@map("organization")
 }
@@ -899,6 +1053,7 @@ model Clinic {
   clinicCreditEntries            ClinicCreditEntry[]
   patients                       Patient[]
   prescriptions                  Prescription[]
+  rxNumberSequences              RxNumberSequence[]
   orders                         Order[]
   orderLines                     OrderLine[]
   controlledSubstanceDispensings ControlledSubstanceDispensing[]
@@ -906,6 +1061,9 @@ model Clinic {
   packagePhotos            PackagePhoto[]
   packagePhotoUploadTokens PackagePhotoUploadToken[]
   workflowPolicyOverlays   WorkflowPolicyOverlay[]
+
+  patientAllergies                PatientAllergy[]
+  patientAllergyHistoryAssertions PatientAllergyHistoryAssertion[]
 
   @@unique([organizationId, code])
   @@index([organizationId, status])
@@ -1063,6 +1221,9 @@ model User {
   orderHoldsReleased            OrderHold[]                     @relation("OrderHoldReleaser")
   orderCorrectionReopens        OrderCorrectionReopen[]         @relation("OrderCorrectionReopenActor")
   verificationRecords           VerificationRecord[]            @relation("VerificationRecordActor")
+  screeningFindings             OrderScreeningFinding[]         @relation("OrderScreeningFindingActor")
+  screeningAcknowledgements     OrderScreeningAcknowledgement[] @relation("OrderScreeningAcknowledgementActor")
+  patientScreeningAcknowledgements PatientScreeningAcknowledgement[] @relation("PatientScreeningAcknowledgementActor")
   lotAssignments                LotAssignment[]                 @relation("LotAssignmentActor")
   printJobsRequested            PrintJob[]                      @relation("PrintJobRequester")
   shipmentsCreated              Shipment[]                      @relation("ShipmentCreator")
@@ -1101,6 +1262,10 @@ model User {
   dscsaTransactionsReceived   DscsaTransaction[]  @relation("DscsaTransactionReceiver")
 
   controlledSubstancesDispensed ControlledSubstanceDispensing[]
+
+  patientAllergiesRecorded        PatientAllergy[]                 @relation("PatientAllergyRecordedBy")
+  patientAllergyStatusChanges     PatientAllergy[]                 @relation("PatientAllergyStatusChangedBy")
+  patientAllergyHistoryAssertions PatientAllergyHistoryAssertion[] @relation("PatientAllergyHistoryAssertedBy")
 
   @@unique([organizationId, email])
   @@index([organizationId, status])
@@ -1563,6 +1728,9 @@ model WorkflowPolicy {
   orderHolds                     OrderHold[]
   orderCorrectionReopens         OrderCorrectionReopen[]
   verificationRecords            VerificationRecord[]
+  screeningFindings              OrderScreeningFinding[]
+  screeningAcknowledgements      OrderScreeningAcknowledgement[]
+  patientScreeningAcknowledgements PatientScreeningAcknowledgement[]
   overlays                       WorkflowPolicyOverlay[]
   providerOnboardingApplications ProviderOnboardingApplication[]
   compoundingRecords             CompoundingRecord[]
@@ -1692,28 +1860,31 @@ model CommandLog {
 
   orderEvents                  OrderEvent[]
   orderCancellations           OrderCancellation[]
-  orderHoldsPlaced             OrderHold[]              @relation("OrderHoldPlaceCommand")
-  orderHoldsReleased           OrderHold[]              @relation("OrderHoldReleaseCommand")
-  orderCorrectionReopens       OrderCorrectionReopen[]  @relation("OrderCorrectionReopenCommand")
+  orderHoldsPlaced             OrderHold[]                     @relation("OrderHoldPlaceCommand")
+  orderHoldsReleased           OrderHold[]                     @relation("OrderHoldReleaseCommand")
+  orderCorrectionReopens       OrderCorrectionReopen[]         @relation("OrderCorrectionReopenCommand")
   verificationRecords          VerificationRecord[]
+  screeningFindings            OrderScreeningFinding[]
+  screeningAcknowledgements    OrderScreeningAcknowledgement[]
+  patientScreeningAcknowledgements PatientScreeningAcknowledgement[]
   lotAssignments               LotAssignment[]
   inventoryTransactions        InventoryTransaction[]
   printJobs                    PrintJob[]
-  shipmentsCreated             Shipment[]               @relation("ShipmentCreateCommand")
-  shipmentsConfirmed           Shipment[]               @relation("ShipmentConfirmCommand")
-  shipmentTrackingEvents       ShipmentTrackingEvent[]  @relation("ShipmentTrackingEventCommand")
-  carrierCredentialsCreated    CarrierCredential[]      @relation("CarrierCredentialCreateCommand")
-  apiKeysCreated               ApiKey[]                 @relation("ApiKeyCreateCommand")
-  webhookSubscriptionsCreated  WebhookSubscription[]    @relation("WebhookSubscriptionCreateCommand")
-  pricingRulesCreated          PricingRule[]            @relation("PricingRuleCreateCommandLog")
-  stageIntervalsOpened         OrderStageInterval[]     @relation("StageIntervalOpenCommand")
-  stageIntervalsClosed         OrderStageInterval[]     @relation("StageIntervalCloseCommand")
-  packagePhotos                PackagePhoto[]           @relation("PackagePhotoCaptureCommand")
-  reportRuns                   ReportRun[]              @relation("ReportRunCommand")
-  reportSchedulesCreated       ReportSchedule[]         @relation("ReportScheduleCreateCommand")
-  accessReviewSnapshots        AccessReviewSnapshot[]   @relation("AccessReviewSnapshotCommand")
-  providerSyncChecksDispatched ProviderSyncCheck[]      @relation("ProviderSyncCheckDispatchedCommandLog")
-  providerSyncReviewsResolved  ProviderSyncReviewItem[] @relation("ProviderSyncReviewResolvedCommandLog")
+  shipmentsCreated             Shipment[]                      @relation("ShipmentCreateCommand")
+  shipmentsConfirmed           Shipment[]                      @relation("ShipmentConfirmCommand")
+  shipmentTrackingEvents       ShipmentTrackingEvent[]         @relation("ShipmentTrackingEventCommand")
+  carrierCredentialsCreated    CarrierCredential[]             @relation("CarrierCredentialCreateCommand")
+  apiKeysCreated               ApiKey[]                        @relation("ApiKeyCreateCommand")
+  webhookSubscriptionsCreated  WebhookSubscription[]           @relation("WebhookSubscriptionCreateCommand")
+  pricingRulesCreated          PricingRule[]                   @relation("PricingRuleCreateCommandLog")
+  stageIntervalsOpened         OrderStageInterval[]            @relation("StageIntervalOpenCommand")
+  stageIntervalsClosed         OrderStageInterval[]            @relation("StageIntervalCloseCommand")
+  packagePhotos                PackagePhoto[]                  @relation("PackagePhotoCaptureCommand")
+  reportRuns                   ReportRun[]                     @relation("ReportRunCommand")
+  reportSchedulesCreated       ReportSchedule[]                @relation("ReportScheduleCreateCommand")
+  accessReviewSnapshots        AccessReviewSnapshot[]          @relation("AccessReviewSnapshotCommand")
+  providerSyncChecksDispatched ProviderSyncCheck[]             @relation("ProviderSyncCheckDispatchedCommandLog")
+  providerSyncReviewsResolved  ProviderSyncReviewItem[]        @relation("ProviderSyncReviewResolvedCommandLog")
   breakGlassActions            BreakGlassAction[]
   compoundingRecords           CompoundingRecord[]
   dscsaTransactions            DscsaTransaction[]
@@ -2534,6 +2705,10 @@ model Patient {
   orders        Order[]
   packagePhotos PackagePhoto[] @relation("PackagePhotoMatchedPatient")
 
+  allergies                PatientAllergy[]
+  allergyHistoryAssertions PatientAllergyHistoryAssertion[]
+  screeningAcknowledgements PatientScreeningAcknowledgement[]
+
   @@index([organizationId, clinicId, status])
   @@index([organizationId, lastNameBi])
   @@index([organizationId, firstNameBi])
@@ -2545,6 +2720,155 @@ model Patient {
   @@index([organizationId, mrnBi])
   @@index([organizationId, mergedIntoPatientId])
   @@map("patient")
+}
+
+// One recorded allergy or intolerance, modelled on HL7 FHIR R4
+// `AllergyIntolerance`.
+//
+// ---------------------------------------------------------------------
+// THE PHI SPLIT, AND WHY IT IS WHERE IT IS
+// ---------------------------------------------------------------------
+//
+// Every row here is PHI: it is individually identifiable health
+// information the moment it is read alongside its patient. Encryption
+// is not what makes a column safe — tenant RLS, the RBAC gate, and the
+// audit trail are. So the split below is NOT "PHI here, non-PHI there".
+// It is between values the platform must COMPARE and values only a
+// human will READ.
+//
+//   PLAINTEXT under tenant RLS — the coded values: `substanceCode`,
+//   `substanceCodeSystem`, `category`, `type`, `criticality`,
+//   `clinicalStatus`, `verificationStatus`,
+//   `reactionManifestations`, `reactionSeverity`. The screening engine
+//   compares these inside the PV1 command transaction on every screen.
+//   A column that must be decrypted row-by-row to be compared cannot
+//   be indexed or filtered, so encrypting them would move the
+//   comparison into application memory on a per-row basis — where a
+//   bug drops rows SILENTLY, which is the one failure mode a safety
+//   screen cannot have. The established precedent is
+//   `prescription.drugNdc`: a coded clinical value kept queryable in
+//   plaintext under RLS.
+//
+//   ENCRYPTED envelope (AAD-bound, same pattern as
+//   `prescription.sigEnc`) — the narrative: `substanceLabelEnc` and
+//   `reactionNoteEnc`. Free text about a reaction reliably carries far
+//   more than the minimum necessary: dates, places, other people's
+//   names, unrelated history. It is never compared and never indexed,
+//   so encryption costs nothing operationally, and it is what a
+//   crypto-shred has to be able to destroy.
+//
+// Nothing from this table reaches a log, an audit metadata blob, or an
+// event payload except record ids and coded enum values.
+model PatientAllergy {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // Copied from the patient at capture time so a clinic-scoped read
+  // does not have to join through `patient` to be safe. Never updated:
+  // it records the clinic the history was taken at.
+  clinicId String @db.Uuid
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  patientId String  @db.Uuid
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+
+  /// The substance reacted to, in the code space named by
+  /// `substanceCodeSystem`. NULL exactly when that system is UNCODED —
+  /// enforced by a CHECK constraint in the migration, because a coded
+  /// system with no code is a row the screen would silently skip.
+  substanceCode       String?
+  substanceCodeSystem AllergySubstanceCodeSystem
+
+  /// What the patient or the referring clinic actually said, verbatim.
+  /// Narrative, therefore encrypted. For an UNCODED record this is the
+  /// only description of the allergen there is, which is why the
+  /// console shows it to the pharmacist even though no engine can use
+  /// it.
+  substanceLabelEnc Json?
+
+  category           AllergyCategory
+  type               AllergyIntoleranceType
+  criticality        AllergyCriticality
+  clinicalStatus     AllergyClinicalStatus     @default(ACTIVE)
+  verificationStatus AllergyVerificationStatus @default(UNCONFIRMED)
+
+  /// Coded reaction manifestations. Empty is legitimate: a patient may
+  /// report an allergy without remembering what it did.
+  reactionManifestations AllergyReactionManifestation[]
+  reactionSeverity       AllergyReactionSeverity?
+  /// Narrative detail about the reaction. PHI, encrypted, never read
+  /// by the engine.
+  reactionNoteEnc        Json?
+
+  /// FHIR `AllergyIntolerance.onsetDateTime`, to the day. Date rather
+  /// than timestamp: nobody recalls the hour of a childhood rash.
+  onsetDate DateTime? @db.Date
+
+  /// Who recorded it, and who last changed its status. Both are
+  /// operator users, not PHI.
+  recordedByUserId String   @db.Uuid
+  recordedByUser   User     @relation("PatientAllergyRecordedBy", fields: [recordedByUserId], references: [id], onDelete: Restrict)
+  recordedAt       DateTime
+
+  statusChangedByUserId String?   @db.Uuid
+  statusChangedByUser   User?     @relation("PatientAllergyStatusChangedBy", fields: [statusChangedByUserId], references: [id], onDelete: Restrict)
+  statusChangedAt       DateTime?
+  /// Reason code for the most recent status change. Required by the
+  /// workflow rules for every retraction, and the thing that makes
+  /// "why is this refuted?" answerable a year later.
+  statusChangeReason    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Screening reads (organizationId, patientId) and filters on
+  // clinicalStatus; this index serves that directly.
+  @@index([organizationId, patientId, clinicalStatus])
+  @@index([organizationId, clinicId])
+  @@index([organizationId, substanceCode])
+  @@map("patient_allergy")
+}
+
+// A patient-level assertion about the allergy HISTORY, which is what
+// makes "no known allergies" distinguishable from "nobody has asked".
+//
+// APPEND-ONLY. Rows are never updated or deleted; the current
+// assertion is the most recent one. A superseded assertion is exactly
+// the record that answers "who said this patient had no allergies, and
+// when, before the anaphylaxis?" — deleting it would destroy the only
+// evidence of the decision.
+//
+// PHI: an assertion carries no narrative and no substance. Every
+// column is an id, an enum, or a timestamp, and the whole row is still
+// PHI by association with its patient — tenant RLS is the control.
+model PatientAllergyHistoryAssertion {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  clinicId String @db.Uuid
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  patientId String  @db.Uuid
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+
+  status AllergyHistoryAssertionStatus
+
+  /// The user stamp. An assertion that nobody owns is not an
+  /// assertion.
+  assertedByUserId String   @db.Uuid
+  assertedByUser   User     @relation("PatientAllergyHistoryAssertedBy", fields: [assertedByUserId], references: [id], onDelete: Restrict)
+  /// When the history was taken, which is not necessarily when the row
+  /// was written.
+  assertedAt       DateTime
+
+  createdAt DateTime @default(now())
+
+  // "Latest assertion for this patient" is the only read shape.
+  @@index([organizationId, patientId, assertedAt(sort: Desc)])
+  @@index([organizationId, clinicId])
+  @@map("patient_allergy_history_assertion")
 }
 
 // A prescriber. NPI registry data is public information; provider
@@ -3081,6 +3405,34 @@ model Prescription {
   // NULL = fillable immediately.
   earliestFillDate DateTime? @db.Date
 
+  // --- Structured sig (dose capture) ---
+  //
+  // The machine-comparable summary of the sig, captured at
+  // transcription so the DOSE_RANGE screening axis has an amount, a
+  // unit and a frequency to compare against a published dosing
+  // envelope. The free-text `sigEnc` REMAINS the authoritative label
+  // instruction; these columns never replace it and are all optional —
+  // a prescription without them is legal and merely unscreenable on
+  // this axis.
+  //
+  // NULL `sigStructureKind` means "not structured at all" (a legacy
+  // transcription, or a typist who skipped the optional fields). The
+  // kind exists because not every sig reduces to one number, and
+  // pretending it does is how a screen lies. Vocabulary is modelled on
+  // HL7 FHIR R4 `Dosage` (`asNeeded`, `doseRange` vs `doseQuantity`,
+  // `sequence` for tapers) without building the full structure. What
+  // the three value columns MEAN depends on the kind — see the enum.
+  //
+  // PHI split: these are coded, comparable values under tenant RLS,
+  // the same treatment `drugNdc` and the patient-allergy substance
+  // codes get. The narrative stays encrypted in `sigEnc`. The
+  // screening engine reads these in-transaction and its findings carry
+  // codes and limits, never the narrative.
+  sigStructureKind SigStructureKind?
+  doseAmount       Decimal?          @db.Decimal(12, 4)
+  doseUnit         DoseUnit?
+  dosesPerDay      Decimal?          @db.Decimal(8, 4)
+
   // --- Encrypted PHI ---
   sigEnc              Json
   noteToPharmacistEnc Json?
@@ -3105,6 +3457,39 @@ model Prescription {
   // "every CS prescription in this org, by schedule, over a period".
   @@index([organizationId, controlledSubstanceSchedule, originalDateWritten])
   @@map("prescription")
+}
+
+// Prescription-number allocator, one counter row per (organization,
+// clinic).
+//
+// An Rx number goes on the vial label, into the PDMP submission, and
+// in front of a DEA inspector who expects a dense, monotonic series.
+// It cannot be random, cannot be operator-typed, and cannot be
+// `MAX(rxNumber) + 1` — concurrent transcriptions would read the same
+// maximum. `CreatePrescription` increments this row inside its
+// transaction; the resulting row lock serializes same-clinic
+// transcriptions and lets different clinics proceed in parallel.
+//
+// Granularity mirrors `prescription(organizationId, clinicId,
+// rxNumber)` exactly. Anything coarser over-serializes; anything finer
+// permits duplicates.
+//
+// `lastValue` is the number most recently HANDED OUT (starts at 0, so
+// the first allocation is 1). A rolled-back transaction consumes its
+// number — a gap in the series is explainable, a reused number is not.
+model RxNumberSequence {
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  clinicId       String       @db.Uuid
+  clinic         Clinic       @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  lastValue Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([organizationId, clinicId])
+  @@map("rx_number_sequence")
 }
 
 // A pharmacy order. The workflow state machine for an order is
@@ -3181,20 +3566,23 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orderLines          OrderLine[]
-  orderEvents         OrderEvent[]
-  commandLogs         CommandLog[]
-  invoiceLines        InvoiceLine[]
-  cancellation        OrderCancellation?
-  holds               OrderHold[]
-  correctionReopens   OrderCorrectionReopen[]
-  verificationRecords VerificationRecord[]
-  lotAssignments      LotAssignment[]
-  printJobs           PrintJob[]
-  vialLabels          VialLabel[]
-  shipments           Shipment[]
-  stageIntervals      OrderStageInterval[]
-  packagePhotos       PackagePhoto[]          @relation("PackagePhotoMatchedOrder")
+  orderLines                OrderLine[]
+  orderEvents               OrderEvent[]
+  commandLogs               CommandLog[]
+  invoiceLines              InvoiceLine[]
+  cancellation              OrderCancellation?
+  holds                     OrderHold[]
+  correctionReopens         OrderCorrectionReopen[]
+  verificationRecords       VerificationRecord[]
+  screeningFindings         OrderScreeningFinding[]
+  screeningAcknowledgements OrderScreeningAcknowledgement[]
+  patientScreeningAcknowledgements PatientScreeningAcknowledgement[] @relation("PatientScreeningAcknowledgementRecordedOnOrder")
+  lotAssignments            LotAssignment[]
+  printJobs                 PrintJob[]
+  vialLabels                VialLabel[]
+  shipments                 Shipment[]
+  stageIntervals            OrderStageInterval[]
+  packagePhotos             PackagePhoto[]                  @relation("PackagePhotoMatchedOrder")
 
   // The queue-shaped index. Order matters: scanner filters by
   // bucket+status, sorts by priority desc + SLA asc + receivedAt
@@ -3557,6 +3945,325 @@ model VerificationRecord {
   @@map("verification_record")
 }
 
+// Which PV1 command produced a screening pass.
+//
+// PV1_START is the snapshot the pharmacist's console renders when
+// they open the review. PV1_APPROVE is the re-screen taken at
+// sign-off — the one the approval was actually gated on. Both are
+// kept: the pair is the evidence that the profile did (or did not)
+// move underneath the review.
+enum ScreeningPhase {
+  PV1_START
+  PV1_APPROVE
+}
+
+// One clinical-screening finding, as produced by
+// `@pharmax/clinical-screening` during a PV1 screening pass.
+//
+// PHI INVARIANT — the reason this table can exist at all. A finding
+// carries NO patient identifier, NO drug name, and NO caller free
+// text. `reason` is templated from codes BY THE ENGINE (see the
+// header of `packages/clinical-screening/src/findings.ts`), and the
+// only identifiers that reach `triggers` are the opaque record ids
+// the command handed in (prescription ids). Rendering a code as a
+// drug name is the operator console's job, inside an authorized
+// session — not this row's.
+//
+// Append-only, like `verification_record`: what the engine told a
+// pharmacist on a given day cannot be edited afterwards, because the
+// whole point of storing it is to be able to answer "what did they
+// see when they signed?" years later. `workflowPolicyId` +
+// `workflowPolicyVersion` and `minimumReportedSeverity` are stamped
+// on every row for the same reason — the reporting floor is bound to
+// the policy version, and a later version raising it must not make an
+// old screen look like it reported everything.
+model OrderScreeningFinding {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  phase ScreeningPhase
+
+  screenedForUserId String @db.Uuid
+  screenedForUser   User   @relation("OrderScreeningFindingActor", fields: [screenedForUserId], references: [id], onDelete: Restrict)
+
+  // Finding vocabulary, owned by @pharmax/clinical-screening. Stored
+  // as TEXT rather than DB enums for the same reason
+  // `verification_record.rejectionReasonCode` is: the code list is
+  // designed to GROW (a code may be added, never renamed), and a new
+  // finding kind must not require a schema migration. `disposition`
+  // is the exception — it is the workflow contract, structurally
+  // closed, and carries a CHECK constraint in the migration.
+  code        String
+  kind        String
+  severity    String
+  certainty   String
+  disposition String
+
+  // Who can close a SCREENING_GAP (`ScreeningGapRemediation`:
+  // SUBJECT_DATA, PLATFORM_CAPABILITY, ORGANIZATION_DATA,
+  // RECORD_IMMUTABLE — a growing TEXT vocabulary like `code`). NULL
+  // exactly when the row is not a gap: a CHECK in the migration
+  // forbids a value on clinical findings, so a coverage query can
+  // GROUP BY this column without a kind filter and get only gaps.
+  // Stated by the engine's emit site at write time; rows written
+  // before the column existed were backfilled by the recovery rules
+  // readers used until then (`gapRemediationForFindingCode` first,
+  // `gapRemediationFromSeverity` second), and a row written by a
+  // pre-column binary during its deploy window is NULL, which readers
+  // treat as "recover by inference" rather than "not a gap".
+  remediation String?
+
+  // Stable identity of the clinical situation. An acknowledgement
+  // matches a finding on this value; see `fingerprintOf`.
+  fingerprint String
+
+  // Operator-facing explanation, templated from codes by the engine.
+  reason String
+
+  // The inputs that set the finding off: `[{ source, recordId, code }]`.
+  triggers Json
+
+  // Provenance supplied by the knowledge source, when one exists.
+  citation String?
+
+  // Replay-correctness anchor. `minimumReportedSeverity` is the
+  // screening floor that was in force, which is a property of the
+  // workflow policy VERSION (see `OrderWorkflowPolicy.screening`) —
+  // stamped here so a screen is reproducible without re-deriving the
+  // policy that governed it.
+  //
+  // READ IT AS A PROPERTY OF THE SCREEN, NOT A PREDICATE APPLIED TO
+  // THIS ROW. The floor filters CLINICAL findings only; rows with
+  // `kind = 'SCREENING_GAP'` are exempt from it at every setting,
+  // because they record whether a check ran rather than what it found,
+  // and a suppressed gap would make an unscreened order look screened.
+  // So a gap row graded MINOR while this column says MAJOR is correct
+  // and expected, not corrupt data. The rule lives in `isReportable`
+  // in `@pharmax/clinical-screening`.
+
+  workflowPolicyId        String         @db.Uuid
+  workflowPolicy          WorkflowPolicy @relation(fields: [workflowPolicyId], references: [id], onDelete: Restrict)
+  workflowPolicyVersion   Int
+  minimumReportedSeverity String
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  // Knowledge-release attribution — the same treatment
+  // `workflowPolicyId` + `workflowPolicyVersion` give the policy.
+  // "Why did this not fire in March?" is answerable only if the row
+  // names the body of knowledge the screen resolved against, because
+  // the reference tables move underneath the findings on every
+  // ingestion. NULL means the screen ran against a source that
+  // carries no release identity (the empty in-memory source, or a
+  // deployment predating knowledge provisioning) — which is itself
+  // the honest answer, not a missing stamp.
+  knowledgeSourceCode     String?
+  knowledgeReleaseVersion String?
+
+  // Compound-formula attribution — the same treatment again, for the
+  // body of knowledge that is the ORG'S OWN: when a finding was
+  // produced (or a coverage gap reported) against a compound product's
+  // declared ingredient list, these name the formula VERSION the
+  // screen resolved, because recipes are republished and "which recipe
+  // did March's screen read?" must survive that. Code + version are
+  // denormalized beside the id exactly as `CompoundingRecord` does, so
+  // the row stays self-describing in exports that don't join. NULL on
+  // findings that involved no compound formula — the common case.
+  //
+  // When one finding involves two formulas (a duplication between two
+  // compound lines), the CANDIDATE line's formula is stamped; the
+  // other formula's product remains reachable through `triggers`.
+  formulaId      String?          @db.Uuid
+  formula        CompoundFormula? @relation("OrderScreeningFindingFormula", fields: [formulaId], references: [id], onDelete: Restrict)
+  formulaCode    String?
+  formulaVersion Int?
+
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  // "What did the last screen on this order say?" — the console's
+  // read path, and the lookup AcknowledgePV1ScreeningFinding uses to
+  // prove a fingerprint was actually shown before it is acknowledged.
+  @@index([organizationId, orderId, phase, occurredAt])
+  // "How often does this finding code fire, and at what grade?" —
+  // alert-fatigue reporting, which is the metric that decides whether
+  // the screening tiers are set correctly.
+  @@index([organizationId, code, severity, occurredAt])
+  // "What fraction of screens could not run, and whose fault?" —
+  // coverage reporting straight off the column. NULL rows (clinical
+  // findings) are dead weight in this index but Prisma cannot express
+  // a partial index, and gap rows dominate it until licensed content
+  // lands anyway.
+  @@index([organizationId, remediation, occurredAt])
+  @@map("order_screening_finding")
+}
+
+// A pharmacist's recorded judgement on one screening finding.
+//
+// Scoped to (order, pharmacist, fingerprint) on purpose. An
+// acknowledgement is a professional judgement attached to a PERSON:
+// ApprovePV1 requires one from the pharmacist who is signing, not
+// from whoever happened to look at the order first. Inheriting a
+// colleague's acknowledgement is exactly how a clinical check
+// degrades into a checkbox.
+//
+// The unique constraint makes a double-acknowledgement structurally
+// impossible rather than merely unlikely, and gives the command a
+// cheap "already recorded" read.
+//
+// PHI invariant: same as the finding table — codes and ids only.
+model OrderScreeningAcknowledgement {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  // The finding this settles. Copied from the persisted finding row
+  // rather than taken from the caller, so an acknowledgement can
+  // never claim a grading the engine did not produce.
+  fingerprint String
+  findingCode String
+  severity    String
+  certainty   String
+
+  pharmacistUserId String @db.Uuid
+  pharmacistUser   User   @relation("OrderScreeningAcknowledgementActor", fields: [pharmacistUserId], references: [id], onDelete: Restrict)
+
+  workflowPolicyId      String         @db.Uuid
+  workflowPolicy        WorkflowPolicy @relation(fields: [workflowPolicyId], references: [id], onDelete: Restrict)
+  workflowPolicyVersion Int
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  acknowledgedAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, orderId, pharmacistUserId, fingerprint])
+  // The gate's read path: "which fingerprints has THIS pharmacist
+  // settled on THIS order?" — evaluated on every ApprovePV1.
+  @@index([organizationId, orderId, pharmacistUserId])
+  // "What has this pharmacist acknowledged, and when?" — override-rate
+  // reporting per pharmacist.
+  @@index([organizationId, pharmacistUserId, acknowledgedAt])
+  @@map("order_screening_acknowledgement")
+}
+
+// A pharmacist's recorded judgement on one PATIENT-RECORD screening
+// gap — the patient-scoped sibling of `OrderScreeningAcknowledgement`.
+//
+// WHY A SIBLING TABLE AND NOT A SCOPE COLUMN. The two rows answer
+// different questions with different keys and different lifetimes. An
+// order-scoped acknowledgement dispositions a clinical situation on
+// ONE dispensing decision and is honored forever on that order. A
+// patient-record gap ("nobody has taken this patient's allergy
+// history") is a fact about the state of the PATIENT'S record: it is
+// byte-identical on every order the patient has, and re-prompting the
+// same pharmacist about the same unchanged fact on refill twelve is
+// alert fatigue, not safety. Folding both into one table would put a
+// nullable patientId and a nullable token on every clinical
+// acknowledgement and make the gate's scoping split a WHERE-clause
+// convention; the sibling table makes it structural.
+//
+// WHAT MAY LIVE HERE, ENFORCED BY THE DATABASE. Only gaps raised
+// because a PER_SUBJECT screening axis had nothing recorded for the
+// patient (`NOT_RECORDED_FOR_SUBJECT` — today exactly
+// `SCR_ALLERGY_INPUT_UNAVAILABLE`). A CLINICAL finding — interaction,
+// allergy match, dose violation — is an input to a dispensing
+// decision, every fill is a new dispensing decision, and pharmacy DUR
+// practice treats overrides as per-fill events; a clinical
+// acknowledgement must therefore never be patient-scoped. The
+// migration pins that with CHECK constraints on `findingCode` and
+// `axis`, so a handler bug cannot widen the scope: adding a new
+// patient-level axis requires a migration that names its gap code,
+// which is the review event we want.
+//
+// RE-ARMING IS A COMPARISON, NOT A MUTATION. `recordStateToken` is a
+// hash of the patient's full allergy-record neighbourhood (every
+// `patient_allergy` row with its statuses and status-change stamp,
+// every history assertion) computed inside the acknowledging
+// command's transaction. The PV1 gate honors a row only while the
+// CURRENT token equals the stored one. Both source tables are
+// append-only / no-DELETE by grant and RLS, so the token can never
+// return to a previous value: record an allergy and retract it and
+// both edits remain visible to the hash forever. The dangerous
+// sequence — gap acknowledged, data later recorded, data later
+// entered-in-error, gap re-arises with the SAME fingerprint — is
+// therefore re-armed with no invalidation write at all: the record
+// state only moves through the audited allergy commands
+// (RecordPatientAllergy / AmendPatientAllergyStatus /
+// AssertPatientAllergyHistory), and a stale row simply stops
+// matching. A fresh prompt appends a NEW row with the new token,
+// which is why the token is part of the unique key.
+//
+// PHI invariant: same as the order-scoped table — codes, ids and a
+// hash only. The token is a SHA-256 over record ids and coded
+// statuses; it reveals nothing about what the patient is allergic to.
+model PatientScreeningAcknowledgement {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  patientId String  @db.Uuid
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+
+  // The order the judgement was recorded ON — provenance for "where
+  // was the pharmacist standing when they said this?", deliberately
+  // NOT part of the matching key. The gate matches on the patient.
+  orderId String @db.Uuid
+  order   Order  @relation("PatientScreeningAcknowledgementRecordedOnOrder", fields: [orderId], references: [id], onDelete: Restrict)
+
+  // The PER_SUBJECT screening axis whose record-state gap this
+  // settles ("DRUG_ALLERGY"). Constrained by CHECK in the migration.
+  axis String
+
+  // The finding this settles. Copied from the persisted finding row,
+  // never from the caller — same rule as the order-scoped table.
+  fingerprint String
+  findingCode String
+  severity    String
+  certainty   String
+
+  // Hash of the patient's record state for `axis` at the moment of
+  // acknowledgement. The gate honors this row only while the current
+  // state still hashes to this value; see the model comment.
+  recordStateToken String
+
+  pharmacistUserId String @db.Uuid
+  pharmacistUser   User   @relation("PatientScreeningAcknowledgementActor", fields: [pharmacistUserId], references: [id], onDelete: Restrict)
+
+  workflowPolicyId      String         @db.Uuid
+  workflowPolicy        WorkflowPolicy @relation(fields: [workflowPolicyId], references: [id], onDelete: Restrict)
+  workflowPolicyVersion Int
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  acknowledgedAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  // One judgement, one person, one situation, one record state. The
+  // token in the key is what lets a re-armed gap take a FRESH row
+  // while the table stays append-only. Index names are pinned with
+  // `map:` because Prisma's generated names for this table truncate
+  // the five-column key into ambiguity at 63 chars.
+  @@unique([organizationId, patientId, pharmacistUserId, fingerprint, recordStateToken], map: "patient_screening_acknowledgement_org_patient_pharm_fp_tok_key")
+  // The gate's read path: "which fingerprints has THIS pharmacist
+  // settled for THIS patient?" — evaluated on every ApprovePV1 that
+  // raises a patient-record gap.
+  @@index([organizationId, patientId, pharmacistUserId], map: "patient_screening_acknowledgement_org_patient_pharmacist_idx")
+  // Override-rate reporting per pharmacist, same as the order table.
+  @@index([organizationId, pharmacistUserId, acknowledgedAt], map: "patient_screening_acknowledgement_org_pharmacist_at_idx")
+  @@map("patient_screening_acknowledgement")
+}
+
 // Status of a scheduled-report row.
 //
 // ACTIVE  — included in the worker tick's claim query
@@ -3838,6 +4545,29 @@ model AccessReviewSnapshot {
 
 // Drug catalog entry keyed by normalized 11-digit NDC. Plaintext by
 // design — NDC + drug name are not PHI.
+// What kind of identifier a product's `ndc` column actually is.
+//
+// Compounding pharmacies catalog two very different things under one
+// column. A manufactured product carries a REAL National Drug Code:
+// it is registered with the FDA, it appears in national drug
+// nomenclature (RxNorm), and a drug-knowledge lookup that cannot find
+// it indicates a data problem someone should chase. A compounded
+// preparation carries an ORG-LOCAL identifier minted by the pharmacy
+// so that lots, labels and billing have something to key on: no
+// national nomenclature has ever heard of it, and no reference-data
+// update will ever resolve it.
+//
+// The PV1 screening layer grades its knowledge gaps on this
+// distinction: an unresolvable NATIONAL code interrupts the
+// pharmacist ("verify the NDC"), an IN_HOUSE_COMPOUND code is
+// recorded without interrupting, because prompting on every compound
+// order forever trains the dismiss reflex — see
+// `SCR_KNOWLEDGE_NOT_APPLICABLE` in `@pharmax/clinical-screening`.
+enum ProductNdcKind {
+  NATIONAL
+  IN_HOUSE_COMPOUND
+}
+
 model Product {
   id             String       @id @default(uuid()) @db.Uuid
   organizationId String       @db.Uuid
@@ -3847,6 +4577,22 @@ model Product {
   name     String
   strength String?
   form     String?
+
+  // Whether `ndc` is a real National Drug Code or an org-local
+  // compound identifier. Defaults to NATIONAL — the conservative
+  // direction, because an unflagged compound over-prompts (a
+  // pharmacist acknowledges a gap) while a mis-flagged manufactured
+  // product would under-prompt (a real missing-NDC signal is
+  // silenced).
+  //
+  // WRITE-SURFACE REQUIREMENT (screening-suppression vector): flipping
+  // NATIONAL → IN_HOUSE_COMPOUND converts the acknowledge-tier "verify
+  // the NDC" prompt into an informational gap on every order for this
+  // product. No application write path for `product` exists today (the
+  // catalog is seeded/ops-managed); whoever builds product CRUD must
+  // make `ndcKind` changes permission-gated and audit-logged, or that
+  // surface becomes a channel for silencing a screening prompt.
+  ndcKind ProductNdcKind @default(NATIONAL)
 
   // DEA schedule for this NDC (21 CFR part 1308). The catalog is the
   // source of truth; `prescription.controlledSubstanceSchedule` is a
@@ -3862,6 +4608,7 @@ model Product {
   lots                       Lot[]
   pricingRules               PricingRule[]
   compoundFormulaIngredients CompoundFormulaIngredient[]
+  compoundFormulas           CompoundFormula[]           @relation("CompoundFormulaProduct")
 
   @@unique([organizationId, ndc])
   @@index([organizationId, name])
@@ -4719,6 +5466,79 @@ enum ControlledSubstanceSchedule {
   CV
 }
 
+// How a prescription's structured sig should be read — because not
+// every sig reduces to one fixed daily dose, and "structured as PRN"
+// must be distinct from "not structured at all" (which is a NULL
+// `sigStructureKind`, not a member here).
+//
+// Vocabulary follows HL7 FHIR R4 `Dosage`: `asNeeded` → PRN,
+// `doseRange` → RANGE, a multi-`sequence` Dosage → TAPER. We capture
+// the minimum honest summary, not the full structure.
+//
+// What the value columns mean per kind (enforced by
+// `prescription_structured_sig_shape` and by `CreatePrescription`):
+//
+//   FIXED — a fixed amount on a fixed schedule. `doseAmount` is the
+//     dose per administration, `dosesPerDay` the scheduled frequency
+//     (decimal: every-other-day is 0.5). All three values required.
+//     Screening compares the single dose and the daily total, and may
+//     flag a sub-therapeutic daily total.
+//
+//   PRN — "as needed". `doseAmount` is the dose per administration if
+//     the script states one; `dosesPerDay` is the prescriber's stated
+//     MAXIMUM administrations per day, if any. Both optional (a bare
+//     PRN kind is legal and honest). Screening compares the maximum
+//     the prescription PERMITS — single dose, and daily total when a
+//     ceiling exists — and never calls a PRN sub-therapeutic.
+//
+//   RANGE — a variable amount on a schedule ("1–2 tablets three times
+//     daily"). `doseAmount` is the UPPER end of the range — the
+//     safety-relevant bound — and `dosesPerDay` the scheduled
+//     frequency. All three required. Screened as a maximum permitted,
+//     like PRN.
+//
+//   TAPER — a stepped schedule that has no single daily dose. If the
+//     values are captured they describe the step with the LARGEST
+//     daily exposure (peak single dose and its frequency); optional,
+//     because summarizing a taper is extra transcription work the
+//     free-text sig already carries. Screened as a maximum permitted
+//     when captured; honestly unscreenable when not.
+enum SigStructureKind {
+  FIXED
+  PRN
+  RANGE
+  TAPER
+}
+
+// The unit `doseAmount` is denominated in. A BOUNDED enum rather than
+// a free-text or full-UCUM string, deliberately: the screening engine
+// compares the prescribed unit against a knowledge source's unit by
+// exact string equality (no conversion inside a safety check), so the
+// unit must be a coded value that cannot drift ("mg" vs "MG " vs
+// "milligram"). A bounded vocabulary keeps
+// `SCR_DOSE_UNIT_NOT_COMPARABLE` meaning "genuinely different
+// dimensions" instead of firing on spelling. Members are UCUM-aligned
+// where UCUM has a code (mg, ug/mcg, g, mL, meq, [IU]-style units)
+// plus the dispensing units prescriptions are actually written in;
+// growing the enum is an additive migration. Adapters over licensed
+// dosing content must normalize their units onto these tokens (see
+// `doseUnitToken` in @pharmax/verification).
+enum DoseUnit {
+  MG
+  MCG
+  G
+  MEQ
+  ML
+  UNIT
+  TABLET
+  CAPSULE
+  DROP
+  PUFF
+  SPRAY
+  PATCH
+  APPLICATION
+}
+
 // Basis on which a controlled substance was partially dispensed.
 // Mirrors `PartialFillBasis` in `@pharmax/controlled-substances`; the
 // Schedule II bases are distinct members rather than one PARTIAL flag
@@ -4818,6 +5638,34 @@ enum CompoundingQualityOutcome {
   FAIL
 }
 
+// How one formula ingredient row relates to machine-readable
+// nomenclature — the per-row statement that makes "this formula is
+// fully coded" a set of attributable claims rather than an inference
+// from absence.
+//
+//   - UNCODED: nobody has made a statement about this row. The default
+//     and the honest starting state; a formula with any UNCODED row is
+//     only PARTIALLY machine-screened and PV1 says so.
+//   - RXNORM_IN: the row names an RxNorm ingredient (IN) RXCUI in
+//     `rxnormInRxcui` — the code space `patient_allergy` RXNORM rows
+//     are recorded in, so the allergy screen's string-equality match
+//     is a real comparison.
+//   - NO_RXNORM_INGREDIENT: a human asserted that no RxNorm ingredient
+//     concept applies to this row — a base, vehicle or excipient that
+//     national nomenclature does not model. The same shape of claim as
+//     the NO_KNOWN_ALLERGIES assertion: a positive statement with a
+//     name on it, not a gap. Without it every real formula (they all
+//     have a base) would read partially-coded forever, and a gap that
+//     fires on every order forever is a gap that gets trained away.
+//
+// A CHECK constraint in the migration ties the enum to the code column
+// in both directions: RXNORM_IN ⇔ `rxnormInRxcui` present.
+enum CompoundIngredientCoding {
+  UNCODED
+  RXNORM_IN
+  NO_RXNORM_INGREDIENT
+}
+
 model CompoundFormula {
   id             String       @id @default(uuid()) @db.Uuid
   organizationId String       @db.Uuid
@@ -4852,6 +5700,29 @@ model CompoundFormula {
   instructions  String
   qualityChecks String?
 
+  // The catalog product this formula is the recipe FOR — the
+  // PV1-time link from a prescription (which carries only the
+  // product's org-local NDC) to the recipe that will be screened.
+  // Distinct from the ingredient rows' `productId` (stocked catalog
+  // components CONSUMED by the recipe).
+  //
+  // On the formula rather than on `Product`, deliberately: the link is
+  // screening-relevant (pointing a product at the wrong recipe screens
+  // the wrong ingredients), and the formula's draft→publish cycle is
+  // already a command surface with permission, audit, events and
+  // append-only versioning — while `product` has no application write
+  // path at all. Changing the link therefore means publishing a new
+  // formula version, which is exactly the discipline a
+  // screening-relevant mutation needs.
+  //
+  // At most one ACTIVE formula may claim a product — the partial
+  // UNIQUE "one ACTIVE per (organizationId, compoundProductId)" lives
+  // in the SQL migration. The fill-time `CompoundingRecord.formulaId`
+  // pin is untouched: that records what was actually compounded,
+  // which may legitimately be a different version than PV1 screened.
+  compoundProductId String?  @db.Uuid
+  compoundProduct   Product? @relation("CompoundFormulaProduct", fields: [compoundProductId], references: [id], onDelete: Restrict)
+
   createdByUserId String @db.Uuid
   createdByUser   User   @relation("CompoundFormulaAuthor", fields: [createdByUserId], references: [id], onDelete: Restrict)
 
@@ -4859,8 +5730,9 @@ model CompoundFormula {
   retiredAt     DateTime?
   retiredReason CompoundFormulaRetireReason?
 
-  ingredients        CompoundFormulaIngredient[]
-  compoundingRecords CompoundingRecord[]
+  ingredients            CompoundFormulaIngredient[]
+  compoundingRecords     CompoundingRecord[]
+  orderScreeningFindings OrderScreeningFinding[]     @relation("OrderScreeningFindingFormula")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4870,6 +5742,8 @@ model CompoundFormula {
   // clause). It serializes concurrent draft creation for a code.
   @@unique([organizationId, code, version])
   @@index([organizationId, status, code])
+  // The screen's lookup: "the ACTIVE formula claiming this product".
+  @@index([organizationId, compoundProductId, status])
   @@map("compound_formula")
 }
 
@@ -4888,6 +5762,16 @@ model CompoundFormulaIngredient {
   quantity       Decimal @db.Decimal(18, 4)
   unit           String
   sortOrder      Int     @default(0)
+
+  // Machine-readable identity for the row, or the recorded absence of
+  // one. See `CompoundIngredientCoding`. The RXCUI is an RxNorm
+  // ingredient (IN) concept — bare digits, the same code space
+  // `patient_allergy.substanceCode` uses under
+  // `substanceCodeSystem = RXNORM`, which is what the PV1 allergy
+  // screen compares by string equality. CHECK in the migration:
+  // coding = RXNORM_IN ⇔ rxnormInRxcui IS NOT NULL.
+  coding        CompoundIngredientCoding @default(UNCODED)
+  rxnormInRxcui String?
 
   compoundingRecordIngredients CompoundingRecordIngredient[]
 
@@ -5028,4 +5912,137 @@ model ClinicCreditEntry {
   @@index([organizationId, clinicId, currency, occurredAt])
   @@index([appliedToInvoiceId])
   @@map("clinic_credit_entry")
+}
+
+// ---------------------------------------------------------------------------
+// RxNorm drug-knowledge reference tables (GLOBAL — deliberately not
+// tenant-scoped).
+//
+// Drug nomenclature is not tenant data: an NDC decomposes into the
+// same ingredients for every pharmacy on the platform, and giving each
+// org its own copy would only let two tenants disagree about
+// pharmacology. So these tables carry no organizationId, no tenant RLS
+// policy, and are absent from TENANT_SCOPED_MODELS — they are
+// classified in TENANT_EXCLUDED_MODELS (the same posture as
+// `permission`) and listed in prisma/migrations/rls-exempt.txt with
+// this rationale.
+//
+// SOURCE AND CLEAN ROOM. Rows are loaded from the NLM's RxNorm
+// "Current Prescribable Content" subset — a public U.S. government
+// artifact explicitly free of the UMLS source-vocabulary license
+// restrictions that encumber the full RxNorm release. See
+// docs/governance/public-sources-reference.md §4. The data is
+// NOMENCLATURE (what a product is made of), not clinical judgement:
+// no interaction facts, no cross-sensitivity groupings, no severity
+// gradings live here or may ever be added here — those are licensed
+// editorial content and adding them is a clean-room incident.
+//
+// VERSIONED, ATOMIC LOADS. Every data row hangs off a release row.
+// Ingestion stages rows under a STAGED release (invisible to
+// screening), then one transaction supersedes the previous LIVE
+// release and promotes the new one. Readers resolve the LIVE release
+// id inside their own transaction and filter every lookup by it, so a
+// half-loaded release is unobservable by construction rather than by
+// scheduling luck. A partial unique index in the migration enforces
+// "at most one LIVE release" at the database layer.
+//
+// WRITE PATH. Only the ingestion job writes here
+// (scripts/operations/ingest-rxnorm-release.ts over
+// @pharmax/drug-knowledge), running under system context with a
+// database role that holds the write grants. `pharmax_app` is granted
+// SELECT only — see the migration.
+
+enum RxnormReleaseStatus {
+  // Rows are loading; invisible to screening.
+  STAGED
+  // The release every screen resolves against. At most one.
+  LIVE
+  // A previous LIVE release, kept so findings stamped with its
+  // version remain interpretable (and prunable once reporting no
+  // longer needs it).
+  SUPERSEDED
+  // Ingestion aborted; rows are garbage awaiting cleanup by a retry.
+  FAILED
+}
+
+model RxnormRelease {
+  id String @id @default(uuid()) @db.Uuid
+
+  // The release version as NLM names it (e.g. "07072026" from
+  // RxNorm_full_prescribe_07072026.zip) — stamped verbatim onto
+  // `order_screening_finding.knowledgeReleaseVersion`.
+  version    String
+  // The same version normalized to a date, so "is this release older
+  // than what is live?" is a comparison rather than a string parse at
+  // every call site.
+  releasedOn DateTime @db.Date
+
+  // SHA-256 (hex) over the RRF files ingested, in a canonical order.
+  // The idempotency key: re-running ingestion over byte-identical
+  // input is a no-op, not a duplicate release.
+  checksumSha256 String @unique
+
+  status RxnormReleaseStatus @default(STAGED)
+
+  // Row counts written at promotion time, so "did the load look
+  // sane?" is answerable from the release row without counting a
+  // million-row table.
+  ndcCount            Int @default(0)
+  ingredientLinkCount Int @default(0)
+
+  // Lifecycle timestamps. `loadedAt` is promotion to LIVE.
+  loadedAt     DateTime?
+  supersededAt DateTime?
+  failedReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ndcProducts        RxnormNdcProduct[]
+  productIngredients RxnormProductIngredient[]
+
+  // The partial UNIQUE "at most one LIVE release"
+  // (rxnorm_release_one_live) lives in the SQL migration (Prisma
+  // cannot express the WHERE clause).
+  @@index([status])
+  @@map("rxnorm_release")
+}
+
+// NDC → product concept (RXCUI), one row per NDC per release.
+//
+// `ndc11` is the normalized 11-digit form `@pharmax/drug-identity`
+// produces — the same normalization `prescription.drugNdc` stores, so
+// the adapter's lookup is exact string equality with no reformatting
+// at screen time.
+model RxnormNdcProduct {
+  releaseId String        @db.Uuid
+  release   RxnormRelease @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  ndc11        String
+  productRxcui String
+
+  @@id([releaseId, ndc11])
+  @@index([releaseId, productRxcui])
+  @@map("rxnorm_ndc_product")
+}
+
+// Product concept (RXCUI) → active ingredient (IN, and PIN where the
+// release asserts a precise ingredient), one row per link per release.
+//
+// `ingredientName` is public nomenclature kept for operator
+// diagnostics ("what did the screen think this NDC contains?"); it is
+// never interpolated into a finding, whose vocabulary is codes.
+model RxnormProductIngredient {
+  releaseId String        @db.Uuid
+  release   RxnormRelease @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  productRxcui    String
+  ingredientRxcui String
+  // "IN" (ingredient) or "PIN" (precise ingredient). TEXT rather than
+  // an enum: the vocabulary is NLM's, not ours.
+  ingredientTty   String
+  ingredientName  String
+
+  @@id([releaseId, productRxcui, ingredientRxcui])
+  @@map("rxnorm_product_ingredient")
 }

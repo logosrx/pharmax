@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { RoleScope } from "@pharmax/database";
+import { errors } from "@pharmax/platform-core";
 import {
   configureRbac,
   InMemoryPermissionLoader,
@@ -659,6 +660,108 @@ describe("defineCommand — bumpVersion CAS", () => {
         )
       ).rejects.toMatchObject({ code: "ORDER_VERSION_MISMATCH" });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Committed refusal
+// ---------------------------------------------------------------------------
+
+describe("defineCommand — committed refusal", () => {
+  function lockedOrder(): void {
+    prisma.setOrderRowForLock({
+      id: ORDER_ID,
+      organizationId: "org-1",
+      clinicId: "clinic-1",
+      siteId: "site-1",
+      currentStatus: "RECEIVED",
+      version: 3,
+      workflowPolicyId: POLICY_ID,
+      workflowPolicyVersion: 1,
+    });
+  }
+
+  it("writes the order_event rows for a refused attempt, then lets the bus throw", async () => {
+    // A refused attempt belongs on the order's timeline. The next
+    // person to open the order needs to know a sign-off was tried and
+    // declined, and the reporting that measures rework cannot see it
+    // any other way — command_log is not the timeline.
+    lockedOrder();
+    prisma.setOrderEventHead({ sequenceNumber: 4 });
+
+    const cmd = defineCommand({
+      name: "RefuseWithEvidence",
+      inputSchema: z.object({ orderId: z.string().uuid() }),
+      permission: PERMISSIONS.ORDERS_READ,
+      lockTarget: { table: "order", by: (i) => ({ id: i.orderId }) },
+      exec: async () => ({
+        refusal: new errors.InvariantViolationError({
+          code: "REFUSED_FOR_TEST",
+          message: "Refused, with the evidence written down.",
+        }),
+        audit: { action: "x.refused", resourceType: "Order", resourceId: ORDER_ID },
+        emits: [
+          {
+            eventType: "order.a.v1",
+            aggregateType: "Order",
+            aggregateId: ORDER_ID,
+            payload: { orderId: ORDER_ID },
+          },
+        ],
+        targetOrderId: ORDER_ID,
+      }),
+    });
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(cmd, { orderId: ORDER_ID }, { idempotencyKey: "refuse-1" })
+      ).rejects.toMatchObject({ code: "REFUSED_FOR_TEST" });
+    });
+
+    const events = callsTo(prisma, "orderEvent", "create");
+    expect(events).toHaveLength(1);
+    expect((events[0]!.args as { data: Record<string, unknown> }).data).toMatchObject({
+      eventType: "order.a.v1",
+      sequenceNumber: 5,
+    });
+    // No transition happened, so no CAS was issued and the order's
+    // version is where the last real transition left it.
+    expect(callsTo(prisma, "order", "updateMany")).toHaveLength(0);
+  });
+
+  it("fails closed when a handler returns a refusal alongside bumpVersion", async () => {
+    // Belt and braces behind the type: bumping the version on behalf
+    // of an act that did not happen would invalidate a concurrent
+    // command's CAS for nothing.
+    lockedOrder();
+
+    const cmd = defineCommand({
+      name: "RefuseAndBump",
+      inputSchema: z.object({ orderId: z.string().uuid() }),
+      permission: PERMISSIONS.ORDERS_READ,
+      lockTarget: { table: "order", by: (i) => ({ id: i.orderId }) },
+      exec: async ({ target }) =>
+        ({
+          refusal: new errors.InvariantViolationError({
+            code: "REFUSED_FOR_TEST",
+            message: "Refused.",
+          }),
+          audit: { action: "x.refused", resourceType: "Order", resourceId: ORDER_ID },
+          emits: [],
+          targetOrderId: ORDER_ID,
+          bumpVersion: { from: target!.version, to: target!.version + 1 },
+          // The union forbids this combination; the cast is how the
+          // test reaches the runtime guard that catches a handler
+          // which got there by any other route.
+        }) as never,
+    });
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(cmd, { orderId: ORDER_ID }, { idempotencyKey: "refuse-bump" })
+      ).rejects.toMatchObject({ code: "DEFINE_COMMAND_CONFIG_INVALID" });
+    });
+    expect(callsTo(prisma, "order", "updateMany")).toHaveLength(0);
   });
 });
 

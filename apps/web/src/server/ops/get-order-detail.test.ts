@@ -19,6 +19,9 @@ const PRESCRIPTION_ID = "00000000-0000-4000-8000-0000000000b1";
 
 const prismaMock = {
   order: { findFirst: vi.fn() },
+  // Compound screening context: the default is "no compound products
+  // on this order", which is what every pre-existing fixture models.
+  product: { findMany: vi.fn(async () => []) },
 };
 
 const decryptMock = vi.fn();

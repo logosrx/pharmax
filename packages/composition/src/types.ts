@@ -27,12 +27,14 @@
 //      passing where it improves testability.
 
 import type { BillingConfiguration } from "@pharmax/billing";
+import type { DrugKnowledgeSource } from "@pharmax/clinical-screening";
 import type { CommandBusConfiguration } from "@pharmax/command-bus";
 import type { CryptoConfiguration, KmsAdapter } from "@pharmax/crypto";
 import type { PrismaClient, ShippingProvider } from "@pharmax/database";
 import type { clock as clockTypes, logger as loggerTypes } from "@pharmax/platform-core";
 import type { EffectivePermissionLoader, RbacConfiguration } from "@pharmax/rbac";
 import type { ShippingAdapterFactory, ShippingConfiguration } from "@pharmax/shipping";
+import type { ClinicalScreeningConfiguration } from "@pharmax/verification";
 
 import type { StripeRefundPort } from "@pharmax/billing";
 
@@ -145,6 +147,20 @@ export interface BuildCompositionRootInput {
   readonly stripeRefundPort: StripeRefundPort | null;
 
   /**
+   * The drug-knowledge source PV1 clinical screening resolves
+   * against, when the deployment has one.
+   *
+   * OMITTING THIS IS A SUPPORTED CONFIGURATION. Pharmax ships no drug
+   * data — interaction tables and severity gradings are licensed
+   * content that must not enter this repository — so a deployment
+   * without a licensed adapter runs against an empty source, and the
+   * screening engine reports "no drug knowledge is available" as a
+   * finding the pharmacist has to acknowledge before PV1 can pass.
+   * That is the intended behaviour: an honest gap, not a silent pass.
+   */
+  readonly clinicalScreeningKnowledgeSource?: DrugKnowledgeSource;
+
+  /**
    * Extra configurators for forthcoming packages (notifications,
    * documents, etc.). The composition root sorts the full list by
    * `priority` and applies them sequentially.
@@ -191,6 +207,7 @@ export interface CompositionRoot {
 // have a one-stop import surface.
 export type {
   BillingConfiguration,
+  ClinicalScreeningConfiguration,
   CommandBusConfiguration,
   CryptoConfiguration,
   RbacConfiguration,

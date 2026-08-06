@@ -85,7 +85,14 @@ ecs_container_insights_enabled = true
 
 # ---- WAF / Alarms -----------------------------------------------------------
 waf_rate_limit_per_5min = 2000
-alarm_sns_topic_arn     = "REPLACE_arn:aws:sns:us-west-2:<account>:pharmax-prod-dr-alerts"
+# Provision this region's own alerting topics. The DR region does not borrow
+# us-east-1's topics: a regional failure would take out the notification path
+# at exactly the moment it matters.
+enable_alerting = true
+# Legacy single-topic override. Leave empty.
+alarm_sns_topic_arn = ""
+# Subscription endpoints are supplied at apply time as TF_VAR_alerting_*.
+# Never write an address or webhook URL here.
 
 # ---- Audit archive ----------------------------------------------------------
 audit_archive_retention_years         = 7

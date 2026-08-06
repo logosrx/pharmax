@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@pharmax/drug-identity": "workspace:*",
     "@pharmax/labels": "workspace:*"
   },
   "devDependencies": {
