@@ -25,6 +25,22 @@ nothing to do with code quality:
    zero alarm actions because `alarm_sns_topic_arn` is `""` in
    `infra/terraform/environments/prod/us-east-1/terraform.tfvars`.
 
+> **Status note (2026-08-06, at merge).** This document was drafted on
+> 2026-08-02 and its facts are as of that date. All three headline
+> blockers above have since closed on `main`: `CreatePrescription`
+> exists with UI and v1 API surfaces (Workstream A); PV1 clinical
+> screening runs against the RxNorm Prescribable Content release with
+> hard-stop/acknowledge dispositions, allergy capture, compound-formula
+> coverage, structured sig dose checks, and persisted findings
+> (Workstream B core); and every production alarm routes to a
+> severity-tiered SNS topic, enforced in CI by `check:alarm-actions`
+> (item C1 — the paging-delivery test remains open). Checklist marks in
+> the workstream tables have deliberately **not** been rewritten:
+> a gate is passed by its named evidence artifact, not by edits to this
+> file, and per-item status lives in the working tracker. The gate
+> structure, D-1 scope decision, and evidence requirements remain the
+> program of record.
+
 Gates in this document are **blocking**. A gate is not passed because the
 work "is basically done"; it is passed when the named evidence artifact
 exists, is committed, and is signed.
