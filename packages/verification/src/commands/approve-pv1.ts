@@ -458,6 +458,7 @@ export const ApprovePV1 = defineCommand<ApprovePV1Input, ApprovePV1Output>({
       tx,
       organizationId: ctx.organizationId,
       orderId: target.id,
+      patientId,
       pharmacistUserId: approvingPharmacistUserId,
       evaluation: screen.evaluation,
     });

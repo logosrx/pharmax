@@ -252,6 +252,7 @@ async function screenAndGate(
       tx,
       organizationId: tenant.organizationId,
       orderId,
+      patientId,
       pharmacistUserId: tenant.adminUserId,
       evaluation: screen.evaluation,
     });

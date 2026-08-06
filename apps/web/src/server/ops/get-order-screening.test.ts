@@ -15,12 +15,13 @@
 // CLEAN ROOM / PHI: every code below is synthetic and no fixture
 // carries a patient identifier or a drug name.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const ORDER_ID = "00000000-0000-4000-8000-0000000000aa";
 const VIEWER_ID = "00000000-0000-4000-8000-0000000000a1";
 const COLLEAGUE_ID = "00000000-0000-4000-8000-0000000000a2";
+const PATIENT_ID = "00000000-0000-4000-8000-0000000000d1";
 const LATEST_COMMAND = "00000000-0000-4000-8000-0000000000c2";
 const EARLIER_COMMAND = "00000000-0000-4000-8000-0000000000c1";
 
@@ -30,16 +31,48 @@ const EARLIER_AT = new Date("2026-08-03T09:00:00.000Z");
 const prismaMock = {
   orderScreeningFinding: { findMany: vi.fn() },
   orderScreeningAcknowledgement: { findMany: vi.fn() },
+  // Patient-scoped coverage reads. Defaulted per-test in `beforeEach`
+  // to "no patient acknowledgements, empty allergy record" so every
+  // pre-existing fixture keeps meaning what it meant.
+  patientScreeningAcknowledgement: { findMany: vi.fn() },
+  order: { findFirst: vi.fn() },
+  patientAllergy: { findMany: vi.fn() },
+  patientAllergyHistoryAssertion: { findMany: vi.fn() },
 };
 
-vi.mock("@pharmax/database", () => ({
-  prisma: prismaMock,
-  readInOrgScope: (_org: string, fn: (tx: unknown) => unknown) => fn(prismaMock),
-  withOrgScope: (_org: string, fn: () => unknown) => fn(),
-  readInTenantContext: (_ctx: unknown, fn: (tx: unknown) => unknown) => fn(prismaMock),
-}));
+// Partial mock: the projection now imports `@pharmax/verification`,
+// which reaches `@pharmax/database` for enums and types a full module
+// replacement would erase. Only the client surface is faked.
+vi.mock("@pharmax/database", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    prisma: prismaMock,
+    readInOrgScope: (_org: string, fn: (tx: unknown) => unknown) => fn(prismaMock),
+    withOrgScope: (_org: string, fn: () => unknown) => fn(),
+    readInTenantContext: (_ctx: unknown, fn: (tx: unknown) => unknown) => fn(prismaMock),
+  };
+});
 
 const { getOrderScreening } = await import("./get-order-screening.js");
+const { patientRecordStateToken } = await import("@pharmax/verification");
+
+/**
+ * The record-state token the projection will compute against the
+ * mocked (empty) allergy record — via the REAL hash function, so a
+ * seeded "current" acknowledgement matches by the same computation
+ * the gate uses, not by a copied literal.
+ */
+async function emptyRecordToken(): Promise<string> {
+  const tx = {
+    patientAllergy: { findMany: async () => [] },
+    patientAllergyHistoryAssertion: { findMany: async () => [] },
+  } as unknown as Parameters<typeof patientRecordStateToken>[0]["tx"];
+  return patientRecordStateToken(
+    { tx, organizationId: ORG_ID, patientId: PATIENT_ID },
+    "DRUG_ALLERGY"
+  );
+}
 
 interface FindingRowOverrides {
   readonly id?: string;
@@ -98,7 +131,14 @@ async function read(pharmacistUserId = VIEWER_ID) {
   });
 }
 
-afterEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  prismaMock.order.findFirst.mockResolvedValue({ patientId: PATIENT_ID });
+  prismaMock.patientScreeningAcknowledgement.findMany.mockResolvedValue([]);
+  prismaMock.patientAllergy.findMany.mockResolvedValue([]);
+  prismaMock.patientAllergyHistoryAssertion.findMany.mockResolvedValue([]);
+});
+
+afterEach(() => vi.resetAllMocks());
 
 describe("getOrderScreening", () => {
   it("returns null when the order has never been screened", async () => {
@@ -424,5 +464,99 @@ describe("getOrderScreening", () => {
     });
     expect(screening?.findings).toHaveLength(1);
     expect(prismaMock.orderScreeningFinding.findMany).not.toHaveBeenCalled();
+  });
+
+  describe("patient-scoped coverage", () => {
+    /** The per-patient allergy-history gap, at its acknowledge-tier grading. */
+    function allergyGapRow(fingerprint = "FP-ALLERGY-SUBJECT") {
+      return findingRow({
+        id: "f-allergy-subject",
+        code: "SCR_ALLERGY_INPUT_UNAVAILABLE",
+        kind: "SCREENING_GAP",
+        severity: "MODERATE",
+        certainty: "DEFINITE",
+        fingerprint,
+      });
+    }
+
+    it("reports COVERED — visibly, with the date — and withdraws the control", async () => {
+      // The suppression must be VISIBLE. The gate will pass this gap
+      // on the strength of the patient-scoped acknowledgement, and a
+      // panel that just showed nothing would read as "screened
+      // clean". The view must carry when the judgement was given.
+      givenFindings([allergyGapRow()]);
+      givenAcknowledgements([]);
+      prismaMock.patientScreeningAcknowledgement.findMany.mockResolvedValue([
+        {
+          fingerprint: "FP-ALLERGY-SUBJECT",
+          recordStateToken: await emptyRecordToken(),
+          acknowledgedAt: EARLIER_AT,
+        },
+      ]);
+
+      const screening = await read();
+      expect(screening?.findings[0]?.patientScopeCoverage).toEqual({
+        kind: "COVERED",
+        acknowledgedAt: EARLIER_AT,
+      });
+      expect(screening?.findings[0]?.acknowledgeable).toBe(false);
+      expect(screening?.outstandingCount).toBe(0);
+
+      // Scoped to the viewer and the patient — a colleague's
+      // patient-scoped acknowledgement must be structurally unreadable
+      // from here.
+      const where = prismaMock.patientScreeningAcknowledgement.findMany.mock.calls[0]?.[0] as {
+        where: Record<string, unknown>;
+      };
+      expect(where.where["pharmacistUserId"]).toBe(VIEWER_ID);
+      expect(where.where["patientId"]).toBe(PATIENT_ID);
+      expect(where.where["organizationId"]).toBe(ORG_ID);
+    });
+
+    it("reports SUPERSEDED when the record changed since the acknowledgement, and re-prompts", async () => {
+      // The re-arm made visible: the stored token no longer matches
+      // the (empty-record) token the projection computes, so the old
+      // judgement is reported as superseded and the control returns.
+      givenFindings([allergyGapRow()]);
+      givenAcknowledgements([]);
+      prismaMock.patientScreeningAcknowledgement.findMany.mockResolvedValue([
+        {
+          fingerprint: "FP-ALLERGY-SUBJECT",
+          recordStateToken: "stale-token-from-a-record-state-that-no-longer-exists",
+          acknowledgedAt: EARLIER_AT,
+        },
+      ]);
+
+      const screening = await read();
+      expect(screening?.findings[0]?.patientScopeCoverage).toEqual({
+        kind: "SUPERSEDED",
+        lastAcknowledgedAt: EARLIER_AT,
+      });
+      expect(screening?.findings[0]?.acknowledgeable).toBe(true);
+      expect(screening?.outstandingCount).toBe(1);
+    });
+
+    it("reports NONE for a never-acknowledged gap, which stays acknowledgeable", async () => {
+      givenFindings([allergyGapRow()]);
+      givenAcknowledgements([]);
+
+      const screening = await read();
+      expect(screening?.findings[0]?.patientScopeCoverage).toEqual({ kind: "NONE" });
+      expect(screening?.findings[0]?.acknowledgeable).toBe(true);
+    });
+
+    it("never consults the patient table for a clinical finding", async () => {
+      // The boundary, from the read side: a clinical finding carries
+      // `patientScopeCoverage: null` and the patient-acknowledgement
+      // table is not even queried — the same classifier the gate uses
+      // decides both.
+      givenFindings([findingRow({ fingerprint: "FP-INTERACTION" })]);
+      givenAcknowledgements([]);
+
+      const screening = await read();
+      expect(screening?.findings[0]?.patientScopeCoverage).toBeNull();
+      expect(prismaMock.patientScreeningAcknowledgement.findMany).not.toHaveBeenCalled();
+      expect(prismaMock.order.findFirst).not.toHaveBeenCalled();
+    });
   });
 });

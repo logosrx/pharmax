@@ -239,6 +239,7 @@ async function screenAndGate(tenant: SeededTenant, orderId: string, patientId: s
       tx,
       organizationId: tenant.organizationId,
       orderId,
+      patientId,
       pharmacistUserId: tenant.adminUserId,
       evaluation: screen.evaluation,
     });

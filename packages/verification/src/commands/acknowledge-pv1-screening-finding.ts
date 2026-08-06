@@ -43,18 +43,51 @@
 //     wanted it belongs in an encrypted column with its own read
 //     path.
 //
+// TWO SCOPES, ONE COMMAND, AND THE FINDING ROW DECIDES — never the
+// caller. After the fingerprint is resolved to a persisted finding,
+// `asPatientRecordGap` classifies it:
+//
+//   - A PATIENT-RECORD gap (a PER_SUBJECT axis reporting
+//     NOT_RECORDED_FOR_SUBJECT — today exactly
+//     SCR_ALLERGY_INPUT_UNAVAILABLE) is recorded in
+//     `patient_screening_acknowledgement`, keyed by PATIENT and
+//     stamped with the record-state token, so the same pharmacist is
+//     not re-charged for the same unchanged record on the patient's
+//     next order — and IS re-prompted the moment the record changes,
+//     because the token stops matching. See `patient-scope.ts` for
+//     the boundary argument and the re-arming design.
+//   - Everything else — every clinical finding, knowledge gaps,
+//     per-record gaps — is recorded per (organization, order,
+//     pharmacist, fingerprint) exactly as before. A clinical finding
+//     structurally cannot take the patient path: the classifier
+//     refuses it, and the patient table's CHECK constraints refuse
+//     its code.
+//
+// There is no input by which a caller can choose the scope, for the
+// same reason the grading is copied from the finding row: a request
+// that could say "make this one patient-wide" would let a client
+// widen the suppression of a safety prompt.
+//
 // Idempotency: two layers. The bus replays an identical
 // (command, key) pair without re-running the handler; and beneath
 // that, the unique index on (organization, order, pharmacist,
-// fingerprint) means a second acknowledgement under a DIFFERENT key
-// resolves to the existing row and emits nothing rather than either
-// duplicating the record or failing on a constraint the caller cannot
-// see.
+// fingerprint) — or, for the patient scope, (organization, patient,
+// pharmacist, fingerprint, recordStateToken) — means a second
+// acknowledgement under a DIFFERENT key resolves to the existing row
+// and emits nothing rather than either duplicating the record or
+// failing on a constraint the caller cannot see. Note what the
+// patient-scoped key's token component buys: re-acknowledging a gap
+// that RE-AROSE after the record changed is NOT a repeat — it is a
+// fresh judgement about a different record state, and it takes a
+// fresh row.
 //
 // PHI invariant: input is an orderId and a fingerprint — a hash-like
 // identity string computed from finding codes. The persisted row and
 // the event carry codes and gradings copied from the finding row, not
-// from the caller.
+// from the caller. The patient-scoped event names the patientId (the
+// same opaque id `patient.allergy.recorded.v1` already carries) and
+// the record-state token, which is a SHA-256 over record ids and
+// coded statuses — no substance, no narrative.
 
 import { defineCommand, ORDER_VERSION_MISMATCH } from "@pharmax/command-bus";
 import { OrderStatus } from "@pharmax/database";
@@ -68,6 +101,8 @@ import {
   PV1_SCREENING_FINDING_UNKNOWN,
   PV1_SCREENING_STAGE_INVALID,
 } from "../screening/errors.js";
+import { loadPatientIdForOrder } from "../screening/order-patient.js";
+import { asPatientRecordGap, patientRecordStateToken } from "../screening/patient-scope.js";
 
 import { PV1_ORDER_STATE_UNKNOWN, PV1_POLICY_UNSUPPORTED } from "./start-pv1.js";
 
@@ -101,11 +136,19 @@ export interface AcknowledgePV1ScreeningFindingOutput {
   readonly acknowledgementId: string;
   /**
    * True when this pharmacist had already acknowledged this
-   * fingerprint on this order and the call was a no-op. Distinguished
-   * from a fresh acknowledgement so a console can tell "recorded" from
-   * "already recorded" without a second read.
+   * fingerprint at this scope (on this order, or — for a
+   * patient-record gap — for this patient at the current record
+   * state) and the call was a no-op. Distinguished from a fresh
+   * acknowledgement so a console can tell "recorded" from "already
+   * recorded" without a second read.
    */
   readonly alreadyAcknowledged: boolean;
+  /**
+   * Where the judgement was filed, decided by the finding row and
+   * never by the caller: PATIENT for a per-subject record gap, ORDER
+   * for everything else.
+   */
+  readonly scope: "ORDER" | "PATIENT";
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +234,7 @@ export const AcknowledgePV1ScreeningFinding = defineCommand<
         fingerprint: input.fingerprint,
       },
       orderBy: { occurredAt: "desc" },
-      select: { code: true, severity: true, certainty: true, disposition: true },
+      select: { code: true, kind: true, severity: true, certainty: true, disposition: true },
     });
     if (finding === null) {
       throw new errors.InvariantViolationError({
@@ -217,6 +260,153 @@ export const AcknowledgePV1ScreeningFinding = defineCommand<
       });
     }
 
+    // Scope decision — made from the persisted finding row, so a
+    // caller cannot widen it. Non-null exactly when this is a
+    // per-subject record gap; see `patient-scope.ts`.
+    const patientRecordGap = asPatientRecordGap({
+      kind: finding.kind,
+      code: finding.code,
+      disposition: finding.disposition,
+      fingerprint: input.fingerprint,
+    });
+
+    if (patientRecordGap !== null) {
+      const patientId = await loadPatientIdForOrder({
+        tx,
+        organizationId: ctx.organizationId,
+        orderId: target.id,
+      });
+      // The record state this judgement binds to, read inside this
+      // same transaction. If the record changes between now and the
+      // approval, the gate's own hash stops matching and the
+      // pharmacist is asked again — which is correct, because the
+      // record they acknowledged is not the record on file.
+      const recordStateToken = await patientRecordStateToken(
+        { tx, organizationId: ctx.organizationId, patientId },
+        patientRecordGap.axis
+      );
+
+      const existingPatientAck = await tx.patientScreeningAcknowledgement.findFirst({
+        where: {
+          organizationId: ctx.organizationId,
+          patientId,
+          pharmacistUserId,
+          fingerprint: input.fingerprint,
+          recordStateToken,
+        },
+        select: { id: true },
+      });
+      if (existingPatientAck !== null) {
+        // Already on record for this patient at this record state.
+        // Same posture as the order-scoped repeat below: no event,
+        // audit only.
+        return {
+          output: {
+            orderId: target.id,
+            fingerprint: input.fingerprint,
+            acknowledgementId: existingPatientAck.id,
+            alreadyAcknowledged: true,
+            scope: "PATIENT" as const,
+          },
+          targetOrderId: target.id,
+          audit: {
+            action: "order.pv1.screening.acknowledgement_repeated",
+            resourceType: "Order",
+            resourceId: target.id,
+            metadata: {
+              orderId: target.id,
+              patientId,
+              pharmacistUserId,
+              fingerprint: input.fingerprint,
+              findingCode: finding.code,
+              acknowledgementId: existingPatientAck.id,
+              scope: "PATIENT",
+              commandLogId,
+            },
+          },
+          emits: [],
+        };
+      }
+
+      const now = clock.now();
+
+      const patientAcknowledgement = await tx.patientScreeningAcknowledgement.create({
+        data: {
+          organizationId: ctx.organizationId,
+          patientId,
+          orderId: target.id,
+          axis: patientRecordGap.axis,
+          fingerprint: input.fingerprint,
+          // Copied from the finding row, never from the caller — same
+          // rule as the order-scoped row.
+          findingCode: finding.code,
+          severity: finding.severity,
+          certainty: finding.certainty,
+          recordStateToken,
+          pharmacistUserId,
+          workflowPolicyId: policy.id,
+          workflowPolicyVersion: policy.version,
+          commandLogId,
+          acknowledgedAt: now,
+        },
+        select: { id: true },
+      });
+
+      return {
+        output: {
+          orderId: target.id,
+          fingerprint: input.fingerprint,
+          acknowledgementId: patientAcknowledgement.id,
+          alreadyAcknowledged: false,
+          scope: "PATIENT" as const,
+        },
+        targetOrderId: target.id,
+        audit: {
+          action: "order.pv1.screening.acknowledged_for_patient",
+          resourceType: "Order",
+          resourceId: target.id,
+          metadata: {
+            orderId: target.id,
+            patientId,
+            pharmacistUserId,
+            axis: patientRecordGap.axis,
+            fingerprint: input.fingerprint,
+            findingCode: finding.code,
+            severity: finding.severity,
+            certainty: finding.certainty,
+            recordStateToken,
+            workflowPolicyId: policy.id,
+            workflowPolicyVersion: policy.version,
+            acknowledgementId: patientAcknowledgement.id,
+            commandLogId,
+          },
+        },
+        emits: [
+          {
+            eventType: "order.pv1.screening.acknowledged_for_patient.v1",
+            aggregateType: "Order",
+            aggregateId: target.id,
+            payload: {
+              orderId: target.id,
+              organizationId: ctx.organizationId,
+              siteId: target.siteId,
+              patientId,
+              pharmacistUserId,
+              axis: patientRecordGap.axis,
+              fingerprint: input.fingerprint,
+              findingCode: finding.code,
+              severity: finding.severity,
+              certainty: finding.certainty,
+              recordStateToken,
+              workflowPolicyId: policy.id,
+              workflowPolicyVersion: policy.version,
+              occurredAt: now.toISOString(),
+            },
+          },
+        ],
+      };
+    }
+
     const existing = await tx.orderScreeningAcknowledgement.findFirst({
       where: {
         organizationId: ctx.organizationId,
@@ -237,6 +427,7 @@ export const AcknowledgePV1ScreeningFinding = defineCommand<
           fingerprint: input.fingerprint,
           acknowledgementId: existing.id,
           alreadyAcknowledged: true,
+          scope: "ORDER" as const,
         },
         targetOrderId: target.id,
         audit: {
@@ -284,6 +475,7 @@ export const AcknowledgePV1ScreeningFinding = defineCommand<
         fingerprint: input.fingerprint,
         acknowledgementId: acknowledgement.id,
         alreadyAcknowledged: false,
+        scope: "ORDER" as const,
       },
       targetOrderId: target.id,
       audit: {

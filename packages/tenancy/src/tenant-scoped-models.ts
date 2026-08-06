@@ -169,6 +169,15 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // approval gate. Neither table stores PHI.
   ["OrderScreeningFinding", { kind: "organizationId" }] as const,
   ["OrderScreeningAcknowledgement", { kind: "organizationId" }] as const,
+  // PatientScreeningAcknowledgement is the patient-scoped sibling
+  // (patient_scoped_screening_acknowledgement migration): one
+  // pharmacist's judgement on a PATIENT-RECORD gap, honored across
+  // that patient's orders while the record-state token still matches.
+  // Same append-only posture, and the same reason auto-scoping is
+  // load-bearing: the gate READS this table on ApprovePV1, and an
+  // unscoped read would let one tenant's acknowledgement open another
+  // tenant's safety gate.
+  ["PatientScreeningAcknowledgement", { kind: "organizationId" }] as const,
   ["Product", { kind: "organizationId" }] as const,
   ["Lot", { kind: "organizationId" }] as const,
   ["LotAssignment", { kind: "organizationId" }] as const,

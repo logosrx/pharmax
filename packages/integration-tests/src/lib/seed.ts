@@ -338,6 +338,11 @@ export async function cleanupTenant(client: Client, organizationId: string): Pro
   // WHERE clause works.
   const tablesInDeleteOrder = [
     "verification_record",
+    // Screening acknowledgements reference order, patient, user,
+    // command_log and workflow_policy, so they go before all five.
+    "patient_screening_acknowledgement",
+    "order_screening_acknowledgement",
+    "order_screening_finding",
     "order_event",
     "command_log",
     "audit_log",

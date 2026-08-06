@@ -924,6 +924,7 @@ model Organization {
   verificationRecords            VerificationRecord[]
   screeningFindings              OrderScreeningFinding[]
   screeningAcknowledgements      OrderScreeningAcknowledgement[]
+  patientScreeningAcknowledgements PatientScreeningAcknowledgement[]
   products                       Product[]
   lots                           Lot[]
   lotAssignments                 LotAssignment[]
@@ -1222,6 +1223,7 @@ model User {
   verificationRecords           VerificationRecord[]            @relation("VerificationRecordActor")
   screeningFindings             OrderScreeningFinding[]         @relation("OrderScreeningFindingActor")
   screeningAcknowledgements     OrderScreeningAcknowledgement[] @relation("OrderScreeningAcknowledgementActor")
+  patientScreeningAcknowledgements PatientScreeningAcknowledgement[] @relation("PatientScreeningAcknowledgementActor")
   lotAssignments                LotAssignment[]                 @relation("LotAssignmentActor")
   printJobsRequested            PrintJob[]                      @relation("PrintJobRequester")
   shipmentsCreated              Shipment[]                      @relation("ShipmentCreator")
@@ -1728,6 +1730,7 @@ model WorkflowPolicy {
   verificationRecords            VerificationRecord[]
   screeningFindings              OrderScreeningFinding[]
   screeningAcknowledgements      OrderScreeningAcknowledgement[]
+  patientScreeningAcknowledgements PatientScreeningAcknowledgement[]
   overlays                       WorkflowPolicyOverlay[]
   providerOnboardingApplications ProviderOnboardingApplication[]
   compoundingRecords             CompoundingRecord[]
@@ -1863,6 +1866,7 @@ model CommandLog {
   verificationRecords          VerificationRecord[]
   screeningFindings            OrderScreeningFinding[]
   screeningAcknowledgements    OrderScreeningAcknowledgement[]
+  patientScreeningAcknowledgements PatientScreeningAcknowledgement[]
   lotAssignments               LotAssignment[]
   inventoryTransactions        InventoryTransaction[]
   printJobs                    PrintJob[]
@@ -2703,6 +2707,7 @@ model Patient {
 
   allergies                PatientAllergy[]
   allergyHistoryAssertions PatientAllergyHistoryAssertion[]
+  screeningAcknowledgements PatientScreeningAcknowledgement[]
 
   @@index([organizationId, clinicId, status])
   @@index([organizationId, lastNameBi])
@@ -3571,6 +3576,7 @@ model Order {
   verificationRecords       VerificationRecord[]
   screeningFindings         OrderScreeningFinding[]
   screeningAcknowledgements OrderScreeningAcknowledgement[]
+  patientScreeningAcknowledgements PatientScreeningAcknowledgement[] @relation("PatientScreeningAcknowledgementRecordedOnOrder")
   lotAssignments            LotAssignment[]
   printJobs                 PrintJob[]
   vialLabels                VialLabel[]
@@ -4128,6 +4134,114 @@ model OrderScreeningAcknowledgement {
   // reporting per pharmacist.
   @@index([organizationId, pharmacistUserId, acknowledgedAt])
   @@map("order_screening_acknowledgement")
+}
+
+// A pharmacist's recorded judgement on one PATIENT-RECORD screening
+// gap — the patient-scoped sibling of `OrderScreeningAcknowledgement`.
+//
+// WHY A SIBLING TABLE AND NOT A SCOPE COLUMN. The two rows answer
+// different questions with different keys and different lifetimes. An
+// order-scoped acknowledgement dispositions a clinical situation on
+// ONE dispensing decision and is honored forever on that order. A
+// patient-record gap ("nobody has taken this patient's allergy
+// history") is a fact about the state of the PATIENT'S record: it is
+// byte-identical on every order the patient has, and re-prompting the
+// same pharmacist about the same unchanged fact on refill twelve is
+// alert fatigue, not safety. Folding both into one table would put a
+// nullable patientId and a nullable token on every clinical
+// acknowledgement and make the gate's scoping split a WHERE-clause
+// convention; the sibling table makes it structural.
+//
+// WHAT MAY LIVE HERE, ENFORCED BY THE DATABASE. Only gaps raised
+// because a PER_SUBJECT screening axis had nothing recorded for the
+// patient (`NOT_RECORDED_FOR_SUBJECT` — today exactly
+// `SCR_ALLERGY_INPUT_UNAVAILABLE`). A CLINICAL finding — interaction,
+// allergy match, dose violation — is an input to a dispensing
+// decision, every fill is a new dispensing decision, and pharmacy DUR
+// practice treats overrides as per-fill events; a clinical
+// acknowledgement must therefore never be patient-scoped. The
+// migration pins that with CHECK constraints on `findingCode` and
+// `axis`, so a handler bug cannot widen the scope: adding a new
+// patient-level axis requires a migration that names its gap code,
+// which is the review event we want.
+//
+// RE-ARMING IS A COMPARISON, NOT A MUTATION. `recordStateToken` is a
+// hash of the patient's full allergy-record neighbourhood (every
+// `patient_allergy` row with its statuses and status-change stamp,
+// every history assertion) computed inside the acknowledging
+// command's transaction. The PV1 gate honors a row only while the
+// CURRENT token equals the stored one. Both source tables are
+// append-only / no-DELETE by grant and RLS, so the token can never
+// return to a previous value: record an allergy and retract it and
+// both edits remain visible to the hash forever. The dangerous
+// sequence — gap acknowledged, data later recorded, data later
+// entered-in-error, gap re-arises with the SAME fingerprint — is
+// therefore re-armed with no invalidation write at all: the record
+// state only moves through the audited allergy commands
+// (RecordPatientAllergy / AmendPatientAllergyStatus /
+// AssertPatientAllergyHistory), and a stale row simply stops
+// matching. A fresh prompt appends a NEW row with the new token,
+// which is why the token is part of the unique key.
+//
+// PHI invariant: same as the order-scoped table — codes, ids and a
+// hash only. The token is a SHA-256 over record ids and coded
+// statuses; it reveals nothing about what the patient is allergic to.
+model PatientScreeningAcknowledgement {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  patientId String  @db.Uuid
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
+
+  // The order the judgement was recorded ON — provenance for "where
+  // was the pharmacist standing when they said this?", deliberately
+  // NOT part of the matching key. The gate matches on the patient.
+  orderId String @db.Uuid
+  order   Order  @relation("PatientScreeningAcknowledgementRecordedOnOrder", fields: [orderId], references: [id], onDelete: Restrict)
+
+  // The PER_SUBJECT screening axis whose record-state gap this
+  // settles ("DRUG_ALLERGY"). Constrained by CHECK in the migration.
+  axis String
+
+  // The finding this settles. Copied from the persisted finding row,
+  // never from the caller — same rule as the order-scoped table.
+  fingerprint String
+  findingCode String
+  severity    String
+  certainty   String
+
+  // Hash of the patient's record state for `axis` at the moment of
+  // acknowledgement. The gate honors this row only while the current
+  // state still hashes to this value; see the model comment.
+  recordStateToken String
+
+  pharmacistUserId String @db.Uuid
+  pharmacistUser   User   @relation("PatientScreeningAcknowledgementActor", fields: [pharmacistUserId], references: [id], onDelete: Restrict)
+
+  workflowPolicyId      String         @db.Uuid
+  workflowPolicy        WorkflowPolicy @relation(fields: [workflowPolicyId], references: [id], onDelete: Restrict)
+  workflowPolicyVersion Int
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  acknowledgedAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  // One judgement, one person, one situation, one record state. The
+  // token in the key is what lets a re-armed gap take a FRESH row
+  // while the table stays append-only. Index names are pinned with
+  // `map:` because Prisma's generated names for this table truncate
+  // the five-column key into ambiguity at 63 chars.
+  @@unique([organizationId, patientId, pharmacistUserId, fingerprint, recordStateToken], map: "patient_screening_acknowledgement_org_patient_pharm_fp_tok_key")
+  // The gate's read path: "which fingerprints has THIS pharmacist
+  // settled for THIS patient?" — evaluated on every ApprovePV1 that
+  // raises a patient-record gap.
+  @@index([organizationId, patientId, pharmacistUserId], map: "patient_screening_acknowledgement_org_patient_pharmacist_idx")
+  // Override-rate reporting per pharmacist, same as the order table.
+  @@index([organizationId, pharmacistUserId, acknowledgedAt], map: "patient_screening_acknowledgement_org_pharmacist_at_idx")
+  @@map("patient_screening_acknowledgement")
 }
 
 // Status of a scheduled-report row.

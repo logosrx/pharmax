@@ -317,6 +317,25 @@ export {
   PV1_SCREENING_STAGE_INVALID,
 } from "./screening/errors.js";
 
+// Patient-scoped acknowledgement vocabulary. Exported for the PV1
+// console's read path (`get-order-screening.ts` classifies findings
+// and reads coverage with the SAME classifier and token the gate
+// uses, so the panel can never disagree with the approval about what
+// is covered) and for the integration suite. Read the module header
+// in `patient-scope.ts` before touching the boundary: the set of
+// patient-scopable codes is deliberately NARROWER than SUBJECT_DATA.
+export {
+  asPatientRecordGap,
+  patientRecordStateToken,
+  PATIENT_RECORD_GAP_AXIS_BY_CODE,
+  PER_SUBJECT_SCREENING_AXES,
+  PV1_SCREENING_AXIS_STATE_UNSUPPORTED,
+  PV1_SCREENING_RECORD_STATE_TOO_LARGE,
+  type FindingIdentity,
+  type PatientRecordGapFinding,
+  type PatientRecordStateScope,
+} from "./screening/patient-scope.js";
+
 export {
   clinicalScreeningKnowledgeSourceIsConfigured,
   configureClinicalScreening,

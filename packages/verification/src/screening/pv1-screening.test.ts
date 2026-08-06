@@ -42,9 +42,13 @@ import {
 import { createOrderStageIntervalTxStub } from "@pharmax/sla/test-utils";
 import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
+import type { TenantTransactionClient } from "@pharmax/database";
+
 import { AcknowledgePV1ScreeningFinding } from "../commands/acknowledge-pv1-screening-finding.js";
 import { ApprovePV1 } from "../commands/approve-pv1.js";
 import { StartPV1 } from "../commands/start-pv1.js";
+
+import { patientRecordStateToken } from "./patient-scope.js";
 
 import {
   configureClinicalScreening,
@@ -337,6 +341,7 @@ function buildFlowFake(options: FlowFakeOptions = {}): FlowFake {
     prescription: screening.prescription,
     orderScreeningFinding: screening.orderScreeningFinding,
     orderScreeningAcknowledgement: screening.orderScreeningAcknowledgement,
+    patientScreeningAcknowledgement: screening.patientScreeningAcknowledgement,
     patientAllergy: screening.patientAllergy,
     patientAllergyHistoryAssertion: screening.patientAllergyHistoryAssertion,
     bucket: {
@@ -2061,5 +2066,301 @@ describe("PV1 screening — the per-screen knowledge source resolver", () => {
     expect(fake.screening.state.persistedFindings.map((f) => f.code)).toContain(
       "SCR_DRUG_INTERACTION"
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Patient-scoped acknowledgement of the allergy-history gap
+// ---------------------------------------------------------------------------
+
+describe("PV1 screening — the allergy-history gap is acknowledged per PATIENT", () => {
+  // The scoping split, the re-arm sequence, per-pharmacist
+  // independence, the backward-compatibility path and the structural
+  // guarantee, all through the real commands — because every one of
+  // these properties is a statement about what ApprovePV1's gate does
+  // with persisted rows, not about any classifier in isolation.
+
+  /** A patient nobody has asked, which is what raises the gap. */
+  const patientNobodyAsked: ScreeningStubOptions = { ...candidateOnly, historyAssertions: [] };
+
+  /** The current allergy record-state token, against the fake's rows. */
+  function currentAllergyToken(fake: FlowFake): Promise<string> {
+    const tx = {
+      patientAllergy: fake.screening.patientAllergy,
+      patientAllergyHistoryAssertion: fake.screening.patientAllergyHistoryAssertion,
+    } as unknown as TenantTransactionClient;
+    return patientRecordStateToken(
+      { tx, organizationId: ORG_ID, patientId: PATIENT_ID },
+      "DRUG_ALLERGY"
+    );
+  }
+
+  function approveAs(pharmacistUserId: string, key: string) {
+    return withTenancyContext(ctxFor(pharmacistUserId), () =>
+      executeCommand(ApprovePV1, { orderId: ORDER_ID }, { idempotencyKey: key })
+    );
+  }
+
+  it("acknowledging the gap files it against the PATIENT, and the approval passes", async () => {
+    const fake = buildFlowFake({ screening: patientNobodyAsked });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    await startReview();
+    await expect(approveAs(PHARMACIST_A, "approve-unacked")).rejects.toMatchObject({
+      code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
+    });
+
+    const result = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
+      executeCommand(
+        AcknowledgePV1ScreeningFinding,
+        { orderId: ORDER_ID, fingerprint: ALLERGY_NOT_RECORDED_FINGERPRINT },
+        { idempotencyKey: "ack-patient-gap" }
+      )
+    );
+    expect(result.scope).toBe("PATIENT");
+    expect(result.alreadyAcknowledged).toBe(false);
+
+    // Filed in the PATIENT table, stamped with axis and token — and
+    // NOT in the order table: one judgement, one home.
+    expect(fake.screening.state.patientAcknowledgements).toHaveLength(1);
+    expect(fake.screening.state.patientAcknowledgements[0]).toMatchObject({
+      patientId: PATIENT_ID,
+      pharmacistUserId: PHARMACIST_A,
+      axis: "DRUG_ALLERGY",
+      fingerprint: ALLERGY_NOT_RECORDED_FINGERPRINT,
+      recordStateToken: await currentAllergyToken(fake),
+    });
+    expect(fake.screening.state.acknowledgements).toHaveLength(0);
+
+    // Its own event type, so reporting can tell the scopes apart.
+    const eventTypes = callsOf(fake.calls, "orderEvent", "create").map(
+      (c) => (c.args as { data: Record<string, unknown> }).data["eventType"]
+    );
+    expect(eventTypes).toContain("order.pv1.screening.acknowledged_for_patient.v1");
+    expect(eventTypes).not.toContain("order.pv1.screening.acknowledged.v1");
+
+    await expect(approveAs(PHARMACIST_A, "approve-acked")).resolves.toMatchObject({
+      currentStatus: "PV1_APPROVED_READY_FOR_FILL",
+    });
+  });
+
+  it("a patient-scoped acknowledgement recorded on an EARLIER order covers this one", async () => {
+    // Refill twelve. The pharmacist acknowledged "no allergy history
+    // recorded" on a previous order for this patient; the record has
+    // not changed; this order must not charge them again.
+    const fake = buildFlowFake({ screening: patientNobodyAsked });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    fake.screening.state.patientAcknowledgements.push({
+      id: "prior-order-ack",
+      patientId: PATIENT_ID,
+      // A different order entirely — the key is the patient.
+      orderId: "00000000-0000-4000-8000-00000000feed",
+      pharmacistUserId: PHARMACIST_A,
+      axis: "DRUG_ALLERGY",
+      fingerprint: ALLERGY_NOT_RECORDED_FINGERPRINT,
+      recordStateToken: await currentAllergyToken(fake),
+    });
+
+    await startReview();
+    // The gap is still SCREENED and PERSISTED — coverage suppresses
+    // the re-prompt, never the record.
+    expect(outstandingFingerprints(fake)).toEqual([ALLERGY_NOT_RECORDED_FINGERPRINT]);
+
+    await expect(approveAs(PHARMACIST_A, "approve-covered")).resolves.toMatchObject({
+      currentStatus: "PV1_APPROVED_READY_FOR_FILL",
+    });
+    // No acknowledgement of any scope was recorded on THIS order.
+    expect(fake.screening.state.acknowledgements).toHaveLength(0);
+    expect(fake.screening.state.patientAcknowledgements).toHaveLength(1);
+  });
+
+  it("a COLLEAGUE's patient-scoped acknowledgement opens nothing", async () => {
+    const fake = buildFlowFake({ screening: patientNobodyAsked });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    fake.screening.state.patientAcknowledgements.push({
+      id: "colleague-ack",
+      patientId: PATIENT_ID,
+      orderId: "00000000-0000-4000-8000-00000000feed",
+      pharmacistUserId: PHARMACIST_B,
+      axis: "DRUG_ALLERGY",
+      fingerprint: ALLERGY_NOT_RECORDED_FINGERPRINT,
+      recordStateToken: await currentAllergyToken(fake),
+    });
+
+    await startReview();
+    await expect(approveAs(PHARMACIST_A, "approve-colleague")).rejects.toMatchObject({
+      code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
+      metadata: expect.objectContaining({
+        outstandingFingerprints: expect.arrayContaining([ALLERGY_NOT_RECORDED_FINGERPRINT]),
+      }),
+    });
+  });
+
+  it("RE-ARMS: allergy data recorded and then entered-in-error re-prompts despite the old acknowledgement", async () => {
+    // The dangerous sequence, end to end. Gap acknowledged → a
+    // technician records an allergy (gap resolves) → the record is
+    // retracted as entered-in-error (gap re-arises, SAME fingerprint).
+    // The acknowledgement was given about a record that no longer
+    // exists in that state; honoring it now would let a years-old
+    // click suppress the one situation that deserves fresh eyes.
+    const fake = buildFlowFake({ screening: patientNobodyAsked });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    await startReview();
+    const first = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
+      executeCommand(
+        AcknowledgePV1ScreeningFinding,
+        { orderId: ORDER_ID, fingerprint: ALLERGY_NOT_RECORDED_FINGERPRINT },
+        { idempotencyKey: "ack-original" }
+      )
+    );
+    expect(first.scope).toBe("PATIENT");
+
+    // A history is taken and an allergy recorded…
+    fake.screening.state.allergies.push(
+      screenableStubAllergy({ patientId: PATIENT_ID, id: "00000000-0000-4000-8000-00000000a0e1" })
+    );
+    // …and later retracted as entered-in-error. The ROW REMAINS —
+    // retraction is a status amendment — which is exactly why the
+    // record-state token cannot travel back to its pre-record value.
+    fake.screening.state.allergies[0] = {
+      ...fake.screening.state.allergies[0]!,
+      verificationStatus: "ENTERED_IN_ERROR",
+      statusChangedAt: new Date("2026-08-07T13:00:00.000Z"),
+    };
+
+    // The gap re-arises with the SAME fingerprint, and the old
+    // acknowledgement does NOT cover it.
+    await expect(approveAs(PHARMACIST_A, "approve-rearmed")).rejects.toMatchObject({
+      code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
+      metadata: expect.objectContaining({
+        outstandingFingerprints: expect.arrayContaining([ALLERGY_NOT_RECORDED_FINGERPRINT]),
+      }),
+    });
+
+    // A fresh judgement is a NEW row — the table is append-only, and
+    // "same fingerprint, different record state" is a different act.
+    const second = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
+      executeCommand(
+        AcknowledgePV1ScreeningFinding,
+        { orderId: ORDER_ID, fingerprint: ALLERGY_NOT_RECORDED_FINGERPRINT },
+        { idempotencyKey: "ack-fresh" }
+      )
+    );
+    expect(second.scope).toBe("PATIENT");
+    expect(second.alreadyAcknowledged).toBe(false);
+    expect(second.acknowledgementId).not.toBe(first.acknowledgementId);
+    expect(fake.screening.state.patientAcknowledgements).toHaveLength(2);
+
+    await expect(approveAs(PHARMACIST_A, "approve-fresh")).resolves.toMatchObject({
+      currentStatus: "PV1_APPROVED_READY_FOR_FILL",
+    });
+  });
+
+  it("BACKWARD COMPAT: an order-scoped acknowledgement recorded before patient scoping still satisfies ITS order", async () => {
+    // Rows written by the pre-patient-scope build live in
+    // `order_screening_acknowledgement` with this same fingerprint.
+    // They were legitimate judgements; the gate honors them on the
+    // order they were recorded on, and nothing invalidates them.
+    const fake = buildFlowFake({ screening: patientNobodyAsked });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    fake.screening.state.acknowledgements.push({
+      id: "legacy-order-ack",
+      orderId: ORDER_ID,
+      pharmacistUserId: PHARMACIST_A,
+      fingerprint: ALLERGY_NOT_RECORDED_FINGERPRINT,
+    });
+
+    await startReview();
+    await expect(approveAs(PHARMACIST_A, "approve-legacy")).resolves.toMatchObject({
+      currentStatus: "PV1_APPROVED_READY_FOR_FILL",
+    });
+    // The legacy row carried the approval; no patient-scoped row was
+    // needed or written.
+    expect(fake.screening.state.patientAcknowledgements).toHaveLength(0);
+  });
+
+  it("STRUCTURAL: a patient-table row matching a CLINICAL finding's fingerprint opens nothing", async () => {
+    // The hand-mutation proof, at runtime. The database's CHECK
+    // constraints refuse such a row (pinned in the integration
+    // suite); this test plants one anyway — as if written by a bugged
+    // or malicious writer — and proves the gate still refuses,
+    // because the patient-scoped lookup is only ever consulted for
+    // findings `asPatientRecordGap` accepted. Suppressing a
+    // drug-interaction alert patient-wide must take more than a row.
+    const fake = buildFlowFake({ screening: candidateAndInteractingProfileDrug });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: knowledgeWithAcknowledgeTierInteraction() });
+
+    fake.screening.state.patientAcknowledgements.push({
+      id: "forged-clinical-ack",
+      patientId: PATIENT_ID,
+      orderId: ORDER_ID,
+      pharmacistUserId: PHARMACIST_A,
+      axis: "DRUG_ALLERGY",
+      fingerprint: INTERACTION_FINGERPRINT,
+      recordStateToken: await currentAllergyToken(fake),
+    });
+
+    await startReview();
+    await expect(approveAs(PHARMACIST_A, "approve-forged")).rejects.toMatchObject({
+      code: "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED",
+      metadata: expect.objectContaining({
+        outstandingFingerprints: expect.arrayContaining([INTERACTION_FINGERPRINT]),
+      }),
+    });
+
+    // And acknowledging the interaction through the command files it
+    // against the ORDER — the classifier, not the caller, owns scope.
+    const acknowledged = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
+      executeCommand(
+        AcknowledgePV1ScreeningFinding,
+        { orderId: ORDER_ID, fingerprint: INTERACTION_FINGERPRINT },
+        { idempotencyKey: "ack-interaction" }
+      )
+    );
+    expect(acknowledged.scope).toBe("ORDER");
+  });
+
+  it("a repeat patient-scoped acknowledgement at an unchanged record state is a no-op", async () => {
+    const fake = buildFlowFake({ screening: patientNobodyAsked });
+    configureBus(fake.client);
+    configureClinicalScreening({ knowledgeSource: createInMemoryDrugKnowledgeSource() });
+
+    await startReview();
+    const first = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
+      executeCommand(
+        AcknowledgePV1ScreeningFinding,
+        { orderId: ORDER_ID, fingerprint: ALLERGY_NOT_RECORDED_FINGERPRINT },
+        { idempotencyKey: "ack-p-1" }
+      )
+    );
+    // A DIFFERENT idempotency key: this exercises the row-level
+    // guard, not the bus's replay cache.
+    const second = await withTenancyContext(ctxFor(PHARMACIST_A), () =>
+      executeCommand(
+        AcknowledgePV1ScreeningFinding,
+        { orderId: ORDER_ID, fingerprint: ALLERGY_NOT_RECORDED_FINGERPRINT },
+        { idempotencyKey: "ack-p-2" }
+      )
+    );
+    expect(first.alreadyAcknowledged).toBe(false);
+    expect(second.alreadyAcknowledged).toBe(true);
+    expect(second.acknowledgementId).toBe(first.acknowledgementId);
+    expect(callsOf(fake.calls, "patientScreeningAcknowledgement", "create")).toHaveLength(1);
+    const events = callsOf(fake.calls, "orderEvent", "create").filter(
+      (c) =>
+        ((c.args as { data: Record<string, unknown> }).data["eventType"] as string) ===
+        "order.pv1.screening.acknowledged_for_patient.v1"
+    );
+    expect(events).toHaveLength(1);
   });
 });
