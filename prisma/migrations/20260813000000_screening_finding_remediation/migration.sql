@@ -122,5 +122,5 @@ ALTER TABLE "order_screening_finding"
 -- 4. Coverage-reporting index.
 -- ---------------------------------------------------------------------
 
-CREATE INDEX "order_screening_finding_organizationId_remediation_occurre_idx"
+CREATE INDEX "order_screening_finding_organizationId_remediation_occurred_idx"
     ON "order_screening_finding"("organizationId", "remediation", "occurredAt");
