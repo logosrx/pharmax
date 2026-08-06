@@ -42,12 +42,14 @@ interface FindingOverrides {
   readonly acknowledgedByViewer?: boolean;
   readonly acknowledgeable?: boolean;
   readonly citation?: string | null;
+  readonly patientScopeCoverage?: OrderScreeningFindingView["patientScopeCoverage"];
 }
 
 function finding(overrides: FindingOverrides = {}): OrderScreeningFindingView {
   const disposition = overrides.disposition ?? "REQUIRES_ACKNOWLEDGEMENT";
   const acknowledgedByViewer = overrides.acknowledgedByViewer ?? false;
   return {
+    patientScopeCoverage: overrides.patientScopeCoverage ?? null,
     findingId: overrides.findingId ?? "f-1",
     code: overrides.code ?? "SCR_DRUG_INTERACTION",
     kind: overrides.kind ?? "DRUG_DRUG_INTERACTION",
@@ -161,6 +163,56 @@ describe("ScreeningFindingsPanel", () => {
     expect(html).toContain("Acknowledged by you");
     expect(html).not.toContain("<form");
     expect(html).toContain("Nothing outstanding for you");
+  });
+
+  it("shows a COVERED patient-record gap as acknowledged for the patient — dated, never silent", () => {
+    // The gate will pass this gap without a fresh click. A panel that
+    // simply rendered no prompt would make a suppressed safety prompt
+    // read as a clean screen, so the coverage is stated with its date
+    // and the control is withdrawn.
+    const html = render([
+      finding({
+        code: "SCR_ALLERGY_INPUT_UNAVAILABLE",
+        kind: "SCREENING_GAP",
+        severity: "MODERATE",
+        fingerprint: "FP-ALLERGY-GAP",
+        acknowledgeable: false,
+        patientScopeCoverage: {
+          kind: "COVERED",
+          acknowledgedAt: new Date("2026-07-01T10:00:00.000Z"),
+        },
+      }),
+    ]);
+
+    expect(html).toContain("Acknowledged for this patient by you");
+    expect(html).toContain("2026-07-01 10:00:00Z");
+    expect(html).toContain("until the patient");
+    expect(html).not.toContain("<form");
+    expect(html).toContain("Nothing outstanding for you");
+  });
+
+  it("explains a SUPERSEDED acknowledgement and re-offers the control", () => {
+    // The re-arm, as the pharmacist meets it: the prompt is back, and
+    // the panel says why — the record changed after their judgement —
+    // rather than looking like a system that forgot.
+    const html = render([
+      finding({
+        code: "SCR_ALLERGY_INPUT_UNAVAILABLE",
+        kind: "SCREENING_GAP",
+        severity: "MODERATE",
+        fingerprint: "FP-ALLERGY-GAP",
+        patientScopeCoverage: {
+          kind: "SUPERSEDED",
+          lastAcknowledgedAt: new Date("2026-07-01T10:00:00.000Z"),
+        },
+      }),
+    ]);
+
+    expect(html).toContain("record has changed since");
+    expect(html).toContain("2026-07-01 10:00:00Z");
+    expect(html).toContain(ACK_ACTION);
+    expect(html).toContain('value="FP-ALLERGY-GAP"');
+    expect(html).not.toContain("Acknowledged for this patient by you");
   });
 
   it("asks nothing of the pharmacist for an INFORMATIONAL finding", () => {

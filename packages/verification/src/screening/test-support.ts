@@ -46,6 +46,14 @@ export interface StubPrescription {
 export interface StubFinding {
   readonly fingerprint: string;
   readonly code: string;
+  /**
+   * The finding kind, as persisted. The acknowledge command's scope
+   * decision reads it (`asPatientRecordGap`), so a stub row without
+   * one classifies as clinical — absent is tolerated for rows a test
+   * seeded directly, but rows written through `persistFindings` carry
+   * it exactly as the real table does.
+   */
+  readonly kind?: string;
   readonly severity: string;
   readonly certainty: string;
   readonly disposition: string;
@@ -87,6 +95,25 @@ export interface StubAcknowledgement {
 }
 
 /**
+ * One row of `patient_screening_acknowledgement`, as the gate and the
+ * acknowledge command read it. `recordStateToken` is matched by exact
+ * equality, exactly like the real query — a test that seeds a
+ * "current" row must compute the token with `patientRecordStateToken`
+ * against this same stub state, which is also what proves the token
+ * is deterministic.
+ */
+export interface StubPatientAcknowledgement {
+  readonly id: string;
+  readonly patientId: string;
+  readonly orderId: string;
+  readonly pharmacistUserId: string;
+  readonly axis: string;
+  readonly fingerprint: string;
+  readonly recordStateToken: string;
+  readonly acknowledgedAt?: Date;
+}
+
+/**
  * One row of `patient_allergy`, as the screening path selects it.
  *
  * Only the coded columns: the screen must never read
@@ -103,6 +130,14 @@ export interface StubAllergy {
   readonly criticality: string;
   readonly clinicalStatus: string;
   readonly verificationStatus: string;
+  /**
+   * When the record's status was last amended — the column the
+   * record-state token hashes so a status cycle (ACTIVE →
+   * ENTERED_IN_ERROR → ACTIVE) can never hash back to an earlier
+   * state. Absent means never amended; the fake normalizes to `null`
+   * on read, as a real Prisma row would.
+   */
+  readonly statusChangedAt?: Date | null;
 }
 
 /** One row of `patient_allergy_history_assertion`. */
@@ -120,10 +155,14 @@ export interface ScreeningStubState {
   /** Rows `order_screening_finding` already holds for the order. */
   persistedFindings: StubFinding[];
   acknowledgements: StubAcknowledgement[];
+  /** Rows `patient_screening_acknowledgement` holds for the patient. */
+  patientAcknowledgements: StubPatientAcknowledgement[];
   /**
    * Mutable so a test can record an allergy BETWEEN the StartPV1 screen
    * and the ApprovePV1 re-screen — the allergy analogue of pushing a
-   * prescription onto the profile mid-review.
+   * prescription onto the profile mid-review. Also what a re-arm test
+   * mutates: any push or status edit changes the record-state token,
+   * which is the entire mechanism under test.
    */
   allergies: StubAllergy[];
   historyAssertions: StubHistoryAssertion[];
@@ -135,6 +174,7 @@ export interface ScreeningStubOptions {
   readonly prescriptions?: ReadonlyArray<StubPrescription>;
   readonly persistedFindings?: ReadonlyArray<StubFinding>;
   readonly acknowledgements?: ReadonlyArray<StubAcknowledgement>;
+  readonly patientAcknowledgements?: ReadonlyArray<StubPatientAcknowledgement>;
   /**
    * Default EMPTY, which resolves DRUG_ALLERGY to
    * NOT_RECORDED_FOR_SUBJECT — the correct answer for a patient nobody
@@ -229,8 +269,16 @@ export interface ScreeningStubs {
     findFirst: ReturnType<typeof vi.fn>;
     create: ReturnType<typeof vi.fn>;
   };
+  readonly patientScreeningAcknowledgement: {
+    findMany: ReturnType<typeof vi.fn>;
+    findFirst: ReturnType<typeof vi.fn>;
+    create: ReturnType<typeof vi.fn>;
+  };
   readonly patientAllergy: { findMany: ReturnType<typeof vi.fn> };
-  readonly patientAllergyHistoryAssertion: { findFirst: ReturnType<typeof vi.fn> };
+  readonly patientAllergyHistoryAssertion: {
+    findFirst: ReturnType<typeof vi.fn>;
+    findMany: ReturnType<typeof vi.fn>;
+  };
 }
 
 export function createScreeningStubs(
@@ -243,11 +291,13 @@ export function createScreeningStubs(
     prescriptions: [...(options.prescriptions ?? [])],
     persistedFindings: [...(options.persistedFindings ?? [])],
     acknowledgements: [...(options.acknowledgements ?? [])],
+    patientAcknowledgements: [...(options.patientAcknowledgements ?? [])],
     allergies: [...(options.allergies ?? [])],
     historyAssertions: [...(options.historyAssertions ?? [])],
   };
 
   let nextAcknowledgementId = 1;
+  let nextPatientAcknowledgementId = 1;
 
   return {
     state,
@@ -287,6 +337,7 @@ export function createScreeningStubs(
           state.persistedFindings.push({
             fingerprint: String(row["fingerprint"]),
             code: String(row["code"]),
+            kind: String(row["kind"]),
             severity: String(row["severity"]),
             certainty: String(row["certainty"]),
             disposition: String(row["disposition"]),
@@ -354,6 +405,63 @@ export function createScreeningStubs(
         return { id };
       }),
     },
+    patientScreeningAcknowledgement: {
+      findMany: vi.fn(async (args: unknown) => {
+        record("patientScreeningAcknowledgement", "findMany", args);
+        const where = (args as WhereArgs).where ?? {};
+        const fingerprintFilter = where["fingerprint"] as
+          { in?: ReadonlyArray<string> } | undefined;
+        const wanted = fingerprintFilter?.in === undefined ? null : new Set(fingerprintFilter.in);
+        return state.patientAcknowledgements
+          .filter(
+            (a) =>
+              a.patientId === where["patientId"] &&
+              a.pharmacistUserId === where["pharmacistUserId"] &&
+              (where["axis"] === undefined || a.axis === where["axis"]) &&
+              // Exact-equality token match, exactly like the real
+              // query: this is the line that makes a stale
+              // acknowledgement stop matching.
+              (where["recordStateToken"] === undefined ||
+                a.recordStateToken === where["recordStateToken"]) &&
+              (wanted === null || wanted.has(a.fingerprint))
+          )
+          .map((a) => ({
+            fingerprint: a.fingerprint,
+            recordStateToken: a.recordStateToken,
+            acknowledgedAt: a.acknowledgedAt ?? new Date("2026-01-01T00:00:00.000Z"),
+          }));
+      }),
+      findFirst: vi.fn(async (args: unknown) => {
+        record("patientScreeningAcknowledgement", "findFirst", args);
+        const where = (args as WhereArgs).where ?? {};
+        const hit = state.patientAcknowledgements.find(
+          (a) =>
+            a.patientId === where["patientId"] &&
+            a.pharmacistUserId === where["pharmacistUserId"] &&
+            a.fingerprint === where["fingerprint"] &&
+            (where["recordStateToken"] === undefined ||
+              a.recordStateToken === where["recordStateToken"])
+        );
+        return hit === undefined ? null : { id: hit.id };
+      }),
+      create: vi.fn(async (args: unknown) => {
+        record("patientScreeningAcknowledgement", "create", args);
+        const data = (args as { data: Record<string, unknown> }).data;
+        const id = `pack-${nextPatientAcknowledgementId}`;
+        nextPatientAcknowledgementId += 1;
+        state.patientAcknowledgements.push({
+          id,
+          patientId: String(data["patientId"]),
+          orderId: String(data["orderId"]),
+          pharmacistUserId: String(data["pharmacistUserId"]),
+          axis: String(data["axis"]),
+          fingerprint: String(data["fingerprint"]),
+          recordStateToken: String(data["recordStateToken"]),
+          acknowledgedAt: data["acknowledgedAt"] as Date,
+        });
+        return { id };
+      }),
+    },
     patientAllergy: {
       findMany: vi.fn(async (args: unknown) => {
         record("patientAllergy", "findMany", args);
@@ -361,11 +469,17 @@ export function createScreeningStubs(
         // Mirrors the real query, which filters ACTIVE in SQL so the
         // index does the work. A stub that returned every row would let
         // an in-memory-only filter pass a test the database would fail.
-        return state.allergies.filter(
-          (a) =>
-            a.patientId === where["patientId"] &&
-            (where["clinicalStatus"] === undefined || a.clinicalStatus === where["clinicalStatus"])
-        );
+        // The record-state token's query carries NO clinicalStatus
+        // filter — it must see retired rows — and that reaches here as
+        // an undefined filter, exactly like the real SQL.
+        return state.allergies
+          .filter(
+            (a) =>
+              a.patientId === where["patientId"] &&
+              (where["clinicalStatus"] === undefined ||
+                a.clinicalStatus === where["clinicalStatus"])
+          )
+          .map((a) => ({ ...a, statusChangedAt: a.statusChangedAt ?? null }));
       }),
     },
     patientAllergyHistoryAssertion: {
@@ -378,6 +492,13 @@ export function createScreeningStubs(
         // assertion wins, which is the rule the screening layer relies
         // on to let a corrected history supersede an earlier one.
         return [...matches].sort((a, b) => b.assertedAt.getTime() - a.assertedAt.getTime())[0];
+      }),
+      findMany: vi.fn(async (args: unknown) => {
+        record("patientAllergyHistoryAssertion", "findMany", args);
+        const where = (args as WhereArgs).where ?? {};
+        return state.historyAssertions
+          .filter((a) => a.patientId === where["patientId"])
+          .sort((a, b) => a.id.localeCompare(b.id));
       }),
     },
   };

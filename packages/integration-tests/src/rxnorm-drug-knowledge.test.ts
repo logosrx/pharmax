@@ -418,6 +418,7 @@ describe("end to end — a seeded ingredient allergy hard-stops through the real
         tx,
         organizationId: tenant.organizationId,
         orderId: chain.orderId,
+        patientId: chain.patientId,
         pharmacistUserId: tenant.adminUserId,
         evaluation: result.evaluation,
       });
@@ -469,6 +470,7 @@ describe("end to end — a seeded ingredient allergy hard-stops through the real
         tx,
         organizationId: tenant.organizationId,
         orderId: chain.orderId,
+        patientId: chain.patientId,
         pharmacistUserId: tenant.adminUserId,
         evaluation: result.evaluation,
       });

@@ -196,11 +196,39 @@ function FindingCard({
             <Badge tone="success" icon="check">
               Acknowledged by you
             </Badge>
+          ) : finding.patientScopeCoverage?.kind === "COVERED" ? (
+            <Badge tone="success" icon="check">
+              Acknowledged for this patient by you
+            </Badge>
           ) : null}
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-fg">{finding.reason}</p>
+
+        {/* Patient-scoped coverage is stated, never silent. A safety
+            prompt that quietly stops appearing reads as "screened
+            clean"; this line is the difference between suppression
+            and a visible, dated judgement. */}
+        {finding.patientScopeCoverage?.kind === "COVERED" ? (
+          <p className="text-xs text-subtle">
+            You acknowledged this for this patient on{" "}
+            <span className="text-muted">
+              {formatDateTime(finding.patientScopeCoverage.acknowledgedAt)}
+            </span>
+            . It covers every order for this patient — signed by you, not by colleagues — until the
+            patient&apos;s record changes, at which point it will ask again.
+          </p>
+        ) : null}
+
+        {finding.patientScopeCoverage?.kind === "SUPERSEDED" ? (
+          <p className="text-xs font-medium text-tone-warning-strong">
+            You acknowledged this for this patient on{" "}
+            {formatDateTime(finding.patientScopeCoverage.lastAcknowledgedAt)}, but the
+            patient&apos;s record has changed since — data was added or retracted. The situation in
+            front of you is not the one you judged, so it needs a fresh acknowledgement.
+          </p>
+        ) : null}
 
         {finding.triggers.length > 0 ? (
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-subtle">

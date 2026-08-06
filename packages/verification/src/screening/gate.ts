@@ -1,22 +1,54 @@
 // The PV1 approval gate.
 //
-// Two refusals, two codes, and one read of the acknowledgement table.
+// Two refusals, two codes, and two reads of two acknowledgement
+// tables — one per scope, split by what the finding is a fact ABOUT:
 //
-// The acknowledgement lookup is scoped to (organization, order,
-// approving pharmacist). Every part of that key is load-bearing:
+//   - CLINICAL findings and order-level gaps consume
+//     `order_screening_acknowledgement`, scoped to (organization,
+//     order, approving pharmacist). Every part of that key is
+//     load-bearing:
+//       - ORDER, because a clinical finding is an input to a
+//         DISPENSING DECISION and every fill is a new one — DUR
+//         overrides are per-fill events, and an interaction
+//         acknowledged in January must be re-confronted in February
+//         because the clinical context may have changed.
+//       - PHARMACIST, because an acknowledgement is a professional
+//         judgement attached to a person. If pharmacist A's
+//         acknowledgement satisfied pharmacist B's approval, the
+//         alert would have been converted into a checkbox that
+//         someone else already ticked — and B would sign a decision
+//         they never made.
+//       - ORGANIZATION, belt-and-braces behind the Prisma tenancy
+//         extension and RLS. An unscoped read here would let one
+//         tenant's acknowledgement open another tenant's gate, which
+//         is the worst shape a cross-tenant leak can take: not a
+//         disclosure, a bypassed safety control.
+//   - PATIENT-RECORD gaps (`asPatientRecordGap` — today exactly the
+//     "no allergy history recorded" gap) consume
+//     `patient_screening_acknowledgement`, scoped to (organization,
+//     PATIENT, approving pharmacist) AND to the record-state token:
+//     the row counts only while the patient's allergy record still
+//     hashes to the state the pharmacist acknowledged. The gap is a
+//     statement about the record, not about this fill; it is
+//     byte-identical on every order the patient has, and re-charging
+//     the same pharmacist for the same unchanged fact per refill is
+//     the alert-fatigue machine the tiers were built to dismantle.
+//     The PHARMACIST and ORGANIZATION halves of the key keep their
+//     full force — a colleague's patient-scoped acknowledgement opens
+//     nothing for the signer.
 //
-//   - ORDER, because a judgement about this patient's regimen on this
-//     prescription is not a judgement about a different order's.
-//   - PHARMACIST, because an acknowledgement is a professional
-//     judgement attached to a person. If pharmacist A's
-//     acknowledgement satisfied pharmacist B's approval, the alert
-//     would have been converted into a checkbox that someone else
-//     already ticked — and B would sign a decision they never made.
-//   - ORGANIZATION, belt-and-braces behind the Prisma tenancy
-//     extension and RLS. An unscoped read here would let one tenant's
-//     acknowledgement open another tenant's gate, which is the worst
-//     shape a cross-tenant leak can take: not a disclosure, a
-//     bypassed safety control.
+//     TRANSITION: order-scoped rows recorded for these gaps before
+//     patient scoping existed still satisfy the gate ON THEIR OWN
+//     ORDER (they were legitimate judgements and are not
+//     invalidated); only NEW coverage is patient-keyed.
+//
+//     THE SPLIT IS STRUCTURAL, NOT A WHERE-CLAUSE CONVENTION. The
+//     patient-scoped lookup accepts only `PatientRecordGapFinding`, a
+//     branded type whose sole constructor proves the finding is a
+//     per-subject gap; the table's CHECK constraints refuse any other
+//     finding code at the database layer. A clinical finding cannot
+//     reach the patient-scoped path without an unsafe cast AND a
+//     constraint-violating row.
 //
 // Note what the gate does NOT do: it never downgrades a HARD_STOP,
 // and there is no input by which a caller could ask it to. The
@@ -38,16 +70,28 @@ import {
   findingsRequiringAcknowledgement,
   hardStopFindings,
   type ScreeningEvaluation,
+  type ScreeningFinding,
 } from "@pharmax/clinical-screening";
 import type { Prisma } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 
 import { PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED, PV1_SCREENING_HARD_STOP } from "./errors.js";
+import {
+  asPatientRecordGap,
+  patientRecordStateToken,
+  type PatientRecordGapFinding,
+} from "./patient-scope.js";
 
 export interface ApprovalGateInput {
   readonly tx: Prisma.TransactionClient;
   readonly organizationId: string;
   readonly orderId: string;
+  /**
+   * The patient on the order — the key patient-record gap
+   * acknowledgements are honored under. The caller has already
+   * resolved it for the screen itself (`loadPatientIdForOrder`).
+   */
+  readonly patientId: string;
   /** The pharmacist whose acknowledgements count. */
   readonly pharmacistUserId: string;
   readonly evaluation: ScreeningEvaluation;
@@ -93,18 +137,42 @@ export async function screeningRefusalForApproval(
   const required = findingsRequiringAcknowledgement(input.evaluation);
   if (required.length === 0) return null;
 
-  const requiredFingerprints = required.map((f) => f.fingerprint);
-  const acknowledged = await input.tx.orderScreeningAcknowledgement.findMany({
+  // Partition by scope. `asPatientRecordGap` is the single authority
+  // on what may be patient-keyed; everything it declines — every
+  // clinical finding, every knowledge or per-record gap — stays on
+  // the order-scoped path below.
+  const patientRecordGaps: PatientRecordGapFinding[] = [];
+  const orderScoped: ScreeningFinding[] = [];
+  for (const finding of required) {
+    const gap = asPatientRecordGap(finding);
+    if (gap === null) {
+      orderScoped.push(finding);
+    } else {
+      patientRecordGaps.push(gap);
+    }
+  }
+
+  // ONE read of the order table for BOTH partitions. For the
+  // order-scoped findings it is their gate; for the patient-record
+  // gaps it is the backward-compatibility path — an order-scoped row
+  // recorded before patient scoping existed keeps satisfying the
+  // order it was recorded on.
+  const acknowledgedOnOrder = await input.tx.orderScreeningAcknowledgement.findMany({
     where: {
       organizationId: input.organizationId,
       orderId: input.orderId,
       pharmacistUserId: input.pharmacistUserId,
-      fingerprint: { in: requiredFingerprints },
+      fingerprint: { in: required.map((f) => f.fingerprint) },
     },
     select: { fingerprint: true },
   });
+  const settled = new Set(acknowledgedOnOrder.map((row) => row.fingerprint));
 
-  const settled = new Set(acknowledged.map((row) => row.fingerprint));
+  const unsettledPatientGaps = patientRecordGaps.filter((g) => !settled.has(g.fingerprint));
+  for (const fingerprint of await patientScopedSettledFingerprints(input, unsettledPatientGaps)) {
+    settled.add(fingerprint);
+  }
+
   const outstanding = required.filter((f) => !settled.has(f.fingerprint));
   if (outstanding.length === 0) return null;
 
@@ -121,4 +189,53 @@ export async function screeningRefusalForApproval(
       outstandingFingerprints: outstanding.map((f) => f.fingerprint),
     },
   });
+}
+
+/**
+ * Which of the given PATIENT-RECORD gaps this pharmacist has settled
+ * for this PATIENT, at the patient's CURRENT record state.
+ *
+ * The parameter type is the structural guarantee (layer 1 in the
+ * header): only `asPatientRecordGap` can produce a
+ * `PatientRecordGapFinding`, so a clinical finding cannot be passed
+ * here without an unsafe cast. The query itself adds layer 2 — it
+ * matches rows whose `axis` proves them per-subject — and the table's
+ * CHECK constraints are layer 3.
+ *
+ * The token comparison is the entire re-arming mechanism: a row whose
+ * `recordStateToken` no longer matches the current hash is simply not
+ * selected. No status column, no invalidation write — the record
+ * state only moves through the audited allergy commands, and this
+ * comparison is where that movement becomes a fresh prompt.
+ */
+async function patientScopedSettledFingerprints(
+  input: ApprovalGateInput,
+  gaps: ReadonlyArray<PatientRecordGapFinding>
+): Promise<ReadonlyArray<string>> {
+  if (gaps.length === 0) return [];
+
+  // One token per distinct axis. Today that is one hash for the whole
+  // set (DRUG_ALLERGY is the only PER_SUBJECT axis), but the loop is
+  // written for the day a second one exists.
+  const settled: string[] = [];
+  for (const axis of new Set(gaps.map((g) => g.axis))) {
+    const recordStateToken = await patientRecordStateToken(
+      { tx: input.tx, organizationId: input.organizationId, patientId: input.patientId },
+      axis
+    );
+    const axisGaps = gaps.filter((g) => g.axis === axis);
+    const rows = await input.tx.patientScreeningAcknowledgement.findMany({
+      where: {
+        organizationId: input.organizationId,
+        patientId: input.patientId,
+        pharmacistUserId: input.pharmacistUserId,
+        axis,
+        fingerprint: { in: axisGaps.map((g) => g.fingerprint) },
+        recordStateToken,
+      },
+      select: { fingerprint: true },
+    });
+    for (const row of rows) settled.push(row.fingerprint);
+  }
+  return settled;
 }

@@ -288,6 +288,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     prescription: screening.prescription,
     orderScreeningFinding: screening.orderScreeningFinding,
     orderScreeningAcknowledgement: screening.orderScreeningAcknowledgement,
+    patientScreeningAcknowledgement: screening.patientScreeningAcknowledgement,
     patientAllergy: screening.patientAllergy,
     patientAllergyHistoryAssertion: screening.patientAllergyHistoryAssertion,
     bucket: {

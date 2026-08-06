@@ -27,6 +27,20 @@
 // filtered after the fact, so there is no shape of this projection
 // that holds another pharmacist's judgement at all.
 //
+// PATIENT-SCOPED COVERAGE IS SHOWN, NEVER SILENT. A patient-record
+// gap (today: "no allergy history recorded") the viewer has already
+// acknowledged FOR THIS PATIENT does not prompt again — but a safety
+// prompt that is suppressed invisibly reads as "screened clean",
+// which it is not. So the projection classifies those findings with
+// the SAME `asPatientRecordGap` the gate uses, reads the viewer's
+// patient-scoped acknowledgements, and reports one of three states
+// the panel must render: COVERED ("acknowledged for this patient by
+// you on <date>"), SUPERSEDED ("you acknowledged this, but the
+// patient's record has changed since — it needs a fresh judgement"),
+// or NONE (prompt, exactly as before). COVERED is decided against the
+// patient's CURRENT record-state token, so this panel and the
+// ApprovePV1 gate cannot disagree about what is settled.
+//
 // PHI: nothing here is PHI. A finding carries no patient identifier
 // and no drug name by construction (see the header of
 // `packages/clinical-screening/src/findings.ts`); `reason` is
@@ -47,6 +61,7 @@ import {
   type ScreeningPhase,
   type TenantTransactionClient,
 } from "@pharmax/database";
+import { asPatientRecordGap, patientRecordStateToken } from "@pharmax/verification";
 
 /**
  * Cap on the rows scanned to find the latest screen.
@@ -125,6 +140,30 @@ export interface OrderScreeningFindingView {
    * else's judgement.
    */
   readonly acknowledgedByViewer: boolean;
+  /**
+   * Patient-scoped coverage, for PATIENT-RECORD gaps only (`null` for
+   * every other finding — clinical findings cannot carry it, by the
+   * same classifier the gate uses).
+   *
+   *   - COVERED — the viewer acknowledged this gap for this patient
+   *     and the patient's record has not changed since. The gate will
+   *     pass it; the panel must SAY so rather than silently not
+   *     prompting.
+   *   - SUPERSEDED — the viewer acknowledged it, but the record has
+   *     changed since (data arrived and was later retracted, or a new
+   *     unscreenable entry landed). The gate will refuse; the panel
+   *     explains why the prompt is back.
+   *   - NONE — never acknowledged for this patient by the viewer.
+   *
+   * Always the viewer's own judgements; a colleague's patient-scoped
+   * acknowledgement is invisible here for the same reason it is
+   * order-scoped acknowledgements are.
+   */
+  readonly patientScopeCoverage:
+    | { readonly kind: "COVERED"; readonly acknowledgedAt: Date }
+    | { readonly kind: "SUPERSEDED"; readonly lastAcknowledgedAt: Date }
+    | { readonly kind: "NONE" }
+    | null;
   /**
    * Whether the console may offer this finding an acknowledge control.
    *
@@ -269,9 +308,12 @@ export async function getOrderScreening(input: {
     });
     const settled = new Set(acknowledged.map((row) => row.fingerprint));
 
+    const patientCoverage = await loadPatientScopeCoverage(tx, input, latest);
+
     const findings = latest
       .map((row) => {
         const acknowledgedByViewer = settled.has(row.fingerprint);
+        const patientScopeCoverage = patientCoverage.get(row.fingerprint) ?? null;
         return Object.freeze({
           findingId: row.id,
           code: row.code,
@@ -285,7 +327,16 @@ export async function getOrderScreening(input: {
           triggers: parseTriggers(row.triggers),
           group: groupFor(row.kind, row.code, row.severity),
           acknowledgedByViewer,
-          acknowledgeable: row.disposition === "REQUIRES_ACKNOWLEDGEMENT" && !acknowledgedByViewer,
+          patientScopeCoverage,
+          // No control when the finding is settled at EITHER scope —
+          // on this order by the viewer, or for this patient at the
+          // current record state. Mirrors the gate exactly:
+          // `outstandingCount` below is what ApprovePV1 will refuse
+          // on, so the two must count the same rows.
+          acknowledgeable:
+            row.disposition === "REQUIRES_ACKNOWLEDGEMENT" &&
+            !acknowledgedByViewer &&
+            patientScopeCoverage?.kind !== "COVERED",
         });
       })
       // Most severe first, then code, then fingerprint — the ordering
@@ -308,4 +359,97 @@ export async function getOrderScreening(input: {
   };
 
   return input.tx !== undefined ? run(input.tx) : readInOrgScope(input.organizationId, run);
+}
+
+/**
+ * Patient-scoped coverage for the PATIENT-RECORD gaps in one screen,
+ * keyed by fingerprint. Findings that are not patient-record gaps are
+ * absent — their view carries `patientScopeCoverage: null`.
+ *
+ * Classifies with `asPatientRecordGap` and hashes with
+ * `patientRecordStateToken` — the gate's own functions — so "COVERED"
+ * here and "settled" there are the same computation reading the same
+ * rows, not two implementations free to drift.
+ */
+async function loadPatientScopeCoverage(
+  tx: TenantTransactionClient,
+  input: {
+    readonly organizationId: string;
+    readonly orderId: string;
+    readonly pharmacistUserId: string;
+  },
+  latest: ReadonlyArray<{
+    readonly kind: string;
+    readonly code: string;
+    readonly disposition: string;
+    readonly fingerprint: string;
+  }>
+): Promise<
+  ReadonlyMap<
+    string,
+    | { readonly kind: "COVERED"; readonly acknowledgedAt: Date }
+    | { readonly kind: "SUPERSEDED"; readonly lastAcknowledgedAt: Date }
+    | { readonly kind: "NONE" }
+  >
+> {
+  const gaps = latest
+    .map((row) => asPatientRecordGap(row))
+    .filter((gap): gap is NonNullable<typeof gap> => gap !== null);
+  if (gaps.length === 0) return new Map();
+
+  const order = await tx.order.findFirst({
+    where: { id: input.orderId, organizationId: input.organizationId },
+    select: { patientId: true },
+  });
+  // A screen without a resolvable order is a tenancy mismatch the
+  // caller has bigger problems with; report the safe state (prompt).
+  if (order === null) {
+    return new Map(gaps.map((gap) => [gap.fingerprint, { kind: "NONE" as const }]));
+  }
+
+  const rows = await tx.patientScreeningAcknowledgement.findMany({
+    where: {
+      organizationId: input.organizationId,
+      patientId: order.patientId,
+      pharmacistUserId: input.pharmacistUserId,
+      fingerprint: { in: gaps.map((gap) => gap.fingerprint) },
+    },
+    select: { fingerprint: true, recordStateToken: true, acknowledgedAt: true },
+    orderBy: { acknowledgedAt: "desc" },
+  });
+
+  const tokenByAxis = new Map<string, string>();
+  for (const axis of new Set(gaps.map((gap) => gap.axis))) {
+    tokenByAxis.set(
+      axis,
+      await patientRecordStateToken(
+        { tx, organizationId: input.organizationId, patientId: order.patientId },
+        axis
+      )
+    );
+  }
+
+  const out = new Map<
+    string,
+    | { readonly kind: "COVERED"; readonly acknowledgedAt: Date }
+    | { readonly kind: "SUPERSEDED"; readonly lastAcknowledgedAt: Date }
+    | { readonly kind: "NONE" }
+  >();
+  for (const gap of gaps) {
+    const forFingerprint = rows.filter((row) => row.fingerprint === gap.fingerprint);
+    const current = forFingerprint.find(
+      (row) => row.recordStateToken === tokenByAxis.get(gap.axis)
+    );
+    if (current !== undefined) {
+      out.set(gap.fingerprint, { kind: "COVERED", acknowledgedAt: current.acknowledgedAt });
+    } else if (forFingerprint[0] !== undefined) {
+      out.set(gap.fingerprint, {
+        kind: "SUPERSEDED",
+        lastAcknowledgedAt: forFingerprint[0].acknowledgedAt,
+      });
+    } else {
+      out.set(gap.fingerprint, { kind: "NONE" });
+    }
+  }
+  return out;
 }
