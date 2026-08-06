@@ -44,6 +44,7 @@ import { buttonClass } from "../../../../src/components/ui/button.js";
 import { Icon } from "../../../../src/components/ui/icon.js";
 import { priorityMeta, statusMeta } from "../../../../src/components/ui/workflow.js";
 import { QueueFlash } from "../../../../src/components/ops/flash.js";
+import { CompoundCoveragePanel } from "../../../../src/components/ops/compound-coverage-panel.js";
 import { describePv1ScreeningError } from "../../../../src/components/ops/pv1-screening-errors.js";
 import {
   ScreeningFindingsPanel,
@@ -450,58 +451,11 @@ export default async function OrderDetailPage({
                       },
                     ]}
                   />
-                  {/* Compound screening coverage, per recipe row. The
-                      findings panel below says WHAT the screen
-                      concluded; this says WHICH rows it read — and
-                      which ones only the pharmacist will ever read,
-                      the same per-row honesty the allergy panel gives
-                      uncoded allergens. */}
-                  {line.compound === null ? null : line.compound.formula === null ? (
-                    <Banner
-                      tone="warning"
-                      title="Compounded preparation — no active formula linked"
-                    >
-                      No published formula claims this compound product, so none of its ingredients
-                      were machine-screened against the patient&rsquo;s allergies. Screen it by
-                      reading the preparation&rsquo;s recipe yourself. Linking and coding a formula
-                      (a formulary task) closes this for every future order.
-                    </Banner>
-                  ) : (
-                    <div className="space-y-1.5 border-t border-subtle pt-2">
-                      <p className="text-xs text-subtle">
-                        Compound formula{" "}
-                        <code className="font-mono text-muted">
-                          {line.compound.formula.formulaCode} v
-                          {line.compound.formula.formulaVersion}
-                        </code>{" "}
-                        — {line.compound.formula.formulaName}.{" "}
-                        {line.compound.formula.ingredients.some((i) => i.coding === "UNCODED")
-                          ? "Rows marked below were NOT machine-screened; read them."
-                          : "Every ingredient row is coded or accounted for."}
-                      </p>
-                      <ul className="space-y-1">
-                        {line.compound.formula.ingredients.map((ingredient) => (
-                          <li
-                            key={ingredient.ingredientId}
-                            className="flex flex-wrap items-center gap-2 text-sm"
-                          >
-                            <span className="text-fg">{ingredient.ingredientName}</span>
-                            <span className="font-mono text-xs text-subtle">
-                              {ingredient.quantity} {ingredient.unit}
-                            </span>
-                            {ingredient.coding === "RXNORM_IN" ? (
-                              <Badge tone="success">
-                                screened · RXCUI {ingredient.rxnormInRxcui}
-                              </Badge>
-                            ) : ingredient.coding === "NO_RXNORM_INGREDIENT" ? (
-                              <Badge tone="neutral">asserted non-drug — base/excipient</Badge>
-                            ) : (
-                              <Badge tone="warning">not machine-screened — read this row</Badge>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                  {/* Compound screening coverage, per recipe row.
+                      Extracted so the badge wiring is render-tested;
+                      see the component header for why that matters. */}
+                  {line.compound === null ? null : (
+                    <CompoundCoveragePanel compound={line.compound} />
                   )}
                 </CardContent>
               </Card>
