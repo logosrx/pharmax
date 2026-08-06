@@ -52,8 +52,10 @@ import "server-only";
 import {
   gapRemediationForFindingCode,
   gapRemediationFromSeverity,
+  SCREENING_GAP_REMEDIATIONS,
   SCREENING_SEVERITIES,
   severityRank,
+  type ScreeningGapRemediation,
   type ScreeningSeverity,
 } from "@pharmax/clinical-screening";
 import {
@@ -113,6 +115,10 @@ export type ScreeningFindingGroup =
 
 function isKnownSeverity(severity: string): severity is ScreeningSeverity {
   return (SCREENING_SEVERITIES as ReadonlyArray<string>).includes(severity);
+}
+
+function isKnownRemediation(value: string): value is ScreeningGapRemediation {
+  return (SCREENING_GAP_REMEDIATIONS as ReadonlyArray<string>).includes(value);
 }
 
 /** One coded concept that contributed to a finding. */
@@ -204,35 +210,62 @@ function rankOf(severity: string): number {
 }
 
 /**
- * Grouped by REMEDIATION, recovered code-first and severity-second.
+ * Grouped by REMEDIATION — the persisted column when the row carries
+ * one, recovery when it does not.
  *
- * MOST codes cannot answer this on their own. `SCR_ALLERGY_INPUT_UNAVAILABLE`
- * means "no allergy capture exists" today and will mean "nobody
- * recorded allergies for this patient" once it does;
- * `SCR_KNOWLEDGE_UNAVAILABLE` means "no database is provisioned" or
- * "this one code is missing from a working database". For those, a
- * code-based rule mislabels in both directions and the persisted
- * severity decides (`gapRemediationFromSeverity`).
+ * Rows written since the `remediation` column landed carry the value
+ * the engine's emit site stated, which is the end of the guessing
+ * this function used to open with. Two classes of row still cannot
+ * answer directly and fall back to the recovery rules that were the
+ * only reader before the column existed:
  *
- * The compound-coverage codes are the exception: they were minted to
- * carry exactly ORGANIZATION_DATA, they grade MINOR, and MINOR's
- * severity-recovery answer is (and must remain, for historical rows)
- * PLATFORM_CAPABILITY. `gapRemediationForFindingCode` is consulted
- * FIRST for exactly this reason — without it the panel would tell a
- * pharmacist "nobody can close this" about their own formulary
- * team's backlog.
+ *   - NULL — a gap row written by a pre-column binary (its deploy
+ *     window, or a database backfilled before this build).
+ *   - A value this build does not recognize — the vocabulary is
+ *     designed to grow, so a NEWER binary can have persisted a
+ *     remediation this build has no group for.
  *
- * An uninterpretable grading falls to PRESCRIPTION_COVERAGE — the
- * group that invites a look — because telling someone to check is a
- * cheaper error than telling them to ignore.
+ * The recovery is code-first (`gapRemediationForFindingCode` — the
+ * compound-coverage codes grade MINOR but belong to the formulary
+ * team, not to "nobody"), severity-second
+ * (`gapRemediationFromSeverity`). An uninterpretable grading falls to
+ * PRESCRIPTION_COVERAGE — the group that invites a look — because
+ * telling someone to check is a cheaper error than telling them to
+ * ignore.
+ *
+ * RECORD_IMMUTABLE groups with PLATFORM_CAPABILITY on purpose: the
+ * panel's operative sentence for both is "nobody handling this order
+ * can close this", the persisted `reason` carries the precise story,
+ * and it is also exactly how those rows grouped under severity
+ * recovery — the column must not re-file findings a pharmacist has
+ * already learned the place of.
  */
-function groupFor(kind: string, code: string, severity: string): ScreeningFindingGroup {
+function groupFor(
+  kind: string,
+  code: string,
+  severity: string,
+  persistedRemediation: string | null
+): ScreeningFindingGroup {
   if (kind !== "SCREENING_GAP") return "CLINICAL";
   const remediation =
-    gapRemediationForFindingCode(code) ??
-    (isKnownSeverity(severity) ? gapRemediationFromSeverity(severity) : null);
-  if (remediation === "ORGANIZATION_DATA") return "ORGANIZATION_COVERAGE";
-  return remediation === "PLATFORM_CAPABILITY" ? "PLATFORM_CAPABILITY" : "PRESCRIPTION_COVERAGE";
+    persistedRemediation !== null && isKnownRemediation(persistedRemediation)
+      ? persistedRemediation
+      : (gapRemediationForFindingCode(code) ??
+        (isKnownSeverity(severity) ? gapRemediationFromSeverity(severity) : null));
+  switch (remediation) {
+    case "ORGANIZATION_DATA":
+      return "ORGANIZATION_COVERAGE";
+    case "PLATFORM_CAPABILITY":
+    case "RECORD_IMMUTABLE":
+      return "PLATFORM_CAPABILITY";
+    case "SUBJECT_DATA":
+    case null:
+      return "PRESCRIPTION_COVERAGE";
+    default: {
+      const exhaustive: never = remediation;
+      return exhaustive;
+    }
+  }
 }
 
 /**
@@ -279,6 +312,7 @@ export async function getOrderScreening(input: {
         severity: true,
         certainty: true,
         disposition: true,
+        remediation: true,
         fingerprint: true,
         reason: true,
         citation: true,
@@ -325,7 +359,7 @@ export async function getOrderScreening(input: {
           reason: row.reason,
           citation: row.citation,
           triggers: parseTriggers(row.triggers),
-          group: groupFor(row.kind, row.code, row.severity),
+          group: groupFor(row.kind, row.code, row.severity, row.remediation),
           acknowledgedByViewer,
           patientScopeCoverage,
           // No control when the finding is settled at EITHER scope —

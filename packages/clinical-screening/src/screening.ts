@@ -482,6 +482,7 @@ function collectInputUnavailabilityFindings(
       finding({
         code: INPUT_UNAVAILABLE_CODE_FOR_AXIS[axis],
         kind: "SCREENING_GAP",
+        remediation,
         // Never high enough to block, at either grade. Refusing to
         // dispense because our platform cannot hold an allergy list
         // would make our missing capability the patient's problem.
@@ -869,6 +870,7 @@ function collectDoseFindings(
       finding({
         code: "SCR_DOSE_KNOWLEDGE_NOT_PROVISIONED",
         kind: "SCREENING_GAP",
+        remediation: "PLATFORM_CAPABILITY",
         severity: screeningGapSeverity("PLATFORM_CAPABILITY"),
         certainty: "DEFINITE",
         reason:
@@ -901,6 +903,7 @@ function collectDoseFindings(
       finding({
         code: "SCR_DOSE_UNIT_NOT_COMPARABLE",
         kind: "SCREENING_GAP",
+        remediation: "SUBJECT_DATA",
         // Derived, not hardcoded: the pharmacist in front of the
         // order can reconcile the two units themselves and re-state
         // the comparison the engine refused to guess at — a
@@ -1038,9 +1041,8 @@ function trigger(
   return { source, recordId, code };
 }
 
-interface FindingDraft {
+interface FindingDraftBase {
   readonly code: ScreeningFindingCode;
-  readonly kind: ScreeningFindingKind;
   readonly severity: ScreeningSeverity;
   readonly certainty: ScreeningCertainty;
   readonly reason: string;
@@ -1057,6 +1059,24 @@ interface FindingDraft {
 }
 
 /**
+ * A union, so the compiler holds the invariant `remediation ⟺ gap`:
+ * a gap draft without a remediation, or a clinical draft claiming
+ * one, fails to compile at the emit site rather than persisting a
+ * row a reader has to second-guess. Every gap already computes its
+ * remediation to grade itself, so stating it here costs the emit
+ * site nothing.
+ */
+type FindingDraft =
+  | (FindingDraftBase & {
+      readonly kind: "SCREENING_GAP";
+      readonly remediation: ScreeningGapRemediation;
+    })
+  | (FindingDraftBase & {
+      readonly kind: Exclude<ScreeningFindingKind, "SCREENING_GAP">;
+      readonly remediation?: never;
+    });
+
+/**
  * Disposition and fingerprint are derived here and nowhere else, so no
  * call site can mint a finding that blocks without going through
  * `dispositionFor`, or one whose identity omits part of what it says.
@@ -1071,6 +1091,7 @@ function finding(draft: FindingDraft): ScreeningFinding {
     kind: draft.kind,
     severity: draft.severity,
     certainty: draft.certainty,
+    remediation: draft.kind === "SCREENING_GAP" ? draft.remediation : null,
     reason: draft.reason,
     triggers: draft.triggers,
     citation: draft.citation,
@@ -1133,6 +1154,7 @@ function knowledgeGapFinding(
     return finding({
       code: "SCR_COMPOUND_FORMULA_NOT_CODED",
       kind: "SCREENING_GAP",
+      remediation: "ORGANIZATION_DATA",
       // ORGANIZATION_DATA grading (MINOR → INFORMATIONAL): closable,
       // but only by the org's formulary team, and identical on every
       // order for this product until they act — interrupting the
@@ -1156,6 +1178,7 @@ function knowledgeGapFinding(
     return finding({
       code: "SCR_KNOWLEDGE_NOT_APPLICABLE",
       kind: "SCREENING_GAP",
+      remediation: "PLATFORM_CAPABILITY",
       // PLATFORM_CAPABILITY grading (MINOR → INFORMATIONAL): nobody
       // touching this order can close the gap, so it is recorded
       // without interrupting. Never high enough to block.
@@ -1177,6 +1200,7 @@ function knowledgeGapFinding(
   return finding({
     code: "SCR_KNOWLEDGE_UNAVAILABLE",
     kind: "SCREENING_GAP",
+    remediation,
     // Never high enough to block, at either grade: refusing to
     // dispense because our reference data is incomplete would make a
     // gap in our knowledge the patient's problem.
@@ -1242,6 +1266,7 @@ function partialCodingGapFinding(
     code: "SCR_COMPOUND_INGREDIENTS_PARTIALLY_CODED",
     kind: "SCREENING_GAP",
     // Same grading and same reasoning as SCR_COMPOUND_FORMULA_NOT_CODED.
+    remediation: "ORGANIZATION_DATA",
     severity: screeningGapSeverity("ORGANIZATION_DATA"),
     certainty: "DEFINITE",
     reason:

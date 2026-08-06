@@ -57,6 +57,11 @@ export interface StubFinding {
   readonly severity: string;
   readonly certainty: string;
   readonly disposition: string;
+  /**
+   * Who can close the gap, as persisted; `null` on clinical findings.
+   * Same null-vs-absent distinction as the attribution stamps below.
+   */
+  readonly remediation?: string | null;
   readonly occurredAt: Date;
   /**
    * `PV1_START` or `PV1_APPROVE`. Absent on rows a test seeded
@@ -341,6 +346,7 @@ export function createScreeningStubs(
             severity: String(row["severity"]),
             certainty: String(row["certainty"]),
             disposition: String(row["disposition"]),
+            remediation: (row["remediation"] ?? null) as string | null,
             occurredAt: row["occurredAt"] as Date,
             phase: String(row["phase"]),
             commandLogId: String(row["commandLogId"]),

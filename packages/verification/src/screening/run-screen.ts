@@ -549,6 +549,11 @@ export async function persistFindings(input: PersistFindingsInput): Promise<void
         severity: finding.severity,
         certainty: finding.certainty,
         disposition: finding.disposition,
+        // Stated by the engine's emit site (null for clinical
+        // findings), so coverage reporting reads a column instead of
+        // re-deriving "whose fault" from severity — see the
+        // `remediation` doc on `ScreeningFinding`.
+        remediation: finding.remediation,
         fingerprint: finding.fingerprint,
         reason: finding.reason,
         triggers: finding.triggers as unknown as Prisma.InputJsonValue,
