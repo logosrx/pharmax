@@ -85,7 +85,7 @@ jobs:
       region: ${{ steps.check.outputs.region }}
       deploy_services: ${{ steps.services.outputs.deploy_services }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: check
         run: |
@@ -151,7 +151,7 @@ jobs:
           - service: print-agent
             dockerfile: apps/print-agent/Dockerfile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

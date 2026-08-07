@@ -59,7 +59,7 @@ jobs:
       matrix:
         language: ["javascript-typescript"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
@@ -82,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history so `--log-opts` can scan the entire branch
           # on push events. PR events only scan the diff (fast).
@@ -107,7 +107,7 @@ jobs:
     # Only meaningful on pull_request — the action diffs base vs head.
     if: ${{ github.event_name == 'pull_request' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Review dependencies
         uses: actions/dependency-review-action@v5
         with:
@@ -130,7 +130,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
         with:
