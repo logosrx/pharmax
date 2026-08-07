@@ -59,6 +59,24 @@ export const PV1_SCREENING_HARD_STOP = "PV1_SCREENING_HARD_STOP";
 export const PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED = "PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED";
 
 /**
+ * The approval asserted (via `reviewedScreenDigest`) which findings
+ * list the pharmacist reviewed, and the sign-off re-screen produced a
+ * different list.
+ *
+ * Raised for ANY difference — including ones the other gates would
+ * wave through, like a new INFORMATIONAL finding or a finding that
+ * vanished. The gates police what a finding demands; the digest
+ * polices what the pharmacist saw. An approval whose premise moved is
+ * refused so the review can be redone against the current screen,
+ * which this refusal has already persisted.
+ *
+ * Class: `InvariantViolationError` (422) — same reasoning as the gate
+ * refusals above: well-formed, understood, refused by rule, and
+ * retrying unchanged fails identically.
+ */
+export const PV1_SCREENING_CHANGED_SINCE_REVIEW = "PV1_SCREENING_CHANGED_SINCE_REVIEW";
+
+/**
  * The order carried no prescription lines to screen.
  *
  * Raised rather than returning "no findings", because zero findings

@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED,
+  PV1_SCREENING_CHANGED_SINCE_REVIEW,
   PV1_SCREENING_FINDING_NOT_ACKNOWLEDGEABLE,
   PV1_SCREENING_FINDING_UNKNOWN,
   PV1_SCREENING_HARD_STOP,
@@ -41,6 +42,7 @@ describe("describePv1ScreeningError", () => {
     for (const code of [
       PV1_SCREENING_HARD_STOP,
       PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED,
+      PV1_SCREENING_CHANGED_SINCE_REVIEW,
       PV1_SCREENING_FINDING_UNKNOWN,
       PV1_SCREENING_FINDING_NOT_ACKNOWLEDGEABLE,
       PV1_SCREENING_STAGE_INVALID,
@@ -75,6 +77,17 @@ describe("describePv1ScreeningError", () => {
     const described = describePv1ScreeningError(payloadFor(PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED));
     expect(described?.resolvableByAcknowledgement).toBe(true);
     expect(described?.guidance).toContain("colleague");
+  });
+
+  it("tells the pharmacist a changed screen means re-review, not re-acknowledge", () => {
+    const described = describePv1ScreeningError(payloadFor(PV1_SCREENING_CHANGED_SINCE_REVIEW));
+    // Not acknowledgement-resolvable: the remedy is to reload and
+    // review the NEW list — offering "go and acknowledge them" would
+    // point at findings the pharmacist has not read yet.
+    expect(described?.resolvableByAcknowledgement).toBe(false);
+    expect(described?.tone).toBe("warning");
+    expect(described?.guidance).toContain("Nothing was approved");
+    expect(described?.guidance.toLowerCase()).toContain("reload");
   });
 
   it("never presents a hard stop as something an acknowledgement clears", () => {

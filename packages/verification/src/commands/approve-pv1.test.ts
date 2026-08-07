@@ -47,6 +47,7 @@ import {
   configureClinicalScreening,
   resetClinicalScreeningConfigurationForTests,
 } from "../screening/configure.js";
+import { screenedFindingsDigest } from "../screening/digest.js";
 import {
   createScreeningStubs,
   type ScreeningStubOptions,
@@ -1269,6 +1270,147 @@ describe("ApprovePV1 — a screening refusal is a COMMITTED refusal", () => {
     // …and the refusal IS described, so the assertion above is not
     // passing on an empty bag.
     expect(serialized).toContain("PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reviewed-screen digest — the "screened at sign-off" attestation
+// ---------------------------------------------------------------------------
+
+describe("ApprovePV1 — reviewedScreenDigest binds the approval to the reviewed list", () => {
+  afterEach(() => {
+    resetClinicalScreeningConfigurationForTests();
+  });
+
+  /** What the default fixture's sign-off screen digests to. */
+  const DEFAULT_SCREEN_DIGEST = screenedFindingsDigest(DEFAULT_GAP_FINGERPRINTS);
+
+  it("approves when the sign-off screen matches the reviewed digest", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      const output = await executeCommand(
+        ApprovePV1,
+        { ...validInput(), reviewedScreenDigest: DEFAULT_SCREEN_DIGEST },
+        { idempotencyKey: "approve-digest-match" }
+      );
+      expect(output.currentStatus).toBe("PV1_APPROVED_READY_FOR_FILL");
+    });
+
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(1);
+    expect(callsOf(fake.calls, "order", "updateMany")).toHaveLength(1);
+  });
+
+  it("refuses a stale review as a COMMITTED refusal — screen persisted, no approval, nothing cached", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    // A digest of a DIFFERENT list than the sign-off screen will
+    // produce — as if a finding vanished between render and sign-off,
+    // which is exactly the change the acknowledgement gate would have
+    // waved through (both default findings are INFORMATIONAL).
+    const staleDigest = screenedFindingsDigest([KNOWLEDGE_GAP_FINGERPRINT]);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(
+          ApprovePV1,
+          { ...validInput(), reviewedScreenDigest: staleDigest },
+          { idempotencyKey: "approve-digest-stale" }
+        )
+      ).rejects.toMatchObject({
+        code: "PV1_SCREENING_CHANGED_SINCE_REVIEW",
+        httpStatus: 422,
+      });
+    });
+
+    // Committed-refusal semantics, same as the gate refusals: the
+    // sign-off screen the pharmacist is sent back to is on record…
+    const persisted = callsOf(fake.calls, "orderScreeningFinding", "createMany");
+    expect(persisted).toHaveLength(1);
+    const events = callsOf(fake.calls, "orderEvent", "create").map(
+      (c) => (c.args as { data: Record<string, unknown> }).data["eventType"]
+    );
+    expect(events).toEqual(["order.pv1.screening.recorded.v1", "order.pv1.approval.refused.v1"]);
+    expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(1);
+
+    // …nothing about the approval happened…
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(0);
+    expect(callsOf(fake.calls, "order", "update")).toHaveLength(0);
+    expect(callsOf(fake.calls, "order", "updateMany")).toHaveLength(0);
+
+    // …and the refusal is not cached: the remedy is to re-review and
+    // retry with the new list's digest, and a cached refusal would
+    // answer that retry with the refusal it was sent to resolve.
+    expect(callsOf(fake.calls, "idempotencyKey", "create")).toHaveLength(0);
+  });
+
+  it("outranks the acknowledgement gate — a stale review is refused as stale, not as unacknowledged", async () => {
+    // Provisioned source without the candidate's NDC (the committed-
+    // refusal suite's fixture): the sign-off screen now carries a
+    // MODERATE outstanding gap the gate would refuse on. With a stale
+    // digest asserted, the digest speaks first — the pharmacist's
+    // premise is void regardless of what the new list demands.
+    configureClinicalScreening({
+      knowledgeSource: createInMemoryDrugKnowledgeSource({
+        drugs: {
+          "00000-0000-99": {
+            ingredientCodes: ["INGREDIENT_ALFA"],
+            uncodedIngredientCount: 0,
+            therapeuticClassCodes: [],
+            crossSensitivityClassCodes: [],
+            doseRange: null,
+          },
+        },
+      }),
+    });
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(
+          ApprovePV1,
+          { ...validInput(), reviewedScreenDigest: screenedFindingsDigest([]) },
+          { idempotencyKey: "approve-digest-vs-gate" }
+        )
+      ).rejects.toMatchObject({ code: "PV1_SCREENING_CHANGED_SINCE_REVIEW" });
+    });
+
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(0);
+  });
+
+  it("without a digest the queue's contract is unchanged — same screen, approval passes", async () => {
+    // The same order that the stale-digest test refused sails through
+    // when no attestation is made: the digest gate is opt-in, armed by
+    // the surface that rendered a findings list.
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      const output = await executeCommand(ApprovePV1, validInput(), {
+        idempotencyKey: "approve-no-digest",
+      });
+      expect(output.currentStatus).toBe("PV1_APPROVED_READY_FOR_FILL");
+    });
+    expect(callsOf(fake.calls, "verificationRecord", "create")).toHaveLength(1);
+  });
+
+  it("rejects a malformed digest at the schema, before any lock or screen", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(
+          ApprovePV1,
+          { ...validInput(), reviewedScreenDigest: "not-a-digest" },
+          { idempotencyKey: "k" }
+        )
+      ).rejects.toMatchObject({ code: "COMMAND_INPUT_INVALID" });
+    });
+    expect(callsOf(fake.calls, "$queryRaw", "select_for_update_order")).toHaveLength(0);
   });
 });
 

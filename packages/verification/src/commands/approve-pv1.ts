@@ -171,6 +171,7 @@ import {
 } from "@pharmax/workflow";
 import { z } from "zod";
 
+import { SCREEN_DIGEST_PATTERN, screenChangedSinceReviewRefusal } from "../screening/digest.js";
 import { screeningRefusalForApproval } from "../screening/gate.js";
 import { loadPatientIdForOrder } from "../screening/order-patient.js";
 import { projectScreening } from "../screening/projection.js";
@@ -202,6 +203,18 @@ export const FILL_BUCKET_NOT_CONFIGURED = "FILL_BUCKET_NOT_CONFIGURED";
 const inputSchema = z
   .object({
     orderId: z.uuid(),
+    /**
+     * OPTIONAL attestation of which findings list the pharmacist
+     * reviewed — the hex SHA-256 the console computed over the
+     * rendered panel's fingerprints (`screenedFindingsDigest`). When
+     * present, the sign-off re-screen must digest to the same value or
+     * the approval is refused (`PV1_SCREENING_CHANGED_SINCE_REVIEW`),
+     * for ANY difference — not only the ones the acknowledgement gate
+     * polices. When absent (the queue's one-click approve), the gate
+     * behaves as before: acknowledgements and hard stops still bind,
+     * but no reviewed-list assertion is checked.
+     */
+    reviewedScreenDigest: z.string().regex(SCREEN_DIGEST_PATTERN).optional(),
   })
   .strict();
 
@@ -252,7 +265,7 @@ export const ApprovePV1 = defineCommand<ApprovePV1Input, ApprovePV1Output>({
   ],
   redactFields: [],
 
-  async exec({ tx, ctx, target, policy, clock, commandLogId }) {
+  async exec({ tx, ctx, input, target, policy, clock, commandLogId }) {
     if (target === undefined) {
       throw new errors.InternalError({
         code: "APPROVE_PV1_NO_TARGET",
@@ -454,14 +467,24 @@ export const ApprovePV1 = defineCommand<ApprovePV1Input, ApprovePV1Output>({
       },
     };
 
-    const refusal = await screeningRefusalForApproval({
-      tx,
-      organizationId: ctx.organizationId,
-      orderId: target.id,
-      patientId,
-      pharmacistUserId: approvingPharmacistUserId,
-      evaluation: screen.evaluation,
-    });
+    // Digest gate FIRST: when the console asserted which findings
+    // list this approval was reviewed against, ANY difference at
+    // sign-off voids the approval's premise — including differences
+    // the acknowledgement gate below would wave through (a new
+    // INFORMATIONAL finding, a finding that vanished). See
+    // `screening/digest.ts` for the ordering rationale. Both refusals
+    // take the same committed-refusal exit, so the sign-off screen the
+    // pharmacist is sent back to is on record either way.
+    const refusal =
+      screenChangedSinceReviewRefusal(input.reviewedScreenDigest, screen.evaluation) ??
+      (await screeningRefusalForApproval({
+        tx,
+        organizationId: ctx.organizationId,
+        orderId: target.id,
+        patientId,
+        pharmacistUserId: approvingPharmacistUserId,
+        evaluation: screen.evaluation,
+      }));
     if (refusal !== null) {
       return {
         refusal,
