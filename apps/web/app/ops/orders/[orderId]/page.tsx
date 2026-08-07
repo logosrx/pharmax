@@ -23,6 +23,7 @@ import { redirect } from "next/navigation";
 
 import { OrderStatus } from "@pharmax/database";
 import { PERMISSIONS } from "@pharmax/rbac";
+import { screenedFindingsDigest } from "@pharmax/verification";
 
 import {
   hasOperatorPermission,
@@ -46,6 +47,7 @@ import { priorityMeta, statusMeta } from "../../../../src/components/ui/workflow
 import { QueueFlash } from "../../../../src/components/ops/flash.js";
 import { CompoundCoveragePanel } from "../../../../src/components/ops/compound-coverage-panel.js";
 import { describePv1ScreeningError } from "../../../../src/components/ops/pv1-screening-errors.js";
+import { Pv1DecisionPanel } from "../../../../src/components/ops/pv1-decision-panel.js";
 import {
   ScreeningFindingsPanel,
   type AcknowledgeGate,
@@ -499,6 +501,29 @@ export default async function OrderDetailPage({
         screening={screening}
         gate={acknowledgeGate}
       />
+
+      {/* The decision, immediately below the evidence — and bound to
+          it. The digest is computed over the SAME projection the panel
+          above just rendered, so the approve this form posts names the
+          exact findings list on this screen; see the component header
+          and `screening/digest.ts` for the refusal it arms. Rendered
+          only while the review is open: once the order moves on there
+          is no decision to take here. */}
+      {detail.currentStatus === OrderStatus.PV1_IN_PROGRESS ? (
+        <Pv1DecisionPanel
+          orderId={detail.orderId}
+          screening={screening}
+          reviewedScreenDigest={
+            screening === null
+              ? null
+              : screenedFindingsDigest(screening.findings.map((f) => f.fingerprint))
+          }
+          capabilities={{
+            canApprove: hasOperatorPermission(permissions, PERMISSIONS.PV1_APPROVE),
+            canReject: hasOperatorPermission(permissions, PERMISSIONS.PV1_REJECT),
+          }}
+        />
+      ) : null}
 
       <Section title="Shipment">
         {detail.shipment === null ? (

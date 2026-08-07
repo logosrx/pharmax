@@ -25,11 +25,20 @@ function readString(body: FormData | Record<string, unknown>, key: string): stri
 
 export async function POST(request: Request, context: RouteParams): Promise<Response> {
   const { orderId } = await context.params;
+
+  // The order detail page posts `from=detail`; a failure should land
+  // back beside the prescription being rejected, not on the queue.
+  // Resolved during `buildInput`, read by the thunk at redirect time.
+  let failureTarget = `/ops/pv1`;
+
   return await dispatchOpsCommand({
     request,
     command: RejectPV1,
     idempotencyKeyPrefix: `route:reject-pv1:${orderId}`,
     buildInput: ({ body }) => {
+      if (readString(body, "from") === "detail") {
+        failureTarget = `/ops/orders/${orderId}`;
+      }
       const reasonCode = readString(body, "reasonCode");
       if (
         reasonCode === null ||
@@ -42,7 +51,7 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
       return { orderId, reasonCode: reasonCode as PV1RejectionReason };
     },
     successRedirect: () => `/ops/pv1?flash=rejected&orderId=${orderId}`,
-    failureRedirect: `/ops/pv1`,
+    failureRedirect: () => failureTarget,
     successLogEvent: "ops.pv1.reject.applied",
     failureLogEvent: "ops.pv1.reject.failed",
   });

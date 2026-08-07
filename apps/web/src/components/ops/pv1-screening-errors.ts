@@ -22,6 +22,7 @@
 
 import {
   PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED,
+  PV1_SCREENING_CHANGED_SINCE_REVIEW,
   PV1_SCREENING_FINDING_NOT_ACKNOWLEDGEABLE,
   PV1_SCREENING_FINDING_UNKNOWN,
   PV1_SCREENING_HARD_STOP,
@@ -59,6 +60,13 @@ const MESSAGES: Readonly<Record<string, Omit<Pv1ScreeningErrorMessage, "code">>>
       "One or more screening findings need an acknowledgement from you specifically. A colleague's acknowledgement of the same finding does not satisfy your approval. Reload the order — approval screens it again at the moment you sign, so the panel may now list a finding that was not there when you started, and it lists exactly what refused you. Acknowledge each outstanding finding on the clinical screening panel, then approve.",
     tone: "warning",
     resolvableByAcknowledgement: true,
+  },
+  [PV1_SCREENING_CHANGED_SINCE_REVIEW]: {
+    title: "Screening changed between your review and sign-off",
+    guidance:
+      "Nothing was approved. The order was screened again at the moment you signed, and the result no longer matches the findings list your approval was reviewed against — the patient's record moved, or the prescription was edited, while you were reading. The sign-off screen has been recorded: reload the order and review the findings it shows now, then decide again.",
+    tone: "warning",
+    resolvableByAcknowledgement: false,
   },
   [PV1_SCREENING_FINDING_UNKNOWN]: {
     title: "That finding is no longer on this order's latest screen",

@@ -309,6 +309,7 @@ export {
 
 export {
   PV1_SCREENING_ACKNOWLEDGEMENT_REQUIRED,
+  PV1_SCREENING_CHANGED_SINCE_REVIEW,
   PV1_SCREENING_FINDING_NOT_ACKNOWLEDGEABLE,
   PV1_SCREENING_FINDING_UNKNOWN,
   PV1_SCREENING_HARD_STOP,
@@ -355,6 +356,14 @@ export {
 // commands above persist and transition.
 export { runOrderScreen, type RunScreenInput, type ScreenResult } from "./screening/run-screen.js";
 export { screeningRefusalForApproval, type ApprovalGateInput } from "./screening/gate.js";
+
+// The reviewed-screen digest. `screenedFindingsDigest` is exported for
+// the console's ORDER DETAIL surface: the page computes it over the
+// findings panel it just rendered and embeds it in the approve form,
+// so the approval names the exact list the pharmacist decided on.
+// `SCREEN_DIGEST_PATTERN` is the shape the route validates before the
+// value reaches the command's schema (which enforces it again).
+export { SCREEN_DIGEST_PATTERN, screenedFindingsDigest } from "./screening/digest.js";
 
 import * as acknowledgePV1ScreeningFindingModule from "./commands/acknowledge-pv1-screening-finding.js";
 import * as approveFinalVerificationModule from "./commands/approve-final-verification.js";
