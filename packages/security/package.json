@@ -18,7 +18,7 @@
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
-    "ulid": "^2.3.0",
+    "ulid": "^3.0.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {
