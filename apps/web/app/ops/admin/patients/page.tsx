@@ -2,7 +2,8 @@
 //
 // PHI surface. Decrypts identifying fields for each visible result so
 // the operator can disambiguate matches; every result render
-// dispatches a ViewPatient audit (surface=PATIENT_SEARCH_RESULT). The
+// dispatches a ViewPatient audit (surface=PATIENT_SEARCH_RESULT), and
+// a result whose audit write fails is withheld from the page. The
 // blind-index search refuses to run without a query term. Query terms
 // are NOT echoed server-side (logs); they do appear in the operator's
 // URL (acceptable — the operator is authorized to view this PHI).
@@ -14,7 +15,11 @@ import {
   loadOperatorPermissions,
 } from "../../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../../src/server/auth/resolve-tenancy.js";
-import { auditPatientViewsBatch } from "../../../../src/server/ops/audit-patient-view.js";
+import {
+  auditPatientViewsBatch,
+  partitionAuditedPatients,
+} from "../../../../src/server/ops/audit-patient-view.js";
+import { UnauditedResultsBanner } from "../../../../src/components/ops/unaudited-results-banner.js";
 import { searchPatientsForAdmin } from "../../../../src/server/ops/search-patients-for-admin.js";
 import { PageHeader, Section } from "../../../../src/components/ui/page.js";
 import { Card, CardContent, LinkCard } from "../../../../src/components/ui/card.js";
@@ -101,6 +106,10 @@ export default async function PatientAdminSearchPage({
       searchError = cause instanceof Error ? cause.message : "Patient search failed unexpectedly.";
     }
   }
+
+  // Only rows whose ViewPatient audit is on record may render — the
+  // rest are withheld and counted in the banner (issue #79).
+  const audited = results === null ? null : partitionAuditedPatients(results.rows, auditBatch);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -203,21 +212,27 @@ export default async function PatientAdminSearchPage({
         </Banner>
       ) : null}
 
-      {auditBatch !== null && auditBatch.failedPatientIds.length > 0 ? (
-        <Banner tone="danger" title="PHI-view audit incomplete">
-          Audit failed for {auditBatch.failedPatientIds.length} of {auditBatch.attempted} results.
-          The page rendered the data anyway — this is a compliance regression; report operator id{" "}
-          <code>{session.operator.userId}</code>.
-        </Banner>
+      {audited !== null ? (
+        <UnauditedResultsBanner
+          suppressedCount={audited.suppressedCount}
+          attempted={auditBatch?.attempted ?? results?.rows.length ?? 0}
+          operatorUserId={session.operator.userId}
+        />
       ) : null}
 
-      {results !== null ? (
-        <Section title="Results" count={results.rows.length} aside={`${results.tookMs}ms`}>
+      {results !== null && audited !== null ? (
+        <Section title="Results" count={audited.visible.length} aside={`${results.tookMs}ms`}>
           {results.rows.length === 0 ? (
             <EmptyState icon="patients" title="No patients match" />
+          ) : audited.visible.length === 0 ? (
+            <EmptyState
+              icon="patients"
+              title="All matching results are withheld"
+              description="Patients matched this search, but none of their view audits could be recorded, so none of them are shown. See the banner above."
+            />
           ) : (
             <div className="space-y-2">
-              {results.rows.map((row) => {
+              {audited.visible.map((row) => {
                 const name = [row.firstName, row.middleName, row.lastName]
                   .filter((s) => s !== null && s.length > 0)
                   .join(" ");
