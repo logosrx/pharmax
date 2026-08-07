@@ -13,6 +13,11 @@ that doc before implementing any item here.
 > `docs/adr/` (Architecture Decision Records).** This plan is the
 > build-order ledger; the ADR series is the rationale.
 
+> **For what must be true before we dispense to a real patient, see
+> `docs/GO_LIVE_PROGRAM.md`.** This plan is organised by capability; the
+> go-live program is organised by risk to a patient and to the licence,
+> and its gates are blocking.
+
 ## Phase 0 — Foundations
 
 - [x] Repo + tooling baseline (TS, ESLint, Prettier, Vitest, Husky, lint-staged)
