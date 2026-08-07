@@ -71,7 +71,7 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
 
   // Accept either form-encoded body (the on-page form) or JSON
   // (programmatic clients). Default to form-encoded.
-  let disposition: string | null = null;
+  let disposition: string | null;
   let reasonText: string | undefined;
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {

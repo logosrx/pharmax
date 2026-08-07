@@ -10,10 +10,10 @@
 //     next fire? Used by CreateReportSchedule (initial
 //     nextRunAt) and the worker tick (advance after run).
 //
-// Library: `cron-parser@4.x` — small, no native deps, supports
+// Library: `cron-parser@5.x` — small, no native deps, supports
 // IANA timezone via the `tz` option.
 
-import cronParser from "cron-parser";
+import { CronExpressionParser } from "cron-parser";
 
 export interface CronValidationOk {
   readonly ok: true;
@@ -46,13 +46,28 @@ export function validateCron(input: {
     return { ok: false, error: "cron expression is empty" };
   }
   try {
-    const interval = cronParser.parseExpression(trimmed, {
+    const interval = CronExpressionParser.parse(trimmed, {
       currentDate: input.from ?? new Date(),
       tz: input.timezone,
     });
     const next = interval.next();
     return { ok: true, nextRunAt: next.toDate() };
   } catch (cause) {
+    // Only the library's own parse rejections mean "the operator
+    // typed a bad expression". A TypeError or ReferenceError means
+    // we called it wrong or it is not the library we think it is —
+    // report that as a fault, not as the operator's mistake.
+    //
+    // This is not hypothetical. The 4.x -> 5.x rename of
+    // `parseExpression` to `CronExpressionParser.parse` landed here
+    // as `ok: false, error: "default.parseExpression is not a
+    // function"`, which CreateReportSchedule surfaced as
+    // CRON_EXPRESSION_INVALID against a perfectly valid `0 9 * * 1`.
+    // Swallowed that way, a dependency break presents as every
+    // admin suddenly being unable to type a correct cron.
+    if (cause instanceof TypeError || cause instanceof ReferenceError) {
+      throw cause;
+    }
     return {
       ok: false,
       error: cause instanceof Error ? cause.message : "invalid cron expression",
@@ -70,7 +85,7 @@ export function computeNextRun(input: {
   readonly timezone: string;
   readonly from: Date;
 }): Date {
-  const interval = cronParser.parseExpression(input.expression, {
+  const interval = CronExpressionParser.parse(input.expression, {
     currentDate: input.from,
     tz: input.timezone,
   });

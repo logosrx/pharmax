@@ -36,6 +36,11 @@ import {
   resetRbacConfigurationForTests,
 } from "@pharmax/rbac";
 import { getShippingConfiguration, resetShippingConfigurationForTests } from "@pharmax/shipping";
+import {
+  clinicalScreeningKnowledgeSourceIsConfigured,
+  getClinicalScreeningKnowledgeSource,
+  resetClinicalScreeningConfigurationForTests,
+} from "@pharmax/verification";
 import type { PrismaClient } from "@pharmax/database";
 
 import {
@@ -88,6 +93,7 @@ function resetAllDownstream(): void {
   resetCommandBusConfigurationForTests();
   resetShippingConfigurationForTests();
   resetBillingConfigurationForTests();
+  resetClinicalScreeningConfigurationForTests();
 }
 
 // ---------------------------------------------------------------------
@@ -144,6 +150,7 @@ describe("buildCompositionRoot configurator ordering", () => {
       "@pharmax/command-bus",
       "@pharmax/shipping",
       "@pharmax/billing",
+      "@pharmax/clinical-screening",
     ]);
     // And the priorities monotonically increase.
     const priorities = root.appliedConfigurators.map((c) => c.priority);
@@ -197,6 +204,7 @@ describe("buildCompositionRoot configurator ordering", () => {
       "@pharmax/command-bus",
       "@pharmax/shipping",
       "@pharmax/billing",
+      "@pharmax/clinical-screening",
       "late",
     ]);
     // The three extras above also ran, recorded in `order`.
@@ -245,6 +253,19 @@ describe("buildCompositionRoot configurator ordering", () => {
     expect(BUILT_IN_PRIORITIES.COMMAND_BUS).toBe(30);
     expect(BUILT_IN_PRIORITIES.SHIPPING).toBe(40);
     expect(BUILT_IN_PRIORITIES.BILLING).toBe(50);
+    expect(BUILT_IN_PRIORITIES.CLINICAL_SCREENING).toBe(60);
+  });
+
+  it("wires the empty knowledge source when the caller supplies none", async () => {
+    // The fallback is deliberate and must stay visible: a deployment
+    // without a licensed drug database still screens, and reports on
+    // every prescription that it could not. What must never happen is
+    // the package being left unconfigured and the fallback becoming
+    // an absence nobody sees in the boot manifest.
+    const root = await buildCompositionRoot(baseInput());
+    expect(root.appliedConfigurators.map((c) => c.name)).toContain("@pharmax/clinical-screening");
+    expect(clinicalScreeningKnowledgeSourceIsConfigured()).toBe(true);
+    expect(getClinicalScreeningKnowledgeSource().describeDrug("ANY_CODE")).toBeNull();
   });
 });
 

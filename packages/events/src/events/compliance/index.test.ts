@@ -20,8 +20,8 @@ import * as ComplianceEvents from "./index.js";
 const ALL = Object.values(ComplianceEvents);
 
 describe("compliance domain barrel", () => {
-  it("1 compliance.* event is registered", () => {
-    expect(ALL.length).toBe(1);
+  it("3 compliance.* events are registered", () => {
+    expect(ALL.length).toBe(3);
   });
 
   it("every compliance.* event is owned by `security`", () => {

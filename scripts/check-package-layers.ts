@@ -110,6 +110,11 @@ const DOMAIN_PACKAGES: ReadonlySet<string> = new Set([
   "@pharmax/labels",
   "@pharmax/scan",
   "@pharmax/security",
+  // Continuous-monitoring side of the SOC 2 / HIPAA program: probes
+  // that re-verify the control claims in docs/soc2/ and write
+  // append-only evidence. A sibling capability, not infrastructure —
+  // nothing in the order lifecycle may depend on it.
+  "@pharmax/compliance",
 ]);
 
 // The CURRENT, frozen set of domain -> domain edges. Each is allowed
@@ -127,6 +132,15 @@ const ALLOWED_DOMAIN_EDGES: ReadonlySet<string> = new Set([
   // stage/assignee guards so both stages reject with identical codes.
   "@pharmax/compounding -> @pharmax/fill",
   "@pharmax/scan -> @pharmax/labels",
+  // compliance probes the security posture, so it reads security's
+  // definitions rather than restating them. Specifically
+  // ELEVATED_ROLE_CODES, which the quarterly access review already
+  // highlights against: two competing definitions of "privileged" is
+  // exactly the silent drift the compliance module exists to catch,
+  // so the constant stays in one place and both consumers move with
+  // it. The edge points inward from the observer to the observed and
+  // is not reciprocated.
+  "@pharmax/compliance -> @pharmax/security",
 ]);
 
 // ---------------------------------------------------------------------------

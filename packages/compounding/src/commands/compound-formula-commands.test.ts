@@ -121,6 +121,10 @@ interface FakePrismaOptions {
   knownProductIds?: ReadonlyArray<string>;
   /** When set, compoundFormula.create throws this. */
   formulaCreateError?: Error;
+  /** Row returned by product.findFirst (compoundProductId validation). */
+  compoundProductRow?: { id: string; ndcKind: string } | null;
+  /** When set, compoundFormula.update throws this (publish conflict). */
+  formulaUpdateError?: Error;
 }
 
 function buildFakePrisma(opts: FakePrismaOptions = {}): {
@@ -148,6 +152,7 @@ function buildFakePrisma(opts: FakePrismaOptions = {}): {
       }),
       update: vi.fn(async (args: unknown) => {
         calls.push({ table: "compoundFormula", op: "update", args });
+        if (opts.formulaUpdateError !== undefined) throw opts.formulaUpdateError;
         return { id: (args as { where: { id: string } }).where.id };
       }),
       updateMany: vi.fn(async (args: unknown) => {
@@ -168,6 +173,10 @@ function buildFakePrisma(opts: FakePrismaOptions = {}): {
         const requested = (args as { where: { id: { in: string[] } } }).where.id.in;
         const known = opts.knownProductIds === undefined ? requested : opts.knownProductIds;
         return requested.filter((id) => known.includes(id)).map((id) => ({ id }));
+      }),
+      findFirst: vi.fn(async (args: unknown) => {
+        calls.push({ table: "product", op: "findFirst", args });
+        return opts.compoundProductRow ?? null;
       }),
     },
     commandLog: {
@@ -552,6 +561,147 @@ describe("CreateCompoundFormula — ingredient product validation", () => {
   });
 });
 
+describe("CreateCompoundFormula — ingredient coding and the compound-product link", () => {
+  const COMPOUND_PRODUCT_ID = "77777777-7777-4777-8777-777777777777";
+
+  function codedCreateInput() {
+    return {
+      ...validCreateInput(),
+      compoundProductId: COMPOUND_PRODUCT_ID,
+      ingredients: [
+        {
+          ingredientName: "FIXTURE-ACTIVE-A",
+          quantity: 80,
+          unit: "mL",
+          rxnormInRxcui: "900001",
+        },
+        { ingredientName: "FIXTURE-MYSTERY", quantity: 80, unit: "mL" },
+        {
+          ingredientName: "FIXTURE-BASE",
+          quantity: 40,
+          unit: "mL",
+          noRxnormIngredient: true,
+        },
+      ],
+    };
+  }
+
+  it("persists the per-row coding state and the product link, and audits the counts", async () => {
+    const fake = buildFakePrisma({
+      compoundProductRow: { id: COMPOUND_PRODUCT_ID, ndcKind: "IN_HOUSE_COMPOUND" },
+    });
+    wireBusAndRbac(fake.client);
+
+    const out = await withTenancyContext(ctx(), () =>
+      executeCommand(CreateCompoundFormula, codedCreateInput(), { idempotencyKey: "coded-1" })
+    );
+
+    const formula = (
+      findOnly(fake.calls, "compoundFormula", "create").args as { data: Record<string, unknown> }
+    ).data;
+    expect(formula).toMatchObject({ id: out.formulaId, compoundProductId: COMPOUND_PRODUCT_ID });
+
+    const ingredients = (
+      findOnly(fake.calls, "compoundFormulaIngredient", "createMany").args as {
+        data: Array<Record<string, unknown>>;
+      }
+    ).data;
+    expect(ingredients[0]).toMatchObject({ coding: "RXNORM_IN", rxnormInRxcui: "900001" });
+    expect(ingredients[1]).toMatchObject({ coding: "UNCODED" });
+    expect(ingredients[1]?.["rxnormInRxcui"]).toBeUndefined();
+    expect(ingredients[2]).toMatchObject({ coding: "NO_RXNORM_INGREDIENT" });
+    expect(ingredients[2]?.["rxnormInRxcui"]).toBeUndefined();
+
+    // The screening-relevant facts reach the audit record as counts —
+    // the recipe itself stays out, as ever.
+    const audit = (
+      findOnly(fake.calls, "auditLog", "create").args as {
+        data: { metadata: Record<string, unknown> };
+      }
+    ).data;
+    expect(audit.metadata).toMatchObject({
+      codedIngredientCount: 1,
+      uncodedIngredientCount: 1,
+      compoundProductId: COMPOUND_PRODUCT_ID,
+    });
+  });
+
+  it("rejects a row that both carries an RXCUI and asserts none applies, at the schema boundary", async () => {
+    const fake = buildFakePrisma();
+    wireBusAndRbac(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          CreateCompoundFormula,
+          {
+            ...validCreateInput(),
+            ingredients: [
+              {
+                ingredientName: "FIXTURE-CONTRADICTION",
+                quantity: 1,
+                unit: "g",
+                rxnormInRxcui: "900001",
+                noRxnormIngredient: true,
+              },
+            ],
+          },
+          { idempotencyKey: "both" }
+        )
+      )
+    ).rejects.toMatchObject({ name: "ValidationError" });
+    expect(callsOf(fake.calls, "compoundFormula", "create")).toHaveLength(0);
+  });
+
+  it("rejects a non-numeric RXCUI at the schema boundary", async () => {
+    const fake = buildFakePrisma();
+    wireBusAndRbac(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          CreateCompoundFormula,
+          {
+            ...validCreateInput(),
+            ingredients: [
+              { ingredientName: "FIXTURE-BAD", quantity: 1, unit: "g", rxnormInRxcui: "RX-1" },
+            ],
+          },
+          { idempotencyKey: "bad-rxcui" }
+        )
+      )
+    ).rejects.toMatchObject({ name: "ValidationError" });
+  });
+
+  it("refuses a compoundProductId missing from this org's catalog", async () => {
+    const fake = buildFakePrisma({ compoundProductRow: null });
+    wireBusAndRbac(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(CreateCompoundFormula, codedCreateInput(), { idempotencyKey: "no-prod-2" })
+      )
+    ).rejects.toMatchObject({ code: "COMPOUND_FORMULA_PRODUCT_NOT_FOUND" });
+    expect(callsOf(fake.calls, "compoundFormula", "create")).toHaveLength(0);
+  });
+
+  it("refuses to link a NATIONAL product — the screening-suppression vector", async () => {
+    // Linking a real NDC to an org-authored recipe would replace its
+    // published-nomenclature screening with whatever the org wrote.
+    const fake = buildFakePrisma({
+      compoundProductRow: { id: COMPOUND_PRODUCT_ID, ndcKind: "NATIONAL" },
+    });
+    wireBusAndRbac(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(CreateCompoundFormula, codedCreateInput(), { idempotencyKey: "national" })
+      )
+    ).rejects.toMatchObject({ code: "COMPOUND_FORMULA_PRODUCT_NOT_COMPOUND" });
+    expect(callsOf(fake.calls, "compoundFormula", "create")).toHaveLength(0);
+  });
+});
+
 describe("CreateCompoundFormula — concurrent draft", () => {
   it("translates the partial-unique P2002 into a typed conflict", async () => {
     const p2002 = new Prisma.PrismaClientKnownRequestError("unique violation", {
@@ -619,6 +769,32 @@ describe("PublishCompoundFormula", () => {
       publishedByUserId: USER_ID,
       supersededFormulaId: PREDECESSOR_ID,
     });
+  });
+
+  it("translates the one-ACTIVE-per-product P2002 into a typed conflict", async () => {
+    // A DIFFERENT code's ACTIVE formula already claims this draft's
+    // compound product: the partial unique fires on activation and the
+    // publisher gets a decision, not a race.
+    const p2002 = new Prisma.PrismaClientKnownRequestError("unique violation", {
+      code: "P2002",
+      clientVersion: "test",
+    });
+    const fake = buildFakePrisma({
+      formulaRow: { id: FORMULA_ID, code: "MAGIC-MOUTHWASH", version: 1, status: "DRAFT" },
+      activePredecessor: null,
+      formulaUpdateError: p2002,
+    });
+    wireBusAndRbac(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          PublishCompoundFormula,
+          { formulaId: FORMULA_ID },
+          { idempotencyKey: "pub-claimed" }
+        )
+      )
+    ).rejects.toMatchObject({ code: "COMPOUND_FORMULA_PRODUCT_ALREADY_CLAIMED" });
   });
 
   it("publishes a first version with no predecessor (supersededFormulaId null)", async () => {

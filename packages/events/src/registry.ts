@@ -42,6 +42,8 @@ import { BillingPricingRuleUpsertedV1 } from "./events/billing/pricing-rule-upse
 
 // ---- compliance (SOC 2 / HIPAA evidence) --------------------------------
 import { ComplianceAccessReviewSnapshotRecordedV1 } from "./events/compliance/access-review-snapshot-recorded-v1.js";
+import { ComplianceCheckExceptionAcceptedV1 } from "./events/compliance/check-exception-accepted-v1.js";
+import { ComplianceControlSignedOffV1 } from "./events/compliance/control-signed-off-v1.js";
 
 // ---- compounding (ADR-0035) ----------------------------------------------
 import { CompoundingFormulaCreatedV1 } from "./events/compounding/formula-created-v1.js";
@@ -72,8 +74,12 @@ import { OrderFinalStartedV1 } from "./events/order/final-started-v1.js";
 import { OrderHeldV1 } from "./events/order/held-v1.js";
 import { OrderHoldReleasedV1 } from "./events/order/hold-released-v1.js";
 import { OrderPrescriptionAddedV1 } from "./events/order/prescription-added-v1.js";
+import { OrderPv1ApprovalRefusedV1 } from "./events/order/pv1-approval-refused-v1.js";
 import { OrderPv1ApprovedV1 } from "./events/order/pv1-approved-v1.js";
 import { OrderPv1RejectedV1 } from "./events/order/pv1-rejected-v1.js";
+import { OrderPv1ScreeningAcknowledgedForPatientV1 } from "./events/order/pv1-screening-acknowledged-for-patient-v1.js";
+import { OrderPv1ScreeningAcknowledgedV1 } from "./events/order/pv1-screening-acknowledged-v1.js";
+import { OrderPv1ScreeningRecordedV1 } from "./events/order/pv1-screening-recorded-v1.js";
 import { OrderPv1StartedV1 } from "./events/order/pv1-started-v1.js";
 import { OrderReceivedV1 } from "./events/order/received-v1.js";
 import { OrderReopenedV1 } from "./events/order/reopened-v1.js";
@@ -109,10 +115,16 @@ import { PlatformWebhookSubscriptionRevokedV1 } from "./events/platform/webhook-
 import { PlatformWebhookSubscriptionSecretRotatedV1 } from "./events/platform/webhook-subscription-secret-rotated-v1.js";
 
 // ---- patient -------------------------------------------------------------
+import { PatientAllergyHistoryAssertedV1 } from "./events/patient/allergy-history-asserted-v1.js";
+import { PatientAllergyRecordedV1 } from "./events/patient/allergy-recorded-v1.js";
+import { PatientAllergyStatusAmendedV1 } from "./events/patient/allergy-status-amended-v1.js";
 import { PatientCryptoShreddedV1 } from "./events/patient/crypto-shredded-v1.js";
 import { PatientRegisteredV1 } from "./events/patient/registered-v1.js";
 import { PatientUpdatedV1 } from "./events/patient/updated-v1.js";
 import { PatientViewedV1 } from "./events/patient/viewed-v1.js";
+
+// ---- prescription --------------------------------------------------------
+import { PrescriptionCreatedV1 } from "./events/prescription/created-v1.js";
 
 // ---- provider ------------------------------------------------------------
 import { ProviderDeactivatedV1 } from "./events/provider/deactivated-v1.js";
@@ -183,6 +195,8 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   BillingPricingRuleUpsertedV1,
   // compliance
   ComplianceAccessReviewSnapshotRecordedV1,
+  ComplianceCheckExceptionAcceptedV1,
+  ComplianceControlSignedOffV1,
   // compounding
   CompoundingFormulaCreatedV1,
   CompoundingFormulaPublishedV1,
@@ -209,8 +223,12 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   OrderHeldV1,
   OrderHoldReleasedV1,
   OrderPrescriptionAddedV1,
+  OrderPv1ApprovalRefusedV1,
   OrderPv1ApprovedV1,
   OrderPv1RejectedV1,
+  OrderPv1ScreeningAcknowledgedForPatientV1,
+  OrderPv1ScreeningAcknowledgedV1,
+  OrderPv1ScreeningRecordedV1,
   OrderPv1StartedV1,
   OrderReceivedV1,
   OrderReopenedV1,
@@ -241,10 +259,15 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   PlatformWebhookSubscriptionRevokedV1,
   PlatformWebhookSubscriptionSecretRotatedV1,
   // patient
+  PatientAllergyHistoryAssertedV1,
+  PatientAllergyRecordedV1,
+  PatientAllergyStatusAmendedV1,
   PatientCryptoShreddedV1,
   PatientRegisteredV1,
   PatientUpdatedV1,
   PatientViewedV1,
+  // prescription
+  PrescriptionCreatedV1,
   // provider
   ProviderDeactivatedV1,
   ProviderOnboardingApprovedV1,

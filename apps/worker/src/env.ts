@@ -104,6 +104,17 @@ const schema = z.object({
   SLA_BREACH_EVAL_BATCH_SIZE: z.coerce.number().int().positive().default(50),
   SLA_BREACH_EVAL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
 
+  // ---- Compliance check scheduler ---------------------------------
+  // Runs due compliance probes (SOC 2 / HIPAA continuous monitoring).
+  // Per-check cadence lives in `compliance_check.intervalMinutes`;
+  // this interval is only how often the worker LOOKS for due checks,
+  // so a 5-minute tick still honours an hourly check to within five
+  // minutes. Deliberately slower than the order-workflow drains: the
+  // probes run cross-tenant aggregate queries and there is no
+  // operator waiting on the result.
+  COMPLIANCE_CHECK_SCHEDULER_BATCH_SIZE: z.coerce.number().int().positive().default(50),
+  COMPLIANCE_CHECK_SCHEDULER_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+
   // ---- NPI registry sync ------------------------------------------
   // Two loops:
   //   1. SCHEDULER — picks orgs whose last successful sync is older
@@ -386,10 +397,11 @@ const schema = z.object({
   // so a job that runs late on Apr 2 still has a full Q1 window.
   //
   // `EVIDENCE_ROOT` controls where the FilesystemEvidencePublisher
-  // writes — must be a path the worker process can write to, and
-  // in production should be on a volume backed by a daily snapshot
-  // (until the S3 Object-Lock publisher lands as part of the
-  // Terraform slice).
+  // writes and applies to dev/test only. Production publishes into the
+  // audit-archive Object Lock bucket via `AUDIT_ARCHIVE_S3_BUCKET`;
+  // when the job is enabled in production and that bucket is unset the
+  // worker refuses to boot rather than write evidence to container-
+  // local storage. See `compliance/build-evidence-publisher.ts`.
   QUARTERLY_ACCESS_REVIEW_ENABLED: z.coerce.boolean().default(true),
   QUARTERLY_ACCESS_REVIEW_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(3),
   QUARTERLY_ACCESS_REVIEW_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(0),

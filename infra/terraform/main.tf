@@ -61,9 +61,10 @@ module "network" {
 }
 
 # -----------------------------------------------------------------------------
-# KMS — eight customer-managed keys (rds, documents, audit_archive, secrets,
-# data, search, asymm_sign, logs). Six of those are explicitly required by
-# the brief; documents + logs round out the set.
+# KMS — nine customer-managed keys (rds, documents, audit_archive, secrets,
+# data, search, asymm_sign, logs, alerts). Six of those are explicitly required
+# by the brief; documents + logs round out the set, and alerts encrypts the SNS
+# topics the alarms publish to.
 # -----------------------------------------------------------------------------
 
 module "kms" {
@@ -482,15 +483,52 @@ module "restore_drill_role" {
 }
 
 # -----------------------------------------------------------------------------
+# Alerting — the SNS topics alarms publish to (critical → page, warning →
+# ticket). Optional so a dev stack can stay topic-free, but production must
+# enable it: `scripts/check-alarm-actions.ts` fails the build if a prod
+# env-region leaves `enable_alerting` off or leaves the cloudwatch module
+# unwired. Subscription endpoints arrive as TF_VAR_* at apply time and are
+# never committed — see the module's variables.tf.
+# -----------------------------------------------------------------------------
+
+module "alerting" {
+  count  = var.enable_alerting ? 1 : 0
+  source = "./modules/alerting"
+
+  name_prefix    = local.name_prefix
+  aws_account_id = data.aws_caller_identity.current.account_id
+  aws_region     = var.region
+  kms_key_arn    = module.kms.alerts_key_arn
+
+  critical_email_subscriptions = var.alerting_critical_email_subscriptions
+  warning_email_subscriptions  = var.alerting_warning_email_subscriptions
+  critical_https_subscriptions = var.alerting_critical_https_subscriptions
+  warning_https_subscriptions  = var.alerting_warning_https_subscriptions
+
+  tags = local.common_tags
+}
+
+# -----------------------------------------------------------------------------
 # CloudWatch — alarms + dashboard.
 # -----------------------------------------------------------------------------
 
 module "cloudwatch" {
   source = "./modules/cloudwatch"
 
-  name_prefix         = local.name_prefix
-  aws_region          = var.region
-  alarm_sns_topic_arn = var.alarm_sns_topic_arn
+  name_prefix = local.name_prefix
+  aws_region  = var.region
+
+  # `try(...)` covers the alerting-disabled case; the empty string is the
+  # module's documented "evaluate but notify nobody" fallback, which is only
+  # acceptable outside production.
+  critical_alarm_sns_topic_arn = try(module.alerting[0].critical_topic_arn, "")
+  warning_alarm_sns_topic_arn  = try(module.alerting[0].warning_topic_arn, "")
+  alarm_sns_topic_arn          = var.alarm_sns_topic_arn
+
+  # No tasks intended → no availability alarm, otherwise it fires forever and
+  # trains the rotation to ignore the feed. See the resource comment in
+  # modules/cloudwatch/main.tf for the scaling caveat.
+  print_agent_running_alarm_enabled = var.ecs_print_agent_desired_count > 0
 
   rds_cluster_id                  = module.rds.cluster_id
   rds_instance_id                 = module.rds.writer_instance_id

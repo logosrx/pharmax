@@ -28,17 +28,23 @@ importers:
         specifier: ^3.1097.0
         version: 3.1097.0
       '@eslint/js':
-        specifier: ^9.13.0
-        version: 9.39.4
+        specifier: ^10.0.1
+        version: 10.0.1(eslint@10.8.0(jiti@2.7.0))
       '@pharmax/audit':
         specifier: workspace:*
         version: link:packages/audit
       '@pharmax/billing':
         specifier: workspace:*
         version: link:packages/billing
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:packages/clinical-screening
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:packages/command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:packages/compliance
       '@pharmax/composition':
         specifier: workspace:*
         version: link:packages/composition
@@ -51,6 +57,9 @@ importers:
       '@pharmax/documents':
         specifier: workspace:*
         version: link:packages/documents
+      '@pharmax/drug-knowledge':
+        specifier: workspace:*
+        version: link:packages/drug-knowledge
       '@pharmax/events':
         specifier: workspace:*
         version: link:packages/events
@@ -232,9 +241,15 @@ importers:
       '@pharmax/billing':
         specifier: workspace:*
         version: link:../../packages/billing
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:../../packages/clinical-screening
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../../packages/command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:../../packages/compliance
       '@pharmax/composition':
         specifier: workspace:*
         version: link:../../packages/composition
@@ -247,6 +262,9 @@ importers:
       '@pharmax/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@pharmax/drug-knowledge':
+        specifier: workspace:*
+        version: link:../../packages/drug-knowledge
       '@pharmax/fill':
         specifier: workspace:*
         version: link:../../packages/fill
@@ -356,6 +374,9 @@ importers:
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../../packages/command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:../../packages/compliance
       '@pharmax/composition':
         specifier: workspace:*
         version: link:../../packages/composition
@@ -547,6 +568,18 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
+  packages/clinical-screening:
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
   packages/command-bus:
     dependencies:
       '@pharmax/audit':
@@ -584,6 +617,74 @@ importers:
         specifier: ^5.6.3
         version: 5.9.3
 
+  packages/compliance:
+    dependencies:
+      '@pharmax/command-bus':
+        specifier: workspace:*
+        version: link:../command-bus
+      '@pharmax/database':
+        specifier: workspace:*
+        version: link:../database
+      '@pharmax/platform-core':
+        specifier: workspace:*
+        version: link:../platform-core
+      '@pharmax/rbac':
+        specifier: workspace:*
+        version: link:../rbac
+      '@pharmax/security':
+        specifier: workspace:*
+        version: link:../security
+      '@pharmax/tenancy':
+        specifier: workspace:*
+        version: link:../tenancy
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  packages/compliance-ai:
+    dependencies:
+      '@pharmax/command-bus':
+        specifier: workspace:*
+        version: link:../command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:../compliance
+      '@pharmax/database':
+        specifier: workspace:*
+        version: link:../database
+      '@pharmax/platform-core':
+        specifier: workspace:*
+        version: link:../platform-core
+      '@pharmax/rbac':
+        specifier: workspace:*
+        version: link:../rbac
+      '@pharmax/tenancy':
+        specifier: workspace:*
+        version: link:../tenancy
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
   packages/composition:
     dependencies:
       '@pharmax/auth':
@@ -595,6 +696,9 @@ importers:
       '@pharmax/cache':
         specifier: workspace:*
         version: link:../cache
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:../clinical-screening
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../command-bus
@@ -613,6 +717,9 @@ importers:
       '@pharmax/shipping':
         specifier: workspace:*
         version: link:../shipping
+      '@pharmax/verification':
+        specifier: workspace:*
+        version: link:../verification
       ioredis:
         specifier: ^5.11.1
         version: 5.11.1
@@ -740,6 +847,40 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
+  packages/drug-identity:
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  packages/drug-knowledge:
+    dependencies:
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:../clinical-screening
+      '@pharmax/database':
+        specifier: workspace:*
+        version: link:../database
+      '@pharmax/drug-identity':
+        specifier: workspace:*
+        version: link:../drug-identity
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
   packages/events:
     dependencies:
       '@pharmax/platform-core':
@@ -814,6 +955,9 @@ importers:
       '@pharmax/audit':
         specifier: workspace:*
         version: link:../audit
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:../clinical-screening
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../command-bus
@@ -823,6 +967,9 @@ importers:
       '@pharmax/database':
         specifier: workspace:*
         version: link:../database
+      '@pharmax/drug-knowledge':
+        specifier: workspace:*
+        version: link:../drug-knowledge
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../platform-core
@@ -832,6 +979,9 @@ importers:
       '@pharmax/tenancy':
         specifier: workspace:*
         version: link:../tenancy
+      '@pharmax/verification':
+        specifier: workspace:*
+        version: link:../verification
       '@prisma/generator-helper':
         specifier: ^7.9.1
         version: 7.9.1
@@ -947,9 +1097,18 @@ importers:
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../command-bus
+      '@pharmax/controlled-substances':
+        specifier: workspace:*
+        version: link:../controlled-substances
+      '@pharmax/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       '@pharmax/database':
         specifier: workspace:*
         version: link:../database
+      '@pharmax/drug-identity':
+        specifier: workspace:*
+        version: link:../drug-identity
       '@pharmax/order-contracts':
         specifier: workspace:*
         version: link:../order-contracts
@@ -1086,6 +1245,9 @@ importers:
 
   packages/patients:
     dependencies:
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:../clinical-screening
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../command-bus
@@ -1201,8 +1363,8 @@ importers:
         specifier: workspace:*
         version: link:../rbac
       cron-parser:
-        specifier: ^4.9.0
-        version: 4.9.0
+        specifier: ^5.6.1
+        version: 5.6.1
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -1216,6 +1378,9 @@ importers:
 
   packages/scan:
     dependencies:
+      '@pharmax/drug-identity':
+        specifier: workspace:*
+        version: link:../drug-identity
       '@pharmax/labels':
         specifier: workspace:*
         version: link:../labels
@@ -1393,6 +1558,9 @@ importers:
 
   packages/verification:
     dependencies:
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:../clinical-screening
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../command-bus
@@ -1430,6 +1598,9 @@ importers:
 
   packages/workflow:
     dependencies:
+      '@pharmax/clinical-screening':
+        specifier: workspace:*
+        version: link:../clinical-screening
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../platform-core
@@ -1994,9 +2165,14 @@ packages:
     resolution: {integrity: sha512-MwcE1P+AZ4C6DWlpin/OmOA54mmIZ/+xZuJiQd4SyB29oAJjN30UW9wkKNptW2ctp4cEsvhlLY/CsQ1uoHDloQ==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@eslint/js@9.39.4':
-    resolution: {integrity: sha512-nE7DEIchvtiFTwBw4Lfbu59PG+kCofhjsKaCWzxTpt4lfRjRMqG6uMBzKXuEcyXhOHoUp9riAm7/aWYGhXZ9cw==}
-    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+  '@eslint/js@10.0.1':
+    resolution: {integrity: sha512-zeR9k5pd4gxjZ0abRoIaxdc7I3nDktoXZk2qOv9gCNWx3mVwEn32VRhyLaRsDiJjTs0xq/T8mfPtyuXu7GWBcA==}
+    engines: {node: ^20.19.0 || ^22.13.0 || >=24}
+    peerDependencies:
+      eslint: ^10.0.0
+    peerDependenciesMeta:
+      eslint:
+        optional: true
 
   '@eslint/object-schema@3.0.5':
     resolution: {integrity: sha512-vqTaUEgxzm+YDSdElad6PiRoX4t8VGDjCtt05zn4nU810UIx/uNEV7/lZJ6KwFThKZOzOxzXy48da+No7HZaMw==}
@@ -4081,9 +4257,9 @@ packages:
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
 
-  cron-parser@4.9.0:
-    resolution: {integrity: sha512-p0SaNjrHOnQeR8/VnfGbmg9te2kfyYSQ7Sc/j/6DtPL3JQvKxmjO9TSjNFpujqV3vEYYBvNNvXSxzyksBWAx1Q==}
-    engines: {node: '>=12.0.0'}
+  cron-parser@5.6.1:
+    resolution: {integrity: sha512-QBm4o1PwZiuY7KFbVvW7FLC8bozy7YWzv+Fz6KRS7sQghzcbDZCGxr/Bc5b6TQreAoSwuWVP491dIcK0THCX6A==}
+    engines: {node: '>=18'}
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -6298,7 +6474,9 @@ snapshots:
     dependencies:
       '@types/json-schema': 7.0.15
 
-  '@eslint/js@9.39.4': {}
+  '@eslint/js@10.0.1(eslint@10.8.0(jiti@2.7.0))':
+    optionalDependencies:
+      eslint: 10.8.0(jiti@2.7.0)
 
   '@eslint/object-schema@3.0.5': {}
 
@@ -8660,7 +8838,7 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
-  cron-parser@4.9.0:
+  cron-parser@5.6.1:
     dependencies:
       luxon: 3.7.2
 

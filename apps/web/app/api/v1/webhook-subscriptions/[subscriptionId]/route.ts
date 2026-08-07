@@ -8,12 +8,12 @@
 
 import { executeCommand } from "@pharmax/command-bus";
 import { RevokeWebhookSubscription } from "@pharmax/partner-api";
-import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { withTenancyContext } from "@pharmax/tenancy";
 import { NextResponse } from "next/server";
 
 import {
+  partnerCommandError,
   partnerJsonError,
   requireIdempotencyKeyHeader,
   requirePartnerScope,
@@ -58,10 +58,10 @@ export async function DELETE(
     );
     return NextResponse.json({ data: output });
   } catch (cause) {
-    if (cause instanceof errors.PharmaxError) {
-      const status = cause.code === "REVOKE_WEBHOOK_SUBSCRIPTION_NOT_FOUND" ? 404 : 422;
-      return partnerJsonError({ status, code: cause.code, message: cause.message });
-    }
+    // The 404 used to be hand-rolled off the code string; the command
+    // throws a `NotFoundError`, so the class-based mapper produces it.
+    const mapped = partnerCommandError(cause);
+    if (mapped !== null) return mapped;
     throw cause;
   }
 }

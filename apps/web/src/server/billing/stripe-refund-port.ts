@@ -64,6 +64,7 @@ export function buildStripeRefundPortFromEnv(): StripeRefundPort | null {
             pharmaxRefundKey: request.pharmaxRefundKey,
             stripeErrorCode: code ?? "unknown",
           },
+          cause,
         });
       }
     },

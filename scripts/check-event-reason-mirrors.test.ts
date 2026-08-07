@@ -1,6 +1,13 @@
-// Cross-package parity for closed reason-code enums between
-// `@pharmax/verification` (source of truth) and the local mirrors
-// inside `@pharmax/events/events/order/*.ts` payload schemas.
+// Cross-package parity for closed reason-code enums, with
+// `@pharmax/verification` as the source of truth. Two families of
+// mirror are pinned here:
+//
+//   1. The local `const` mirrors inside
+//      `@pharmax/events/events/order/*.ts` payload schemas.
+//   2. The PV1 rejection-reason HINTS in
+//      `@pharmax/clinical-screening`, which suggests a reason code
+//      for each screening finding kind so the console can preselect
+//      one when a pharmacist rejects on the strength of a finding.
 //
 // Why this lives in `scripts/` and NOT inside either package:
 //
@@ -12,6 +19,12 @@
 //     adding `@pharmax/events` as a devDependency just for the
 //     test, which adds a graph edge a future contributor might
 //     interpret as a permission to import event helpers at runtime.
+//     The same objection applies to `@pharmax/clinical-screening`:
+//     the layer linter would permit that edge (screening is a
+//     low-tier pure package, not a domain), but verification does
+//     not depend on screening at runtime TODAY, and a manifest
+//     entry claiming otherwise would be read as licence to call it
+//     from a command handler before that integration is designed.
 //   - Putting it at the repo root (where every workspace is
 //     already a devDependency of `pharmax`) lets the test reach
 //     both sides without altering the package dependency surface.
@@ -45,6 +58,11 @@
 
 import { describe, expect, it } from "vitest";
 
+import {
+  suggestedPv1RejectionReason,
+  SCREENING_FINDING_KINDS,
+  SUGGESTED_PV1_REJECTION_REASONS,
+} from "@pharmax/clinical-screening";
 import {
   OrderPv1RejectedV1,
   OrderFinalRejectedV1,
@@ -116,5 +134,55 @@ describe("event reason-code mirrors mirror @pharmax/verification", () => {
     const mirror = extractEnumValuesFromSchema(OrderTypingMissingInfoV1.schema, "reasonCode");
     const source = Object.freeze([...MISSING_INFO_REASONS].sort());
     expect(mirror).toEqual(source);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// @pharmax/clinical-screening PV1 hints
+// ---------------------------------------------------------------------------
+//
+// The screening engine cannot import `PV1_REJECTION_REASONS`: it sits
+// BELOW the domain tier by design, so that any domain package may
+// depend on it, and reaching up into `@pharmax/verification` would
+// invert that. It therefore reproduces the handful of codes it
+// suggests, and these tests are what keep the copy honest.
+//
+// How to recover when this fails: a code in `PV1_REJECTION_REASONS`
+// was renamed or removed while a screening hint still points at it.
+// Fix the hint in `packages/clinical-screening/src/findings.ts` — do
+// NOT re-add the stale code here just to make the test pass.
+//
+// Unlike the event mirrors above this is a SUBSET relationship, not
+// equality: screening only has an opinion about the clinical reasons
+// it can compute, and has nothing to say about `SIG_AMBIGUOUS` or
+// `INSURANCE_PRIOR_AUTH_REQUIRED`.
+
+describe("clinical-screening PV1 hints are real @pharmax/verification reasons", () => {
+  it("every published hint is a member of PV1_REJECTION_REASONS", () => {
+    for (const hint of SUGGESTED_PV1_REJECTION_REASONS) {
+      expect(PV1_REJECTION_REASONS).toContain(hint);
+    }
+  });
+
+  it("every hint the engine can actually emit is a member", () => {
+    // Asserted over the function's real output as well as the
+    // published list, so a finding kind wired to a code that never
+    // made it into that list is still caught.
+    const emitted = SCREENING_FINDING_KINDS.map(suggestedPv1RejectionReason).filter(
+      (reason) => reason !== null
+    );
+    expect(emitted.length).toBeGreaterThan(0);
+    for (const hint of emitted) {
+      expect(PV1_REJECTION_REASONS).toContain(hint);
+    }
+  });
+
+  it("still covers the three clinical reasons screening exists to compute", () => {
+    // Membership alone would still pass if a hint were dropped
+    // altogether, leaving the console with nothing to preselect for
+    // the findings this engine was built to produce.
+    expect([...SUGGESTED_PV1_REJECTION_REASONS]).toEqual(
+      expect.arrayContaining(["DRUG_INTERACTION", "ALLERGY_CONFLICT", "DUPLICATE_THERAPY"])
+    );
   });
 });

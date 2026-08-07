@@ -43,10 +43,40 @@ info:
     secrets) is only present on the FIRST response — a replay returns
     the created resource with the secret field `null`.
 
+    ## Errors
+    Every error carries a stable `error.code` and a human-readable
+    `error.message`. The STATUS tells you what to do about it; the
+    code tells you which rule fired. Branch on the status first:
+
+    | Status | Meaning                                    | Retry?          |
+    |--------|--------------------------------------------|-----------------|
+    | 400    | The request is malformed or a field is invalid. | No — fix it. |
+    | 401    | The API key is missing, unknown, or revoked.    | No.          |
+    | 403    | The key lacks the scope for this operation.     | No.          |
+    | 404    | No such resource in your organization.          | No.          |
+    | 409    | A state race or allocation collision.           | **Yes** — resubmit. |
+    | 422    | Well-formed and authorized, refused by a domain or regulatory rule. | No. |
+    | 429    | Rate limit or daily quota.                      | Yes, after `Retry-After`. |
+    | 500    | A fault on our side, not a defect in your request. | **Yes**.  |
+
+    409 and 500 are the two you should retry automatically. Reuse the
+    SAME `Idempotency-Key` when you do: the retry either performs the
+    operation or returns the original result, so a 500 raised after
+    the write committed cannot produce a duplicate.
+
+    A 500 response body carries the typed code — quote it when you
+    contact support — but a generic message: internal failures are
+    not described to callers in detail.
+
     ## PHI
     v1 order resources are PHI-free by construction: workflow, state,
     and timing fields plus opaque UUID references only. Patient
     demographics are not exposed on this surface.
+
+    The prescription intake body is the one exception, and it is
+    write-only: `sig`, the two notes and the indication are clinical
+    free text, encrypted on arrival and never returned by any v1 read.
+    Do not place them in a query string or a log on your side either.
 
     ## Webhooks
     Subscriptions deliver registered PHI-safe platform events to your
@@ -71,6 +101,8 @@ security:
 tags:
   - name: Orders
     description: Read-only order state and workflow progress.
+  - name: Prescriptions
+    description: Transcribe prescriptions for later attachment to an order.
   - name: Webhook Subscriptions
     description: Manage outbound event delivery endpoints.
   - name: Webhook Deliveries
@@ -214,8 +246,11 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/ScopeDenied" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
 
   /orders/{orderId}:
     get:
@@ -245,6 +280,186 @@ paths:
         "403": { $ref: "#/components/responses/ScopeDenied" }
         "404": { $ref: "#/components/responses/NotFound" }
         "429": { $ref: "#/components/responses/RateLimited" }
+
+  /prescriptions:
+    post:
+      operationId: createPrescription
+      tags: [Prescriptions]
+      summary: Transcribe a prescription
+      description: |
+        Create a prescription so it can later be attached to an order.
+        Requires the `prescriptions.create` scope and an
+        `Idempotency-Key`.
+
+        Two things are NOT yours to set. The **Rx number** is issued
+        by the pharmacy's allocator and returned in the response. The
+        **DEA schedule** is read from the pharmacy's product catalog
+        by NDC; send `controlledSubstanceSchedule` only when the NDC
+        is not catalogued (otherwise omit it, or send a value that
+        agrees — a disagreement is rejected rather than accepted as
+        an override).
+
+        Controlled-substance authorization is checked at issuance,
+        not at dispense: a Schedule II prescription may authorize no
+        refills (21 CFR 1306.12(a)), Schedule III and IV at most five
+        (21 CFR 1306.22(a)), and the prescriber must hold a DEA
+        registration for any controlled schedule.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [
+                  clinicId,
+                  patientId,
+                  providerId,
+                  drugNdc,
+                  drugName,
+                  quantityAuthorized,
+                  daysSupply,
+                  refillsAuthorized,
+                  originalDateWritten,
+                  sig,
+                ]
+              properties:
+                clinicId:
+                  type: string
+                  format: uuid
+                patientId:
+                  type: string
+                  format: uuid
+                  description: Must belong to `clinicId` and be ACTIVE.
+                providerId:
+                  type: string
+                  format: uuid
+                drugNdc:
+                  type: string
+                  maxLength: 32
+                  description: |
+                    10- or 11-digit NDC; hyphens allowed. Normalized
+                    to 11 digits before the catalog lookup.
+                drugName:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                drugStrength:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                drugForm:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                controlledSubstanceSchedule:
+                  type: string
+                  enum: [NON_CONTROLLED, CII, CIII, CIV, CV]
+                  description: |
+                    Required only when the NDC is absent from the
+                    catalog — an uncatalogued drug is never assumed
+                    non-controlled.
+                quantityAuthorized:
+                  type: string
+                  pattern: '^\d{1,14}(\.\d{1,4})?$'
+                  description: |
+                    Decimal STRING, up to four fractional digits. A
+                    string because the column is DECIMAL(18,4) and
+                    IEEE-754 cannot represent every value exactly.
+                daysSupply:
+                  type: integer
+                  minimum: 1
+                  maximum: 365
+                refillsAuthorized:
+                  type: integer
+                  minimum: 0
+                  maximum: 99
+                  description: |
+                    Capped further by the DEA schedule; see the
+                    controlled-substance rules above.
+                originalDateWritten:
+                  type: string
+                  format: date
+                  description: YYYY-MM-DD. May not be in the future.
+                expiresAt:
+                  type: string
+                  format: date
+                  description: |
+                    Omit to derive: six months for a controlled
+                    substance, one year otherwise. A Schedule III or
+                    IV expiry beyond six months from the date written
+                    is rejected (21 CFR 1306.22(a)).
+                earliestFillDate:
+                  type: string
+                  format: date
+                  description: Do-not-fill-before; may not precede the date written.
+                daw:
+                  type: integer
+                  minimum: 0
+                  maximum: 9
+                  default: 0
+                  description: NCPDP "dispense as written" code.
+                sig:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                  description: |
+                    Directions for use. PHI — encrypted on arrival,
+                    redacted from our command log, and never returned
+                    by any v1 read.
+                noteToPharmacist:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                  description: PHI; same handling as `sig`.
+                noteToPatient:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                  description: PHI; same handling as `sig`.
+                indication:
+                  type: string
+                  minLength: 1
+                  maxLength: 500
+                  description: PHI; same handling as `sig`.
+      responses:
+        "201":
+          description: Prescription created at `ACTIVE`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PrescriptionCreated" }
+        "200":
+          description: Idempotent replay of a previous submission.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PrescriptionCreated" }
+                  meta:
+                    type: object
+                    properties:
+                      idempotentReplay: { type: boolean, enum: [true] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/ScopeDenied" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >-
+            Nothing was written. `RX_NUMBER_COLLISION` means the
+            allocated Rx number was taken — resubmit and the next
+            attempt takes a fresh one.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
 
   /webhook-subscriptions:
     get:
@@ -338,8 +553,10 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/ScopeDenied" }
+        "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
 
   /webhook-subscriptions/{subscriptionId}:
     delete:
@@ -383,8 +600,10 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/ScopeDenied" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
 
   /webhook-subscriptions/{subscriptionId}/rotate-secret:
     post:
@@ -446,8 +665,10 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/ScopeDenied" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
 
   /webhook-deliveries:
     get:
@@ -524,8 +745,27 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: >-
+        A state race or an allocation collision — the request was
+        well-formed and nothing was written. Resubmit with the same
+        `Idempotency-Key`. The most common code here is
+        `COMMAND_IN_FLIGHT`: a concurrent request with that key is
+        still executing, and retrying it replays the winner's
+        response once it commits.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     Unprocessable:
       description: Valid shape, rejected by domain rules (typed code).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: >-
+        A fault on the Pharmax side. `error.code` is the typed code to
+        quote to support; `error.message` is deliberately generic.
+        Safe to retry with the same `Idempotency-Key`.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -585,6 +825,21 @@ components:
     WebhookDeliveryStatus:
       type: string
       enum: [PENDING, SENT, FAILED, DEAD]
+
+    PrescriptionCreated:
+      type: object
+      properties:
+        prescriptionId: { type: string, format: uuid }
+        rxNumber:
+          type: string
+          description: Issued by the pharmacy's allocator, never by the caller.
+        controlledSubstanceSchedule:
+          type: string
+          enum: [NON_CONTROLLED, CII, CIII, CIV, CV]
+          description: >-
+            The schedule actually recorded — from the product catalog
+            when the NDC is catalogued, otherwise the declared value.
+        expiresAt: { type: string, format: date }
 
     OrderCreated:
       type: object

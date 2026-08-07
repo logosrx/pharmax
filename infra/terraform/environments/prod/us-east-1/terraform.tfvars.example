@@ -64,7 +64,15 @@ ecs_container_insights_enabled = true
 
 # ---- WAF / Alarms -----------------------------------------------------------
 waf_rate_limit_per_5min = 2000
-alarm_sns_topic_arn     = "REPLACE_arn:aws:sns:us-east-1:<account>:pharmax-prod-alerts"
+# Provision the severity-split alerting topics (critical → page, warning →
+# ticket) and route alarms to them. Required in production.
+enable_alerting = true
+# Legacy single-topic override. Leave empty unless you are pointing at an
+# externally-managed topic; it routes EVERY severity to one place.
+alarm_sns_topic_arn = ""
+# Subscription endpoints are supplied at apply time as
+# TF_VAR_alerting_critical_email_subscriptions / _https_subscriptions from the
+# GitHub Environment secrets. Never write an address or webhook URL here.
 
 # ---- Audit archive ----------------------------------------------------------
 audit_archive_retention_years         = 7

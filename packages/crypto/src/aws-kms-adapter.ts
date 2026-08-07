@@ -83,7 +83,12 @@
 
 import { getMeter } from "@pharmax/telemetry";
 
-import { cryptoValidationError, decryptFailedError, kmsKeyNotFoundError } from "./errors.js";
+import {
+  cryptoValidationError,
+  decryptFailedError,
+  kmsAccessDeniedError,
+  kmsKeyNotFoundError,
+} from "./errors.js";
 import type {
   DeriveSearchKeyInput,
   GenerateDataKeyResult,
@@ -96,6 +101,18 @@ import type {
 
 const DEK_BYTES = 32;
 const SEARCH_KEY_BYTES = 32;
+
+// `validate()` runs before any tenancy frame exists, so the
+// tenant-scoped error metadata has no real tenant to name. Keep the
+// sentinel stable — dashboards filter boot-path KMS failures on it.
+const BOOT_TENANT_ID = "(boot)";
+
+// A disabled CMK is reachable but unusable. Distinct enough from an
+// unreachable key that the message must say so, but not a distinct
+// error code: the remedy (`aws kms enable-key`, or cancel a pending
+// deletion) is the operator's either way.
+const DISABLED_KEY_REASON = (fieldLabel: string): string =>
+  `${fieldLabel} resolves to a key with Enabled=false; a disabled CMK cannot encrypt or decrypt`;
 
 const meter = getMeter("@pharmax/crypto");
 
@@ -344,13 +361,21 @@ export class AwsKmsAdapter implements KmsAdapter {
    *     and `KeySpec === "HMAC_256"` — required for the
    *     `GenerateMac` + `HMAC_SHA_256` algorithm pair we use.
    *
-   * Throws on any violation; the error code is
-   * `KMS_KEY_NOT_FOUND` for unreachable / disabled keys (so the
-   * operator triages an IAM or key-state issue) and
-   * `CRYPTO_VALIDATION` for type mismatches (so the operator
-   * triages a Terraform / configuration issue). Error metadata
-   * names the offending key id but never echoes credentials or
-   * AWS principal info.
+   * Throws on any violation. The error code tells the responder
+   * which team owns the fix:
+   *
+   *   - `KMS_ACCESS_DENIED` — the IAM principal is not authorized.
+   *     Fix the ECS task role or the CMK key policy. The key is
+   *     probably fine.
+   *   - `KMS_KEY_NOT_FOUND` — the key is unreachable, disabled, or
+   *     the id/region is wrong. Fix `AWS_KMS_*` or the key state.
+   *   - `CRYPTO_VALIDATION` — the key exists but is the wrong type.
+   *     Fix Terraform or the env var wiring.
+   *
+   * Error metadata names the offending key id and, for AWS-sourced
+   * failures, the modeled exception name. It never echoes
+   * credentials or AWS principal info; the raw AWS error rides on
+   * `cause`, which `PharmaxError.toJSON` drops.
    */
   public async validate(): Promise<void> {
     if (this.validated) return;
@@ -358,8 +383,9 @@ export class AwsKmsAdapter implements KmsAdapter {
     const dataKey = await this.describeOrThrow(this.dataKeyKeyId, "dataKeyKeyId");
     if (dataKey.KeyMetadata.Enabled !== true) {
       throw kmsKeyNotFoundError({
-        tenantId: "(boot)",
-        kid: `aws-kms describe(${this.dataKeyKeyId}): disabled`,
+        tenantId: BOOT_TENANT_ID,
+        kid: this.dataKeyKeyId,
+        reason: DISABLED_KEY_REASON("dataKeyKeyId"),
       });
     }
     // Strict comparison even when the SDK returns `undefined` for a
@@ -386,8 +412,9 @@ export class AwsKmsAdapter implements KmsAdapter {
     const searchKey = await this.describeOrThrow(this.searchKeyKeyId, "searchKeyKeyId");
     if (searchKey.KeyMetadata.Enabled !== true) {
       throw kmsKeyNotFoundError({
-        tenantId: "(boot)",
-        kid: `aws-kms describe(${this.searchKeyKeyId}): disabled`,
+        tenantId: BOOT_TENANT_ID,
+        kid: this.searchKeyKeyId,
+        reason: DISABLED_KEY_REASON("searchKeyKeyId"),
       });
     }
     if (searchKey.KeyMetadata.KeyUsage !== "GENERATE_VERIFY_MAC") {
@@ -415,8 +442,9 @@ export class AwsKmsAdapter implements KmsAdapter {
       const meta = await this.describeOrThrow(previousKeyId, "dataKeyKeyId", fieldLabel);
       if (meta.KeyMetadata.Enabled !== true) {
         throw kmsKeyNotFoundError({
-          tenantId: "(boot)",
-          kid: `aws-kms describe(${previousKeyId}) for ${fieldLabel}: disabled`,
+          tenantId: BOOT_TENANT_ID,
+          kid: previousKeyId,
+          reason: DISABLED_KEY_REASON(fieldLabel),
         });
       }
       if (meta.KeyMetadata.KeyUsage !== "ENCRYPT_DECRYPT") {
@@ -613,6 +641,7 @@ export class AwsKmsAdapter implements KmsAdapter {
         table: "(kms.unwrapDataKey)",
         column: "(wrappedDek)",
         recordId: input.kid,
+        cause: lastError,
       });
     }
 
@@ -737,14 +766,18 @@ export class AwsKmsAdapter implements KmsAdapter {
   public async signRoot(input: SignRootInput): Promise<SignRootOutput> {
     throw kmsKeyNotFoundError({
       tenantId: input.tenantId,
-      kid: "aws-kms.signRoot is not implemented by design; use KmsAsymmetricSigner from @pharmax/security (ADR-0024). Reaching this method indicates a miswired composition root.",
+      kid: this.kidFor(input.tenantId),
+      reason:
+        "AwsKmsAdapter.signRoot is not implemented by design; use KmsAsymmetricSigner from @pharmax/security (ADR-0024). Reaching this method indicates a miswired composition root",
     });
   }
 
   public async verifyRoot(input: VerifyRootInput): Promise<boolean> {
     throw kmsKeyNotFoundError({
       tenantId: input.tenantId,
-      kid: "aws-kms.verifyRoot is not implemented by design; use EcdsaP256SignatureVerifier from @pharmax/security (ADR-0024). Reaching this method indicates a miswired composition root.",
+      kid: this.kidFor(input.tenantId),
+      reason:
+        "AwsKmsAdapter.verifyRoot is not implemented by design; use EcdsaP256SignatureVerifier from @pharmax/security (ADR-0024). Reaching this method indicates a miswired composition root",
     });
   }
 
@@ -756,13 +789,19 @@ export class AwsKmsAdapter implements KmsAdapter {
 
   /**
    * Call `DescribeKey` and surface a typed error tied to the
-   * configured field name. We translate transport-level failures
-   * (timeout, IAM AccessDenied, NotFound) into our internal
-   * `KMS_KEY_NOT_FOUND` shape so the boot path produces a single
-   * error code regardless of which lower-layer reason caused the
-   * call to fail. The original cause is preserved as the `cause`
-   * field for Sentry/OTel correlation but never re-thrown to
-   * the caller.
+   * configured field name. The original AWS error is threaded
+   * through as `cause`, so Sentry/OTel see its type, message and
+   * stack. This is the PHI-decrypt boot path: when it fires, the
+   * application cannot read patient data, and the responder's first
+   * question is which AWS failure it was.
+   *
+   * `AccessDeniedException` becomes `KMS_ACCESS_DENIED` and
+   * everything else becomes `KMS_KEY_NOT_FOUND`, because the two
+   * have disjoint remedies (task role / key policy vs. a wrong ARN,
+   * alias, or region). Unclassifiable failures — throttling,
+   * timeouts, an SDK shape we do not recognize — keep
+   * `KMS_KEY_NOT_FOUND` so the boot path's existing contract holds;
+   * `metadata.awsErrorName` separates them without a third code.
    */
   private async describeOrThrow(
     keyId: string,
@@ -776,15 +815,51 @@ export class AwsKmsAdapter implements KmsAdapter {
     try {
       return await this.client.describeKey({ KeyId: keyId });
     } catch (cause) {
-      throw kmsKeyNotFoundError({
-        tenantId: "(boot)",
-        kid: `aws-kms describe(${keyId}) failed for ${fieldLabel}: ${
-          cause instanceof Error ? cause.message : "unknown"
-        }`,
+      const awsErrorName = awsErrorNameOf(cause);
+      const awsMessage = cause instanceof Error ? cause.message : "unknown";
+      const factory = ACCESS_DENIED_ERROR_NAMES.has(awsErrorName)
+        ? kmsAccessDeniedError
+        : kmsKeyNotFoundError;
+      throw factory({
+        tenantId: BOOT_TENANT_ID,
+        kid: keyId,
+        // The AWS message goes in the human message, never in
+        // metadata: it can echo request detail, and metadata is the
+        // part that gets indexed as log fields and alarm dimensions.
+        reason: `DescribeKey failed for ${fieldLabel}: ${awsErrorName}: ${awsMessage}`,
+        awsErrorName,
+        cause,
       });
     }
   }
 }
+
+/**
+ * The AWS SDK v3 sets `Error.name` to the modeled exception shape
+ * (`AccessDeniedException`, `NotFoundException`,
+ * `KMSInvalidStateException`, `ThrottlingException`, ...). It is the
+ * only classifier available here without importing
+ * `@aws-sdk/client-kms`, which this file deliberately does not
+ * depend on — see the client-surface note at the top.
+ *
+ * A caller that hands us a plain `Error` (or a proxy that flattened
+ * the SDK error) yields `"Error"` / `"unknown"` and therefore stays
+ * on the unclassified path. That is the safe direction: mislabelling
+ * a missing key as an IAM problem would send the responder to the
+ * wrong team.
+ */
+function awsErrorNameOf(cause: unknown): string {
+  if (!(cause instanceof Error)) return "unknown";
+  return cause.name.length > 0 ? cause.name : "unknown";
+}
+
+// KMS itself throws `AccessDeniedException`; the `KMS`-prefixed
+// variant appears when another service fronts the call on our
+// behalf. Both mean "authorization", never "missing".
+const ACCESS_DENIED_ERROR_NAMES: ReadonlySet<string> = new Set([
+  "AccessDeniedException",
+  "KMSAccessDeniedException",
+]);
 
 /**
  * Validate the `previousDataKeyKeyIds` option at construction time.

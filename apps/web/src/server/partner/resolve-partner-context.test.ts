@@ -1,4 +1,4 @@
-// Enforcement tests for resolvePartnerContext (ADR-0032).
+// Enforcement tests for the v1 partner request toolkit (ADR-0032).
 //
 // The behavior pinned here: quota-tier enforcement is TWO limiter
 // windows resolved from the key's tier — a per-minute burst gate
@@ -7,6 +7,13 @@
 // requests that already passed the burst gate. Unauthenticated
 // requests never touch the limiter at all (an attacker without a
 // key cannot burn a partner's quota).
+//
+// `partnerCommandError` is pinned in the second suite. It is the one
+// place every v1 mutation route turns a command rejection into a
+// status, so the two failures a blanket 422 caused — a retryable
+// conflict presented as un-retryable, and our own outage presented as
+// the caller's bad payload — are regression-tested here rather than
+// five times over.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -48,13 +55,17 @@ vi.mock("@pharmax/tenancy", () => ({
 
 vi.mock("@/server/env", () => ({ env: { REDIS_URL: undefined } }));
 
-vi.mock("@/server/logger", () => {
+const loggerMock = vi.hoisted(() => {
   const noop = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() };
   noop.child.mockReturnValue(noop);
-  return { logger: noop };
+  return noop;
 });
 
-import { resolvePartnerContext } from "./resolve-partner-context.js";
+vi.mock("@/server/logger", () => ({ logger: loggerMock }));
+
+import { errors } from "@pharmax/platform-core";
+
+import { partnerCommandError, resolvePartnerContext } from "./resolve-partner-context.js";
 
 const RESOLVED_KEY = {
   apiKeyId: "ak-1",
@@ -158,5 +169,68 @@ describe("resolvePartnerContext quota enforcement", () => {
       expect(tenancy.organizationId).toBe("org-1");
       expect(tenancy.actor.userId).toBe("user-minter");
     }
+  });
+});
+
+describe("partnerCommandError", () => {
+  beforeEach(() => {
+    loggerMock.error.mockReset();
+  });
+
+  it.each([
+    [new errors.ValidationError({ code: "C", message: "m" }), 400],
+    [new errors.AuthenticationError({ code: "C", message: "m" }), 401],
+    [new errors.AuthorizationError({ code: "C", message: "m" }), 403],
+    [new errors.NotFoundError({ code: "C", message: "m" }), 404],
+    [new errors.ConflictError({ code: "C", message: "m" }), 409],
+    [new errors.InvariantViolationError({ code: "C", message: "m" }), 422],
+    [new errors.InternalError({ code: "C", message: "m" }), 500],
+  ])("takes the status from the error class, not the code (%#)", async (error, status) => {
+    const response = partnerCommandError(error);
+    expect(response?.status).toBe(status);
+    expect((await response!.json()).error.code).toBe("C");
+  });
+
+  it("passes an expected rejection's own message through and stays out of the logs", async () => {
+    const response = partnerCommandError(
+      new errors.ConflictError({
+        code: "RX_NUMBER_COLLISION",
+        message: "The allocated prescription number is already in use. Retry the transcription.",
+      })
+    );
+    expect(response?.status).toBe(409);
+    expect((await response!.json()).error.message).toContain("Retry the transcription");
+    // An expected rejection is ordinary traffic. Logging it at ERROR
+    // would put caller mistakes into the same rate on-call watches.
+    expect(loggerMock.error).not.toHaveBeenCalled();
+  });
+
+  it("redacts an InternalError's message and reports it at ERROR so alerting sees it", async () => {
+    const cause = new errors.InternalError({
+      code: "RX_NUMBER_ALLOCATION_FAILED",
+      message: "allocate failed on shard db-3: relation rx_counter is locked",
+    });
+    const response = partnerCommandError(cause);
+    expect(response?.status).toBe(500);
+
+    const body = await response!.json();
+    expect(body.error.code).toBe("RX_NUMBER_ALLOCATION_FAILED");
+    expect(body.error.message).not.toContain("db-3");
+    expect(body.error.message).not.toContain("rx_counter");
+    // Retry guidance is the actionable part: the caller did nothing
+    // wrong, and their Idempotency-Key makes a retry safe.
+    expect(body.error.message).toContain("Idempotency-Key");
+
+    // `.error()` is what bridges to Sentry, and the cause has to be
+    // forwarded for it to capture an exception rather than a string.
+    expect(loggerMock.error).toHaveBeenCalledTimes(1);
+    const [event, context] = loggerMock.error.mock.calls[0] as [string, Record<string, unknown>];
+    expect(event).toBe("partner_api.command_internal_error");
+    expect(context["error"]).toBe(cause);
+  });
+
+  it("returns null for a non-Pharmax throw so the route rethrows it", () => {
+    expect(partnerCommandError(new Error("boom"))).toBeNull();
+    expect(partnerCommandError("boom")).toBeNull();
   });
 });

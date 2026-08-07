@@ -13,8 +13,15 @@
 // ApprovePV1) under the seeded admin's identity, so command_log /
 // order_event / audit_log / event_outbox rows are produced exactly
 // as production would. The only direct Prisma writes are the demo
-// Provider + Prescription rows — no production intake command
-// exists for those yet (they arrive with the e-prescribe API).
+// Provider + Prescription rows. Production intake commands for both
+// DO exist (`RegisterProvider`, and `CreatePrescription` since
+// PR #67) — the seed DELIBERATELY bypasses them. CreatePrescription
+// assigns Rx numbers itself from the per-clinic allocator (the
+// caller cannot choose one), so routing the demo book through it
+// would spend the clinic's real, dense, inspector-facing number
+// series on disposable fixtures and make re-seeded rows
+// indistinguishable from transcribed ones. The demo rows carry their
+// own obviously-fake DEMO-RX-* numbers instead.
 //
 // Idempotent-ish: exits early if any DEMO-ORD-* order already
 // exists in the org (re-running won't duplicate the demo book).
@@ -261,7 +268,8 @@ async function main(): Promise<void> {
   }
   process.stdout.write(`✓ ${patientIds.length} synthetic patients registered\n`);
 
-  // ---- Provider + prescriptions (direct writes; no intake command yet) ----
+  // ---- Provider + prescriptions (direct writes; deliberate command
+  // bypass — see the header) ----
   const { providerId, prescriptionIds } = await withSystemContext(
     "seed-demo-orders:provider-and-rx",
     async () => {

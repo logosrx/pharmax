@@ -22,6 +22,14 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // `apps/web/tsconfig.json` sets `jsx: "preserve"` because Next.js
+  // owns that transform in the real build. Vitest reads the same
+  // tsconfig and esbuild then falls back to the CLASSIC runtime, so
+  // importing any component blows up with "React is not defined".
+  // Pinning the automatic runtime lets a test render a component to
+  // static markup, which is the only way to assert that a control is
+  // ABSENT rather than merely disabled.
+  esbuild: { jsx: "automatic" },
   resolve: {
     alias: {
       // Next.js's `server-only` and `client-only` packages are virtual
@@ -61,6 +69,23 @@ export default defineConfig({
     globals: false,
     reporters: ["default"],
     setupFiles: ["./test/setup-env.ts"],
+    // Vitest's 5s default assumes every test is pure and does no I/O.
+    // Most here are, but a handful are deliberate whole-repo sentinels
+    // (raw-SQL usage, event-name parity, migration RLS coverage) that
+    // read every source file under apps/ and packages/ to prove a
+    // repo-wide invariant. Those cost well under 100ms locally, but
+    // this suite runs 350+ files with coverage on a 2-core CI runner,
+    // where wall clock stops tracking actual work — the raw-SQL
+    // sentinel timed out at 5s while doing ~200ms of work.
+    //
+    // The floor is per-test and raised once here rather than sprinkled
+    // as literals on individual sentinels, so a new repo-wide test
+    // cannot go red simply because its author did not know to opt in.
+    // It stays tight enough to still catch a genuine hang: nothing in
+    // the suite comes within 10x of it (slowest test ~520ms), so
+    // reaching this ceiling means a test stopped terminating, not that
+    // the runner was busy.
+    testTimeout: 15_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],

@@ -94,3 +94,48 @@ break_glass_session
 # rationale). INSERT-only at the grant layer — rows are immutable
 # audit evidence of exactly what was executed under the bypass.
 break_glass_action
+
+# Compliance control plane (schema.prisma §10). The control program
+# these tables evidence belongs to Pharmax-the-operator, not to any
+# pharmacy tenant: "is RLS still enabled on every tenant table" and
+# "does branch protection still require CodeQL" have no
+# organizationId, and the per-org probes (audit-chain verification)
+# deliberately span every tenant in one run. Rather than anchor the
+# rows to a synthetic platform org — which packages/security/src/
+# break-glass/SCHEMA.md rejects because it weakens the per-tenant
+# hash chain — these tables are themselves the append-only evidence
+# ledger: compliance_check_run is INSERT-only and DELETE is granted
+# to neither application role.
+#
+# Where a run or exception identifies the tenant it examined, it uses
+# an unlinked `subject_organization_id` uuid rather than a foreign
+# key, so (a) evidence for a closed audit period survives tenant
+# offboarding and (b) no FK invites the cross-tenant join RLS exists
+# to prevent.
+compliance_criterion
+compliance_control
+compliance_control_criterion
+compliance_check
+compliance_check_control
+compliance_check_run
+compliance_check_exception
+compliance_task
+# Same plane, same reasoning: a draft proposes wording for a control
+# in the platform's own program, so it has no tenant either. Its
+# actor stamps (requestedBy / reviewedBy) are real FKs, because
+# "a model wrote this and a person approved it" is only an answer if
+# the person cannot be deleted out of the record.
+compliance_ai_draft
+
+# RxNorm drug-knowledge reference tables (global, deliberately not
+# tenant-scoped — same posture as `permission`). Drug nomenclature is
+# not tenant data: every organization screens against the same public
+# NLM release, the rows contain no organizationId and no PHI, and a
+# per-org copy would only let two tenants disagree about what an NDC
+# contains. Isolation is replaced by a write boundary instead of a
+# read boundary: pharmax_app is granted SELECT only, and writes happen
+# solely through the ingestion job (see the
+# 20260809000000_rxnorm_drug_knowledge migration's GRANT block).
+rxnorm_release
+rxnorm_ndc_product
+rxnorm_product_ingredient

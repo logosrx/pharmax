@@ -126,3 +126,15 @@ output "logs_key_alias" {
   description = "Alias of the CloudWatch Logs CMK."
   value       = aws_kms_alias.logs.name
 }
+
+# ---- Alerting (SNS topics) ---------------------------------------------------
+
+output "alerts_key_arn" {
+  description = "ARN of the CMK that encrypts the alerting SNS topics. CloudWatch alarms hold GenerateDataKey*/Decrypt on it."
+  value       = aws_kms_key.alerts.arn
+}
+
+output "alerts_key_alias" {
+  description = "Alias of the alerting CMK."
+  value       = aws_kms_alias.alerts.name
+}

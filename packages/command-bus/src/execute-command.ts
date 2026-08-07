@@ -23,6 +23,13 @@
 //      effect is the pre-tx command_log row, which is updated to
 //      status=FAILED with the error code. SOC 2 reviewers can
 //      audit attempted-but-failed actions in command_log.
+//      The one deliberate exception is a COMMITTED REFUSAL (see
+//      `HandlerResult.refusal`): the handler declines the act but
+//      asks for its transaction to commit, because the evidence of
+//      WHY it declined has to outlive the attempt. The tx commits,
+//      command_log is still marked FAILED with the refusal's code,
+//      no idempotency row is written, and the error is thrown to
+//      the caller afterwards.
 //
 // RLS invariant (every statement, not just the handler tx):
 //   command_log and idempotency_key are RLS-protected tables
@@ -91,7 +98,7 @@ const meter = getMeter("@pharmax/command-bus");
 
 const commandDispatchedCounter = meter.createCounter("pharmax_command_dispatched_total", {
   description:
-    "Commands dispatched through the bus. Outcome is one of success | fail | replay | sod_rejected.",
+    "Commands dispatched through the bus. Outcome is one of success | fail | refused | replay | sod_rejected.",
 });
 
 const commandDurationHistogram = meter.createHistogram("pharmax_command_duration_seconds", {
@@ -288,15 +295,24 @@ export async function executeCommandDetailed<TInput, TOutput>(
 
       // Store idempotency row in the SAME tx, so a tx rollback
       // also rolls back the cache write (no phantom replay rows).
-      const responsePayload = redactPayload(result.output, command.redactFields);
-      await storeIdempotencyInTx(tx, {
-        organizationId: ctx.organizationId,
-        commandName: command.name,
-        key: idempotencyKey,
-        requestHash,
-        responsePayload,
-        responseStatus: null,
-      });
+      //
+      // A committed refusal is deliberately NOT cached. The caller's
+      // remedy for a refusal is to change the world and retry, and a
+      // cached refusal would answer that retry with the very refusal
+      // it was sent to resolve — for as long as the key survives.
+      // The same-key retry re-executes instead, which is what the
+      // FAILED command_log status below already promises.
+      if (result.refusal === undefined) {
+        const responsePayload = redactPayload(result.output, command.redactFields);
+        await storeIdempotencyInTx(tx, {
+          organizationId: ctx.organizationId,
+          commandName: command.name,
+          key: idempotencyKey,
+          requestHash,
+          responsePayload,
+          responseStatus: null,
+        });
+      }
 
       return result;
     });
@@ -351,6 +367,41 @@ export async function executeCommandDetailed<TInput, TOutput>(
     commandDispatchedCounter.add(1, { ...labels, outcome });
     commandDurationHistogram.record(elapsedSeconds(startHrTimeNs), { ...labels, outcome });
     throw err;
+  }
+
+  // Step 19 (committed-refusal path) — the tx COMMITTED, so the
+  // handler's evidence is durable, but the act was refused. Record
+  // the same FAILED command_log row a rollback refusal would have
+  // written (same status, same errorCode, so nothing downstream has
+  // to learn a new shape) and rethrow, so the caller sees the refusal
+  // as the typed error its class already promises.
+  if (handlerResult.refusal !== undefined) {
+    const refusal = handlerResult.refusal;
+    try {
+      await runInTenantTx(config, ctx, (tx) =>
+        updateCommandLogStatus(tx, {
+          id: commandLogId,
+          status: CommandStatus.FAILED,
+          errorCode: refusal.code,
+          errorMessage: refusal.message,
+          completedAt: config.clock.now(),
+          ...(handlerResult.targetOrderId === undefined
+            ? {}
+            : { targetOrderId: handlerResult.targetOrderId }),
+        })
+      );
+    } catch (updateErr) {
+      log.error("failed to mark command_log FAILED after a committed refusal", {
+        commandLogId,
+        err: describeError(updateErr),
+      });
+    }
+    commandDispatchedCounter.add(1, { ...labels, outcome: "refused" });
+    commandDurationHistogram.record(elapsedSeconds(startHrTimeNs), {
+      ...labels,
+      outcome: "refused",
+    });
+    throw refusal;
   }
 
   // Step 19 (success path) — mark command_log SUCCEEDED (GUC'd tx;
