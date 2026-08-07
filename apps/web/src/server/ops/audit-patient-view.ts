@@ -130,12 +130,15 @@ export interface BatchAuditPatientViewResult {
  * single helper) ensure a refresh-spamming operator writes ONE
  * row per (patient, minute), not N.
  *
- * Returns the patient ids whose audit failed; the caller decides
- * whether to render those rows or hide them. The conservative
- * choice is to hide ("every PHI display has an audit row" is
- * load-bearing); the practical choice for search is to show a
- * partial-audit warning banner and render the successful rows.
- * This helper does NOT make that choice — it just reports.
+ * Returns the patient ids whose audit failed. Callers MUST NOT
+ * render identity for those patients: "every PHI display has an
+ * audit row" is load-bearing, and an unauditable view is precisely
+ * the view that should not happen — if the audit write is failing,
+ * the thing that would have recorded the disclosure is down, which
+ * is when a disclosure is least defensible after the fact. Pass the
+ * result through `partitionAuditedPatients` and render only the
+ * `visible` rows, with a banner naming the suppressed count (issue
+ * #79 removed the older render-anyway-and-warn behaviour).
  */
 export async function auditPatientViewsBatch(input: {
   readonly organizationId: string;
@@ -171,4 +174,42 @@ export async function auditPatientViewsBatch(input: {
     succeeded: input.patients.length - failedPatientIds.length,
     failedPatientIds,
   });
+}
+
+export interface PartitionedAuditedPatients<T> {
+  /** Rows whose `ViewPatient` audit is durably on record — the only rows a page may render. */
+  readonly visible: ReadonlyArray<T>;
+  /** How many rows were withheld because their audit failed. */
+  readonly suppressedCount: number;
+}
+
+/**
+ * Split search rows into the ones whose PHI view was audited and the
+ * count that must be withheld.
+ *
+ * ONE function, used by every search surface, deliberately: the
+ * failure issue #79 closed was not the render-anyway behaviour itself
+ * but the DIVERGENCE — the same control enforced on the detail pages
+ * and advisory on the search pages, with no principle distinguishing
+ * them. A page that maps `results.rows` directly instead of `visible`
+ * is reintroducing that divergence; there should be exactly one place
+ * that decides what an audit failure withholds.
+ *
+ * A `null` batch means no audit was attempted (the search itself
+ * failed or was never run) — there are no rows to protect, and the
+ * caller renders none.
+ */
+export function partitionAuditedPatients<T extends { readonly patientId: string }>(
+  rows: ReadonlyArray<T>,
+  batch: BatchAuditPatientViewResult | null
+): PartitionedAuditedPatients<T> {
+  if (batch === null) {
+    return Object.freeze({ visible: [], suppressedCount: rows.length });
+  }
+  if (batch.failedPatientIds.length === 0) {
+    return Object.freeze({ visible: rows, suppressedCount: 0 });
+  }
+  const failed = new Set(batch.failedPatientIds);
+  const visible = rows.filter((row) => !failed.has(row.patientId));
+  return Object.freeze({ visible, suppressedCount: rows.length - visible.length });
 }

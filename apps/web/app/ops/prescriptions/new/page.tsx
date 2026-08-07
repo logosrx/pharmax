@@ -32,7 +32,9 @@ import { resolveOperatorTenancyContext } from "../../../../src/server/auth/resol
 import {
   auditPatientView,
   auditPatientViewsBatch,
+  partitionAuditedPatients,
 } from "../../../../src/server/ops/audit-patient-view.js";
+import { UnauditedResultsBanner } from "../../../../src/components/ops/unaudited-results-banner.js";
 import { getPatientDetail } from "../../../../src/server/ops/get-patient-detail.js";
 import { listProviders } from "../../../../src/server/ops/list-providers.js";
 import { listTranscribableProducts } from "../../../../src/server/ops/list-transcribable-products.js";
@@ -153,6 +155,9 @@ export default async function TranscribePrescriptionPage({
               phiDecryptErrors: r.phiDecryptErrors,
             })),
           });
+    // Only rows whose ViewPatient audit is on record may render — the
+    // rest are withheld and counted in the banner (issue #79).
+    const audited = results === null ? null : partitionAuditedPatients(results.rows, auditBatch);
 
     return (
       <div className="space-y-6 animate-fade-in">
@@ -213,15 +218,15 @@ export default async function TranscribePrescriptionPage({
           </CardContent>
         </Card>
 
-        {auditBatch !== null && auditBatch.failedPatientIds.length > 0 ? (
-          <Banner tone="danger" title="PHI-view audit incomplete">
-            Audit failed for {auditBatch.failedPatientIds.length} of {auditBatch.attempted} results.
-            This is a compliance regression; report operator id{" "}
-            <code>{session.operator.userId}</code>.
-          </Banner>
+        {audited !== null ? (
+          <UnauditedResultsBanner
+            suppressedCount={audited.suppressedCount}
+            attempted={auditBatch?.attempted ?? results?.rows.length ?? 0}
+            operatorUserId={session.operator.userId}
+          />
         ) : null}
 
-        {results === null ? (
+        {results === null || audited === null ? (
           <EmptyState
             icon="search"
             title="Start with the patient"
@@ -233,10 +238,16 @@ export default async function TranscribePrescriptionPage({
             title="No active patient matches"
             description="Check the spelling and the date of birth. A patient who is inactive, deceased, or merged will not appear here and cannot be prescribed for."
           />
+        ) : audited.visible.length === 0 ? (
+          <EmptyState
+            icon="patients"
+            title="All matching results are withheld"
+            description="Patients matched this search, but none of their view audits could be recorded, so none of them are shown. See the banner above."
+          />
         ) : (
-          <Section title="Matches" count={results.rows.length} aside={`${results.tookMs}ms`}>
+          <Section title="Matches" count={audited.visible.length} aside={`${results.tookMs}ms`}>
             <div className="space-y-2">
-              {results.rows.map((row) => {
+              {audited.visible.map((row) => {
                 const name = [row.firstName, row.middleName, row.lastName]
                   .filter((s) => s !== null && s.length > 0)
                   .join(" ");
