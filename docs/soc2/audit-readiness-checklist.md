@@ -13,6 +13,28 @@ Owner per item is a role title; see
 gap"** without a remediation date is a control deficiency and must be
 recorded in the [risk register](../governance/risk-register.md).
 
+## Known-open gaps as of this revision
+
+Read these before running the checklist. Every one of them will make an
+item below fail, and knowing which failures are already understood is
+the difference between a readiness pulse and a fire drill.
+
+- **230 placeholder markers are unresolved** across the policy,
+  security, and governance documents. The full breakdown, with owners
+  and which audit gate each blocks, is in
+  [`placeholder-inventory.md`](./placeholder-inventory.md). Section 9
+  below therefore fails today by design; treat the inventory as the
+  work list rather than re-deriving it.
+- **Six evidence-integrity findings are open**, two of them High. They
+  are written as actionable tasks in
+  [`evidence-integrity-findings.md`](./evidence-integrity-findings.md)
+  and are referenced by ID (`EI-1` … `EI-6`) from the affected items
+  below and from the controls inventory.
+- **Fourteen of sixty-nine controls are `Partial`**, up from eight,
+  after the inventory was reconciled against the code. See the
+  reconciliation note at the end of
+  [`controls-inventory.md`](./controls-inventory.md).
+
 ## Pre-audit checklist
 
 ### Section 1 — Framework integrity (Compliance Officer)
@@ -35,14 +57,24 @@ recorded in the [risk register](../governance/risk-register.md).
 
 - [ ] Quarterly access review completed within the last 90 days for
       every active tenant. Signed PDFs under
-      `evidence/access-reviews/<YYYY-Q#>/signed/`.
+      `evidence/access-reviews/<YYYY-Q#>/signed/`. `EI-1` resolved
+      2026-08-06: the pack is written by the S3 Object Lock publisher
+      to the audit-archive bucket, and production refuses to boot with
+      the review enabled but the bucket unconfigured. Confirm the pack
+      objects exist under the bucket's `access-reviews/` prefix AND
+      cross-check the `access_review_snapshot` rows' `digestSha256`.
 - [ ] Audit-chain verifier (`scripts/security/verify-audit-chain-all-orgs.ts`)
       run within the last 24 hours and exit code was 0 (no chain
       breaks).
 - [ ] Daily Merkle-root signing job ran < 26 hours ago for every active
-      tenant. Manifest landed in S3 Object Lock bucket (ADR-0024).
-      If the signing lane is not yet wired, document the gap with a
-      target completion date.
+      tenant. Manifest landed in S3 Object Lock bucket (ADR-0024). The
+      code and Terraform lanes have both landed — the worker refuses to
+      boot in production without `AUDIT_ARCHIVE_S3_BUCKET` — so the
+      question is now whether a production run is evidenced, not
+      whether the lane exists. `EI-2` resolved 2026-08-06: the bucket
+      policy now denies a `PutObject` naming any Object Lock mode other
+      than COMPLIANCE, and one whose retention is under the six-year
+      floor (`scripts/audit-archive-bucket-policy.test.ts` pins both).
 - [ ] Nightly security digest (`scripts/security/send-nightly-security-digest.ts`)
       delivered every night in the period — confirm dispatch records.
 - [ ] Break-glass usage in the period reviewed; every elevation has a
@@ -53,12 +85,27 @@ recorded in the [risk register](../governance/risk-register.md).
 
 - [ ] Last backup restore drill completed within the last 90 days.
       Restore-drill log under `evidence/dr-drills/<period>/` with
-      post-restore `verifyChain` exit code 0.
+      post-restore `verifyChain` exit code 0. The quarterly cadence is
+      enforced by `.github/workflows/restore-drill.yml`, which opens a
+      tracking issue and runs a read-only preflight; the destructive
+      phases stay human-in-the-loop, so a green workflow is not a
+      completed drill.
 - [ ] Last DR tabletop exercise completed within the last 12 months.
-- [ ] RDS automated backups verified — 35-day retention, multi-AZ,
-      most recent automated snapshot < 26 hours old.
+      **Note `EI-5`:** the secondary region carries no
+      `terraform.tfvars`, so a region-failover scenario is a paper
+      exercise today.
+- [ ] RDS automated backups verified — retention and Multi-AZ are set
+      in `infra/terraform/environments/prod/us-east-1/terraform.tfvars`
+      (`rds_backup_retention_days = 35`, `rds_multi_az = true`);
+      confirm the most recent automated snapshot is < 26 hours old.
 - [ ] CloudWatch alarms reviewed; no alarm in `INSUFFICIENT_DATA` for
-      more than 7 days without an explanation.
+      more than 7 days without an explanation. `EI-3` resolved
+      2026-08-06: every alarm routes to a severity-tiered SNS topic
+      (`enable_alerting = true` in prod tfvars; CI-enforced by
+      `pnpm check:alarm-actions`). Confirm
+      `terraform output alerting_critical_subscription_count` is > 0
+      and that a deliberately tripped test alarm reached a human —
+      that delivery test is the one part still unexercised.
 
 ### Section 4 — Change management (Engineering Lead)
 
@@ -83,8 +130,10 @@ recorded in the [risk register](../governance/risk-register.md).
 - [ ] Every PHI-touching vendor has a BAA on file
       (`docs/governance/baa-tracker.md`) and the BAA has not lapsed.
 - [ ] Vendor SOC 2 reports current (within annual renewal window) for
-      every PHI-touching vendor (AWS, EasyPost, Clerk, observability
-      vendor).
+      every PHI-touching vendor (AWS, EasyPost, and the observability
+      vendor once selected). Clerk is no longer in scope — ADR-0030
+      moved authentication in-house — so its absence from the vendor
+      pack is correct, not a gap.
 - [ ] No new vendor added in the period without going through the
       vendor onboarding playbook.
 
@@ -99,7 +148,14 @@ recorded in the [risk register](../governance/risk-register.md).
 ### Section 7 — Incident response (Security Officer)
 
 - [ ] Every incident in the period has a postmortem under
-      `evidence/incidents/<year>/<incident-id>/`.
+      `evidence/incidents/<year>/<incident-id>/`. **Open gap `EI-4`:**
+      no durable incident record exists in the system, so nothing
+      enforces the completeness of that folder.
+      `scripts/soc2/export-incident-log.ts` runs in declared stub mode
+      and emits an `audit_log` proxy, which is a cross-check and not a
+      population. If the period had no incidents, land the explicit
+      `no-incidents-<period>.txt` marker the exporter's banner
+      describes.
 - [ ] Every incident classified `MAJOR` or `CRITICAL` had a customer
       notification and a regulator notification where required, with
       copies under `evidence/external-comms/<year>/` and
@@ -112,9 +168,15 @@ recorded in the [risk register](../governance/risk-register.md).
 - [ ] Security training completed by every employee within the last
       12 months. Completion records under `evidence/training/<year>/`.
 - [ ] Acceptable-use policy acknowledgment current for every employee.
-- [ ] Every termination in the period had a Clerk webhook
-      `user.deleted` event followed by a Pharmax `User.status =
-INACTIVE` flip within 24 hours (audit via `clerk_webhook_event`).
+- [ ] Every termination in the period had a `DeactivateUser` command
+      (`packages/auth/src/commands/deactivate-user.ts`) within 24 hours,
+      flipping `User.status` to `SUSPENDED` or `TERMINATED` and revoking
+      the user's sessions in the same transaction. Audit via
+      `command_log` and `audit_log`, not `clerk_webhook_event` — that
+      table has had no writer since ADR-0030 (`EI-6`). Because the
+      command is admin-initiated rather than triggered by an identity
+      provider, reconcile the termination list from HR records; the
+      system cannot tell you about a termination nobody actioned.
 - [ ] Device-hygiene attestations current for every employee with
       production access.
 
@@ -124,8 +186,15 @@ INACTIVE` flip within 24 hours (audit via `clerk_webhook_event`).
       `Last reviewed` date within the last 12 months.
 - [ ] Every policy has a signed approval PDF for the current version
       under `evidence/policies/<year>/`.
-- [ ] No policy in the bundle has `[TBD]` markers in the front matter
-      (Owner, Approver, Effective date).
+- [ ] No policy in the bundle has unresolved placeholder markers in the
+      front matter (Owner, Approver, Effective date, Last reviewed, Next
+      review). **This item fails today.** All 22 authoritative documents
+      carry `[Effective date: TBD]`, and the nine framework stubs carry
+      81 `<TBD>` markers between them. Work the list in
+      [`placeholder-inventory.md`](./placeholder-inventory.md), which
+      names the owner and the blocking gate for each; do not re-count
+      them here. Resolve a marker by deleting it and stating the fact —
+      never by blanking it.
 - [ ] The framework stubs under [`policies/`](./policies/) and the
       authoritative policies under [`../policies/`](../policies/) do
       not disagree on the policy structure; if they do, the

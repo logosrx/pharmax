@@ -31,12 +31,22 @@ and any third-party human with credentialed access.
 
 - Workstations used for Pharmax work require:
   - Full-disk encryption.
-  - Antimalware (`<TBD by legal counsel: specific products approved>`).
-  - Auto-lock within `<TBD: 5 or 10 minutes>` of inactivity.
+  - Antimalware
+    (`<TBD by Security Officer: approved product list (gate: PRE-T1)>` —
+    re-owned from legal counsel, because product selection is a security
+    decision).
+  - Auto-lock within
+    `<TBD by Security Officer: 5 or 10 minutes (gate: PRE-T1)>` of
+    inactivity.
   - OS auto-updates enabled.
 - Personal devices may access Pharmax services only through approved
-  thin clients (e.g. Clerk-authenticated browser session); no PHI is
+  thin clients — a browser session authenticated by the in-house
+  identity engine (ADR-0030), subject to the 30-minute idle and 12-hour
+  absolute session caps in `packages/auth/src/configure.ts`. No PHI is
   stored locally.
+
+Neither workstation requirement has an attestation mechanism in the
+platform today; CC6.8-1 is recorded as `Partial` for that reason.
 
 ### 3.2 Credential hygiene
 

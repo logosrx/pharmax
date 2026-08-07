@@ -26,7 +26,8 @@ workforce-impacting events.
 ## 2. Scope
 
 - Pharmax-operated production systems.
-- Critical vendor dependencies (AWS, Clerk, Stripe, EasyPost).
+- Critical vendor dependencies (AWS, Stripe, EasyPost). Clerk was
+  removed as a dependency by ADR-0030.
 - Workforce availability for the operations-critical roles
   (on-call engineering, customer-support, pharmacy operations
   coordination on the customer side).

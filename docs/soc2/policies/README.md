@@ -72,6 +72,36 @@ before the policy can be treated as audit-ready:
 Stubs use the marker `<TBD by SOC 2 auditor: reason>` for any prose
 in these categories.
 
+## Marker discipline
+
+A bare `<TBD>` is an unowned marker, and an unowned marker does not get
+closed. Every marker should therefore name a role and an audit gate:
+
+```
+<TBD by <role>: <reason> (gate: <gate>)>
+```
+
+`<role>` is any role in the [ownership roster](../README.md#ownership),
+`legal counsel`, or `SOC 2 auditor`. `<gate>` is one of `PRE-T1`,
+`AT-T1`, `PRE-T2`, or `DRILL`, defined in
+[`../placeholder-inventory.md`](../placeholder-inventory.md).
+
+Two rules follow from this:
+
+- **Assign the marker to whoever can actually decide.** A question about
+  which antimalware product to standardize on is not a legal question,
+  and addressing it to counsel guarantees it sits forever. Re-owning a
+  mis-addressed marker is a legitimate edit and should be recorded in the
+  placeholder inventory.
+- **Resolve an engineering fact rather than marking it.** A retention
+  window that Terraform states is not awaiting anyone's confirmation;
+  state it and cite the file. Wrapping a verifiable fact in an auditor
+  marker converts work that takes one grep into work that waits on a
+  third party.
+
+The running count of unresolved markers, with owners and gates, is
+[`../placeholder-inventory.md`](../placeholder-inventory.md).
+
 ## The stub set
 
 | File                                                   | Authoritative version                                                                                                                           | Owner role         | Audience                 |
