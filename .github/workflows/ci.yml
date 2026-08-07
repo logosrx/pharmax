@@ -56,7 +56,7 @@ jobs:
     outputs:
       pnpm-store-path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -102,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
       - uses: actions/setup-node@v7
@@ -116,7 +116,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
       - uses: actions/setup-node@v7
@@ -130,7 +130,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
       - uses: actions/setup-node@v7
@@ -144,7 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
       - uses: actions/setup-node@v7
@@ -192,7 +192,7 @@ jobs:
     # Each is a TypeScript file under `scripts/`. They run sequentially
     # in this job because each is fast (sub-second).
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
       - uses: actions/setup-node@v7
@@ -216,7 +216,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
       - uses: actions/setup-node@v7
@@ -248,7 +248,7 @@ jobs:
     # `continue-on-error` to false on a per-severity basis.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
       - uses: actions/setup-node@v7

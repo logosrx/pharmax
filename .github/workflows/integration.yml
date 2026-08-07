@@ -80,7 +80,7 @@ jobs:
       PHARMAX_LOCAL_KMS_SEED: ci-integration-seed-do-not-use-in-prod-32+chars
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
         with:
@@ -155,7 +155,7 @@ jobs:
       DIRECT_URL: postgresql://postgres:postgres@localhost:5432/pharmax
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
         with:

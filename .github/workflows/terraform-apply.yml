@@ -175,7 +175,7 @@ jobs:
       env_name: ${{ steps.resolve.outputs.env_name }}
       role_var_name: ${{ steps.resolve.outputs.role_var_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate `reason` length
         env:
@@ -302,7 +302,7 @@ jobs:
       WORK_DIR: ${{ needs.preflight.outputs.work_dir }}
       AWS_REGION: ${{ needs.preflight.outputs.aws_region }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve read-only plan-role ARN from variable
         id: role
@@ -533,7 +533,7 @@ jobs:
       WORK_DIR: ${{ needs.preflight.outputs.work_dir }}
       AWS_REGION: ${{ needs.preflight.outputs.aws_region }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve apply-role ARN from variable
         id: role
