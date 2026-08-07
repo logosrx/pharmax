@@ -104,6 +104,17 @@ const schema = z.object({
   SLA_BREACH_EVAL_BATCH_SIZE: z.coerce.number().int().positive().default(50),
   SLA_BREACH_EVAL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
 
+  // ---- Compliance check scheduler ---------------------------------
+  // Runs due compliance probes (SOC 2 / HIPAA continuous monitoring).
+  // Per-check cadence lives in `compliance_check.intervalMinutes`;
+  // this interval is only how often the worker LOOKS for due checks,
+  // so a 5-minute tick still honours an hourly check to within five
+  // minutes. Deliberately slower than the order-workflow drains: the
+  // probes run cross-tenant aggregate queries and there is no
+  // operator waiting on the result.
+  COMPLIANCE_CHECK_SCHEDULER_BATCH_SIZE: z.coerce.number().int().positive().default(50),
+  COMPLIANCE_CHECK_SCHEDULER_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+
   // ---- NPI registry sync ------------------------------------------
   // Two loops:
   //   1. SCHEDULER — picks orgs whose last successful sync is older

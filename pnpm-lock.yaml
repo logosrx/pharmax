@@ -42,6 +42,9 @@ importers:
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:packages/command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:packages/compliance
       '@pharmax/composition':
         specifier: workspace:*
         version: link:packages/composition
@@ -244,6 +247,9 @@ importers:
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../../packages/command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:../../packages/compliance
       '@pharmax/composition':
         specifier: workspace:*
         version: link:../../packages/composition
@@ -368,6 +374,9 @@ importers:
       '@pharmax/command-bus':
         specifier: workspace:*
         version: link:../../packages/command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:../../packages/compliance
       '@pharmax/composition':
         specifier: workspace:*
         version: link:../../packages/composition
@@ -607,6 +616,74 @@ importers:
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
+
+  packages/compliance:
+    dependencies:
+      '@pharmax/command-bus':
+        specifier: workspace:*
+        version: link:../command-bus
+      '@pharmax/database':
+        specifier: workspace:*
+        version: link:../database
+      '@pharmax/platform-core':
+        specifier: workspace:*
+        version: link:../platform-core
+      '@pharmax/rbac':
+        specifier: workspace:*
+        version: link:../rbac
+      '@pharmax/security':
+        specifier: workspace:*
+        version: link:../security
+      '@pharmax/tenancy':
+        specifier: workspace:*
+        version: link:../tenancy
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  packages/compliance-ai:
+    dependencies:
+      '@pharmax/command-bus':
+        specifier: workspace:*
+        version: link:../command-bus
+      '@pharmax/compliance':
+        specifier: workspace:*
+        version: link:../compliance
+      '@pharmax/database':
+        specifier: workspace:*
+        version: link:../database
+      '@pharmax/platform-core':
+        specifier: workspace:*
+        version: link:../platform-core
+      '@pharmax/rbac':
+        specifier: workspace:*
+        version: link:../rbac
+      '@pharmax/tenancy':
+        specifier: workspace:*
+        version: link:../tenancy
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
   packages/composition:
     dependencies:

@@ -60,6 +60,7 @@ import { createStripeInvoiceAdapter } from "./billing/stripe-invoice-adapter.js"
 import { createStripeRefundAdapter } from "./billing/stripe-refund-adapter.js";
 import { createQuarterlyAccessReviewLoop } from "./compliance/access-review-job.js";
 import { buildEvidencePublisher } from "./compliance/build-evidence-publisher.js";
+import { createComplianceCheckScheduler } from "./compliance/check-scheduler.js";
 import { S3ObjectLockEvidencePublisher } from "./compliance/s3-evidence-publisher.js";
 import { NotificationChannelComplianceNotifier } from "./compliance/notification-channel-compliance-notifier.js";
 import { PrismaNotificationDeliveryStore } from "./notifications/prisma-notification-delivery-store.js";
@@ -384,6 +385,10 @@ async function main(): Promise<void> {
       batchSize: env.SLA_BREACH_EVAL_BATCH_SIZE,
       intervalMs: env.SLA_BREACH_EVAL_INTERVAL_MS,
     },
+    complianceCheckScheduler: {
+      batchSize: env.COMPLIANCE_CHECK_SCHEDULER_BATCH_SIZE,
+      intervalMs: env.COMPLIANCE_CHECK_SCHEDULER_INTERVAL_MS,
+    },
     npiSyncScheduler: {
       batchSize: env.NPI_SYNC_SCHEDULER_BATCH_SIZE,
       intervalMs: env.NPI_SYNC_SCHEDULER_INTERVAL_MS,
@@ -604,6 +609,18 @@ async function main(): Promise<void> {
     { client: prisma, logger },
     { batchSize: env.SLA_BREACH_EVAL_BATCH_SIZE }
   );
+
+  // Compliance control plane. Each tick runs the probes whose
+  // per-check interval has elapsed and writes append-only evidence of
+  // what it found. Unconditionally constructed — a monitoring loop
+  // that is only enabled in some environments produces a control
+  // program with gaps nobody notices until the audit.
+  const complianceCheckScheduler = createComplianceCheckScheduler({
+    prisma,
+    clock: clock.systemClock,
+    logger,
+    batchSize: env.COMPLIANCE_CHECK_SCHEDULER_BATCH_SIZE,
+  });
 
   // NPI Registry sync scheduler + reaper. Two loops:
   //   - scheduler: tick → claim orgs due for a sync → enter per-org
@@ -989,6 +1006,15 @@ async function main(): Promise<void> {
     logger,
   });
 
+  const complianceCheckSchedulerLoop = createPollLoop({
+    name: "compliance-check-scheduler",
+    intervalMs: env.COMPLIANCE_CHECK_SCHEDULER_INTERVAL_MS,
+    tick: async () => {
+      await complianceCheckScheduler.tick();
+    },
+    logger,
+  });
+
   const npiSyncSchedulerLoop = createPollLoop({
     name: "npi-sync-scheduler",
     intervalMs: env.NPI_SYNC_SCHEDULER_INTERVAL_MS,
@@ -1074,6 +1100,7 @@ async function main(): Promise<void> {
   upsTrackingLoop.start();
   reportSchedulerLoop.start();
   slaBreachEvaluatorLoop.start();
+  complianceCheckSchedulerLoop.start();
   npiSyncSchedulerLoop.start();
   npiSyncReaperLoop.start();
   providerOnboardingProverLoop.start();
@@ -1132,6 +1159,7 @@ async function main(): Promise<void> {
     upsTrackingLoop.stop(),
     reportSchedulerLoop.stop(),
     slaBreachEvaluatorLoop.stop(),
+    complianceCheckSchedulerLoop.stop(),
     npiSyncSchedulerLoop.stop(),
     npiSyncReaperLoop.stop(),
     providerOnboardingProverLoop.stop(),

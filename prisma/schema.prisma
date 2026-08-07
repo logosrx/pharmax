@@ -912,42 +912,42 @@ model Organization {
   payments               Payment[]
   clinicCreditEntries    ClinicCreditEntry[]
 
-  patients                       Patient[]
-  providers                      Provider[]
-  prescriptions                  Prescription[]
-  rxNumberSequences              RxNumberSequence[]
-  orders                         Order[]
-  orderLines                     OrderLine[]
-  orderCancellations             OrderCancellation[]
-  orderHolds                     OrderHold[]
-  orderCorrectionReopens         OrderCorrectionReopen[]
-  verificationRecords            VerificationRecord[]
-  screeningFindings              OrderScreeningFinding[]
-  screeningAcknowledgements      OrderScreeningAcknowledgement[]
+  patients                         Patient[]
+  providers                        Provider[]
+  prescriptions                    Prescription[]
+  rxNumberSequences                RxNumberSequence[]
+  orders                           Order[]
+  orderLines                       OrderLine[]
+  orderCancellations               OrderCancellation[]
+  orderHolds                       OrderHold[]
+  orderCorrectionReopens           OrderCorrectionReopen[]
+  verificationRecords              VerificationRecord[]
+  screeningFindings                OrderScreeningFinding[]
+  screeningAcknowledgements        OrderScreeningAcknowledgement[]
   patientScreeningAcknowledgements PatientScreeningAcknowledgement[]
-  products                       Product[]
-  lots                           Lot[]
-  lotAssignments                 LotAssignment[]
-  inventoryTransactions          InventoryTransaction[]
-  labelPrinters                  LabelPrinter[]
-  printTemplates                 PrintTemplate[]
-  printJobs                      PrintJob[]
-  vialLabels                     VialLabel[]
-  shipments                      Shipment[]
-  shipmentTrackingEvents         ShipmentTrackingEvent[]
-  carrierCredentials             CarrierCredential[]
-  orderStageIntervals            OrderStageInterval[]
-  pricingRules                   PricingRule[]
-  packagePhotos                  PackagePhoto[]
-  packagePhotoUploadTokens       PackagePhotoUploadToken[]
-  reportRuns                     ReportRun[]
-  reportSchedules                ReportSchedule[]
-  notificationDeliveries         NotificationDelivery[]
-  accessReviewSnapshots          AccessReviewSnapshot[]
-  providerSyncRuns               ProviderSyncRun[]
-  providerSyncChecks             ProviderSyncCheck[]
-  providerSyncReviewItems        ProviderSyncReviewItem[]
-  providerOnboardingApplications ProviderOnboardingApplication[]
+  products                         Product[]
+  lots                             Lot[]
+  lotAssignments                   LotAssignment[]
+  inventoryTransactions            InventoryTransaction[]
+  labelPrinters                    LabelPrinter[]
+  printTemplates                   PrintTemplate[]
+  printJobs                        PrintJob[]
+  vialLabels                       VialLabel[]
+  shipments                        Shipment[]
+  shipmentTrackingEvents           ShipmentTrackingEvent[]
+  carrierCredentials               CarrierCredential[]
+  orderStageIntervals              OrderStageInterval[]
+  pricingRules                     PricingRule[]
+  packagePhotos                    PackagePhoto[]
+  packagePhotoUploadTokens         PackagePhotoUploadToken[]
+  reportRuns                       ReportRun[]
+  reportSchedules                  ReportSchedule[]
+  notificationDeliveries           NotificationDelivery[]
+  accessReviewSnapshots            AccessReviewSnapshot[]
+  providerSyncRuns                 ProviderSyncRun[]
+  providerSyncChecks               ProviderSyncCheck[]
+  providerSyncReviewItems          ProviderSyncReviewItem[]
+  providerOnboardingApplications   ProviderOnboardingApplication[]
 
   // Provider portal principals (ADR-0033, slice 2).
   portalAccounts        PortalAccount[]
@@ -1211,39 +1211,39 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  userRoles                     UserRole[]
-  commandLogs                   CommandLog[]
-  orderEvents                   OrderEvent[]
-  auditLogs                     AuditLog[]
-  assignedOrders                Order[]                         @relation("OrderAssignee")
-  orderCancellations            OrderCancellation[]             @relation("OrderCancellationActor")
-  orderHoldsPlaced              OrderHold[]                     @relation("OrderHoldPlacer")
-  orderHoldsReleased            OrderHold[]                     @relation("OrderHoldReleaser")
-  orderCorrectionReopens        OrderCorrectionReopen[]         @relation("OrderCorrectionReopenActor")
-  verificationRecords           VerificationRecord[]            @relation("VerificationRecordActor")
-  screeningFindings             OrderScreeningFinding[]         @relation("OrderScreeningFindingActor")
-  screeningAcknowledgements     OrderScreeningAcknowledgement[] @relation("OrderScreeningAcknowledgementActor")
+  userRoles                        UserRole[]
+  commandLogs                      CommandLog[]
+  orderEvents                      OrderEvent[]
+  auditLogs                        AuditLog[]
+  assignedOrders                   Order[]                           @relation("OrderAssignee")
+  orderCancellations               OrderCancellation[]               @relation("OrderCancellationActor")
+  orderHoldsPlaced                 OrderHold[]                       @relation("OrderHoldPlacer")
+  orderHoldsReleased               OrderHold[]                       @relation("OrderHoldReleaser")
+  orderCorrectionReopens           OrderCorrectionReopen[]           @relation("OrderCorrectionReopenActor")
+  verificationRecords              VerificationRecord[]              @relation("VerificationRecordActor")
+  screeningFindings                OrderScreeningFinding[]           @relation("OrderScreeningFindingActor")
+  screeningAcknowledgements        OrderScreeningAcknowledgement[]   @relation("OrderScreeningAcknowledgementActor")
   patientScreeningAcknowledgements PatientScreeningAcknowledgement[] @relation("PatientScreeningAcknowledgementActor")
-  lotAssignments                LotAssignment[]                 @relation("LotAssignmentActor")
-  printJobsRequested            PrintJob[]                      @relation("PrintJobRequester")
-  shipmentsCreated              Shipment[]                      @relation("ShipmentCreator")
-  shipmentsConfirmed            Shipment[]                      @relation("ShipmentConfirmer")
-  carrierCredentialsCreated     CarrierCredential[]             @relation("CarrierCredentialCreator")
-  apiKeysCreated                ApiKey[]                        @relation("ApiKeyCreator")
-  webhookSubscriptionsCreated   WebhookSubscription[]           @relation("WebhookSubscriptionCreator")
-  pricingRulesCreated           PricingRule[]                   @relation("PricingRuleCreator")
-  stageIntervalsActed           OrderStageInterval[]            @relation("StageIntervalActor")
-  packagePhotosCaptured         PackagePhoto[]                  @relation("PackagePhotoCapturer")
-  packagePhotosArchived         PackagePhoto[]                  @relation("PackagePhotoArchiver")
-  packagePhotoUploadTokens      PackagePhotoUploadToken[]       @relation("PackagePhotoUploadTokenUploader")
-  workflowPolicyOverlaysCreated WorkflowPolicyOverlay[]         @relation("WorkflowPolicyOverlayCreator")
-  reportRuns                    ReportRun[]                     @relation("ReportRunActor")
-  reportSchedulesCreated        ReportSchedule[]                @relation("ReportScheduleCreator")
-  accessReviewSnapshotsRecorded AccessReviewSnapshot[]          @relation("AccessReviewSnapshotRecordedBy")
-  providerSyncRunsTriggered     ProviderSyncRun[]               @relation("ProviderSyncRunTriggeredBy")
-  providerSyncReviewsResolved   ProviderSyncReviewItem[]        @relation("ProviderSyncReviewResolvedBy")
-  providerOnboardingDecisions   ProviderOnboardingApplication[] @relation("ProviderOnboardingDecidedBy")
-  invoicesApproved              Invoice[]                       @relation("InvoiceApprover")
+  lotAssignments                   LotAssignment[]                   @relation("LotAssignmentActor")
+  printJobsRequested               PrintJob[]                        @relation("PrintJobRequester")
+  shipmentsCreated                 Shipment[]                        @relation("ShipmentCreator")
+  shipmentsConfirmed               Shipment[]                        @relation("ShipmentConfirmer")
+  carrierCredentialsCreated        CarrierCredential[]               @relation("CarrierCredentialCreator")
+  apiKeysCreated                   ApiKey[]                          @relation("ApiKeyCreator")
+  webhookSubscriptionsCreated      WebhookSubscription[]             @relation("WebhookSubscriptionCreator")
+  pricingRulesCreated              PricingRule[]                     @relation("PricingRuleCreator")
+  stageIntervalsActed              OrderStageInterval[]              @relation("StageIntervalActor")
+  packagePhotosCaptured            PackagePhoto[]                    @relation("PackagePhotoCapturer")
+  packagePhotosArchived            PackagePhoto[]                    @relation("PackagePhotoArchiver")
+  packagePhotoUploadTokens         PackagePhotoUploadToken[]         @relation("PackagePhotoUploadTokenUploader")
+  workflowPolicyOverlaysCreated    WorkflowPolicyOverlay[]           @relation("WorkflowPolicyOverlayCreator")
+  reportRuns                       ReportRun[]                       @relation("ReportRunActor")
+  reportSchedulesCreated           ReportSchedule[]                  @relation("ReportScheduleCreator")
+  accessReviewSnapshotsRecorded    AccessReviewSnapshot[]            @relation("AccessReviewSnapshotRecordedBy")
+  providerSyncRunsTriggered        ProviderSyncRun[]                 @relation("ProviderSyncRunTriggeredBy")
+  providerSyncReviewsResolved      ProviderSyncReviewItem[]          @relation("ProviderSyncReviewResolvedBy")
+  providerOnboardingDecisions      ProviderOnboardingApplication[]   @relation("ProviderOnboardingDecidedBy")
+  invoicesApproved                 Invoice[]                         @relation("InvoiceApprover")
 
   // Authentication (ADR-0030, in-house identity engine).
   authSessions        AuthSession[]
@@ -1262,6 +1262,23 @@ model User {
   dscsaTransactionsReceived   DscsaTransaction[]  @relation("DscsaTransactionReceiver")
 
   controlledSubstancesDispensed ControlledSubstanceDispensing[]
+
+  // Compliance control plane (§10). Actor stamps only — the
+  // compliance ledger itself is platform-level, but who signed off a
+  // control, accepted an exception, or closed a remediation task is
+  // exactly what an auditor traces, so those edges are real FKs with
+  // onDelete: Restrict.
+  complianceControlsSignedOff  ComplianceControl[]        @relation("ComplianceControlSignedOffBy")
+  complianceExceptionsApproved ComplianceCheckException[] @relation("ComplianceExceptionApprovedBy")
+  complianceExceptionsRevoked  ComplianceCheckException[] @relation("ComplianceExceptionRevokedBy")
+  complianceTasksAssigned      ComplianceTask[]           @relation("ComplianceTaskAssignee")
+  complianceTasksCompleted     ComplianceTask[]           @relation("ComplianceTaskCompletedBy")
+  // Who asked a model for a draft, and who reviewed it. Both are
+  // Restrict FKs for the same reason as the rest: "a model wrote
+  // this and a person approved it" is only an answer if the person
+  // cannot later be deleted out of the record.
+  complianceAiDraftsRequested  ComplianceAiDraft[]        @relation("ComplianceAiDraftRequestedBy")
+  complianceAiDraftsReviewed   ComplianceAiDraft[]        @relation("ComplianceAiDraftReviewedBy")
 
   patientAllergiesRecorded        PatientAllergy[]                 @relation("PatientAllergyRecordedBy")
   patientAllergyStatusChanges     PatientAllergy[]                 @relation("PatientAllergyStatusChangedBy")
@@ -1723,17 +1740,17 @@ model WorkflowPolicy {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orders                         Order[]
-  orderCancellations             OrderCancellation[]
-  orderHolds                     OrderHold[]
-  orderCorrectionReopens         OrderCorrectionReopen[]
-  verificationRecords            VerificationRecord[]
-  screeningFindings              OrderScreeningFinding[]
-  screeningAcknowledgements      OrderScreeningAcknowledgement[]
+  orders                           Order[]
+  orderCancellations               OrderCancellation[]
+  orderHolds                       OrderHold[]
+  orderCorrectionReopens           OrderCorrectionReopen[]
+  verificationRecords              VerificationRecord[]
+  screeningFindings                OrderScreeningFinding[]
+  screeningAcknowledgements        OrderScreeningAcknowledgement[]
   patientScreeningAcknowledgements PatientScreeningAcknowledgement[]
-  overlays                       WorkflowPolicyOverlay[]
-  providerOnboardingApplications ProviderOnboardingApplication[]
-  compoundingRecords             CompoundingRecord[]
+  overlays                         WorkflowPolicyOverlay[]
+  providerOnboardingApplications   ProviderOnboardingApplication[]
+  compoundingRecords               CompoundingRecord[]
 
   @@unique([organizationId, code, version])
   @@index([organizationId, status])
@@ -1858,36 +1875,36 @@ model CommandLog {
   targetOrderId String? @db.Uuid
   targetOrder   Order?  @relation(fields: [targetOrderId], references: [id], onDelete: Restrict)
 
-  orderEvents                  OrderEvent[]
-  orderCancellations           OrderCancellation[]
-  orderHoldsPlaced             OrderHold[]                     @relation("OrderHoldPlaceCommand")
-  orderHoldsReleased           OrderHold[]                     @relation("OrderHoldReleaseCommand")
-  orderCorrectionReopens       OrderCorrectionReopen[]         @relation("OrderCorrectionReopenCommand")
-  verificationRecords          VerificationRecord[]
-  screeningFindings            OrderScreeningFinding[]
-  screeningAcknowledgements    OrderScreeningAcknowledgement[]
+  orderEvents                      OrderEvent[]
+  orderCancellations               OrderCancellation[]
+  orderHoldsPlaced                 OrderHold[]                       @relation("OrderHoldPlaceCommand")
+  orderHoldsReleased               OrderHold[]                       @relation("OrderHoldReleaseCommand")
+  orderCorrectionReopens           OrderCorrectionReopen[]           @relation("OrderCorrectionReopenCommand")
+  verificationRecords              VerificationRecord[]
+  screeningFindings                OrderScreeningFinding[]
+  screeningAcknowledgements        OrderScreeningAcknowledgement[]
   patientScreeningAcknowledgements PatientScreeningAcknowledgement[]
-  lotAssignments               LotAssignment[]
-  inventoryTransactions        InventoryTransaction[]
-  printJobs                    PrintJob[]
-  shipmentsCreated             Shipment[]                      @relation("ShipmentCreateCommand")
-  shipmentsConfirmed           Shipment[]                      @relation("ShipmentConfirmCommand")
-  shipmentTrackingEvents       ShipmentTrackingEvent[]         @relation("ShipmentTrackingEventCommand")
-  carrierCredentialsCreated    CarrierCredential[]             @relation("CarrierCredentialCreateCommand")
-  apiKeysCreated               ApiKey[]                        @relation("ApiKeyCreateCommand")
-  webhookSubscriptionsCreated  WebhookSubscription[]           @relation("WebhookSubscriptionCreateCommand")
-  pricingRulesCreated          PricingRule[]                   @relation("PricingRuleCreateCommandLog")
-  stageIntervalsOpened         OrderStageInterval[]            @relation("StageIntervalOpenCommand")
-  stageIntervalsClosed         OrderStageInterval[]            @relation("StageIntervalCloseCommand")
-  packagePhotos                PackagePhoto[]                  @relation("PackagePhotoCaptureCommand")
-  reportRuns                   ReportRun[]                     @relation("ReportRunCommand")
-  reportSchedulesCreated       ReportSchedule[]                @relation("ReportScheduleCreateCommand")
-  accessReviewSnapshots        AccessReviewSnapshot[]          @relation("AccessReviewSnapshotCommand")
-  providerSyncChecksDispatched ProviderSyncCheck[]             @relation("ProviderSyncCheckDispatchedCommandLog")
-  providerSyncReviewsResolved  ProviderSyncReviewItem[]        @relation("ProviderSyncReviewResolvedCommandLog")
-  breakGlassActions            BreakGlassAction[]
-  compoundingRecords           CompoundingRecord[]
-  dscsaTransactions            DscsaTransaction[]
+  lotAssignments                   LotAssignment[]
+  inventoryTransactions            InventoryTransaction[]
+  printJobs                        PrintJob[]
+  shipmentsCreated                 Shipment[]                        @relation("ShipmentCreateCommand")
+  shipmentsConfirmed               Shipment[]                        @relation("ShipmentConfirmCommand")
+  shipmentTrackingEvents           ShipmentTrackingEvent[]           @relation("ShipmentTrackingEventCommand")
+  carrierCredentialsCreated        CarrierCredential[]               @relation("CarrierCredentialCreateCommand")
+  apiKeysCreated                   ApiKey[]                          @relation("ApiKeyCreateCommand")
+  webhookSubscriptionsCreated      WebhookSubscription[]             @relation("WebhookSubscriptionCreateCommand")
+  pricingRulesCreated              PricingRule[]                     @relation("PricingRuleCreateCommandLog")
+  stageIntervalsOpened             OrderStageInterval[]              @relation("StageIntervalOpenCommand")
+  stageIntervalsClosed             OrderStageInterval[]              @relation("StageIntervalCloseCommand")
+  packagePhotos                    PackagePhoto[]                    @relation("PackagePhotoCaptureCommand")
+  reportRuns                       ReportRun[]                       @relation("ReportRunCommand")
+  reportSchedulesCreated           ReportSchedule[]                  @relation("ReportScheduleCreateCommand")
+  accessReviewSnapshots            AccessReviewSnapshot[]            @relation("AccessReviewSnapshotCommand")
+  providerSyncChecksDispatched     ProviderSyncCheck[]               @relation("ProviderSyncCheckDispatchedCommandLog")
+  providerSyncReviewsResolved      ProviderSyncReviewItem[]          @relation("ProviderSyncReviewResolvedCommandLog")
+  breakGlassActions                BreakGlassAction[]
+  compoundingRecords               CompoundingRecord[]
+  dscsaTransactions                DscsaTransaction[]
 
   controlledSubstanceDispensings ControlledSubstanceDispensing[]
 
@@ -2705,8 +2722,8 @@ model Patient {
   orders        Order[]
   packagePhotos PackagePhoto[] @relation("PackagePhotoMatchedPatient")
 
-  allergies                PatientAllergy[]
-  allergyHistoryAssertions PatientAllergyHistoryAssertion[]
+  allergies                 PatientAllergy[]
+  allergyHistoryAssertions  PatientAllergyHistoryAssertion[]
   screeningAcknowledgements PatientScreeningAcknowledgement[]
 
   @@index([organizationId, clinicId, status])
@@ -3566,23 +3583,23 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orderLines                OrderLine[]
-  orderEvents               OrderEvent[]
-  commandLogs               CommandLog[]
-  invoiceLines              InvoiceLine[]
-  cancellation              OrderCancellation?
-  holds                     OrderHold[]
-  correctionReopens         OrderCorrectionReopen[]
-  verificationRecords       VerificationRecord[]
-  screeningFindings         OrderScreeningFinding[]
-  screeningAcknowledgements OrderScreeningAcknowledgement[]
+  orderLines                       OrderLine[]
+  orderEvents                      OrderEvent[]
+  commandLogs                      CommandLog[]
+  invoiceLines                     InvoiceLine[]
+  cancellation                     OrderCancellation?
+  holds                            OrderHold[]
+  correctionReopens                OrderCorrectionReopen[]
+  verificationRecords              VerificationRecord[]
+  screeningFindings                OrderScreeningFinding[]
+  screeningAcknowledgements        OrderScreeningAcknowledgement[]
   patientScreeningAcknowledgements PatientScreeningAcknowledgement[] @relation("PatientScreeningAcknowledgementRecordedOnOrder")
-  lotAssignments            LotAssignment[]
-  printJobs                 PrintJob[]
-  vialLabels                VialLabel[]
-  shipments                 Shipment[]
-  stageIntervals            OrderStageInterval[]
-  packagePhotos             PackagePhoto[]                  @relation("PackagePhotoMatchedOrder")
+  lotAssignments                   LotAssignment[]
+  printJobs                        PrintJob[]
+  vialLabels                       VialLabel[]
+  shipments                        Shipment[]
+  stageIntervals                   OrderStageInterval[]
+  packagePhotos                    PackagePhoto[]                    @relation("PackagePhotoMatchedOrder")
 
   // The queue-shaped index. Order matters: scanner filters by
   // bucket+status, sorts by priority desc + SLA asc + receivedAt
@@ -5912,6 +5929,672 @@ model ClinicCreditEntry {
   @@index([organizationId, clinicId, currency, occurredAt])
   @@index([appliedToInvoiceId])
   @@map("clinic_credit_entry")
+}
+
+// ===========================================================================
+// 10. Compliance control plane (SOC 2 + HIPAA)
+// ===========================================================================
+//
+// Why these tables exist:
+//
+//   The control program itself already exists — docs/soc2/
+//   controls-inventory.md names ~60 controls with owners, statuses,
+//   and review cadences, and docs/soc2/trust-service-criteria-
+//   mapping.md crosswalks them to the TSC. The gap is that markdown
+//   cannot tell you when a control STOPS operating. A control that
+//   reads "Implemented — Clerk auth" after auth moved in-house is
+//   not a documentation nit; it is the exact finding an auditor is
+//   paid to discover. These tables move the program from a document
+//   somebody remembers to refresh into a ledger the platform
+//   continuously re-verifies.
+//
+// Why they are PLATFORM-level and not tenant-scoped:
+//
+//   The program being evidenced is Pharmax-the-operator's, not any
+//   one pharmacy tenant's. A probe like "is RLS still enabled on
+//   every tenant table" or "does branch protection still require
+//   CodeQL" has no organizationId to belong to. Several probes span
+//   ALL tenants at once (audit-chain verification iterates every
+//   org). This is the same shape as break_glass_session, and the
+//   resolution follows the precedent recorded in
+//   packages/security/src/break-glass/SCHEMA.md §"Audit surface":
+//   rather than invent a synthetic "platform org" to anchor
+//   audit_log/event_outbox rows — which would weaken the per-tenant
+//   hash-chain semantics — these tables ARE the append-only
+//   evidence ledger. DELETE is granted to neither application role;
+//   compliance_check_run is INSERT-only at the grant layer.
+//
+//   Consequence: every model here is registered in
+//   TENANT_EXCLUDED_MODELS (@pharmax/tenancy) and listed in
+//   prisma/migrations/rls-exempt.txt with its justification.
+//
+// Why organization/user references are deliberately UNLINKED:
+//
+//   `subjectOrganizationId` on a run/exception is a SOFT reference —
+//   a plain uuid column with no FK. Two reasons. (1) Compliance
+//   evidence must outlive the tenant it describes: an auditor
+//   examining the 2026-Q3 period needs the Q3 runs even for an org
+//   offboarded in Q4, and a FK with onDelete: Restrict would instead
+//   make the evidence block offboarding. (2) A FK from a
+//   platform-level table into a tenant-scoped one invites exactly
+//   the cross-tenant join the RLS layer exists to prevent.
+//
+//   Actor stamps (`approvedByUserId`, `signedOffByUserId`, ...) DO
+//   carry real FKs with onDelete: Restrict, matching
+//   AccessReviewSnapshot. Restrict is what makes an actor stamp
+//   non-repudiable: the operator who accepted a risk cannot later be
+//   deleted out from under the record. The platform deactivates
+//   users rather than deleting them, so this costs nothing
+//   operationally.
+//
+// PHI: none, by construction. A probe reports structural facts
+// ("12 tenant tables, 12 with RLS"), counts, and opaque uuids.
+// `summary` and `details` are asserted PHI-free by the probe
+// contract in @pharmax/compliance and are the reason no probe is
+// permitted to select a patient column.
+
+/// Which published framework a criterion belongs to. Criteria text
+/// is sourced exclusively from public standards (AICPA TSC, 45 CFR
+/// Part 164) per docs/governance/public-sources-reference.md.
+enum ComplianceFramework {
+  /// AICPA Trust Services Criteria — the SOC 2 points of focus
+  /// (CC1.x–CC9.x plus the A / PI / C / P additional criteria).
+  SOC2_TSC
+  /// HIPAA Security Rule, 45 CFR §164.302–318.
+  HIPAA_SECURITY
+  /// HIPAA Privacy Rule, 45 CFR §164.500–534.
+  HIPAA_PRIVACY
+  /// HIPAA Breach Notification Rule, 45 CFR §164.400–414.
+  HIPAA_BREACH
+}
+
+/// Lifecycle of a Pharmax control. Mirrors the status vocabulary
+/// already defined in docs/soc2/controls-inventory.md so the
+/// markdown export round-trips without a translation table.
+enum ComplianceControlStatus {
+  IMPLEMENTED
+  PARTIAL
+  PLANNED
+  DEPRECATED
+  NOT_APPLICABLE
+}
+
+/// How often a control is reviewed or a check is expected to run.
+/// CONTINUOUS means "every scheduler tick"; the concrete interval
+/// for automated checks lives in `ComplianceCheck.intervalMinutes`.
+enum ComplianceCadence {
+  CONTINUOUS
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  ANNUAL
+  ON_CHANGE
+  PER_EVENT
+}
+
+/// Blast radius if the checked condition is not holding. Drives task
+/// due-dates and whether a failure pages versus waits for the
+/// nightly digest.
+enum ComplianceCheckSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+/// Result of one probe execution.
+///
+/// ERROR is deliberately distinct from FAIL. FAIL means the probe
+/// ran and the control is not holding. ERROR means the probe could
+/// not reach a verdict (AWS API timeout, credentials expired) — an
+/// observability gap, not a control failure. Collapsing the two
+/// would let an outage masquerade as compliance, or a broken probe
+/// raise a false breach.
+enum ComplianceCheckOutcome {
+  PASS
+  FAIL
+  ERROR
+  NOT_APPLICABLE
+}
+
+/// Remediation task lifecycle.
+enum ComplianceTaskStatus {
+  OPEN
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+/// What a model was asked to draft.
+///
+/// The list is closed on purpose. Each kind has a prompt builder, a
+/// Zod schema its output must satisfy, and a defined apply-step that
+/// runs when a human accepts it. An open-ended "ask the model
+/// anything about compliance" kind would have none of those, and its
+/// output would land in the same table that an auditor reads as
+/// though it did.
+enum ComplianceAiDraftKind {
+  /// Longer prose for ComplianceControl.description, given the
+  /// control's title, owner, and implementation refs.
+  CONTROL_DESCRIPTION
+  /// Proposed control ⇄ criterion crosswalk entries.
+  CRITERION_MAPPING
+  /// Remediation steps for a failing check, written onto a task.
+  REMEDIATION_PLAN
+}
+
+/// Draft lifecycle. A draft is inert in every state except ACCEPTED,
+/// and reaching ACCEPTED requires a human command.
+enum ComplianceAiDraftStatus {
+  /// Awaiting human review. Has no effect on anything.
+  PENDING
+  /// A human applied it. The apply-step has run.
+  ACCEPTED
+  /// A human declined it, with a reason.
+  REJECTED
+  /// A newer draft for the same subject and kind replaced it.
+  SUPERSEDED
+  /// Sat unreviewed past the acceptance window. Cannot be accepted:
+  /// the state it was drafted against has moved on, and accepting a
+  /// months-old proposal about a control that has since changed is
+  /// how stale text gets laundered into the record.
+  EXPIRED
+}
+
+/// One model-generated proposal, and everything needed to audit it.
+///
+/// The reason this table exists rather than the model writing
+/// directly into `compliance_control` and friends: an auditor is
+/// entitled to ask "which of this text did a machine write, and who
+/// approved it?". Without a durable draft record the honest answer
+/// is "we don't know". With one, the answer is a row naming the
+/// model, the prompt version, the requester, the reviewer, and the
+/// timestamp of each.
+///
+/// PHI: none, and structurally so. Prompt inputs are assembled from
+/// the compliance tables and docs/ only — never from an order, a
+/// patient, or a prescription — and every prompt passes the PHI
+/// tripwire in @pharmax/compliance-ai before egress. The model is a
+/// third party without a BAA covering patient data; this table
+/// existing does not change that, so nothing PHI-adjacent may reach
+/// it.
+model ComplianceAiDraft {
+  id String @id @default(uuid()) @db.Uuid
+
+  kind   ComplianceAiDraftKind
+  status ComplianceAiDraftStatus @default(PENDING)
+
+  /// Subject of the draft. Which one is set depends on `kind`; the
+  /// command validates the combination. Restrict rather than
+  /// Cascade: deleting a control should not silently erase the
+  /// record that a model once proposed its wording.
+  controlId String?            @db.Uuid
+  control   ComplianceControl? @relation(fields: [controlId], references: [id], onDelete: Restrict)
+
+  checkId String?          @db.Uuid
+  check   ComplianceCheck? @relation(fields: [checkId], references: [id], onDelete: Restrict)
+
+  taskId String?         @db.Uuid
+  task   ComplianceTask? @relation(fields: [taskId], references: [id], onDelete: Restrict)
+
+  /// Provider identifier ("bedrock") and the exact model id
+  /// ("anthropic.claude-3-5-sonnet-20241022-v2:0"). Stored verbatim
+  /// because "which model wrote this" is unanswerable a year later
+  /// from anything else, and model behaviour changes between
+  /// versions.
+  provider String
+  modelId  String
+
+  /// Version of the prompt template used. Bumped whenever the
+  /// template changes, so output can be attributed to the exact
+  /// instructions that produced it.
+  promptVersion Int
+
+  /// SHA-256 over the canonicalized prompt input. Lets a reviewer
+  /// confirm that two drafts were generated from identical inputs
+  /// without storing the full prompt for every row.
+  inputDigestSha256 String @db.Char(64)
+
+  /// Human-readable one-liner describing what was fed in ("control
+  /// CC6.1-2 title, owner, implementation refs"). PHI-free.
+  inputSummary String
+
+  /// The model's output, already validated against the Zod schema
+  /// for `kind`. Stored as JSON rather than text so the apply-step
+  /// reads structured fields instead of re-parsing prose.
+  output Json
+
+  /// Model self-reported confidence, when the prompt asks for it.
+  /// Advisory only — it is a token prediction, not a measurement,
+  /// and no code branches on it. Present so a reviewer can triage.
+  selfReportedConfidence String?
+
+  inputTokens  Int?
+  outputTokens Int?
+  latencyMs    Int?
+
+  requestedByUserId String @db.Uuid
+  requestedByUser   User   @relation("ComplianceAiDraftRequestedBy", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+
+  /// Hard deadline for review. Past it the draft EXPIRES rather than
+  /// remaining acceptable forever.
+  expiresAt DateTime
+
+  reviewedByUserId String?   @db.Uuid
+  reviewedByUser   User?     @relation("ComplianceAiDraftReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
+  reviewedAt       DateTime?
+
+  /// Required by the reject command. Why a human said no is the most
+  /// useful signal for whether the prompt needs work.
+  rejectionReasonCode String?
+  reviewNotes         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, kind])
+  @@index([controlId, kind])
+  @@index([requestedByUserId])
+  @@map("compliance_ai_draft")
+}
+
+/// One requirement from a published framework — e.g. (SOC2_TSC,
+/// "CC6.1") or (HIPAA_SECURITY, "164.312(a)(2)(iv)").
+///
+/// Seeded from public standards text; never authored freehand. Rows
+/// are reference data: a criterion is retired by superseding it in a
+/// new framework revision, not by editing it, so historical control
+/// mappings keep pointing at the text that was in force.
+model ComplianceCriterion {
+  id String @id @default(uuid()) @db.Uuid
+
+  framework ComplianceFramework
+
+  /// Canonical dotted identifier as published ("CC6.1",
+  /// "164.308(a)(1)(ii)(A)"). Unique WITHIN a framework — SOC 2 and
+  /// HIPAA number independently.
+  code String
+
+  title String
+
+  /// Requirement text from the standard, transcribed by a human who
+  /// holds the relevant license.
+  ///
+  /// Nullable, and left NULL by the seeder on purpose. The AICPA
+  /// Trust Services Criteria text is copyrighted; the seeder can
+  /// derive a criterion's CODE from our own crosswalk documents but
+  /// it cannot supply the criterion's TEXT. Generating a plausible
+  /// paraphrase and storing it here would manufacture an
+  /// authoritative-looking requirement nobody verified against the
+  /// standard — a fake compliance artifact, which is worse than an
+  /// obviously empty field. HIPAA text (45 CFR Part 164) is public
+  /// domain and may be transcribed directly.
+  requirementText String?
+
+  /// Grouping label for UI ("Logical and Physical Access Controls",
+  /// "Administrative Safeguards").
+  category String
+
+  /// False once a framework revision supersedes this criterion.
+  /// Retained for lineage — historical mappings still resolve.
+  active Boolean @default(true)
+
+  controls ComplianceControlCriterion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([framework, code])
+  @@index([framework, category])
+  @@map("compliance_criterion")
+}
+
+/// A Pharmax control — the thing WE do that satisfies one or more
+/// framework criteria. `code` values are the stable identifiers
+/// already published in docs/soc2/controls-inventory.md ("CC6.1-2",
+/// "PI1.1-1"), which is what makes the markdown migration a
+/// one-to-one import rather than a re-numbering.
+model ComplianceControl {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Stable control identifier. Never reused: a superseded control
+  /// keeps its code, flips to DEPRECATED, and points at its
+  /// successor via `replacedByControlId`.
+  code String
+
+  title       String
+  description String
+
+  /// Role title accountable for the control ("Security Officer",
+  /// "Engineering Lead"). A role rather than a user id because
+  /// accountability survives staff turnover — matches the Owner
+  /// column in the existing inventory.
+  ownerRole String
+
+  status  ComplianceControlStatus @default(PLANNED)
+  cadence ComplianceCadence
+
+  /// Free-text qualifier carried over from the inventory's Notes
+  /// column (e.g. "Pending formal board governance pattern").
+  notes String?
+
+  /// Code paths / ADRs that implement the control, mirroring
+  /// docs/soc2/code-evidence-map.md. Kept inline (not a join table)
+  /// because the list is small, read whole, and never queried by
+  /// "which controls reference this path" — the reverse lookup is a
+  /// grep, not a query.
+  implementationRefs String[] @default([])
+
+  /// Lineage for DEPRECATED controls. Self-relation; no cascade, so
+  /// a successor cannot be deleted while a predecessor points at it.
+  replacedByControlId String?             @db.Uuid
+  replacedByControl   ComplianceControl?  @relation("ComplianceControlSuccession", fields: [replacedByControlId], references: [id], onDelete: Restrict)
+  replaces            ComplianceControl[] @relation("ComplianceControlSuccession")
+
+  /// Most recent human attestation that the control is designed and
+  /// operating. Automated checks produce evidence; a named human
+  /// still signs the control itself — see the AI boundary note in
+  /// packages/compliance.
+  lastSignedOffAt       DateTime?
+  lastSignedOffByUserId String?   @db.Uuid
+  lastSignedOffByUser   User?     @relation("ComplianceControlSignedOffBy", fields: [lastSignedOffByUserId], references: [id], onDelete: Restrict)
+
+  criteria ComplianceControlCriterion[]
+  checks   ComplianceCheckControl[]
+  tasks    ComplianceTask[]
+  aiDrafts ComplianceAiDraft[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([code])
+  @@index([status, ownerRole])
+  @@map("compliance_control")
+}
+
+/// Crosswalk: control ⇄ framework criterion. Many-to-many because
+/// one control commonly satisfies several criteria across BOTH
+/// frameworks (RBAC covers TSC CC6.1 and HIPAA §164.308(a)(4)), and
+/// one criterion usually needs several controls. This table is what
+/// makes "which HIPAA requirements have no control mapped?" a query
+/// instead of a careful re-read of a 47KB markdown file.
+model ComplianceControlCriterion {
+  id String @id @default(uuid()) @db.Uuid
+
+  controlId String            @db.Uuid
+  control   ComplianceControl @relation(fields: [controlId], references: [id], onDelete: Cascade)
+
+  criterionId String              @db.Uuid
+  criterion   ComplianceCriterion @relation(fields: [criterionId], references: [id], onDelete: Restrict)
+
+  /// Set when the mapping was proposed by the AI layer and accepted
+  /// by a human. Null for mappings authored directly. Present so an
+  /// auditor can ask "which of these crosswalks did a model
+  /// suggest?" and get a truthful answer.
+  acceptedFromAiDraftId String? @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  @@unique([controlId, criterionId])
+  @@index([criterionId])
+  @@map("compliance_control_criterion")
+}
+
+/// Definition of one automated probe.
+///
+/// The row is configuration and denormalized scheduler state; the
+/// probe LOGIC lives in code (@pharmax/compliance check registry),
+/// keyed by `code`. That split is deliberate: a probe is executable
+/// logic that must be code-reviewed, tested, and versioned in git,
+/// never a database-editable expression. A row whose `code` has no
+/// registered implementation is reported as a configuration error
+/// rather than silently skipped.
+model ComplianceCheck {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Stable registry key, matching the exported probe
+  /// ("db.rls.tenant_tables_covered", "github.branch_protection").
+  code String
+
+  title       String
+  description String
+
+  severity ComplianceCheckSeverity
+  cadence  ComplianceCadence
+
+  /// Scheduler interval. Required for automated checks; null for
+  /// cadence values the scheduler does not drive (PER_EVENT,
+  /// ON_CHANGE) and for manual attestations.
+  intervalMinutes Int?
+
+  /// False for controls evidenced by human attestation rather than a
+  /// probe (e.g. "CEO approved the policy set"). Kept in the same
+  /// table so the posture dashboard shows one complete list rather
+  /// than two that must be mentally unioned.
+  automated Boolean @default(true)
+
+  /// Operator kill-switch. A disabled check stops running but its
+  /// history is retained, and the dashboard surfaces it as disabled
+  /// rather than passing — a silently skipped check is worse than a
+  /// failing one.
+  enabled Boolean @default(true)
+
+  // --- Denormalized scheduler + dashboard state -------------------
+  // Derived from compliance_check_run. Duplicated here so the
+  // posture dashboard is one indexed read instead of a
+  // per-check LATERAL over the full run history.
+
+  nextRunAt   DateTime?
+  lastRunAt   DateTime?
+  lastOutcome ComplianceCheckOutcome?
+
+  /// Consecutive non-PASS runs. Drives escalation without a window
+  /// function over the run table on every tick.
+  consecutiveFailureCount Int @default(0)
+
+  controls   ComplianceCheckControl[]
+  runs       ComplianceCheckRun[]
+  exceptions ComplianceCheckException[]
+  tasks      ComplianceTask[]
+  aiDrafts   ComplianceAiDraft[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([code])
+  @@index([enabled, nextRunAt])
+  @@index([lastOutcome, severity])
+  @@map("compliance_check")
+}
+
+/// Which controls a check produces evidence for. Many-to-many: one
+/// probe often evidences several controls (an RLS probe supports both
+/// TSC CC6.1-3 and the HIPAA access-control safeguard), and a control
+/// usually needs several probes before it is credibly "operating".
+model ComplianceCheckControl {
+  id String @id @default(uuid()) @db.Uuid
+
+  checkId String          @db.Uuid
+  check   ComplianceCheck @relation(fields: [checkId], references: [id], onDelete: Cascade)
+
+  controlId String            @db.Uuid
+  control   ComplianceControl @relation(fields: [controlId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([checkId, controlId])
+  @@index([controlId])
+  @@map("compliance_check_control")
+}
+
+/// One probe execution. APPEND-ONLY — this table is the evidence.
+///
+/// UPDATE and DELETE are revoked at the grant layer (see the
+/// migration), following audit_log and break_glass_action. An
+/// auditor's whole reason to trust a continuous-monitoring claim is
+/// that the operator cannot quietly delete the runs that failed.
+///
+/// `digestSha256` is the canonical (sorted-key) SHA-256 of
+/// `details`, so an exported evidence file can be recomputed and
+/// compared — the same integrity affordance AccessReviewSnapshot
+/// provides for access reviews.
+model ComplianceCheckRun {
+  id String @id @default(uuid()) @db.Uuid
+
+  checkId String          @db.Uuid
+  check   ComplianceCheck @relation(fields: [checkId], references: [id], onDelete: Restrict)
+
+  /// Denormalized check code, frozen at run time. A later rename of
+  /// the check must not retroactively relabel historical evidence.
+  checkCode String
+
+  outcome ComplianceCheckOutcome
+
+  /// Severity in force when the run happened. Frozen for the same
+  /// reason as checkCode: re-grading a check today must not rewrite
+  /// how serious last quarter's failure looked.
+  severityAtRun ComplianceCheckSeverity
+
+  /// Soft reference to the tenant this run examined, for per-org
+  /// probes (audit-chain verification). Null for platform-wide
+  /// probes. Intentionally NOT a foreign key — see the section
+  /// header for why compliance evidence must outlive the tenant.
+  subjectOrganizationId String? @db.Uuid
+
+  /// One-line PHI-free verdict, safe to render in a digest email
+  /// ("12 of 12 tenant tables have RLS enabled").
+  summary String
+
+  /// Structured, PHI-free findings. Shape is owned by the probe and
+  /// versioned by `detailsVersion` so a verifier branches on the
+  /// version instead of guessing.
+  details        Json
+  detailsVersion Int  @default(1)
+
+  /// Canonical JSON SHA-256 of `details`, hex-encoded.
+  digestSha256 String
+
+  /// Count of individual findings behind a FAIL. Indexed-adjacent so
+  /// "worst offenders" sorts without parsing JSONB.
+  findingCount Int @default(0)
+
+  /// Populated only when `outcome = ERROR`. PHI-free by contract.
+  errorCode    String?
+  errorMessage String?
+
+  observedAt DateTime
+  durationMs Int
+
+  tasks ComplianceTask[]
+
+  createdAt DateTime @default(now())
+
+  @@index([checkId, observedAt(sort: Desc)])
+  @@index([outcome, observedAt(sort: Desc)])
+  @@index([subjectOrganizationId, observedAt(sort: Desc)])
+  @@map("compliance_check_run")
+}
+
+/// A time-boxed, justified acceptance of a failing check.
+///
+/// Every field that makes this defensible is REQUIRED: a reason
+/// code, a written justification, a named approver, and an expiry.
+/// `expiresAt` is non-nullable on purpose — a permanent exception is
+/// not an exception, it is an undocumented change to the control
+/// design, and the correct action there is to amend the control.
+/// This mirrors the reason-code discipline the workflow engine
+/// already enforces on holds, rejections, and reprints.
+model ComplianceCheckException {
+  id String @id @default(uuid()) @db.Uuid
+
+  checkId String          @db.Uuid
+  check   ComplianceCheck @relation(fields: [checkId], references: [id], onDelete: Restrict)
+
+  /// Narrow the exception to a single tenant, or null for
+  /// platform-wide. Soft reference, as elsewhere in this section.
+  subjectOrganizationId String? @db.Uuid
+
+  /// Controlled vocabulary from @pharmax/compliance (e.g.
+  /// COMPENSATING_CONTROL, VENDOR_DEPENDENCY, ACCEPTED_RISK).
+  reasonCode String
+
+  /// Free-text rationale. Read aloud in the audit; write it for that
+  /// audience.
+  justification String
+
+  approvedByUserId String @db.Uuid
+  approvedByUser   User   @relation("ComplianceExceptionApprovedBy", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+
+  /// Hard stop. The scheduler resumes treating failures as failures
+  /// the moment this passes, with no renewal grace.
+  expiresAt DateTime
+
+  /// Early revocation. Set rather than deleting the row — the fact
+  /// that an exception once existed is itself evidence.
+  revokedAt       DateTime?
+  revokedByUserId String?   @db.Uuid
+  revokedByUser   User?     @relation("ComplianceExceptionRevokedBy", fields: [revokedByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@index([checkId, expiresAt])
+  @@map("compliance_check_exception")
+}
+
+/// Remediation work item. Opened automatically when a check fails
+/// (via the compliance.check.failed.v1 outbox handler) or by hand
+/// for cadence obligations that have no probe.
+///
+/// This is the "and then somebody fixes it" half of continuous
+/// monitoring. A monitoring system that detects drift but does not
+/// track the response produces findings, not compliance.
+model ComplianceTask {
+  id String @id @default(uuid()) @db.Uuid
+
+  title       String
+  description String
+
+  /// What prompted the task. All three are optional and
+  /// independent: a task may trace to a specific failing run, to a
+  /// check with no single run, to a control-level cadence
+  /// obligation, or to none of them (ad-hoc remediation).
+  controlId String?            @db.Uuid
+  control   ComplianceControl? @relation(fields: [controlId], references: [id], onDelete: Restrict)
+
+  checkId String?          @db.Uuid
+  check   ComplianceCheck? @relation(fields: [checkId], references: [id], onDelete: Restrict)
+
+  sourceCheckRunId String?             @db.Uuid
+  sourceCheckRun   ComplianceCheckRun? @relation(fields: [sourceCheckRunId], references: [id], onDelete: Restrict)
+
+  status   ComplianceTaskStatus    @default(OPEN)
+  severity ComplianceCheckSeverity
+
+  /// Derived from severity at creation time; editable by the owner.
+  dueAt DateTime
+
+  assignedToUserId String? @db.Uuid
+  assignedToUser   User?   @relation("ComplianceTaskAssignee", fields: [assignedToUserId], references: [id], onDelete: Restrict)
+
+  completedAt       DateTime?
+  completedByUserId String?   @db.Uuid
+  completedByUser   User?     @relation("ComplianceTaskCompletedBy", fields: [completedByUserId], references: [id], onDelete: Restrict)
+
+  /// What was actually done. Required by the completion command, not
+  /// by the column, so a partially-built row is still insertable.
+  resolutionNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  aiDrafts ComplianceAiDraft[]
+
+  @@index([status, dueAt])
+  @@index([assignedToUserId, status])
+  @@index([checkId, status])
+  @@map("compliance_task")
 }
 
 // ---------------------------------------------------------------------------

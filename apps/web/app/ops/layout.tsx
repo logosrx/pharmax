@@ -244,6 +244,39 @@ const NAV: ReadonlyArray<GroupSpec> = [
       },
     ],
   },
+  {
+    // Pharmax's own SOC 2 / HIPAA program, not tenant data. Its own
+    // group rather than an Administration entry because the audience
+    // is different: an admin manages this organization, a compliance
+    // officer reads the platform's control posture.
+    label: "Compliance",
+    items: [
+      {
+        href: "/ops/admin/compliance",
+        label: "Posture",
+        icon: "shield",
+        requires: PERMISSIONS.COMPLIANCE_CONTROL_PLANE_VIEW,
+      },
+      {
+        href: "/ops/admin/compliance/controls",
+        label: "Controls",
+        icon: "check",
+        requires: PERMISSIONS.COMPLIANCE_CONTROL_PLANE_VIEW,
+      },
+      {
+        href: "/ops/admin/compliance/checks",
+        label: "Checks",
+        icon: "verify",
+        requires: PERMISSIONS.COMPLIANCE_CONTROL_PLANE_VIEW,
+      },
+      {
+        href: "/ops/admin/compliance/tasks",
+        label: "Remediation",
+        icon: "history",
+        requires: PERMISSIONS.COMPLIANCE_CONTROL_PLANE_VIEW,
+      },
+    ],
+  },
 ];
 
 const COUNT_BUCKET_CODES = ["INBOX", "TYPING", "PV1", "FILL", "FINAL"] as const;

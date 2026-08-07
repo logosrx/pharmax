@@ -6,3 +6,5 @@
 // the HIPAA documentation-retention floor.
 
 export { ComplianceAccessReviewSnapshotRecordedV1 } from "./access-review-snapshot-recorded-v1.js";
+export { ComplianceCheckExceptionAcceptedV1 } from "./check-exception-accepted-v1.js";
+export { ComplianceControlSignedOffV1 } from "./control-signed-off-v1.js";

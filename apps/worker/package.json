@@ -12,6 +12,7 @@
   "dependencies": {
     "@pharmax/billing": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
+    "@pharmax/compliance": "workspace:*",
     "@pharmax/composition": "workspace:*",
     "stripe": "^22.3.2",
     "@pharmax/crypto": "workspace:*",

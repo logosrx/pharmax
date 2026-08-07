@@ -300,6 +300,26 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
       "Dispatch RecordAccessReviewSnapshot to freeze an immutable, digest-sealed (user → role → permission) snapshot for SOC 2 CC6.2 evidence",
   },
   {
+    code: "compliance.control_plane.view",
+    description:
+      "Read the compliance control plane: controls, framework crosswalks, probe definitions, run history, exceptions, and remediation tasks (read-only, PHI-free)",
+  },
+  {
+    code: "compliance.control.sign_off",
+    description:
+      "Dispatch SignOffControl to attest that a control is designed and operating; probes produce evidence, a named human signs the control",
+  },
+  {
+    code: "compliance.exception.accept",
+    description:
+      "Dispatch AcceptCheckException to accept a failing check as a time-boxed, justified exception; requires a reason code, written justification, and hard expiry",
+  },
+  {
+    code: "compliance.task.manage",
+    description:
+      "Assign and close compliance remediation tasks; closing a task asserts the problem was fixed, which the next probe run independently re-verifies",
+  },
+  {
     code: "api.keys.manage",
     description:
       "Mint and revoke partner API keys for the public v1 API (ADR-0032); raw tokens are shown once and stored only as SHA-256 hashes",

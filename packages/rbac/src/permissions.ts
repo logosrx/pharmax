@@ -198,6 +198,41 @@ export const PERMISSIONS = Object.freeze({
   // the default role templates.
   COMPLIANCE_ACCESS_REVIEW_RECORD: "compliance.access_review.record",
 
+  // Read the compliance control plane: controls, framework
+  // crosswalks, probe definitions, run history, exceptions, tasks.
+  // Read-only, and safe to grant broadly to anyone who needs to see
+  // posture — the run history contains structural facts and counts,
+  // never PHI.
+  COMPLIANCE_CONTROL_PLANE_VIEW: "compliance.control_plane.view",
+
+  // Attest that a control is designed and operating, stamping
+  // `lastSignedOffAt` / `lastSignedOffByUserId`.
+  //
+  // Deliberately separate from `.view` and from every automated path.
+  // Probes produce evidence; a control is signed by a NAMED human who
+  // is accountable for the claim, and that signature is what an
+  // auditor asks about. No worker, scheduler, or model-driven code
+  // path holds this permission.
+  COMPLIANCE_CONTROL_SIGN_OFF: "compliance.control.sign_off",
+
+  // Accept a failing check as a time-boxed, justified exception.
+  //
+  // The highest-blast-radius permission in the compliance surface: it
+  // is the one that makes a red control stop being red. Every
+  // exception requires a reason code, a written justification, and a
+  // hard expiry, and the approver is recorded non-repudiably. Hold
+  // this separate from `.sign_off` so the person who can silence a
+  // finding is a deliberate choice rather than a side effect of
+  // being able to attest to controls.
+  COMPLIANCE_EXCEPTION_ACCEPT: "compliance.exception.accept",
+
+  // Assign and close compliance remediation tasks. Lower bar than
+  // accepting an exception: closing a task asserts the problem was
+  // FIXED, which the next probe run independently re-verifies. An
+  // exception asserts the problem is tolerated, which nothing
+  // re-verifies.
+  COMPLIANCE_TASK_MANAGE: "compliance.task.manage",
+
   // Platform surface (ADR-0032): partner API keys + outbound webhooks.
   // Mint / revoke partner API keys for the public v1 API. The raw
   // token is shown once at mint time; only its SHA-256 hash is
@@ -544,6 +579,26 @@ export const PERMISSION_METADATA: Readonly<
   [PERMISSIONS.COMPLIANCE_ACCESS_REVIEW_RECORD]: {
     description:
       "Dispatch the RecordAccessReviewSnapshot command to freeze an immutable, digest-sealed (user → role → permission) snapshot for SOC 2 CC6.2 evidence. Separate from .view so the snapshot author is a deliberate, audited identity.",
+    category: "Compliance",
+  },
+  [PERMISSIONS.COMPLIANCE_CONTROL_PLANE_VIEW]: {
+    description:
+      "Read the compliance control plane: controls, framework crosswalks, probe definitions, run history, exceptions, and remediation tasks. Read-only and PHI-free (probe output is structural facts and counts), so it is safe to grant to anyone who needs posture visibility.",
+    category: "Compliance",
+  },
+  [PERMISSIONS.COMPLIANCE_CONTROL_SIGN_OFF]: {
+    description:
+      "Dispatch SignOffControl to attest that a control is designed and operating. Probes produce evidence; a named human signs the control, and that signature is what an auditor examines. No automated or model-driven path holds this permission.",
+    category: "Compliance",
+  },
+  [PERMISSIONS.COMPLIANCE_EXCEPTION_ACCEPT]: {
+    description:
+      "Dispatch AcceptCheckException to accept a failing check as a time-boxed, justified exception. The highest-blast-radius permission in the compliance surface — it is what makes a red control stop being red. Requires a reason code, a written justification, and a hard expiry; the approver is recorded non-repudiably.",
+    category: "Compliance",
+  },
+  [PERMISSIONS.COMPLIANCE_TASK_MANAGE]: {
+    description:
+      "Assign and close compliance remediation tasks. A lower bar than accepting an exception: closing a task asserts the problem was fixed, which the next probe run independently re-verifies.",
     category: "Compliance",
   },
   [PERMISSIONS.API_KEYS_MANAGE]: {
