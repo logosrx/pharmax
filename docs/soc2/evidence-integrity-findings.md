@@ -13,14 +13,18 @@ this cycle. Findings marked **APP** require a change under `apps/` or
 
 ## Summary
 
-| ID     | Finding                                                            | Severity | Owner            | Type  |
-| ------ | ------------------------------------------------------------------ | -------- | ---------------- | ----- |
-| `EI-1` | Access-review evidence packs are written to ephemeral task storage | High     | Engineering Lead | APP   |
-| `EI-2` | Audit-archive bucket policy is missing its Object-Lock-mode deny   | Medium   | Engineering Lead | INFRA |
-| `EI-3` | Every production CloudWatch alarm notifies nobody                  | High     | Engineering Lead | INFRA |
-| `EI-4` | No durable security-incident record exists                         | Medium   | Security Officer | APP   |
-| `EI-5` | The DR region has no Terraform variable file                       | Medium   | Engineering Lead | INFRA |
-| `EI-6` | `clerk_webhook_event` is an orphaned evidence table                | Low      | Engineering Lead | APP   |
+| ID     | Finding                                                            | Severity | Owner            | Type  | Status              |
+| ------ | ------------------------------------------------------------------ | -------- | ---------------- | ----- | ------------------- |
+| `EI-1` | Access-review evidence packs are written to ephemeral task storage | High     | Engineering Lead | APP   | Resolved 2026-08-06 |
+| `EI-2` | Audit-archive bucket policy is missing its Object-Lock-mode deny   | Medium   | Engineering Lead | INFRA | Resolved 2026-08-06 |
+| `EI-3` | Every production CloudWatch alarm notifies nobody                  | High     | Engineering Lead | INFRA | Resolved 2026-08-06 |
+| `EI-4` | No durable security-incident record exists                         | Medium   | Security Officer | APP   | Open                |
+| `EI-5` | The DR region has no Terraform variable file                       | Medium   | Engineering Lead | INFRA | Open                |
+| `EI-6` | `clerk_webhook_event` is an orphaned evidence table                | Low      | Engineering Lead | APP   | Open                |
+
+Resolved findings keep their original text below, unedited — the
+finding is the written basis for a control-status change, and the
+closure note under each one cites the code that closed it.
 
 ## What is already correct
 
@@ -106,6 +110,17 @@ line-766 warning to a boot refusal in production once it is available.
 No Terraform is needed: bucket, CMK, IAM grant, and container
 environment all already exist.
 
+**Resolved 2026-08-06.** The task above was implemented as specified:
+`apps/worker/src/compliance/s3-evidence-publisher.ts` is the
+`S3ObjectLockEvidencePublisher`, and
+`apps/worker/src/compliance/build-evidence-publisher.ts` selects it in
+production — throwing at boot when the quarterly review is enabled but
+the bucket or CMK is unconfigured, rather than degrading to a
+filesystem write the next deployment discards. `apps/worker/src/main.ts`
+resolves the publisher only when the loop is enabled, so an operator
+who has deliberately disabled the job is not blocked from booting.
+CC6.2-2 re-asserted to Implemented.
+
 ## EI-2 — Audit-archive bucket policy is missing its Object-Lock-mode deny
 
 **Severity: Medium. Type: INFRA. Affects CC7.2-2, CC7.2-3, PI1.4-2.**
@@ -146,6 +161,15 @@ still inherits the default. Consider a companion condition on
 from `var.retention_years`. The comment at line 114 already describes
 the intent, so no design decision is outstanding.
 
+**Resolved 2026-08-06.** Both the required statement and the suggested
+companion landed in `infra/terraform/modules/s3-audit-archive/main.tf`:
+`DenyNonComplianceObjectLockMode` denies any PUT naming an Object Lock
+mode other than COMPLIANCE, and `DenyShortObjectLockRetention` denies
+any PUT whose requested retention is under the HIPAA six-year floor.
+`scripts/audit-archive-bucket-policy.test.ts` pins the policy document
+so a statement cannot be dropped silently. The immutability guarantee
+now holds by policy, not convention.
+
 ## EI-3 — Every production CloudWatch alarm notifies nobody
 
 **Severity: High. Type: INFRA. Affects CC7.1-1, CC7.2-1, A1.1-1.**
@@ -185,6 +209,19 @@ add a `validation` block to `variable "alarm_sns_topic_arn"` in
 production alerting in this exact tree. This finding is very likely
 already being fixed there; it is recorded so the control-status change
 it justifies has a written basis, not to duplicate the work.
+
+**Resolved 2026-08-06.** `feat/prod-alerting` landed, and went further
+than the task asked: instead of a single topic,
+`infra/terraform/modules/alerting/` provisions severity-split SNS
+topics (critical/paging vs warning/ticket) and every alarm routes to
+one of them; `enable_alerting = true` is set in the production tfvars;
+and `pnpm check:alarm-actions` fails CI if any production alarm is
+declared with an empty action list — the "cannot recur silently"
+property, enforced ahead of the apply rather than inside it.
+Subscription endpoints arrive from GitHub Environment secrets at apply
+time. One residual ops task, tracked outside this document: trip a
+test alarm and confirm delivery to a phone. CC7.1-1 re-asserted to
+Implemented.
 
 ## EI-4 — No durable security-incident record exists
 

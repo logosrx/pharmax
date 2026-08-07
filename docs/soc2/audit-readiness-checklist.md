@@ -57,12 +57,12 @@ the difference between a readiness pulse and a fire drill.
 
 - [ ] Quarterly access review completed within the last 90 days for
       every active tenant. Signed PDFs under
-      `evidence/access-reviews/<YYYY-Q#>/signed/`. **Open gap `EI-1`:**
-      the generated evidence pack is written to the worker task's local
-      filesystem, so in production it does not survive a task
-      replacement. Until that is fixed, confirm the review from the
-      `access_review_snapshot` rows and their `digestSha256` values, not
-      from the pack.
+      `evidence/access-reviews/<YYYY-Q#>/signed/`. `EI-1` resolved
+      2026-08-06: the pack is written by the S3 Object Lock publisher
+      to the audit-archive bucket, and production refuses to boot with
+      the review enabled but the bucket unconfigured. Confirm the pack
+      objects exist under the bucket's `access-reviews/` prefix AND
+      cross-check the `access_review_snapshot` rows' `digestSha256`.
 - [ ] Audit-chain verifier (`scripts/security/verify-audit-chain-all-orgs.ts`)
       run within the last 24 hours and exit code was 0 (no chain
       breaks).
@@ -71,9 +71,10 @@ the difference between a readiness pulse and a fire drill.
       code and Terraform lanes have both landed — the worker refuses to
       boot in production without `AUDIT_ARCHIVE_S3_BUCKET` — so the
       question is now whether a production run is evidenced, not
-      whether the lane exists. **Open gap `EI-2`:** the bucket policy
-      does not deny a `PutObject` that supplies its own weaker Object
-      Lock mode.
+      whether the lane exists. `EI-2` resolved 2026-08-06: the bucket
+      policy now denies a `PutObject` naming any Object Lock mode other
+      than COMPLIANCE, and one whose retention is under the six-year
+      floor (`scripts/audit-archive-bucket-policy.test.ts` pins both).
 - [ ] Nightly security digest (`scripts/security/send-nightly-security-digest.ts`)
       delivered every night in the period — confirm dispatch records.
 - [ ] Break-glass usage in the period reviewed; every elevation has a
@@ -98,9 +99,13 @@ the difference between a readiness pulse and a fire drill.
       (`rds_backup_retention_days = 35`, `rds_multi_az = true`);
       confirm the most recent automated snapshot is < 26 hours old.
 - [ ] CloudWatch alarms reviewed; no alarm in `INSUFFICIENT_DATA` for
-      more than 7 days without an explanation. **Open gap `EI-3`:**
-      `alarm_sns_topic_arn` is empty in production, so all ten alarms —
-      including audit-chain integrity — currently notify nobody.
+      more than 7 days without an explanation. `EI-3` resolved
+      2026-08-06: every alarm routes to a severity-tiered SNS topic
+      (`enable_alerting = true` in prod tfvars; CI-enforced by
+      `pnpm check:alarm-actions`). Confirm
+      `terraform output alerting_critical_subscription_count` is > 0
+      and that a deliberately tripped test alarm reached a human —
+      that delivery test is the one part still unexercised.
 
 ### Section 4 — Change management (Engineering Lead)
 
