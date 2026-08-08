@@ -182,6 +182,15 @@ const schema = z.object({
   // without piling on extra DB load.
   WORKFLOW_BUCKET_SCRAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
 
+  // ---- Outbox backlog probe ----------------------------------------
+  // Cadence at which the worker measures `event_outbox` backlog depth
+  // / oldest-row age / DEAD count and publishes them as CloudWatch
+  // custom metrics (namespace Pharmax/Worker) for the outbox alarms
+  // in infra/terraform/modules/cloudwatch. 60s gives the 5-minute
+  // alarm periods five datapoints each; the query is one indexed
+  // aggregate, so the DB cost is negligible.
+  OUTBOX_BACKLOG_PROBE_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+
   // ---- Package-photo upload-token reaper --------------------------
   // Sweeps expired `package_photo_upload_token` rows (the ephemeral
   // upload-resolution claim; the durable bytes + pointer live on the

@@ -9,7 +9,9 @@
 #   - ECS unhealthy task count > 0 (per service)
 #   - ALB 5xx rate > 1%
 #   - ALB target response time p99 > 2s
-#   - Custom: AuditChainIntegrityFailure > 0 (nightly job emits this)
+#   - Custom: AuditChainIntegrityFailure > 0 (daily verifier loop emits this)
+#   - Custom: outbox backlog (depth / oldest age / DEAD count; the worker's
+#     outbox-backlog-probe loop emits these every ~60s)
 #
 # Aurora has no FreeStorageSpace metric (storage auto-scales), so we watch
 # FreeableMemory on the writer instead. AuroraReplicaLag is reported in
@@ -386,10 +388,11 @@ resource "aws_cloudwatch_metric_alarm" "alb_target_response_p99" {
 
 # ---- Custom: audit chain integrity ----------------------------------------
 #
-# Placeholder: when the nightly `verifyAuditChain` job (Tier 3) finds a break
-# it emits 1 to this metric; otherwise 0. The alarm fires on ANY non-zero
-# value in a single period. The metric must already be emitted from the
-# worker — the alarm is just a consumer.
+# The worker's daily audit-chain verifier loop publishes this metric after
+# every run (`AUDIT_CHAIN_FAILURE_METRIC` in
+# apps/worker/src/security/audit-chain-verifier-loop.ts): orgsFailed on a
+# break, 0 on a clean run. The alarm fires on ANY non-zero value in a single
+# period.
 
 resource "aws_cloudwatch_metric_alarm" "audit_chain_integrity_failure" {
   # severity: critical — a break in the audit chain is either a bug corrupting the
@@ -409,6 +412,103 @@ resource "aws_cloudwatch_metric_alarm" "audit_chain_integrity_failure" {
 
   alarm_actions = local.critical_alarm_actions
   ok_actions    = local.critical_alarm_actions
+
+  tags = var.tags
+}
+
+# ---- Custom: event outbox backlog ------------------------------------------
+#
+# The worker's outbox-backlog-probe loop (apps/worker/src/metrics/
+# outbox-backlog-probe.ts) publishes three metrics to
+# `var.worker_metric_namespace` every ~60s:
+#
+#   OutboxUndispatchedDepth            PENDING + FAILED rows
+#   OutboxOldestUndispatchedAgeSeconds age of the oldest such row (0 = none)
+#   OutboxDeadDepth                    DEAD rows awaiting admin replay
+#
+# Why the outbox gets its own alarms when the worker already has
+# running-count paging: every command's side effects — shipping
+# notifications, billing materialization, partner webhook fan-out,
+# label dispatch — ride the outbox. The running-count alarm catches a
+# dead worker; nothing else catches a LIVE worker whose drainer has
+# stopped making progress (poison row, lock pile-up, wedged handler).
+# Oldest-row age is the honest progress signal: a healthy drainer
+# cannot let it grow, and a row's full retry ladder tops out around
+# two hours, so a sustained hour-old row means the async half of the
+# platform is down while the console looks fine.
+
+resource "aws_cloudwatch_metric_alarm" "outbox_oldest_age_high" {
+  # severity: warning — a 15-minute-old undispatched row means some side effect is
+  # already 15 minutes late (usually one failing handler riding the retry ladder).
+  # Degradation, not an outage; the critical stall alarm below covers the cliff.
+  # `treat_missing_data = breaching` is deliberate and load-bearing: the probe
+  # publishing nothing means the worker is down (already paging via running-count)
+  # or the probe/publisher is broken — and a silently non-emitting metric is
+  # exactly the "monitoring configured but disconnected" failure this repo has
+  # shipped once already. Three empty 5-minute periods absorb a normal deploy gap.
+  alarm_name          = "${var.name_prefix}-outbox-oldest-age-high"
+  alarm_description   = "Oldest undispatched event_outbox row is older than ${var.outbox_oldest_age_warning_threshold_seconds}s — side effects are running late. See RUNBOOK 'Outbox drain stuck or backed up'."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 3
+  metric_name         = "OutboxOldestUndispatchedAgeSeconds"
+  namespace           = var.worker_metric_namespace
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.outbox_oldest_age_warning_threshold_seconds
+  treat_missing_data  = "breaching"
+
+  alarm_actions = local.warning_alarm_actions
+  ok_actions    = local.warning_alarm_actions
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "outbox_stalled" {
+  # severity: critical — an hour-old undispatched row outlives any legitimate retry
+  # wait, so the drainer has stopped making progress while orders keep committing:
+  # shipping releases, billing, notifications, and webhook fan-out are all silently
+  # queued behind it. That is a loss of availability for the asynchronous half of
+  # the platform, and the response (find the wedged row/handler, restart the
+  # worker) is time-sensitive even at 03:00. Missing data is NOT breaching here:
+  # a dead worker already pages via running-count, and a broken probe raises the
+  # warning-tier age alarm above — double-paging the same cause helps nobody.
+  alarm_name          = "${var.name_prefix}-outbox-stalled"
+  alarm_description   = "Oldest undispatched event_outbox row exceeded ${var.outbox_stalled_threshold_seconds}s — the outbox drainer is not making progress. See RUNBOOK 'Outbox drain stuck or backed up'."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 3
+  metric_name         = "OutboxOldestUndispatchedAgeSeconds"
+  namespace           = var.worker_metric_namespace
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.outbox_stalled_threshold_seconds
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = local.critical_alarm_actions
+  ok_actions    = local.critical_alarm_actions
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "outbox_dead_rows" {
+  # severity: warning — a DEAD row is a load-bearing side effect the platform has
+  # permanently missed (the drainer never replays DEAD); it stays wrong until an
+  # admin re-publish, but it is not getting MORE wrong by the minute, and the
+  # 03:00 response would be "read the lastError, replay in the morning". The
+  # alarm holds ALARM state until the replay happens, which is honest: the
+  # mailbox owner should keep seeing it until someone acts.
+  alarm_name          = "${var.name_prefix}-outbox-dead-rows"
+  alarm_description   = "event_outbox has DEAD rows — side effects permanently missed until an admin replay. See RUNBOOK 'Outbox drain stuck or backed up'."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "OutboxDeadDepth"
+  namespace           = var.worker_metric_namespace
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 0
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = local.warning_alarm_actions
+  ok_actions    = local.warning_alarm_actions
 
   tags = var.tags
 }
@@ -492,6 +592,24 @@ resource "aws_cloudwatch_dashboard" "this" {
           period = 300
           metrics = [
             [var.custom_metric_namespace, var.audit_chain_failure_metric_name]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 12
+        width  = 12
+        height = 6
+        properties = {
+          title  = "Event outbox backlog (custom)"
+          region = var.aws_region
+          stat   = "Maximum"
+          period = 300
+          metrics = [
+            [var.worker_metric_namespace, "OutboxOldestUndispatchedAgeSeconds"],
+            [var.worker_metric_namespace, "OutboxUndispatchedDepth"],
+            [var.worker_metric_namespace, "OutboxDeadDepth"]
           ]
         }
       }

@@ -92,6 +92,8 @@ import { createWebhookDeliveryDrainer } from "./drains/webhook-delivery-drainer.
 import { createStripeEventHandlers } from "./drains/stripe-handlers.js";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
+import { buildMetricsPublisher } from "./metrics/metrics-publisher.js";
+import { createOutboxBacklogProbe } from "./metrics/outbox-backlog-probe.js";
 import { createWorkflowBucketScraper } from "./metrics/workflow-bucket-scraper.js";
 import { flushSentry, initSentry } from "./observability/sentry-init.js";
 import { createLivenessHeartbeat } from "./runtime/liveness.js";
@@ -812,6 +814,17 @@ async function main(): Promise<void> {
     });
   }
 
+  // CloudWatch custom-metric publisher. Production emits real
+  // PutMetricData (and refuses the boot without AWS_REGION — a worker
+  // that cannot feed its alarms runs unwatched); dev/test log the
+  // datums. Consumed by the outbox backlog probe below and by the
+  // audit-chain verifier so the `AuditChainIntegrityFailure` alarm
+  // finally has a producer.
+  const metricsPublisher = await buildMetricsPublisher({
+    logger,
+    env: { NODE_ENV: env.NODE_ENV, AWS_REGION: env.AWS_REGION },
+  });
+
   // Daily audit-chain verifier loop (ADR-0006 + SOC 2 CC7.2). Fires
   // at 01:30 UTC, BEFORE the 02:00 UTC Merkle signing job, so a
   // tamper is caught and paged on BEFORE the day's manifest is
@@ -830,6 +843,7 @@ async function main(): Promise<void> {
         logger,
         utcHour: env.DAILY_AUDIT_CHAIN_VERIFIER_HOUR_UTC,
         utcMinute: env.DAILY_AUDIT_CHAIN_VERIFIER_MINUTE_UTC,
+        metricsPublisher,
       })
     : null;
   if (env.NODE_ENV === "production" && auditChainVerifierLoop === null) {
@@ -1091,6 +1105,24 @@ async function main(): Promise<void> {
     logger,
   });
 
+  // Outbox backlog probe → CloudWatch. The signal the ECS
+  // running-count alarm cannot see: a live worker whose drainer has
+  // stopped making progress. One aggregate query per tick; the
+  // Terraform alarms in modules/cloudwatch evaluate the result.
+  const outboxBacklogProbe = createOutboxBacklogProbe({
+    client: prisma,
+    logger,
+    publisher: metricsPublisher,
+  });
+  const outboxBacklogProbeLoop = createPollLoop({
+    name: "outbox-backlog-probe",
+    intervalMs: env.OUTBOX_BACKLOG_PROBE_INTERVAL_MS,
+    tick: async () => {
+      await outboxBacklogProbe.tick();
+    },
+    logger,
+  });
+
   stripeLoop.start();
   outboxLoop.start();
   webhookDeliveryLoop.start();
@@ -1110,6 +1142,7 @@ async function main(): Promise<void> {
     packagePhotoObjectSweeperLoop.start();
   }
   workflowBucketScraperLoop.start();
+  outboxBacklogProbeLoop.start();
   if (auditChainVerifierLoop !== null) {
     auditChainVerifierLoop.start();
   }
@@ -1167,6 +1200,7 @@ async function main(): Promise<void> {
     labelPurchaseReconcilerLoop.stop(),
     ...(packagePhotoObjectSweeperLoop !== null ? [packagePhotoObjectSweeperLoop.stop()] : []),
     workflowBucketScraperLoop.stop(),
+    outboxBacklogProbeLoop.stop(),
     ...(auditChainVerifierLoop !== null ? [auditChainVerifierLoop.stop()] : []),
     merkleRootLoop.stop(),
     ...(nightlySecurityDigestLoop !== null ? [nightlySecurityDigestLoop.stop()] : []),

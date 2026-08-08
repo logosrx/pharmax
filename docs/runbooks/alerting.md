@@ -81,7 +81,10 @@ for alarms named `<prefix>-*` in this account.
 | `<prefix>-ecs-web-running-low`         | **critical** | Web running tasks < 1, 2 × 1 min (missing = breaching)                                  |
 | `<prefix>-ecs-worker-running-low`      | **critical** | Worker running tasks < 1, 2 × 1 min (missing = breaching)                               |
 | `<prefix>-audit-chain-integrity`       | **critical** | Any non-zero `AuditChainIntegrityFailure` in 5 min                                      |
+| `<prefix>-outbox-stalled`              | **critical** | Oldest undispatched outbox row > 1 h, 3 × 5 min                                         |
 | `<prefix>-alb-target-p99`              | warning      | Web target p99 > 2 s, 3 × 5 min                                                         |
+| `<prefix>-outbox-oldest-age-high`      | warning      | Oldest undispatched outbox row > 15 min, 3 × 5 min (missing = breaching)                |
+| `<prefix>-outbox-dead-rows`            | warning      | Any DEAD `event_outbox` row — holds ALARM until replayed                                |
 | `<prefix>-rds-cpu-high`                | warning      | Writer CPU > 80%, 2 × 5 min                                                             |
 | `<prefix>-rds-replica-lag`             | warning      | `AuroraReplicaLag` > 30 s, 2 × 1 min                                                    |
 | `<prefix>-ecs-<svc>-cpu-high`          | warning      | Service CPU > 80%, 3 × 5 min (web, worker, print-agent)                                 |
@@ -257,6 +260,30 @@ production metric namespace by mistake. Verify which database the
 emitting job read before treating it as real — but verify it, do not
 assume it.
 
+### `outbox-stalled`
+
+**What it means.** The oldest undispatched `event_outbox` row is more
+than an hour old. The drainer has stopped making progress while
+commands keep committing: shipping notifications, billing
+materialization, label dispatch, and partner webhooks are all silently
+queued. The console looks fine — that is the point of this alarm.
+
+**First diagnostic step.** Is the worker running at all? (If
+`ecs-worker-running-low` is also firing, that is the cause; fix that
+one.) If the worker is up, follow
+[RUNBOOK § Outbox drain stuck or backed up](../RUNBOOK.md#outbox-drain-stuck-or-backed-up):
+look at the oldest PENDING/FAILED rows' `lastError` and `attempts` —
+one poison row or one wedged downstream is the usual answer.
+
+**Escalation.** Treat as an availability incident for everything
+asynchronous. If it fired outside a deploy window, wake whoever owns
+the failing handler's downstream.
+
+**Not actually an emergency when.** A deliberate bulk backfill just
+enqueued hours of work and depth is draining. Depth falling with age
+high means the drainer is alive and chewing through the backlog — watch
+it; don't restart it.
+
 ---
 
 ## Warning tier
@@ -363,6 +390,55 @@ the entire feed. When the agent is scaled up, raise
 change — scaling with `aws ecs update-service` alone leaves the service
 running unwatched, because the ECS service ignores `desired_count`
 drift by design.
+
+### `outbox-oldest-age-high`
+
+**What it means.** The oldest undispatched `event_outbox` row is more
+than fifteen minutes old. Some side effect — a notification, a billing
+line, a webhook — is at least that late. Usually one failing handler
+climbing its retry ladder, not a stalled drainer; the stall has its own
+critical alarm at one hour.
+
+**First diagnostic step.** Find the oldest PENDING/FAILED rows and read
+`lastError` / `attempts` / `eventType`
+([RUNBOOK § Outbox drain stuck or backed up](../RUNBOOK.md#outbox-drain-stuck-or-backed-up)).
+One event type failing repeatedly is a downstream or handler bug; many
+types aging together is early drainer trouble — treat it as the stall
+alarm arriving early.
+
+**Escalation.** Ticket. Escalate if age keeps climbing toward the
+one-hour critical threshold or the affected event type is
+shipping/billing-bearing.
+
+**Not actually an emergency when.** A known downstream (Resend, a
+partner webhook endpoint) is having an outage and rows are riding
+backoff as designed. This alarm also fires on MISSING data, on
+purpose: if the probe itself stops publishing, this is the tier that
+notices — check the worker logs for `outbox.backlog.probe.failed`
+before assuming a backlog exists.
+
+### `outbox-dead-rows`
+
+**What it means.** At least one `event_outbox` row is DEAD: it
+exhausted all eight attempts and the drainer will never retry it. A
+load-bearing side effect has been permanently missed. This alarm stays
+in ALARM until the rows are dealt with — that is deliberate.
+
+**First diagnostic step.** Read the DEAD rows' `eventType` and
+`lastError`. The error text names the handler failure; the fix is
+usually in the downstream or the handler, after which the row is
+re-published through the admin replay path
+([RUNBOOK § Outbox drain stuck or backed up](../RUNBOOK.md#outbox-drain-stuck-or-backed-up)).
+Never mark a DEAD row DISPATCHED by hand — that erases the missed work
+without performing it.
+
+**Escalation.** Ticket, same morning. The longer a DEAD shipping or
+billing event sits, the harder the operational cleanup on the other
+side.
+
+**Not actually an emergency when.** The rows are already known —
+yesterday's incident, replay scheduled. It is never noise, though: a
+DEAD row represents work the platform promised and did not do.
 
 ---
 

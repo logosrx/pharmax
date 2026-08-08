@@ -10,11 +10,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.1105.0",
+    "@aws-sdk/client-s3": "^3.1103.0",
     "@pharmax/billing": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/compliance": "workspace:*",
     "@pharmax/composition": "workspace:*",
-    "stripe": "^22.4.0",
     "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/events": "workspace:*",
@@ -23,8 +24,6 @@
     "@pharmax/partner-api": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/reporting": "workspace:*",
-    "resend": "^4.0.0",
-    "@aws-sdk/client-s3": "^3.1103.0",
     "@pharmax/security": "workspace:*",
     "@pharmax/shipping": "workspace:*",
     "@pharmax/sla": "workspace:*",
@@ -32,6 +31,8 @@
     "@pharmax/tenancy": "workspace:*",
     "@pharmax/workflow": "workspace:*",
     "@sentry/node": "^10.69.0",
+    "resend": "^4.0.0",
+    "stripe": "^22.4.0",
     "ulid": "^3.0.2",
     "zod": "^4.4.3"
   },
