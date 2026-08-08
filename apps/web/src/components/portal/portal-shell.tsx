@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 
-import { Icon } from "../ui/icon.js";
+import { BrandWordmark } from "../shell/brand.js";
 import { PortalSignOutButton } from "./portal-sign-out-button.js";
 
 export type PortalNavKey = "home" | "orders" | "profile" | "settings";
@@ -28,10 +28,10 @@ export function PortalShell({
       <header className="border-b border-line bg-surface">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-4">
           <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand text-brand-fg">
-              <Icon name="pill" size={18} />
+            <BrandWordmark className="h-5" />
+            <span className="border-l border-line pl-3 text-sm font-semibold text-fg">
+              Provider portal
             </span>
-            <span className="text-sm font-semibold text-fg">Provider portal</span>
           </div>
           <PortalSignOutButton />
         </div>

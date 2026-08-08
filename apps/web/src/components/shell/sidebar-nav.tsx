@@ -18,6 +18,7 @@ import { useEffect, useState } from "react";
 
 import { cx } from "../ui/cx.js";
 import { Icon, type IconName } from "../ui/icon.js";
+import { BrandMark, BrandWordmark } from "./brand.js";
 import { sumLiveCounts, useLiveQueueCounts } from "./live-queue-counts.js";
 
 export interface NavLink {
@@ -85,17 +86,7 @@ export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup
       <div
         className={cx("flex h-14 items-center gap-2.5 px-4", collapsed && "justify-center px-0")}
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand text-brand-fg shadow-sm">
-          <Icon name="pill" size={18} />
-        </span>
-        {!collapsed ? (
-          <div className="leading-tight">
-            <div className="text-sm font-semibold tracking-tight text-fg">Pharmax</div>
-            <div className="text-3xs font-medium uppercase tracking-caps text-subtle">
-              Operations
-            </div>
-          </div>
-        ) : null}
+        {collapsed ? <BrandMark className="h-8 w-8" /> : <BrandWordmark className="h-6" />}
       </div>
 
       <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-3">
