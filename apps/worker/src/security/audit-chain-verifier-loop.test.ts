@@ -21,7 +21,10 @@ import type { PrismaClient } from "@pharmax/database";
 import { logger as loggerNs } from "@pharmax/platform-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { MetricDatum } from "../metrics/metrics-publisher.js";
 import {
+  AUDIT_CHAIN_FAILURE_METRIC,
+  AUDIT_METRIC_NAMESPACE,
   AUDIT_VERIFIER_UNKNOWN,
   createDailyAuditChainVerifierLoop,
 } from "./audit-chain-verifier-loop.js";
@@ -336,5 +339,78 @@ describe("createDailyAuditChainVerifierLoop", () => {
     await loop.runOnce(fixedNow);
 
     expect(verified).toEqual([ORG_A, ORG_B, ORG_C]);
+  });
+
+  it("publishes AuditChainIntegrityFailure = orgsFailed after each run", async () => {
+    const published: Array<{ namespace: string; datums: ReadonlyArray<MetricDatum> }> = [];
+    const source = buildFakeSource(
+      new Map<string, FakeOrgBehaviour>([
+        [ORG_A, "ok"],
+        [ORG_B, "seq-gap"],
+      ])
+    );
+    const loop = createDailyAuditChainVerifierLoop({
+      prisma: buildPrismaFake([
+        { id: ORG_A, slug: "org-a" },
+        { id: ORG_B, slug: "org-b" },
+      ]),
+      logger,
+      source,
+      now: () => fixedNow,
+      metricsPublisher: {
+        async publish(namespace, datums) {
+          published.push({ namespace, datums });
+        },
+      },
+    });
+
+    await loop.runOnce(fixedNow);
+
+    expect(published).toEqual([
+      {
+        namespace: AUDIT_METRIC_NAMESPACE,
+        datums: [{ metricName: AUDIT_CHAIN_FAILURE_METRIC, value: 1, unit: "Count" }],
+      },
+    ]);
+  });
+
+  it("publishes 0 on a clean run — the datapoint doubles as proof the verifier ran", async () => {
+    const published: Array<{ namespace: string; datums: ReadonlyArray<MetricDatum> }> = [];
+    const loop = createDailyAuditChainVerifierLoop({
+      prisma: buildPrismaFake([{ id: ORG_A, slug: "org-a" }]),
+      logger,
+      source: buildFakeSource(new Map<string, FakeOrgBehaviour>([[ORG_A, "ok"]])),
+      now: () => fixedNow,
+      metricsPublisher: {
+        async publish(namespace, datums) {
+          published.push({ namespace, datums });
+        },
+      },
+    });
+
+    await loop.runOnce(fixedNow);
+
+    expect(published[0]?.datums).toEqual([
+      { metricName: AUDIT_CHAIN_FAILURE_METRIC, value: 0, unit: "Count" },
+    ]);
+  });
+
+  it("a metric publish failure never fails the run", async () => {
+    const loop = createDailyAuditChainVerifierLoop({
+      prisma: buildPrismaFake([{ id: ORG_A, slug: "org-a" }]),
+      logger,
+      source: buildFakeSource(new Map<string, FakeOrgBehaviour>([[ORG_A, "ok"]])),
+      now: () => fixedNow,
+      metricsPublisher: {
+        async publish() {
+          throw new Error("simulated PutMetricData failure");
+        },
+      },
+    });
+
+    const summary = await loop.runOnce(fixedNow);
+
+    expect(summary.orgsVerified).toBe(1);
+    expect(summary.orgsFailed).toBe(0);
   });
 });

@@ -53,9 +53,21 @@ import { createPrismaAuditChainSource } from "@pharmax/security";
 import { getMeter } from "@pharmax/telemetry";
 import { withSystemContext } from "@pharmax/tenancy";
 
+import type { WorkerMetricsPublisher } from "../metrics/metrics-publisher.js";
 import { createDailyUtcScheduler, type DailyUtcScheduler } from "./daily-utc-scheduler.js";
 
 type Logger = loggerContract.Logger;
+
+/**
+ * Namespace + metric name the `audit_chain_integrity_failure` alarm
+ * in `infra/terraform/modules/cloudwatch` consumes (see its
+ * `custom_metric_namespace` / `audit_chain_failure_metric_name`
+ * variables — change both sides together). Until this emission
+ * existed the alarm was a consumer of a metric nothing produced:
+ * permanently green, never able to fire.
+ */
+export const AUDIT_METRIC_NAMESPACE = "Pharmax/Audit";
+export const AUDIT_CHAIN_FAILURE_METRIC = "AuditChainIntegrityFailure";
 
 const meter = getMeter("@pharmax/worker.security");
 
@@ -104,6 +116,14 @@ export interface DailyAuditChainVerifierLoopOptions {
   readonly source?: ChainSource;
   /** Override the clock; tests use a fake. */
   readonly now?: () => Date;
+  /**
+   * When provided, each run publishes `AuditChainIntegrityFailure`
+   * (= orgsFailed) to CloudWatch so the SEV1 alarm can actually
+   * fire. Clean runs publish 0 — the datapoint doubles as proof the
+   * verifier ran. Publish failures are logged and swallowed: the
+   * verification result must never be lost to a metrics hiccup.
+   */
+  readonly metricsPublisher?: WorkerMetricsPublisher;
 }
 
 export interface DailyAuditChainVerifierLoop {
@@ -239,6 +259,25 @@ export function createDailyAuditChainVerifierLoop(
       orgsFailed: summary.orgsFailed,
       errorsByCode: summary.errorsByCode,
     });
+
+    if (options.metricsPublisher !== undefined) {
+      try {
+        await options.metricsPublisher.publish(AUDIT_METRIC_NAMESPACE, [
+          {
+            metricName: AUDIT_CHAIN_FAILURE_METRIC,
+            value: summary.orgsFailed,
+            unit: "Count",
+          },
+        ]);
+      } catch (cause) {
+        log.error("audit_chain_verifier.metric_publish_failed", {
+          errorMessage: cause instanceof Error ? `${cause.name}: ${cause.message}` : "unknown",
+          orgsFailed: summary.orgsFailed,
+          detail:
+            "the run itself completed and is logged above; the CloudWatch SEV1 alarm did not receive this run's datapoint",
+        });
+      }
+    }
 
     return summary;
   }

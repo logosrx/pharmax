@@ -114,6 +114,9 @@ const ALLOWLIST: ReadonlySet<string> = new Set<string>([
   // Partner webhook-delivery claim drain — FOR UPDATE SKIP LOCKED
   // across orgs (system ctx); completion writes are org-scoped.
   "apps/worker/src/drains/claim-webhook-deliveries.ts",
+  // Read-only cross-tenant event_outbox backlog aggregate for the
+  // CloudWatch outbox alarms (system ctx; counts + one age, no payloads).
+  "apps/worker/src/metrics/outbox-backlog-probe.ts",
   // Read-only per-org bucket-count aggregate for metrics (system ctx).
   "apps/worker/src/metrics/workflow-bucket-scraper.ts",
   // Per-org audit-chain serialization via pg_advisory_xact_lock.

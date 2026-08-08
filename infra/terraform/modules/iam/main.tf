@@ -455,6 +455,33 @@ resource "aws_iam_role_policy" "task_worker_ssm_exec" {
   policy = data.aws_iam_policy_document.task_ssm_exec.json
 }
 
+# The worker publishes the custom metrics its CloudWatch alarms
+# consume: the outbox backlog probe (Pharmax/Worker) and the daily
+# audit-chain verifier (Pharmax/Audit). PutMetricData does not support
+# resource-level scoping, so the namespace condition key is the
+# narrowest available grant — the worker cannot pollute AWS/* or any
+# other team's namespace.
+data "aws_iam_policy_document" "task_worker_put_metrics" {
+  statement {
+    sid       = "PutCustomMetrics"
+    effect    = "Allow"
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "cloudwatch:namespace"
+      values   = ["Pharmax/Worker", "Pharmax/Audit"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "task_worker_put_metrics" {
+  name   = "put-metrics"
+  role   = aws_iam_role.task_worker.id
+  policy = data.aws_iam_policy_document.task_worker_put_metrics.json
+}
+
 data "aws_iam_policy_document" "task_worker_buckets" {
   statement {
     sid    = "DocumentsRW"

@@ -151,3 +151,37 @@ variable "audit_chain_failure_metric_name" {
   type        = string
   default     = "AuditChainIntegrityFailure"
 }
+
+variable "worker_metric_namespace" {
+  description = <<-EOT
+    Namespace for worker-emitted operational metrics (outbox backlog probe).
+    Mirrors WORKER_METRIC_NAMESPACE in apps/worker/src/metrics/outbox-backlog-probe.ts
+    — change both together or the outbox alarms watch an empty namespace.
+  EOT
+  type        = string
+  default     = "Pharmax/Worker"
+}
+
+variable "outbox_oldest_age_warning_threshold_seconds" {
+  description = <<-EOT
+    Warning when the oldest undispatched event_outbox row exceeds this age.
+    Default 900 (15 min): a healthy drainer clears a row in seconds, and a
+    single failing handler reaches ~16 minutes of cumulative backoff by retry
+    attempt 6 — so 15 sustained minutes means a real, persistent problem
+    without firing on the first couple of retries.
+  EOT
+  type        = number
+  default     = 900
+}
+
+variable "outbox_stalled_threshold_seconds" {
+  description = <<-EOT
+    Critical (pages) when the oldest undispatched event_outbox row exceeds this
+    age. Default 3600 (1h): the full retry ladder for one row spans ~2h with the
+    longest single wait being 64 minutes, so an hour-old row is either dying (a
+    state worth a page on its own) or the drainer has stopped making progress
+    entirely and every side effect on the platform is queued behind it.
+  EOT
+  type        = number
+  default     = 3600
+}
