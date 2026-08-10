@@ -35,7 +35,6 @@ import {
   ALLERGY_CRITICALITIES,
   ALLERGY_SUBSTANCE_CODE_SYSTEMS,
   ALLERGY_TYPES,
-  ALLERGY_VERIFICATION_STATUSES,
 } from "@pharmax/clinical-screening";
 import { encryptField } from "@pharmax/crypto";
 import type { AllergyReactionSeverity, Prisma } from "@pharmax/database";
@@ -54,6 +53,19 @@ const REACTION_MANIFESTATION_VALUES = Object.values(AllergyReactionManifestation
   string,
   ...string[],
 ];
+
+/**
+ * The only verification statuses a record may be BORN with.
+ *
+ * `REFUTED` and `ENTERED_IN_ERROR` are retraction states: each one is a
+ * judgement about an assertion that already exists, and a record created
+ * directly in either state is a retraction of a claim nobody made. It
+ * would also never screen, silently occupying the place where a real
+ * allergy entry should go. Retiring a record is
+ * `AmendPatientAllergyStatus`, which is pharmacist-gated and stamps a
+ * reason code — a gate this technician-level command must not bypass.
+ */
+const ALLERGY_CREATION_VERIFICATION_STATUSES = Object.freeze(["CONFIRMED", "UNCONFIRMED"] as const);
 
 const inputSchema = z
   .object({
@@ -76,7 +88,7 @@ const inputSchema = z
     // concern, not an intake one, and allowing it here would let a
     // record land in a state that never screens without anyone
     // deciding to retire it.
-    verificationStatus: z.enum(ALLERGY_VERIFICATION_STATUSES).optional(),
+    verificationStatus: z.enum(ALLERGY_CREATION_VERIFICATION_STATUSES).optional(),
 
     reactionManifestations: z.array(z.enum(REACTION_MANIFESTATION_VALUES)).max(16).optional(),
     reactionSeverity: z.enum(["MILD", "MODERATE", "SEVERE"]).optional(),

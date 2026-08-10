@@ -468,6 +468,29 @@ describe("RecordPatientAllergy — storage shape", () => {
       )
     ).rejects.toMatchObject({ code: "COMMAND_INPUT_INVALID" });
   });
+
+  it("refuses to create a record already REFUTED or ENTERED_IN_ERROR", async () => {
+    // Both are retraction states — judgements about an assertion that
+    // already exists. A record born in either state is a retraction of
+    // a claim nobody made, would never screen, and would bypass the
+    // pharmacist-gated AmendPatientAllergyStatus path that stamps a
+    // reason code on every retirement.
+    const fake = buildFakePrisma();
+    wire(fake.client);
+
+    for (const verificationStatus of ["REFUTED", "ENTERED_IN_ERROR"] as const) {
+      await expect(
+        withTenancyContext(ctx(), () =>
+          executeCommand(
+            RecordPatientAllergy,
+            { ...codedAllergyInput, verificationStatus } as never,
+            { idempotencyKey: `rec-born-${verificationStatus}` }
+          )
+        )
+      ).rejects.toMatchObject({ code: "COMMAND_INPUT_INVALID" });
+    }
+    expect(callsOf(fake.calls, "patientAllergy", "create")).toHaveLength(0);
+  });
 });
 
 describe("RecordPatientAllergy — the substance code rules", () => {
@@ -1125,6 +1148,27 @@ describe("AssertPatientAllergyHistory — the negative assertion", () => {
         )
       )
     ).rejects.toMatchObject({ code: "ALLERGY_HISTORY_PATIENT_NOT_FOUND" });
+  });
+
+  it("refuses to assert against a crypto-shredded patient", async () => {
+    // No PHI is written here, but NO_KNOWN_ALLERGIES is what opens the
+    // DRUG_ALLERGY screening axis — asserting it against a patient whose
+    // allergy narrative was deliberately destroyed would report a clean
+    // screen built on records nobody can read anymore.
+    const fake = buildFakePrisma({ patientShreddedAt: new Date("2026-01-01T00:00:00.000Z") });
+    wire(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          AssertPatientAllergyHistory,
+          { patientId: PATIENT_ID, status: "NO_KNOWN_ALLERGIES" },
+          { idempotencyKey: "assert-shredded" }
+        )
+      )
+    ).rejects.toMatchObject({ code: "ALLERGY_HISTORY_PATIENT_SHREDDED" });
+    expect(callsOf(fake.calls, "patientAllergyHistoryAssertion", "create")).toHaveLength(0);
+    expect(callsOf(fake.calls, "eventOutbox", "createMany")).toHaveLength(0);
   });
 
   it("carries no PHI beyond ids, one enum and timestamps", async () => {

@@ -72,6 +72,7 @@ export interface AssertPatientAllergyHistoryOutput {
 }
 
 export const ALLERGY_HISTORY_PATIENT_NOT_FOUND = "ALLERGY_HISTORY_PATIENT_NOT_FOUND";
+export const ALLERGY_HISTORY_PATIENT_SHREDDED = "ALLERGY_HISTORY_PATIENT_SHREDDED";
 export const ALLERGY_HISTORY_ASSERTED_IN_FUTURE = "ALLERGY_HISTORY_ASSERTED_IN_FUTURE";
 export const ALLERGY_HISTORY_ASSERTED_TOO_LONG_AGO = "ALLERGY_HISTORY_ASSERTED_TOO_LONG_AGO";
 
@@ -94,13 +95,27 @@ export const AssertPatientAllergyHistory: Command<
 
     const patient = await tx.patient.findUnique({
       where: { id: input.patientId },
-      select: { id: true, clinicId: true },
+      select: { id: true, clinicId: true, cryptoShreddedAt: true },
     });
     if (patient === null) {
       throw new errors.ValidationError({
         code: ALLERGY_HISTORY_PATIENT_NOT_FOUND,
         message: "Patient does not exist or is not in this organization.",
         issues: [{ path: ["patientId"], message: "unknown patient" }],
+        metadata: { patientId: input.patientId },
+      });
+    }
+
+    // Same refusal as RecordPatientAllergy, for a sharper reason: this
+    // command writes no PHI, but NO_KNOWN_ALLERGIES is what opens the
+    // DRUG_ALLERGY screening axis — and asserting it against a patient
+    // whose allergy narrative was deliberately destroyed would report a
+    // clean screen built on records nobody can read anymore.
+    if (patient.cryptoShreddedAt !== null) {
+      throw new errors.ConflictError({
+        code: ALLERGY_HISTORY_PATIENT_SHREDDED,
+        message:
+          "This patient has been crypto-shredded; no further clinical data may be recorded against the record.",
         metadata: { patientId: input.patientId },
       });
     }
