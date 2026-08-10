@@ -35,18 +35,18 @@ exactly what they did with them."
 
 Lifecycle row for one bypass session.
 
-| Column               | Type         | Notes                                                                                                |
-| -------------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
-| `id`                 | uuid (PK)    | ULID encoded as uuid; sortable by open time.                                                         |
-| `requestedByUserId`  | uuid         | FK → `user(id)`. The engineer who initiated the bypass.                                              |
-| `approvedByUserId`   | uuid?        | FK → `user(id)`. Second engineer (four-eyes). NULL until approval lands.                             |
-| `ticketUrl`          | text         | REQUIRED. Link to the incident / change ticket. Stored verbatim.                                     |
-| `reason`             | text         | REQUIRED. Free-form summary. PHI-safe (no patient names — enforced by Pino redaction at write time). |
-| `openedAt`           | timestamptz  | When the session was opened. Defaults to `now()`.                                                    |
-| `closedAt`           | timestamptz? | When the session was finalized. NULL while open.                                                     |
-| `resolution`         | text?        | Final summary written at close time. Required when `closedAt` is set.                                |
-| `maxDurationMinutes` | int          | Hard cap; sessions auto-close when `openedAt + INTERVAL '... minutes'` lapses. Default: 60.          |
-| `createdAt`          | timestamptz  | `now()`. Audit trail.                                                                                |
+| Column               | Type         | Notes                                                                                                                                                                                                           |
+| -------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                 | uuid (PK)    | ULID encoded as uuid; sortable by open time.                                                                                                                                                                    |
+| `requestedByUserId`  | uuid         | FK → `user(id)`. The engineer who initiated the bypass.                                                                                                                                                         |
+| `approvedByUserId`   | uuid?        | FK → `user(id)`. Second engineer (four-eyes). NULL until approval lands.                                                                                                                                        |
+| `ticketUrl`          | text         | REQUIRED. Link to the incident / change ticket. Stored verbatim.                                                                                                                                                |
+| `reason`             | text         | REQUIRED. `"<code>"` or `"<code>: <detail>"` — a registered `BREAK_GLASS_SESSION_REASONS` code plus optional ≤ 280-char detail, PHI-tripwire-screened at the module boundary (`ledger-gate.ts`). Not free-form. |
+| `openedAt`           | timestamptz  | When the session was opened. Defaults to `now()`.                                                                                                                                                               |
+| `closedAt`           | timestamptz? | When the session was finalized. NULL while open.                                                                                                                                                                |
+| `resolution`         | text?        | Final summary written at close time. Required when `closedAt` is set. ≤ 2000 chars, PHI-tripwire-screened; a hit refuses the close so the author rewords.                                                       |
+| `maxDurationMinutes` | int          | Hard cap; sessions auto-close when `openedAt + INTERVAL '... minutes'` lapses. Default: 60.                                                                                                                     |
+| `createdAt`          | timestamptz  | `now()`. Audit trail.                                                                                                                                                                                           |
 
 **RLS:** this table is **not** tenant-scoped (sessions cross all tenants by
 definition). Read access is restricted to `pharmax_system` and to a future
@@ -64,18 +64,18 @@ narrow stored procedure.
 One row per database operation executed inside the session. The
 `BreakGlassSessionHandle.runAs()` method writes one of these per call.
 
-| Column         | Type        | Notes                                                                                       |
-| -------------- | ----------- | ------------------------------------------------------------------------------------------- |
-| `id`           | uuid (PK)   | ULID encoded as uuid.                                                                       |
-| `sessionId`    | uuid        | FK → `break_glass_session(id)`. Cascade delete is **disallowed**; sessions are append-only. |
-| `actionLabel`  | text        | Caller-supplied short label (e.g. "lookup_user_by_email", "advance_order_status").          |
-| `parameters`   | jsonb       | PHI-redacted parameters. Caller is responsible for redaction.                               |
-| `success`      | boolean     | Outcome of the wrapped transaction.                                                         |
-| `errorMessage` | text?       | When `success = false`, the error class+message. PHI-safe.                                  |
-| `commandLogId` | uuid?       | When the action dispatched a command, the resulting `command_log.id`.                       |
-| `startedAt`    | timestamptz |                                                                                             |
-| `completedAt`  | timestamptz |                                                                                             |
-| `createdAt`    | timestamptz | `now()`.                                                                                    |
+| Column         | Type        | Notes                                                                                                                                                                          |
+| -------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`           | uuid (PK)   | ULID encoded as uuid.                                                                                                                                                          |
+| `sessionId`    | uuid        | FK → `break_glass_session(id)`. Cascade delete is **disallowed**; sessions are append-only.                                                                                    |
+| `actionLabel`  | text        | Caller-supplied short label (e.g. "lookup_user_by_email", "advance_order_status").                                                                                             |
+| `parameters`   | jsonb       | Identifiers and switches, not payloads. Every string (keys and values, any depth) is PHI-tripwire-screened and the serialized whole capped at 4 KB, BEFORE the operation runs. |
+| `success`      | boolean     | Outcome of the wrapped transaction.                                                                                                                                            |
+| `errorMessage` | text?       | When `success = false`, the error class+message. Tripwire-screened post-hoc: a hit REDACTS the message (naming the rules) rather than suppressing the failure row.             |
+| `commandLogId` | uuid?       | When the action dispatched a command, the resulting `command_log.id`.                                                                                                          |
+| `startedAt`    | timestamptz |                                                                                                                                                                                |
+| `completedAt`  | timestamptz |                                                                                                                                                                                |
+| `createdAt`    | timestamptz | `now()`.                                                                                                                                                                       |
 
 **RLS:** same as `break_glass_session`. `INSERT` only — `UPDATE`/`DELETE`
 revoked at the role level.
@@ -99,6 +99,15 @@ semantics), the evidence model is:
   append-only ledger: `DELETE` is granted to neither application role on
   either table, `UPDATE` is granted only on the session row (for the
   close write), and `break_glass_action` is INSERT-only.
+- BECAUSE the ledger is append-only and surfaces in write-once
+  evidence artifacts, free text is gated at the module boundary
+  (`ledger-gate.ts`): session reasons are a closed code list with a
+  bounded, PHI-tripwire-screened detail; resolutions and `runAs`
+  parameters are screened pre-write (a hit refuses); action error
+  messages are redacted post-hoc (a hit must not suppress the
+  failure row). Log-level redaction never was and is not the control
+  here — nothing about a Pino serializer changes what a database
+  INSERT persists.
 - Every session opened in the last 24 h surfaces in the **nightly
   security digest** (`compose-nightly-security-digest.ts` →
   `BreakGlassSessionProbe`), which is delivered to the operator security

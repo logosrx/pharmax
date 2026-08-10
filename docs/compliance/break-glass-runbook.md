@@ -57,12 +57,19 @@ opening a session.
 
 ### 1. Open the session
 
-Run the open helper (production form lands when the
-`break_glass_session` migration ships per
-`packages/security/src/break-glass/SCHEMA.md`):
+> **Free text entering a break-glass session is permanent.** The
+> session and action tables are the append-only evidence ledger, and
+> they surface in write-once evidence artifacts. Reasons are therefore
+> a registered code (`BREAK_GLASS_SESSION_REASONS`) plus an optional
+> short detail (≤ 280 chars). The detail, the close resolution, and
+> all `runAs` parameters are screened by the PHI tripwire at the
+> module boundary — a hit refuses the write. Refer to patients by
+> order id or ticket, never by name, DOB, or contact details.
+
+Run the open helper:
 
 ```ts
-import { openBreakGlassSession } from "@pharmax/security";
+import { BREAK_GLASS_SESSION_REASONS, openBreakGlassSession } from "@pharmax/security";
 
 const handle = await openBreakGlassSession({
   client: breakGlassClient,
@@ -70,7 +77,8 @@ const handle = await openBreakGlassSession({
   actionIdFactory: () => ulid(),
   clock: systemClock,
   session: {
-    reason: "investigate audit chain break on org-acme",
+    reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
+    reasonDetail: "audit chain break on org-acme per INC-1234",
     requestedByUserId: "<requester user id>",
     approvedByUserId: "<second engineer user id>",
     ticketUrl: "https://tickets/INC-1234",
@@ -113,6 +121,11 @@ await handle.runAs(
 If the action dispatched a domain command, pass the resulting
 `command_log.id` as `commandLogId` so the standard observability
 tools join cleanly.
+
+`parameters` are identifiers and switches, not payloads: every string
+in the structure is tripwire-screened and the serialized whole is
+capped at 4 KB. A rejection happens BEFORE the wrapped operation runs,
+so nothing executes unrecorded.
 
 ### 3. Close the session
 

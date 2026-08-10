@@ -34,13 +34,28 @@ export {
 } from "./break-glass/break-glass-session.js";
 
 export {
+  BREAK_GLASS_LEDGER_TEXT_REJECTED,
+  BREAK_GLASS_LEDGER_TEXT_TOO_LONG,
   BREAK_GLASS_SESSION_ALREADY_CLOSED,
+  BREAK_GLASS_SESSION_DETAIL_REQUIRED,
   BREAK_GLASS_SESSION_EXPIRED,
   BREAK_GLASS_SESSION_REASON_REQUIRED,
   BREAK_GLASS_SESSION_TICKET_REQUIRED,
   breakGlassSessionAlreadyClosedError,
   breakGlassSessionExpiredError,
 } from "./break-glass/errors.js";
+
+export {
+  BREAK_GLASS_DETAIL_MAX_LENGTH,
+  BREAK_GLASS_PARAMETERS_MAX_BYTES,
+  BREAK_GLASS_RESOLUTION_MAX_LENGTH,
+  BREAK_GLASS_SESSION_REASONS,
+  assertLedgerSafeParameters,
+  assertLedgerSafeText,
+  composeSessionReason,
+  redactErrorMessageForLedger,
+  type BreakGlassSessionReasonCode,
+} from "./break-glass/ledger-gate.js";
 
 export { PrismaBreakGlassClient } from "./break-glass/prisma-break-glass-client.js";
 

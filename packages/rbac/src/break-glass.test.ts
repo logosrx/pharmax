@@ -18,6 +18,7 @@ import { PERMISSIONS } from "./permissions.js";
 import {
   BREAK_GLASS_DEFAULT_MINUTES,
   BREAK_GLASS_MAX_MINUTES,
+  BREAK_GLASS_NOTE_MAX_LENGTH,
   BREAK_GLASS_REASONS,
   BREAK_GLASS_VALIDATION,
   buildBreakGlassGrant,
@@ -118,6 +119,32 @@ describe("buildBreakGlassGrant — policy violations", () => {
         grantedByUserId: "user-admin",
       })
     ).toThrowError(expect.objectContaining({ code: BREAK_GLASS_VALIDATION }));
+  });
+
+  it("rejects a PHI-shaped note and never quotes it back", () => {
+    const secret = "for patient: Jane Doe, DOB: 1962-07-04";
+    try {
+      buildBreakGlassGrant({ ...baseInput(), note: secret });
+      throw new Error("expected throw");
+    } catch (e: unknown) {
+      const err = e as { code: string; message: string };
+      expect(err.code).toBe(BREAK_GLASS_VALIDATION);
+      // The note enters the append-only audit chain; the refusal
+      // names the rules but must not echo the text it refused.
+      expect(err.message).toContain("patient_label");
+      expect(err.message).not.toContain("Jane Doe");
+    }
+  });
+
+  it("rejects an over-length note", () => {
+    expect(() =>
+      buildBreakGlassGrant({ ...baseInput(), note: "x".repeat(BREAK_GLASS_NOTE_MAX_LENGTH + 1) })
+    ).toThrowError(expect.objectContaining({ code: BREAK_GLASS_VALIDATION }));
+  });
+
+  it("accepts a clean note at exactly the cap", () => {
+    const note = "x".repeat(BREAK_GLASS_NOTE_MAX_LENGTH);
+    expect(buildBreakGlassGrant({ ...baseInput(), note }).note).toBe(note);
   });
 
   it("rejection error metadata includes a structured issues field", () => {
