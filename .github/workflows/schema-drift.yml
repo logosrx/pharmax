@@ -98,7 +98,7 @@ jobs:
       # definition, and read the resulting logs. See
       # infra/terraform/modules/cicd-deploy/schema-check.tf.
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_SCHEMA_CHECK_ROLE_ARN }}
           aws-region: ${{ needs.preflight.outputs.region }}

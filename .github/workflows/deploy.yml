@@ -154,7 +154,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ needs.preflight.outputs.region }}
@@ -226,7 +226,7 @@ jobs:
       SERVICE: ${{ needs.preflight.outputs.name_prefix }}-worker
     steps:
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ needs.preflight.outputs.region }}
@@ -366,7 +366,7 @@ jobs:
         service: ${{ fromJSON(needs.preflight.outputs.deploy_services) }}
     steps:
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ needs.preflight.outputs.region }}
