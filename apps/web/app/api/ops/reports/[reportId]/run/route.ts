@@ -29,6 +29,7 @@ import { NextResponse } from "next/server";
 import { resolveOperatorTenancyContext } from "../../../../../../src/server/auth/resolve-tenancy.js";
 import { logger } from "../../../../../../src/server/logger.js";
 import { withSentryOpsScope } from "../../../../../../src/server/observability/ops-scope.js";
+import { parseOpsRequestBody } from "../../../../../../src/server/ops/parse-request-body.js";
 
 interface RouteParams {
   readonly params: Promise<{ readonly reportId: string }>;
@@ -68,15 +69,18 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
   // serialization (csv default | pdf) and is read OUTSIDE
   // `parseReportParameters` — it is transport chrome, not a report
   // parameter, so it never reaches the report's Zod schema.
-  const contentType = request.headers.get("content-type") ?? "";
+  const parsedBody = await parseOpsRequestBody(request);
+  if (!parsedBody.ok) {
+    return redirectWithError(reportId, parsedBody.error);
+  }
   let format: "csv" | "pdf" = "csv";
   let source;
-  if (contentType.includes("application/json")) {
-    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  if (parsedBody.bodyKind === "json") {
+    const body = parsedBody.body;
     if (body["format"] === "pdf") format = "pdf";
     source = paramSourceFromRecord(body);
   } else {
-    const formData = await request.formData();
+    const formData = parsedBody.body;
     if (formData.get("format") === "pdf") format = "pdf";
     source = paramSourceFromFormData(formData);
   }

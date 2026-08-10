@@ -40,6 +40,7 @@ import { NextResponse } from "next/server";
 
 import { resolveOperatorTenancyContext } from "../../../../../../src/server/auth/resolve-tenancy.js";
 import { logger } from "../../../../../../src/server/logger.js";
+import { parseOpsRequestBody } from "../../../../../../src/server/ops/parse-request-body.js";
 
 interface RouteParams {
   readonly params: Promise<{ readonly orderId: string }>;
@@ -70,18 +71,22 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
   }
 
   // Accept either form-encoded body (the on-page form) or JSON
-  // (programmatic clients). Default to form-encoded.
+  // (programmatic clients). Default to form-encoded. Guarded so a
+  // non-form body is a flash redirect, not an unhandled 500.
+  const parsed = await parseOpsRequestBody(request);
+  if (!parsed.ok) {
+    return redirectBack(`error=${encodeURIComponent(parsed.error)}`);
+  }
   let disposition: string | null;
   let reasonText: string | undefined;
-  const contentType = request.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  if (parsed.bodyKind === "json") {
+    const body = parsed.body;
     disposition = typeof body["disposition"] === "string" ? body["disposition"] : null;
     if (typeof body["reasonText"] === "string" && body["reasonText"].trim().length > 0) {
       reasonText = body["reasonText"].trim();
     }
   } else {
-    const form = await request.formData();
+    const form = parsed.body;
     disposition = form.get("disposition")?.toString() ?? null;
     const raw = form.get("reasonText")?.toString() ?? "";
     if (raw.trim().length > 0) reasonText = raw.trim();
