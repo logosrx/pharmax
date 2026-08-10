@@ -1,16 +1,16 @@
 // Brand — the Pharmax logo, theme-aware.
 //
-// Two prerendered PNG variants live in `public/brand/`: the original
-// charcoal wordmark for light surfaces and a light-gray recolor for the
-// dark console (the blue "x" mark is identical in both). The swap is
-// pure CSS keyed off the `.light` class on <html> (see the
-// `.brand-wordmark-*` rules in `app/globals.css`), so the correct
-// variant renders on first paint with zero client JS — usable from
-// server and client components alike.
+// Two SVG wordmark variants live in `public/brand/`: charcoal for light
+// surfaces and white for the dark console (the blue "x" mark is
+// identical in both). The swap is pure CSS keyed off the `.light` class
+// on <html> (see the `.brand-wordmark-*` rules in `app/globals.css`),
+// so the correct variant renders on first paint with zero client JS —
+// usable from server and client components alike.
 //
-// Assets are generated from the master logo by
-// `scripts/brand/generate-brand-assets.mjs`; edit the source PNG and
-// re-run that script rather than editing the variants by hand.
+// The SVG masters are committed in `brand/`;
+// `scripts/brand/generate-brand-assets.ts` copies them here and
+// rasterizes the favicon. Update the masters and re-run that script
+// rather than editing the served copies by hand.
 
 import { cx } from "../ui/cx.js";
 
@@ -19,12 +19,12 @@ export function BrandWordmark({ className }: { readonly className?: string }) {
   return (
     <span className={cx("inline-flex shrink-0 items-center", className)}>
       <img
-        src="/brand/pharmax-wordmark-dark.png"
+        src="/brand/pharmax-wordmark-dark.svg"
         alt="Pharmax"
         className="brand-wordmark-on-dark h-full w-auto"
       />
       <img
-        src="/brand/pharmax-wordmark-light.png"
+        src="/brand/pharmax-wordmark-light.svg"
         alt="Pharmax"
         className="brand-wordmark-on-light h-full w-auto"
       />
@@ -34,5 +34,5 @@ export function BrandWordmark({ className }: { readonly className?: string }) {
 
 /** Square "x" mark — collapsed rails, mobile topbars, tight spots. */
 export function BrandMark({ className }: { readonly className?: string }) {
-  return <img src="/brand/pharmax-mark.png" alt="Pharmax" className={cx("shrink-0", className)} />;
+  return <img src="/brand/pharmax-mark.svg" alt="Pharmax" className={cx("shrink-0", className)} />;
 }
