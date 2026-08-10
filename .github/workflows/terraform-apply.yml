@@ -570,7 +570,7 @@ jobs:
           role-session-name: gh-actions-apply-${{ inputs.env_region }}-${{ github.run_id }}
 
       - name: Download tfplan binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tfplan-${{ inputs.env_region }}-${{ github.run_id }}
           path: ${{ env.WORK_DIR }}
