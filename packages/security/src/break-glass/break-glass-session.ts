@@ -30,11 +30,18 @@ import { errors, type clock as clockNs } from "@pharmax/platform-core";
 type Clock = clockNs.Clock;
 
 import {
-  BREAK_GLASS_SESSION_REASON_REQUIRED,
   BREAK_GLASS_SESSION_TICKET_REQUIRED,
   breakGlassSessionAlreadyClosedError,
   breakGlassSessionExpiredError,
 } from "./errors.js";
+import {
+  BREAK_GLASS_RESOLUTION_MAX_LENGTH,
+  assertLedgerSafeParameters,
+  assertLedgerSafeText,
+  composeSessionReason,
+  redactErrorMessageForLedger,
+  type BreakGlassSessionReasonCode,
+} from "./ledger-gate.js";
 
 /** Hard cap on session duration. Compliance-driven, do not raise without security review. */
 export const BREAK_GLASS_SESSION_MAX_DURATION_MINUTES = 240;
@@ -43,7 +50,18 @@ export const BREAK_GLASS_SESSION_MAX_DURATION_MINUTES = 240;
 export const BREAK_GLASS_SESSION_DEFAULT_DURATION_MINUTES = 60;
 
 export interface BreakGlassSessionInput {
-  readonly reason: string;
+  /**
+   * WHY the bypass is being opened — a registered code, not prose.
+   * See `BREAK_GLASS_SESSION_REASONS` in ledger-gate.ts for the
+   * vocabulary and the rationale.
+   */
+  readonly reasonCode: BreakGlassSessionReasonCode;
+  /**
+   * Optional short context (≤ 280 chars, PHI-tripwire-screened);
+   * REQUIRED when `reasonCode` is `"other"`. Point at tickets and
+   * order ids — never at patients.
+   */
+  readonly reasonDetail?: string;
   readonly requestedByUserId: string;
   readonly ticketUrl: string;
   /** Optional second approver. NULL means "to be filled in by a follow-up update". */
@@ -148,7 +166,12 @@ export interface BreakGlassSessionHandle {
   runAs<T>(
     args: {
       readonly actionLabel: string;
-      /** PHI-redacted parameters. The caller is responsible for redaction. */
+      /**
+       * Identifiers and switches only — persisted verbatim to the
+       * append-only action ledger. Every string in the structure is
+       * PHI-tripwire-screened and the serialized whole is size-capped
+       * BEFORE the operation runs; a hit refuses the action.
+       */
       readonly parameters?: unknown;
       /** Optional: if the action dispatched a command, the resulting `command_log.id`. */
       readonly commandLogId?: string | null;
@@ -205,7 +228,7 @@ export async function openBreakGlassSession(input: {
   const openedAt = input.clock.now();
   const record = await input.client.insertSession({
     id: input.idFactory(),
-    reason: input.session.reason,
+    reason: composeSessionReason(input.session.reasonCode, input.session.reasonDetail),
     requestedByUserId: input.session.requestedByUserId,
     ticketUrl: input.session.ticketUrl,
     approvedByUserId: input.session.approvedByUserId ?? null,
@@ -229,6 +252,9 @@ export async function openBreakGlassSession(input: {
     ): Promise<T> {
       assertOpen(active);
       assertNotExpired(active.record, input.clock);
+      // Screened BEFORE the operation runs: a parameters rejection
+      // must not leave a half-executed bypass with no ledger row.
+      assertLedgerSafeParameters(args.parameters ?? null);
 
       const startedAt = input.clock.now();
       let outcome: T;
@@ -290,6 +316,10 @@ export async function closeBreakGlassSession(
       issues: [{ path: ["resolution"], message: "must be a non-empty string" }],
     });
   }
+  // Human-typed, pre-write: a tripwire hit refuses the close so the
+  // author (who is present) rewords, rather than PHI entering a row
+  // that can never be deleted.
+  assertLedgerSafeText(input.resolution, "resolution", BREAK_GLASS_RESOLUTION_MAX_LENGTH);
   if (handle.session.closedAt !== null) {
     throw breakGlassSessionAlreadyClosedError({ sessionId: handle.session.id });
   }
@@ -306,13 +336,8 @@ export async function closeBreakGlassSession(
 }
 
 function validateOpenInput(input: BreakGlassSessionInput): void {
-  if (typeof input.reason !== "string" || input.reason.trim().length === 0) {
-    throw new errors.ValidationError({
-      code: BREAK_GLASS_SESSION_REASON_REQUIRED,
-      message: "openBreakGlassSession: reason is required and must be a non-empty string.",
-      issues: [{ path: ["reason"], message: "must be a non-empty string" }],
-    });
-  }
+  // reasonCode / reasonDetail are validated by `composeSessionReason`
+  // (closed code list, OTHER-requires-detail, PHI tripwire).
   if (typeof input.ticketUrl !== "string" || input.ticketUrl.trim().length === 0) {
     throw new errors.ValidationError({
       code: BREAK_GLASS_SESSION_TICKET_REQUIRED,
@@ -354,6 +379,9 @@ function assertNotExpired(record: BreakGlassSessionRecord, clock: Clock): void {
 }
 
 function describeError(cause: unknown): string {
-  if (cause instanceof Error) return `${cause.name}: ${cause.message}`;
+  // Post-hoc text we do not control: redact on a tripwire hit rather
+  // than refuse, because refusing would suppress the failure ledger
+  // row itself. See redactErrorMessageForLedger.
+  if (cause instanceof Error) return `${cause.name}: ${redactErrorMessageForLedger(cause.message)}`;
   return "Unknown error";
 }

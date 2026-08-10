@@ -31,12 +31,18 @@
 //   `BreakGlassWriter` as the seam so callers can wire a real
 //   writer at boot and a fake writer in tests today.
 
-import { errors } from "@pharmax/platform-core";
+import { errors, phi } from "@pharmax/platform-core";
 
 import type { PermissionCode } from "./permissions.js";
 
 /** Absolute maximum break-glass duration. Compliance-driven, do not raise without security review. */
 export const BREAK_GLASS_MAX_MINUTES = 240;
+
+/**
+ * Cap on the free-text note that rides into the audit chain. Short by
+ * design: the note is context ("covering INC-2214"), not a narrative.
+ */
+export const BREAK_GLASS_NOTE_MAX_LENGTH = 280;
 
 /** Default break-glass duration when the caller does not specify one. */
 export const BREAK_GLASS_DEFAULT_MINUTES = 60;
@@ -67,7 +73,11 @@ export interface BreakGlassGrant {
   readonly grantedByUserId: string;
   readonly permission: PermissionCode;
   readonly reason: BreakGlassReason;
-  /** Free-form note. PHI-safe (no patient names — enforced by Pino redaction). */
+  /**
+   * Free-form note, ≤ `BREAK_GLASS_NOTE_MAX_LENGTH` chars and
+   * PHI-tripwire-screened at build time — it enters the append-only
+   * audit chain. Point at tickets, never at patients.
+   */
   readonly note?: string;
   readonly expiresAt: Date;
 }
@@ -157,6 +167,37 @@ export function buildBreakGlassGrant(input: {
       message: "Break-glass cannot be self-granted; a second administrator must approve.",
       issues: [{ path: ["granteeUserId"], message: "must differ from grantedByUserId" }],
     });
+  }
+  if (input.note !== undefined) {
+    // The note rides into the BREAK_GLASS_GRANTED audit event and
+    // from there into the hash-chained audit_log — a store nothing
+    // can be deleted from. Screen it here, at the write, rather than
+    // trusting log-level redaction (which masks log OUTPUT, not the
+    // persisted row).
+    if (input.note.length > BREAK_GLASS_NOTE_MAX_LENGTH) {
+      throw new errors.ValidationError({
+        code: BREAK_GLASS_VALIDATION,
+        message:
+          `Break-glass note is ${input.note.length} characters; the cap is ` +
+          `${BREAK_GLASS_NOTE_MAX_LENGTH}. Put the story in the ticket, not the audit row.`,
+        issues: [
+          { path: ["note"], message: `must be ≤ ${BREAK_GLASS_NOTE_MAX_LENGTH} characters` },
+        ],
+      });
+    }
+    const hits = phi.scanForPhi(input.note);
+    if (hits.length > 0) {
+      // Names the rules, never the text — this message reaches logs.
+      throw new errors.ValidationError({
+        code: BREAK_GLASS_VALIDATION,
+        message:
+          `Break-glass note looks like it carries patient data ` +
+          `(matched: ${hits.map((h) => h.rule).join(", ")}). The note enters the append-only ` +
+          `audit chain and can never be deleted. Refer to patients by order id or ticket, ` +
+          `never by name, DOB, or contact details.`,
+        issues: [{ path: ["note"], message: "must not carry PHI-shaped text" }],
+      });
+    }
   }
 
   return {

@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import { clock as clockNs } from "@pharmax/platform-core";
 
 import {
+  BREAK_GLASS_LEDGER_TEXT_REJECTED,
   BREAK_GLASS_SESSION_ALREADY_CLOSED,
   BREAK_GLASS_SESSION_EXPIRED,
   BREAK_GLASS_SESSION_REASON_REQUIRED,
   BREAK_GLASS_SESSION_TICKET_REQUIRED,
 } from "./errors.js";
+import { BREAK_GLASS_SESSION_REASONS, type BreakGlassSessionReasonCode } from "./ledger-gate.js";
 import {
   closeBreakGlassSession,
   openBreakGlassSession,
@@ -83,7 +85,7 @@ const REQUESTER = "11111111-1111-1111-1111-111111111111";
 const APPROVER = "22222222-2222-2222-2222-222222222222";
 
 describe("openBreakGlassSession", () => {
-  it("validates the reason and ticket URL", async () => {
+  it("validates the reason code and ticket URL", async () => {
     const client = buildFakeClient();
     const clock = clockNs.createFrozenClock(new Date("2026-05-24T12:00:00.000Z"));
     await expect(
@@ -93,7 +95,7 @@ describe("openBreakGlassSession", () => {
         actionIdFactory: makeIdFactory("a"),
         clock,
         session: {
-          reason: "",
+          reasonCode: "free-form prose" as BreakGlassSessionReasonCode,
           requestedByUserId: REQUESTER,
           ticketUrl: "https://tickets/INC-1",
         },
@@ -107,7 +109,7 @@ describe("openBreakGlassSession", () => {
         actionIdFactory: makeIdFactory("a"),
         clock,
         session: {
-          reason: "investigate stuck order",
+          reasonCode: BREAK_GLASS_SESSION_REASONS.STUCK_WORKFLOW_RECOVERY,
           requestedByUserId: REQUESTER,
           ticketUrl: "",
         },
@@ -125,7 +127,7 @@ describe("openBreakGlassSession", () => {
         actionIdFactory: makeIdFactory("a"),
         clock,
         session: {
-          reason: "investigate",
+          reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
           requestedByUserId: REQUESTER,
           approvedByUserId: REQUESTER,
           ticketUrl: "https://tickets/INC-1",
@@ -145,7 +147,8 @@ describe("openBreakGlassSession", () => {
       actionIdFactory: makeIdFactory("a"),
       clock,
       session: {
-        reason: "investigate stuck order ORD-7",
+        reasonCode: BREAK_GLASS_SESSION_REASONS.STUCK_WORKFLOW_RECOVERY,
+        reasonDetail: "order ORD-7 stuck after worker crash",
         requestedByUserId: REQUESTER,
         approvedByUserId: APPROVER,
         ticketUrl: "https://tickets/INC-1",
@@ -157,6 +160,31 @@ describe("openBreakGlassSession", () => {
     expect(handle.session.maxDurationMinutes).toBe(30);
     expect(handle.session.approvedByUserId).toBe(APPROVER);
     expect(handle.session.openedAt.toISOString()).toBe("2026-05-24T12:00:00.000Z");
+    // Persisted reason is "<code>: <detail>" so reports classify on
+    // the prefix while the row stays one column.
+    expect(handle.session.reason).toBe(
+      "stuck-workflow.recovery: order ORD-7 stuck after worker crash"
+    );
+  });
+
+  it("refuses PHI-shaped reason detail before anything is written", async () => {
+    const client = buildFakeClient();
+    const clock = clockNs.createFrozenClock(new Date("2026-05-24T12:00:00.000Z"));
+    await expect(
+      openBreakGlassSession({
+        client,
+        idFactory: makeIdFactory("s"),
+        actionIdFactory: makeIdFactory("a"),
+        clock,
+        session: {
+          reasonCode: BREAK_GLASS_SESSION_REASONS.DATA_REPAIR,
+          reasonDetail: "fix record for patient: Jane Doe, DOB: 1962-07-04",
+          requestedByUserId: REQUESTER,
+          ticketUrl: "https://tickets/INC-1",
+        },
+      })
+    ).rejects.toMatchObject({ code: BREAK_GLASS_LEDGER_TEXT_REJECTED });
+    expect(client.sessions).toHaveLength(0);
   });
 });
 
@@ -170,7 +198,7 @@ describe("BreakGlassSessionHandle.runAs", () => {
       actionIdFactory: makeIdFactory("a"),
       clock,
       session: {
-        reason: "investigate",
+        reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
         requestedByUserId: REQUESTER,
         ticketUrl: "https://tickets/INC-1",
       },
@@ -196,7 +224,7 @@ describe("BreakGlassSessionHandle.runAs", () => {
       actionIdFactory: makeIdFactory("a"),
       clock,
       session: {
-        reason: "investigate",
+        reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
         requestedByUserId: REQUESTER,
         ticketUrl: "https://tickets/INC-1",
       },
@@ -211,6 +239,68 @@ describe("BreakGlassSessionHandle.runAs", () => {
     expect(client.actions[0]?.errorMessage).toMatch(/connection reset/);
   });
 
+  it("refuses PHI-shaped parameters before the operation runs", async () => {
+    const client = buildFakeClient();
+    const clock = clockNs.createFrozenClock(new Date("2026-05-24T12:00:00.000Z"));
+    const handle = await openBreakGlassSession({
+      client,
+      idFactory: makeIdFactory("s"),
+      actionIdFactory: makeIdFactory("a"),
+      clock,
+      session: {
+        reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
+        requestedByUserId: REQUESTER,
+        ticketUrl: "https://tickets/INC-1",
+      },
+    });
+    let executed = false;
+    await expect(
+      handle.runAs(
+        {
+          actionLabel: "lookup_user",
+          parameters: { nested: ["contact is nurse@example-clinic.com"] },
+        },
+        async () => {
+          executed = true;
+          return "never";
+        }
+      )
+    ).rejects.toMatchObject({ code: BREAK_GLASS_LEDGER_TEXT_REJECTED });
+    // The gate is a pre-condition: nothing ran, nothing was recorded.
+    expect(executed).toBe(false);
+    expect(client.actions).toHaveLength(0);
+    expect(client.txReasons).toHaveLength(0);
+  });
+
+  it("redacts PHI-shaped error text in the failure ledger row instead of suppressing it", async () => {
+    const client = buildFakeClient();
+    const clock = clockNs.createFrozenClock(new Date("2026-05-24T12:00:00.000Z"));
+    const handle = await openBreakGlassSession({
+      client,
+      idFactory: makeIdFactory("s"),
+      actionIdFactory: makeIdFactory("a"),
+      clock,
+      session: {
+        reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
+        requestedByUserId: REQUESTER,
+        ticketUrl: "https://tickets/INC-1",
+      },
+    });
+    const leakyMessage = "duplicate key: patient: Jane Doe DOB: 1962-07-04";
+    await expect(
+      handle.runAs({ actionLabel: "repair_order" }, async () => {
+        throw new Error(leakyMessage);
+      })
+    ).rejects.toThrow(leakyMessage);
+    // The failure row exists (post-hoc redaction, not refusal) but
+    // carries the rule names, never the text.
+    expect(client.actions).toHaveLength(1);
+    expect(client.actions[0]?.success).toBe(false);
+    expect(client.actions[0]?.errorMessage).toContain("redacted");
+    expect(client.actions[0]?.errorMessage).not.toContain("Jane Doe");
+    expect(client.actions[0]?.errorMessage).not.toContain("1962-07-04");
+  });
+
   it("refuses to execute after the session has expired", async () => {
     const client = buildFakeClient();
     const mutable = clockNs.createAdvancingClock(new Date("2026-05-24T12:00:00.000Z"));
@@ -220,7 +310,7 @@ describe("BreakGlassSessionHandle.runAs", () => {
       actionIdFactory: makeIdFactory("a"),
       clock: mutable,
       session: {
-        reason: "investigate",
+        reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
         requestedByUserId: REQUESTER,
         ticketUrl: "https://tickets/INC-1",
         maxDurationMinutes: 1,
@@ -241,7 +331,7 @@ describe("BreakGlassSessionHandle.runAs", () => {
       actionIdFactory: makeIdFactory("a"),
       clock,
       session: {
-        reason: "investigate",
+        reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
         requestedByUserId: REQUESTER,
         ticketUrl: "https://tickets/INC-1",
       },
@@ -263,7 +353,7 @@ describe("closeBreakGlassSession", () => {
       actionIdFactory: makeIdFactory("a"),
       clock,
       session: {
-        reason: "investigate",
+        reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
         requestedByUserId: REQUESTER,
         ticketUrl: "https://tickets/INC-1",
       },
@@ -271,6 +361,37 @@ describe("closeBreakGlassSession", () => {
     await expect(
       closeBreakGlassSession(handle, { client, clock, resolution: "   " })
     ).rejects.toMatchObject({ code: "BREAK_GLASS_SESSION_RESOLUTION_REQUIRED" });
+  });
+
+  it("refuses a PHI-shaped resolution and leaves the session open for rewording", async () => {
+    const client = buildFakeClient();
+    const clock = clockNs.createFrozenClock(new Date("2026-05-24T12:00:00.000Z"));
+    const handle = await openBreakGlassSession({
+      client,
+      idFactory: makeIdFactory("s"),
+      actionIdFactory: makeIdFactory("a"),
+      clock,
+      session: {
+        reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
+        requestedByUserId: REQUESTER,
+        ticketUrl: "https://tickets/INC-1",
+      },
+    });
+    await expect(
+      closeBreakGlassSession(handle, {
+        client,
+        clock,
+        resolution: "resolved — reached patient at (415) 555-0132",
+      })
+    ).rejects.toMatchObject({ code: BREAK_GLASS_LEDGER_TEXT_REJECTED });
+    expect(handle.session.closedAt).toBeNull();
+    // Reworded without the PHI, the close goes through.
+    const closed = await closeBreakGlassSession(handle, {
+      client,
+      clock,
+      resolution: "resolved — outreach handled through the clinic per INC-1",
+    });
+    expect(closed.closedAt).not.toBeNull();
   });
 
   it("marks the session closed and refuses double-close", async () => {
@@ -282,7 +403,7 @@ describe("closeBreakGlassSession", () => {
       actionIdFactory: makeIdFactory("a"),
       clock,
       session: {
-        reason: "investigate",
+        reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
         requestedByUserId: REQUESTER,
         ticketUrl: "https://tickets/INC-1",
       },
