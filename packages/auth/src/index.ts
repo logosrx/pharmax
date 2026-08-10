@@ -164,6 +164,11 @@ export {
   type DeactivateUserInput,
   type DeactivateUserOutput,
 } from "./commands/deactivate-user.js";
+export {
+  SetThemePreference,
+  type SetThemePreferenceInput,
+  type SetThemePreferenceOutput,
+} from "./commands/set-theme-preference.js";
 export { issueInvite, acceptInvite } from "./invite.js";
 export {
   NOOP_PASSWORD_RESET_MAILER,
@@ -228,6 +233,7 @@ import * as resetPasswordModule from "./reset-password.js";
 import * as issueInviteModule from "./commands/issue-invite.js";
 import * as acceptInviteModule from "./commands/accept-invite.js";
 import * as deactivateUserModule from "./commands/deactivate-user.js";
+import * as setThemePreferenceModule from "./commands/set-theme-preference.js";
 import * as inviteModule from "./invite.js";
 import * as resetMailerModule from "./reset-mailer.js";
 import * as rateLimitModule from "./rate-limit.js";
@@ -263,6 +269,7 @@ export const auth = {
   ...issueInviteModule,
   ...acceptInviteModule,
   ...deactivateUserModule,
+  ...setThemePreferenceModule,
   ...inviteModule,
   ...resetMailerModule,
   ...rateLimitModule,

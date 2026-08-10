@@ -13,9 +13,11 @@ import { errors } from "@pharmax/platform-core";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 
+import { themeChoiceFromPreference } from "@/lib/theme";
 import { resolveOrganizationIdFromHost } from "@/server/auth/resolve-org-from-host";
 import { resolveWebAuthnRp } from "@/server/auth/webauthn-rp";
 import { setSessionCookie } from "@/server/auth/session-cookie";
+import { setThemeCookie } from "@/server/theme-cookie";
 
 const bodySchema = z.object({
   email: z.string().email(),
@@ -77,6 +79,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     });
     const response = NextResponse.json({ ok: true, userId: result.userId });
     setSessionCookie(response, result.rawToken);
+    // Seed the theme render-hint from the saved preference so the very
+    // first console paint on this device matches the account setting.
+    setThemeCookie(response, themeChoiceFromPreference(result.themePreference));
     return response;
   } catch (cause) {
     if (errors.isPharmaxError(cause)) {
