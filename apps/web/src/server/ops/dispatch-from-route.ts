@@ -25,6 +25,7 @@ import { NextResponse } from "next/server";
 import { logger } from "../logger.js";
 import { withSentryOpsScope } from "../observability/ops-scope.js";
 import { resolveOperatorTenancyContext } from "../auth/resolve-tenancy.js";
+import { OPS_REQUEST_BODY_INVALID, parseOpsRequestBody } from "./parse-request-body.js";
 
 /**
  * Optional scope narrowers that the route can resolve from the
@@ -112,12 +113,33 @@ export async function dispatchOpsCommand<TIn, TOut>(
     });
   }
 
-  const contentType = input.request.headers.get("content-type") ?? "";
-  const bodyKind: "form" | "json" = contentType.includes("application/json") ? "json" : "form";
-  const body: FormData | Record<string, unknown> =
-    bodyKind === "json"
-      ? ((await input.request.json().catch(() => ({}))) as Record<string, unknown>)
-      : await input.request.formData();
+  const resolveFailureRedirect = (): string =>
+    typeof input.failureRedirect === "function" ? input.failureRedirect() : input.failureRedirect;
+
+  // `error` is SET on the parsed target rather than templated onto the
+  // end of it, so a failure target may carry its own query string. The
+  // PV1 approve route uses that to name the order that was refused,
+  // which is how the queue links the pharmacist to the findings that
+  // blocked it instead of showing a code with no destination.
+  const failureRedirect = (payload: string): Response => {
+    const url = new URL(resolveFailureRedirect(), "http://internal");
+    url.searchParams.set("error", payload);
+    return NextResponse.redirect(url.toString(), { status: 303 });
+  };
+
+  // Guarded parse: a body that is neither form nor JSON (text/plain,
+  // no content type, truncated multipart) is a clean flash redirect,
+  // not an unhandled 500.
+  const parsed = await parseOpsRequestBody(input.request);
+  if (!parsed.ok) {
+    logger.warn(input.failureLogEvent, {
+      operatorUserId: session.operator.userId,
+      commandName: input.command.name,
+      code: OPS_REQUEST_BODY_INVALID,
+    });
+    return failureRedirect(parsed.error);
+  }
+  const { body, bodyKind } = parsed;
 
   // `buildInput` and `resolveTenancyExtras` may issue org-scoped
   // reads (e.g. the print-vial-label route looks up the order's site
@@ -156,20 +178,6 @@ export async function dispatchOpsCommand<TIn, TOut>(
     }
     return { kind: "ok" as const, built: builtInner as TIn, tenancyExtras: extrasInner };
   });
-
-  const resolveFailureRedirect = (): string =>
-    typeof input.failureRedirect === "function" ? input.failureRedirect() : input.failureRedirect;
-
-  // `error` is SET on the parsed target rather than templated onto the
-  // end of it, so a failure target may carry its own query string. The
-  // PV1 approve route uses that to name the order that was refused,
-  // which is how the queue links the pharmacist to the findings that
-  // blocked it instead of showing a code with no destination.
-  const failureRedirect = (payload: string): Response => {
-    const url = new URL(resolveFailureRedirect(), "http://internal");
-    url.searchParams.set("error", payload);
-    return NextResponse.redirect(url.toString(), { status: 303 });
-  };
 
   if (prepared.kind === "error") {
     return failureRedirect(prepared.error);
