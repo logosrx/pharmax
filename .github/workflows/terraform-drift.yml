@@ -138,9 +138,23 @@ jobs:
       - name: terraform plan -detailed-exitcode (prod / us-east-1)
         id: plan
         working-directory: infra/terraform/environments/prod/us-east-1
+        # Alerting subscription endpoints: the same secrets
+        # terraform-apply.yml feeds its plan. Without them this plan
+        # compares live subscriptions against an empty list and reports
+        # the difference as drift every night. See
+        # docs/runbooks/alerting.md § "Changing who gets paged".
+        env:
+          ALERTING_CRITICAL_EMAILS: ${{ secrets.ALERTING_CRITICAL_EMAIL_SUBSCRIPTIONS }}
+          ALERTING_WARNING_EMAILS: ${{ secrets.ALERTING_WARNING_EMAIL_SUBSCRIPTIONS }}
+          ALERTING_CRITICAL_HTTPS: ${{ secrets.ALERTING_CRITICAL_HTTPS_SUBSCRIPTIONS }}
+          ALERTING_WARNING_HTTPS: ${{ secrets.ALERTING_WARNING_HTTPS_SUBSCRIPTIONS }}
         # `set +e` so we can capture the exit code; -detailed-exitcode
         # returns 0 (no diff), 1 (error), or 2 (diff present).
         run: |
+          if [ -n "$ALERTING_CRITICAL_EMAILS" ]; then export TF_VAR_alerting_critical_email_subscriptions="$ALERTING_CRITICAL_EMAILS"; fi
+          if [ -n "$ALERTING_WARNING_EMAILS" ]; then export TF_VAR_alerting_warning_email_subscriptions="$ALERTING_WARNING_EMAILS"; fi
+          if [ -n "$ALERTING_CRITICAL_HTTPS" ]; then export TF_VAR_alerting_critical_https_subscriptions="$ALERTING_CRITICAL_HTTPS"; fi
+          if [ -n "$ALERTING_WARNING_HTTPS" ]; then export TF_VAR_alerting_warning_https_subscriptions="$ALERTING_WARNING_HTTPS"; fi
           set +e
           terraform plan -input=false -lock=false -detailed-exitcode -no-color \
             -var-file=terraform.tfvars \
@@ -260,7 +274,17 @@ jobs:
       - name: terraform plan -detailed-exitcode (prod / us-west-2)
         id: plan
         working-directory: infra/terraform/environments/prod/us-west-2
+        # Same subscription secrets as prod-ue1; see that job's comment.
+        env:
+          ALERTING_CRITICAL_EMAILS: ${{ secrets.ALERTING_CRITICAL_EMAIL_SUBSCRIPTIONS }}
+          ALERTING_WARNING_EMAILS: ${{ secrets.ALERTING_WARNING_EMAIL_SUBSCRIPTIONS }}
+          ALERTING_CRITICAL_HTTPS: ${{ secrets.ALERTING_CRITICAL_HTTPS_SUBSCRIPTIONS }}
+          ALERTING_WARNING_HTTPS: ${{ secrets.ALERTING_WARNING_HTTPS_SUBSCRIPTIONS }}
         run: |
+          if [ -n "$ALERTING_CRITICAL_EMAILS" ]; then export TF_VAR_alerting_critical_email_subscriptions="$ALERTING_CRITICAL_EMAILS"; fi
+          if [ -n "$ALERTING_WARNING_EMAILS" ]; then export TF_VAR_alerting_warning_email_subscriptions="$ALERTING_WARNING_EMAILS"; fi
+          if [ -n "$ALERTING_CRITICAL_HTTPS" ]; then export TF_VAR_alerting_critical_https_subscriptions="$ALERTING_CRITICAL_HTTPS"; fi
+          if [ -n "$ALERTING_WARNING_HTTPS" ]; then export TF_VAR_alerting_warning_https_subscriptions="$ALERTING_WARNING_HTTPS"; fi
           set +e
           terraform plan -input=false -lock=false -detailed-exitcode -no-color \
             -var-file=terraform.tfvars \
