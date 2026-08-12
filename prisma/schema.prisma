@@ -2776,6 +2776,16 @@ model Patient {
 //
 // Nothing from this table reaches a log, an audit metadata blob, or an
 // event payload except record ids and coded enum values.
+//
+// UPDATE is a COLUMN-LEVEL grant (migration
+// 20260816000000_patient_allergy_column_update_grant): only the status
+// columns and their change stamp are writable. Content — substance,
+// category, narrative — is corrected by retiring the record and
+// recording a new one, and the database now refuses an in-place recode
+// even if a future command tries one. This is what keeps
+// `patient_screening_acknowledgement.recordStateToken` honest: no
+// write path can flip a record's screenability without the ack hash
+// moving.
 model PatientAllergy {
   id             String       @id @default(uuid()) @db.Uuid
   organizationId String       @db.Uuid
