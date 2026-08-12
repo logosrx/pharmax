@@ -196,4 +196,40 @@ describe("RxnormReleaseModelBuilder — the NDC → ingredient chain", () => {
     const model = buildModel({});
     expect([...model.productIngredients.keys()].sort()).toEqual(["920001", "930001", "940001"]);
   });
+
+  it("still resolves when synonym atoms (PSN/SY/TMSY) share the concept's RXCUI", () => {
+    // A real release prints SEVERAL atoms per RXCUI: the defining atom
+    // (SCD, SCDC, IN, …) plus prescribable-name and synonym atoms on
+    // the same concept. A last-write-wins TTY map let whichever atom
+    // came last rename the concept — an SCD followed by its PSN row
+    // stopped looking like a product, and ~98% of a real release's
+    // NDCs were dropped as "no ingredients". Regression: interleave
+    // synonym atoms before AND after every defining atom; resolution
+    // must be identical to the plain fixture.
+    const model = buildModel({
+      conso: [
+        conso({ rxcui: "920001", tty: "SY", name: "FIXTURE-DRUG-ALFA-SYNONYM" }),
+        ...CONSO_LINES,
+        conso({ rxcui: "920001", tty: "PSN", name: "FIXTURE-DRUG-ALFA-PRESCRIBABLE" }),
+        conso({ rxcui: "930001", tty: "TMSY", name: "FIXTURE-BRAND-ALFA-TMSY" }),
+        conso({ rxcui: "940001", tty: "PSN", name: "FIXTURE-PACK-PRESCRIBABLE" }),
+        conso({ rxcui: "910001", tty: "SY", name: "FIXTURE-COMPONENT-ALFA-SYNONYM" }),
+        conso({ rxcui: "900001", tty: "SY", name: "FIXTURE-INGREDIENT-ALFA-SYNONYM" }),
+        conso({ rxcui: "900002", tty: "SY", name: "FIXTURE-PRECISE-ALFA-SYNONYM" }),
+      ],
+    });
+    for (const [ndc, product] of [
+      ["99999000101", "920001"],
+      ["99999000201", "930001"],
+      ["99999000301", "940001"],
+    ] as const) {
+      expect(model.ndcToProduct.get(ndc)).toBe(product);
+      expect(model.productIngredients.get(product)?.map((i) => i.rxcui)).toEqual([
+        "900001",
+        "900002",
+      ]);
+    }
+    // The ingredient TTY still reports the DEFINING type, not a synonym.
+    expect(model.productIngredients.get("920001")?.map((i) => i.tty)).toEqual(["IN", "PIN"]);
+  });
 });
