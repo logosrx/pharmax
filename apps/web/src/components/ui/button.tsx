@@ -22,13 +22,17 @@ export type ButtonSize = "sm" | "md" | "lg" | "icon";
 const BASE =
   "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium " +
   "transition-[background-color,border-color,color,box-shadow,transform] duration-150 " +
+  "ease-(--ease-out) " +
   "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring " +
-  "active:translate-y-px disabled:pointer-events-none disabled:opacity-50 select-none";
+  "active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 select-none";
 
 const VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    "bg-brand text-brand-fg shadow-sm hover:bg-brand-hover hover:shadow-md " +
-    "border border-transparent",
+    // Hairline top-light + contact shadow: reads as a machined key,
+    // not a flat fill. The inset highlight rides on brand-fg white.
+    "bg-brand text-brand-fg border border-transparent " +
+    "shadow-[inset_0_1px_0_rgb(255_255_255/0.16),0_1px_3px_rgb(0_0_0/0.28)] " +
+    "hover:bg-brand-hover hover:shadow-[inset_0_1px_0_rgb(255_255_255/0.16),0_4px_14px_-2px_color-mix(in_oklab,var(--brand)_55%,transparent)]",
   go:
     "border border-emerald-500/30 bg-emerald-500/15 text-tone-success-strong " +
     "hover:bg-emerald-500/25 hover:border-emerald-500/45",

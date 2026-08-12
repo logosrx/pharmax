@@ -7,8 +7,25 @@
 
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { Inter, JetBrains_Mono } from "next/font/google";
 
 import "./globals.css";
+
+// Self-hosted at build time by next/font — the CSS token layer
+// (`--font-sans` / `--font-mono` in globals.css) references these
+// variables first, so the whole console actually renders Inter +
+// JetBrains Mono instead of silently falling back to system fonts.
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Pharmax",
@@ -21,7 +38,11 @@ const THEME_BOOTSTRAP = `(function(){try{var t=localStorage.getItem("pharmax-the
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${inter.variable} ${jetbrainsMono.variable}`}
+      suppressHydrationWarning
+    >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>

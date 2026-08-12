@@ -28,9 +28,11 @@ export function PageHeader({
     <header className={cx("flex flex-wrap items-end justify-between gap-4", className)}>
       <div className="min-w-0 space-y-1.5">
         {eyebrow ? (
-          <p className="text-xs font-semibold uppercase tracking-caps text-subtle">{eyebrow}</p>
+          <p className="text-xs font-semibold uppercase tracking-caps text-tone-brand">{eyebrow}</p>
         ) : null}
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">{title}</h1>
+        <h1 className="text-[26px] leading-tight font-semibold tracking-tight text-fg text-balance">
+          {title}
+        </h1>
         {description ? <p className="max-w-2xl text-sm text-muted">{description}</p> : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
@@ -88,7 +90,7 @@ export function Toolbar({
   return (
     <div
       className={cx(
-        "flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2",
+        "card-sheen flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2",
         className
       )}
     >

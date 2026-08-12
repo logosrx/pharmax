@@ -40,20 +40,35 @@ export function Stat({
   return (
     <div
       className={cx(
-        "rounded-lg border border-line bg-surface p-4 shadow-xs transition-colors hover:border-line-strong",
+        "card-sheen group rounded-lg border border-line bg-surface p-4 " +
+          "transition-[border-color,box-shadow] duration-200 ease-(--ease-out) " +
+          "hover:border-line-strong hover:[box-shadow:var(--shadow-edge),var(--shadow-sm)]",
         className
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-subtle">{label}</p>
-        {icon ? <Icon name={icon} size={16} className={STAT_ACCENT[tone]} /> : null}
+        <p className="text-2xs font-semibold uppercase tracking-caps text-subtle">{label}</p>
+        {icon ? (
+          <span
+            className={cx(
+              "flex h-7 w-7 items-center justify-center rounded-md border border-line bg-surface-2 " +
+                "transition-transform duration-200 ease-(--ease-out) group-hover:scale-105",
+              STAT_ACCENT[tone]
+            )}
+          >
+            <Icon name={icon} size={14} />
+          </span>
+        ) : null}
       </div>
       <p
-        className={cx("mt-2 text-3xl font-semibold tracking-tight tabular-nums", STAT_ACCENT[tone])}
+        className={cx(
+          "mt-2.5 text-[28px] leading-none font-semibold tracking-tight tabular-nums",
+          STAT_ACCENT[tone]
+        )}
       >
         {value}
       </p>
-      {hint ? <p className="mt-1 text-xs text-muted">{hint}</p> : null}
+      {hint ? <p className="mt-2 text-xs text-muted">{hint}</p> : null}
     </div>
   );
 }
@@ -66,7 +81,7 @@ export function Table({
   readonly className?: string;
 }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-line bg-surface">
+    <div className="card-sheen overflow-hidden rounded-lg border border-line bg-surface">
       <div className="overflow-x-auto">
         <table className={cx("w-full border-collapse text-sm", className)}>{children}</table>
       </div>
@@ -76,7 +91,7 @@ export function Table({
 
 export function THead({ children }: { readonly children: ReactNode }) {
   return (
-    <thead className="border-b border-line bg-surface-2">
+    <thead className="border-b border-line bg-surface-2/70">
       <tr>{children}</tr>
     </thead>
   );
@@ -94,7 +109,7 @@ export function TH({
   return (
     <th
       className={cx(
-        "px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-subtle",
+        "px-4 py-2.5 text-2xs font-semibold uppercase tracking-caps text-subtle",
         align === "right" && "text-right",
         align === "center" && "text-center",
         align === "left" && "text-left",

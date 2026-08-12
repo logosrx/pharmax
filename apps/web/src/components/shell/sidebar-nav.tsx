@@ -123,20 +123,24 @@ export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup
                   title={collapsed ? item.label : undefined}
                   aria-current={isActive ? "page" : undefined}
                   className={cx(
-                    "group relative flex items-center gap-3 rounded-md px-2.5 py-2 text-sm transition-colors",
+                    "group relative flex items-center gap-3 rounded-md px-2.5 py-2 text-sm " +
+                      "transition-[background-color,color] duration-150 ease-(--ease-out)",
                     collapsed && "justify-center px-0",
                     isActive
-                      ? "bg-brand/12 font-medium text-fg"
+                      ? "bg-brand/12 font-medium text-fg shadow-(--shadow-edge)"
                       : "text-muted hover:bg-surface-2 hover:text-fg"
                   )}
                 >
                   {isActive ? (
-                    <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-brand" />
+                    <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-gradient-to-b from-iris-400 to-iris-600" />
                   ) : null}
                   <Icon
                     name={item.icon}
                     size={18}
-                    className={isActive ? "text-brand" : "text-subtle group-hover:text-fg"}
+                    className={cx(
+                      "transition-transform duration-150 ease-(--ease-out) group-hover:scale-110",
+                      isActive ? "text-brand" : "text-subtle group-hover:text-fg"
+                    )}
                   />
                   {!collapsed ? <span className="flex-1 truncate">{item.label}</span> : null}
                   {count !== undefined && count !== null && count > 0 ? (
@@ -145,7 +149,9 @@ export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup
                         "tabular-nums",
                         collapsed
                           ? "absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-brand"
-                          : "inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-line bg-surface-2 px-1.5 text-2xs font-semibold text-muted"
+                          : isActive
+                            ? "inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-brand/30 bg-brand/15 px-1.5 text-2xs font-semibold text-tone-brand"
+                            : "inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-line bg-surface-2 px-1.5 text-2xs font-semibold text-muted"
                       )}
                     >
                       {!collapsed ? (count > 99 ? "99+" : count) : null}

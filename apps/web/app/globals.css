@@ -20,12 +20,16 @@
  */
 
 @theme {
+  /* next/font (app/layout.tsx) self-hosts Inter + JetBrains Mono and
+     exposes them as --font-inter / --font-jetbrains-mono; the named
+     families remain as fallbacks for surfaces rendered outside the
+     root layout (emails, error pages). */
   --font-sans:
-    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    sans-serif;
+    var(--font-inter, "Inter"), "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono:
-    "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas,
-    monospace;
+    var(--font-jetbrains-mono, "JetBrains Mono"), "JetBrains Mono", ui-monospace, "SF Mono",
+    "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
 
   /* Brand — "iris": a refined indigo-violet. Deliberately not the
      cookie-cutter pharmacy green; green is reserved for "go". */
@@ -61,12 +65,18 @@
   --radius-xl: 1rem;
   --radius-2xl: 1.25rem;
 
-  /* Elevation — tuned for dark surfaces (subtle, never muddy). */
+  /* Elevation — tuned for dark surfaces (subtle, never muddy). Each
+     step pairs an ambient wash with a tighter contact shadow so
+     raised surfaces read as lit from above, not outlined. */
   --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.16);
   --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.24), 0 1px 2px -1px rgb(0 0 0 / 0.24);
   --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.32), 0 2px 6px -2px rgb(0 0 0 / 0.28);
   --shadow-lg: 0 16px 40px -8px rgb(0 0 0 / 0.44), 0 6px 16px -6px rgb(0 0 0 / 0.36);
   --shadow-glow: 0 0 0 1px rgb(107 102 241 / 0.4), 0 8px 28px -6px rgb(107 102 241 / 0.45);
+  /* Hairline top-light: the inset highlight that makes a dark surface
+     feel machined rather than flat. Pair with any drop shadow, e.g.
+     `shadow-edge` alone or via the .card-sheen component class. */
+  --shadow-edge: inset 0 1px 0 0 rgb(255 255 255 / 0.05);
 
   /* Motion — quick and confident; nothing floaty. */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -278,6 +288,83 @@
       color-mix(in oklab, var(--fg) 4%, transparent) 0%,
       transparent 120px
     );
+  }
+
+  /* Card material: top-lit sheen + hairline inset highlight. The
+     standard treatment for every raised surface (Card, Stat, Toolbar,
+     Table) so the whole console shares one "machined panel" finish. */
+  .card-sheen {
+    background-image: linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--fg) 3%, transparent) 0%,
+      transparent 64px
+    );
+    box-shadow: var(--shadow-edge), var(--shadow-xs);
+  }
+
+  /* Ambient canvas: a faint brand-tinted radial wash at the top of the
+     workspace. Applied once on the ops shell; gives the console depth
+     without competing with content. */
+  .ambient-canvas {
+    background-image:
+      radial-gradient(
+        1100px 480px at 78% -120px,
+        color-mix(in oklab, var(--brand) 8%, transparent),
+        transparent 70%
+      ),
+      radial-gradient(
+        900px 420px at -10% -160px,
+        color-mix(in oklab, var(--tone-cyan-accent) 5%, transparent),
+        transparent 70%
+      );
+    background-repeat: no-repeat;
+  }
+
+  /* Loading shimmer for Skeleton primitives. */
+  .skeleton {
+    border-radius: var(--radius-md);
+    background-color: var(--surface-2);
+    background-image: linear-gradient(
+      100deg,
+      transparent 32%,
+      color-mix(in oklab, var(--fg) 5%, transparent) 50%,
+      transparent 68%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+
+  /* Staggered entrance: children slide up in sequence. Put on grids
+     and lists of cards; costs nothing after first paint. */
+  .stagger-children > * {
+    animation: slide-up 0.35s var(--ease-out) both;
+  }
+  .stagger-children > *:nth-child(1) {
+    animation-delay: 0ms;
+  }
+  .stagger-children > *:nth-child(2) {
+    animation-delay: 30ms;
+  }
+  .stagger-children > *:nth-child(3) {
+    animation-delay: 60ms;
+  }
+  .stagger-children > *:nth-child(4) {
+    animation-delay: 90ms;
+  }
+  .stagger-children > *:nth-child(5) {
+    animation-delay: 120ms;
+  }
+  .stagger-children > *:nth-child(6) {
+    animation-delay: 150ms;
+  }
+  .stagger-children > *:nth-child(7) {
+    animation-delay: 180ms;
+  }
+  .stagger-children > *:nth-child(8) {
+    animation-delay: 210ms;
+  }
+  .stagger-children > *:nth-child(n + 9) {
+    animation-delay: 240ms;
   }
 }
 
