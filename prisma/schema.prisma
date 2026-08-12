@@ -100,6 +100,15 @@ enum UserStatus {
   TERMINATED
 }
 
+// Operator console UI theme, per user. DARK is the product default
+// (the console is designed dark-first); SYSTEM follows the device's
+// prefers-color-scheme. Purely cosmetic — no workflow meaning.
+enum UserThemePreference {
+  DARK
+  LIGHT
+  SYSTEM
+}
+
 enum RoleScope {
   ORGANIZATION
   SITE
@@ -1190,6 +1199,10 @@ model User {
   hashedPassword String?
   mfaEnrolled    Boolean    @default(false)
   lastLoginAt    DateTime?
+
+  // Console UI theme for this operator (self-service, see
+  // SetThemePreference). Cosmetic only.
+  themePreference UserThemePreference @default(DARK)
 
   // Bridge to the Clerk identity layer (see migration
   // `20260606000000_phase5_user_clerk_id`). Clerk owns auth

@@ -22,7 +22,7 @@
 // `mfaCode`, `webauthn` (input) and `rawToken` (output) are on the bus
 // redaction allowlist so they never reach `command_log`.
 
-import { WebAuthnCeremony } from "@pharmax/database";
+import { WebAuthnCeremony, type UserThemePreference } from "@pharmax/database";
 import type { SystemCommand, SystemHandlerResult } from "@pharmax/command-bus";
 import { z } from "zod";
 
@@ -69,6 +69,8 @@ export interface SignInOutput {
   /** Bearer session token. Redacted from command_log; returned to caller. */
   readonly rawToken: string;
   readonly mfaSatisfied: boolean;
+  /** Saved console theme — lets the web tier seed the theme cookie at login. */
+  readonly themePreference: UserThemePreference;
 }
 
 export const SignIn: SystemCommand<SignInInput, SignInOutput> = {
@@ -187,7 +189,11 @@ export const SignIn: SystemCommand<SignInInput, SignInOutput> = {
       config,
     });
 
-    await tx.user.update({ where: { id: userId }, data: { lastLoginAt: now } });
+    const { themePreference } = await tx.user.update({
+      where: { id: userId },
+      data: { lastLoginAt: now },
+      select: { themePreference: true },
+    });
 
     const output: SignInOutput = {
       userId,
@@ -195,6 +201,7 @@ export const SignIn: SystemCommand<SignInInput, SignInOutput> = {
       sessionId: session.sessionId,
       rawToken: session.rawToken,
       mfaSatisfied: true,
+      themePreference,
     };
 
     return {

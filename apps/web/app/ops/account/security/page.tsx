@@ -11,6 +11,7 @@ import { PageHeader, Section } from "../../../../src/components/ui/page.js";
 import { Table, THead, TH, TBody, TR, TD } from "../../../../src/components/ui/data.js";
 import { Badge } from "../../../../src/components/ui/badge.js";
 import { EmptyState } from "../../../../src/components/ui/feedback.js";
+import { AccountNav } from "../../../../src/components/account/account-nav.js";
 import { WebAuthnRegister } from "../../../../src/components/auth/webauthn-register.js";
 import { resolveOperatorTenancyContext } from "../../../../src/server/auth/resolve-tenancy.js";
 import { getAccountSecurity } from "../../../../src/server/ops/get-account-security.js";
@@ -35,6 +36,8 @@ export default async function AccountSecurityPage() {
         title="Security"
         description="Second factors protecting your sign-in."
       />
+
+      <AccountNav />
 
       <Section title="Authenticator app">
         {security.totpEnrolled ? (

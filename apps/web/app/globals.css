@@ -418,3 +418,17 @@
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Theme-aware brand wordmark (see src/components/shell/brand.tsx):
+   the dark-surface variant renders by default; the `.light` root class
+   (set by THEME_BOOTSTRAP in app/layout.tsx) swaps in the charcoal
+   variant. CSS-only so the logo is correct on first paint. */
+.brand-wordmark-on-light {
+  display: none;
+}
+.light .brand-wordmark-on-light {
+  display: inline-block;
+}
+.light .brand-wordmark-on-dark {
+  display: none;
+}

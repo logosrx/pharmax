@@ -31,10 +31,11 @@ import {
 } from "../../src/server/auth/resolve-tenancy.js";
 import { getQueueCounts } from "../../src/server/ops/get-queue-counts.js";
 import { LiveQueueCountsProvider } from "../../src/components/shell/live-queue-counts.js";
+import { BrandMark } from "../../src/components/shell/brand.js";
 import { SidebarNav, type NavGroup, type NavLink } from "../../src/components/shell/sidebar-nav.js";
 import { OrderSearch } from "../../src/components/shell/order-search.js";
 import { ThemeToggle } from "../../src/components/shell/theme-toggle.js";
-import { Icon, type IconName } from "../../src/components/ui/icon.js";
+import { type IconName } from "../../src/components/ui/icon.js";
 import { EmptyState } from "../../src/components/ui/feedback.js";
 
 interface NavSpec {
@@ -357,9 +358,7 @@ export default async function OpsLayout({ children }: Readonly<{ children: React
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur-md sm:px-6">
             <div className="flex items-center gap-2 sm:hidden">
-              <span className="flex h-8 w-8 items-center justify-center rounded-md bg-brand text-brand-fg">
-                <Icon name="pill" size={18} />
-              </span>
+              <BrandMark className="h-8 w-8" />
             </div>
             <OrderSearch />
             <div className="ml-auto flex items-center gap-3">

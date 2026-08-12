@@ -123,6 +123,7 @@ export {
   StripeWebhookEventStatus,
   TeamStatus,
   UserStatus,
+  UserThemePreference,
   VerificationDecision,
   VerificationStage,
   WebAuthnCeremony,
