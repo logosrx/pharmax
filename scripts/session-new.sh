@@ -118,11 +118,41 @@ if [ -e "$dir" ]; then
   exit 1
 fi
 
+# Fail BEFORE touching any state if the sibling directory cannot be
+# created. The agent sandbox allows writes only inside the workspace,
+# and $dir is a sibling of the primary checkout by design — so a
+# sandboxed run used to get partway: `git worktree add -b` writes the
+# branch ref (inside the repo, allowed) before creating the directory
+# (outside, denied), leaving a half-made branch and no worktree.
+parent=$(dirname "$dir")
+probe="$parent/.session-new-probe-$$"
+if ! mkdir "$probe" 2>/dev/null; then
+  cat >&2 <<EOF
+session:new: cannot create directories in $parent.
+
+Worktrees are siblings of the primary checkout, so this script needs
+write access OUTSIDE the repository. If this is a sandboxed agent
+session, re-run the command with sandboxing disabled (in Cursor:
+required_permissions ["all"]). Nothing has been created or changed.
+EOF
+  exit 1
+fi
+rmdir "$probe"
+
 echo "[session:new] fetching $base"
 git fetch origin --quiet || echo "[session:new] fetch failed; using the local $base" >&2
 
 echo "[session:new] creating worktree $dir on $branch (from $base)"
-git worktree add -b "$branch" "$dir" "$base"
+# Belt and braces for failure modes the probe cannot see (disk full,
+# a race on $dir): if worktree creation fails, remove the branch ref
+# it may already have written — we verified above that $branch did not
+# exist, so deleting it cannot destroy anyone's work.
+if ! git worktree add -b "$branch" "$dir" "$base"; then
+  git branch -D "$branch" >/dev/null 2>&1 || true
+  git worktree prune >/dev/null 2>&1 || true
+  echo "session:new: worktree creation failed; branch \"$branch\" was rolled back." >&2
+  exit 1
+fi
 
 # Symlink rather than copy: secrets should exist once on disk, and a
 # rotated value should reach every worktree at the same moment.
