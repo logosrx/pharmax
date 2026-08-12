@@ -271,16 +271,25 @@ resource "aws_s3_bucket_policy" "this" {
     # the plan verifies. Add a statement without documenting it — or document
     # one without adding it, which is the failure this module actually
     # suffered — and the plan stops here.
+    #
+    # `sort(keys(...))`, not bare `keys(...)`: keys() on an object literal
+    # returns a TUPLE, sort() returns a LIST, and Terraform's `==` is false
+    # for equal elements of unequal types. The bare form made this
+    # precondition unconditionally false — which no pipeline noticed,
+    # because the drift job was silently skipping (AWS_DRIFT_ROLE_ARN
+    # unset) and no reviewer-gated apply had run since it landed. sort()
+    # normalises both sides to list(string); keys() is already ordered, so
+    # the extra sort changes nothing but the type.
     precondition {
       condition = sort([
         for statement in jsondecode(data.aws_iam_policy_document.bucket.json).Statement :
         statement.Sid
-      ]) == keys(local.bucket_policy_denies)
+      ]) == sort(keys(local.bucket_policy_denies))
 
       error_message = format(
         "Audit-archive bucket policy drift: rendered sids %v do not match the documented set %v in local.bucket_policy_denies.",
         sort([for s in jsondecode(data.aws_iam_policy_document.bucket.json).Statement : s.Sid]),
-        keys(local.bucket_policy_denies)
+        sort(keys(local.bucket_policy_denies))
       )
     }
   }
