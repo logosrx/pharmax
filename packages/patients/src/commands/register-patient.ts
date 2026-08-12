@@ -303,6 +303,7 @@ export const RegisterPatient: Command<RegisterPatientInput, RegisterPatientOutpu
           // check and the insert would land here.
           throw new errors.ConflictError({
             code: "PATIENT_CLINIC_RACE",
+            cause: err,
             message: "Clinic was modified concurrently. Retry the registration.",
             metadata: { clinicId: input.clinicId },
           });

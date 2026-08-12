@@ -159,6 +159,7 @@ export const RecordShipmentTrackingEvent: Command<
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
         throw new errors.ConflictError({
           code: SHIPMENT_TRACKING_DUPLICATE_EVENT,
+          cause: err,
           message: "This carrier tracking event has already been recorded for this organization.",
           metadata: {
             shipmentId: shipment.id,

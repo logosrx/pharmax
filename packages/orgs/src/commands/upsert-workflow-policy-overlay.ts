@@ -389,6 +389,7 @@ export const UpsertWorkflowPolicyOverlay: Command<
       if (cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2002") {
         throw new errors.ConflictError({
           code: UPSERT_OVERLAY_ACTIVE_RACE,
+          cause,
           message:
             "A concurrent UpsertWorkflowPolicyOverlay already activated an overlay for this scope. Refresh and retry.",
           metadata: {

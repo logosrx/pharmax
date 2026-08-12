@@ -207,6 +207,7 @@ export const ReceiveLot: Command<ReceiveLotInput, ReceiveLotOutput> = {
         if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
           throw new errors.ConflictError({
             code: INVENTORY_RECEIPT_CONFLICT,
+            cause: err,
             message: "A concurrent receipt created this lot; retry the receipt.",
             metadata: { lotNumber: input.lotNumber },
           });

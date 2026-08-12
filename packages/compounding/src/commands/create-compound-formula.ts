@@ -312,6 +312,7 @@ export const CreateCompoundFormula: Command<
         // version.)
         throw new errors.ConflictError({
           code: COMPOUND_FORMULA_DRAFT_EXISTS,
+          cause: err,
           message: `A draft of formula ${input.code} already exists; publish or discard it before drafting again.`,
           metadata: { code: input.code },
         });
