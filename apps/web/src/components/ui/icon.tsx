@@ -198,6 +198,12 @@ const ICON_PATHS = {
     </>
   ),
   moon: <path d="M20 13.5A8 8 0 1 1 10.5 4a6.2 6.2 0 0 0 9.5 9.5Z" />,
+  monitor: (
+    <>
+      <rect x="3" y="4" width="18" height="13" rx="2" />
+      <path d="M8 21h8M12 17v4" />
+    </>
+  ),
   settings: (
     <>
       <circle cx="12" cy="12" r="3" />

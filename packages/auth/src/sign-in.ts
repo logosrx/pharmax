@@ -14,7 +14,7 @@
 // web route just calls `signIn(...)` and sets the returned cookie.
 
 import { errors } from "@pharmax/platform-core";
-import { LoginOutcome } from "@pharmax/database";
+import { LoginOutcome, type UserThemePreference } from "@pharmax/database";
 import { executeSystemCommand } from "@pharmax/command-bus";
 import { withSystemContext } from "@pharmax/tenancy";
 
@@ -36,6 +36,8 @@ export interface SignInResult {
   readonly sessionId: string;
   /** Bearer token to set as the session cookie. */
   readonly rawToken: string;
+  /** Saved console theme — the route seeds the theme cookie from this. */
+  readonly themePreference: UserThemePreference;
 }
 
 export async function signIn(input: SignInInput): Promise<SignInResult> {
@@ -95,6 +97,7 @@ export async function signIn(input: SignInInput): Promise<SignInResult> {
     organizationId: result.organizationId,
     sessionId: result.sessionId,
     rawToken: result.rawToken,
+    themePreference: result.themePreference,
   };
 }
 
