@@ -8,7 +8,7 @@
 
 import type { ReactNode } from "react";
 
-import { Icon } from "../ui/icon.js";
+import { BrandWordmark } from "./brand.js";
 
 export const clerkAppearance = {
   variables: {
@@ -58,10 +58,8 @@ export function AuthShell({
         }}
       />
       <div className="relative w-full max-w-md space-y-8">
-        <div className="flex flex-col items-center gap-3 text-center">
-          <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand text-brand-fg shadow-glow">
-            <Icon name="pill" size={24} />
-          </span>
+        <div className="flex flex-col items-center gap-4 text-center">
+          <BrandWordmark className="h-8" />
           <div className="space-y-1">
             <h1 className="text-2xl font-semibold tracking-tight text-fg">{title}</h1>
             {subtitle ? <p className="text-sm text-muted">{subtitle}</p> : null}

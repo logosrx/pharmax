@@ -1,4 +1,7 @@
-# Pharmax
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/brand/pharmax-wordmark-dark.svg">
+  <img src="apps/web/public/brand/pharmax-wordmark-light.svg" alt="Pharmax" width="340">
+</picture>
 
 Enterprise Pharmacy Operating System
 
