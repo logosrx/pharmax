@@ -137,7 +137,15 @@ function addToMultiMap(map: Map<string, Set<string>>, key: string, value: string
  * oriented by TTY only at build time.
  */
 export class RxnormReleaseModelBuilder {
-  private readonly ttyByRxcui = new Map<string, string>();
+  // A concept carries a SET of term types, not one. Every RXCUI in the
+  // Prescribable Content release has one DEFINING atom (SCD, SCDC, IN,
+  // …) and usually several SYNONYM atoms on the same RXCUI — PSN
+  // (prescribable name), SY, TMSY. A `Map<rxcui, tty>` with
+  // last-write-wins let whichever atom happened to be printed last
+  // rename the concept: an SCD whose PSN row followed it stopped
+  // looking like a product, its NDCs were dropped as
+  // "no ingredients", and a real release shrank by ~98%.
+  private readonly ttysByRxcui = new Map<string, Set<string>>();
   private readonly nameByRxcui = new Map<string, string>();
   private readonly edges: RelEdge[] = [];
   private readonly ndcToProduct = new Map<string, string>();
@@ -152,7 +160,7 @@ export class RxnormReleaseModelBuilder {
     const tty = f[CONSO_TTY];
     const name = f[CONSO_STR];
     if (rxcui === undefined || rxcui.length === 0 || tty === undefined) return;
-    this.ttyByRxcui.set(rxcui, tty);
+    addToMultiMap(this.ttysByRxcui, rxcui, tty);
     if (name !== undefined && !this.nameByRxcui.has(rxcui)) {
       this.nameByRxcui.set(rxcui, name);
     }
@@ -183,9 +191,16 @@ export class RxnormReleaseModelBuilder {
   }
 
   build(): RxnormReleaseModel {
-    const tty = (rxcui: string): string | undefined => this.ttyByRxcui.get(rxcui);
-    const isProduct = (rxcui: string): boolean =>
-      (RXNORM_PRODUCT_TTYS as ReadonlyArray<string>).includes(tty(rxcui) ?? "");
+    // Membership, not equality: a concept "is" an SCD if ANY of its
+    // atoms is the SCD atom, regardless of how many synonym atoms
+    // (PSN/SY/TMSY) share the RXCUI. A concept never carries two
+    // DIFFERENT defining TTYs, so membership tests stay unambiguous.
+    const hasTty = (rxcui: string, ...wanted: ReadonlyArray<string>): boolean => {
+      const ttys = this.ttysByRxcui.get(rxcui);
+      if (ttys === undefined) return false;
+      return wanted.some((t) => ttys.has(t));
+    };
+    const isProduct = (rxcui: string): boolean => hasTty(rxcui, ...RXNORM_PRODUCT_TTYS);
 
     // Orient every edge by the TTY of its ends. An edge whose ends do
     // not match its family's expected shape is skipped — a release
@@ -198,72 +213,62 @@ export class RxnormReleaseModelBuilder {
     const packContents = new Map<string, Set<string>>(); // GPCK/BPCK → SCD/SBD
 
     for (const edge of this.edges) {
-      const ttyA = tty(edge.a);
-      const ttyB = tty(edge.b);
-      if (ttyA === undefined || ttyB === undefined) continue;
-
       switch (edge.family) {
         case "COMPONENT": {
-          const drug =
-            ttyA === "SCD" || ttyA === "SBD"
-              ? edge.a
-              : ttyB === "SCD" || ttyB === "SBD"
-                ? edge.b
-                : null;
-          const component =
-            ttyA === "SCDC" || ttyA === "SBDC"
-              ? edge.a
-              : ttyB === "SCDC" || ttyB === "SBDC"
-                ? edge.b
-                : null;
+          const drug = hasTty(edge.a, "SCD", "SBD")
+            ? edge.a
+            : hasTty(edge.b, "SCD", "SBD")
+              ? edge.b
+              : null;
+          const component = hasTty(edge.a, "SCDC", "SBDC")
+            ? edge.a
+            : hasTty(edge.b, "SCDC", "SBDC")
+              ? edge.b
+              : null;
           if (drug !== null && component !== null) addToMultiMap(componentsOfDrug, drug, component);
           break;
         }
         case "INGREDIENT": {
-          const component =
-            ttyA === "SCDC" || ttyA === "SBDC"
-              ? edge.a
-              : ttyB === "SCDC" || ttyB === "SBDC"
-                ? edge.b
-                : null;
-          const ingredient = ttyA === "IN" ? edge.a : ttyB === "IN" ? edge.b : null;
+          const component = hasTty(edge.a, "SCDC", "SBDC")
+            ? edge.a
+            : hasTty(edge.b, "SCDC", "SBDC")
+              ? edge.b
+              : null;
+          const ingredient = hasTty(edge.a, "IN") ? edge.a : hasTty(edge.b, "IN") ? edge.b : null;
           if (component !== null && ingredient !== null) {
             addToMultiMap(ingredientsOfComponent, component, ingredient);
           }
           break;
         }
         case "PRECISE_INGREDIENT": {
-          const component =
-            ttyA === "SCDC" || ttyA === "SBDC"
-              ? edge.a
-              : ttyB === "SCDC" || ttyB === "SBDC"
-                ? edge.b
-                : null;
-          const precise = ttyA === "PIN" ? edge.a : ttyB === "PIN" ? edge.b : null;
+          const component = hasTty(edge.a, "SCDC", "SBDC")
+            ? edge.a
+            : hasTty(edge.b, "SCDC", "SBDC")
+              ? edge.b
+              : null;
+          const precise = hasTty(edge.a, "PIN") ? edge.a : hasTty(edge.b, "PIN") ? edge.b : null;
           if (component !== null && precise !== null) {
             addToMultiMap(preciseIngredientsOfComponent, component, precise);
           }
           break;
         }
         case "TRADENAME": {
-          const brand = ttyA === "SBD" ? edge.a : ttyB === "SBD" ? edge.b : null;
-          const generic = ttyA === "SCD" ? edge.a : ttyB === "SCD" ? edge.b : null;
+          const brand = hasTty(edge.a, "SBD") ? edge.a : hasTty(edge.b, "SBD") ? edge.b : null;
+          const generic = hasTty(edge.a, "SCD") ? edge.a : hasTty(edge.b, "SCD") ? edge.b : null;
           if (brand !== null && generic !== null) addToMultiMap(genericOfBrand, brand, generic);
           break;
         }
         case "CONTAINS": {
-          const pack =
-            ttyA === "GPCK" || ttyA === "BPCK"
-              ? edge.a
-              : ttyB === "GPCK" || ttyB === "BPCK"
-                ? edge.b
-                : null;
-          const contained =
-            ttyA === "SCD" || ttyA === "SBD"
-              ? edge.a
-              : ttyB === "SCD" || ttyB === "SBD"
-                ? edge.b
-                : null;
+          const pack = hasTty(edge.a, "GPCK", "BPCK")
+            ? edge.a
+            : hasTty(edge.b, "GPCK", "BPCK")
+              ? edge.b
+              : null;
+          const contained = hasTty(edge.a, "SCD", "SBD")
+            ? edge.a
+            : hasTty(edge.b, "SCD", "SBD")
+              ? edge.b
+              : null;
           if (pack !== null && contained !== null) addToMultiMap(packContents, pack, contained);
           break;
         }
@@ -284,7 +289,7 @@ export class RxnormReleaseModelBuilder {
           for (const rxcui of set ?? []) {
             out.set(rxcui, {
               rxcui,
-              tty: tty(rxcui) ?? "IN",
+              tty: hasTty(rxcui, "PIN") ? "PIN" : "IN",
               name: this.nameByRxcui.get(rxcui) ?? "",
             });
           }
@@ -294,33 +299,27 @@ export class RxnormReleaseModelBuilder {
     };
 
     const resolveProduct = (rxcui: string): Map<string, RxnormIngredient> => {
-      const productTty = tty(rxcui);
-      switch (productTty) {
-        case "SCD":
-          return ingredientsOfDrug(rxcui);
-        case "SBD": {
-          // A brand drug's own SBDC edges name the brand; the
-          // pharmacology lives on the generic clinical drug it is a
-          // tradename of.
-          const direct = ingredientsOfDrug(rxcui);
-          if (direct.size > 0) return direct;
-          const merged = new Map<string, RxnormIngredient>();
-          for (const generic of genericOfBrand.get(rxcui) ?? []) {
-            for (const [key, value] of ingredientsOfDrug(generic)) merged.set(key, value);
-          }
-          return merged;
+      if (hasTty(rxcui, "SCD")) return ingredientsOfDrug(rxcui);
+      if (hasTty(rxcui, "SBD")) {
+        // A brand drug's own SBDC edges name the brand; the
+        // pharmacology lives on the generic clinical drug it is a
+        // tradename of.
+        const direct = ingredientsOfDrug(rxcui);
+        if (direct.size > 0) return direct;
+        const merged = new Map<string, RxnormIngredient>();
+        for (const generic of genericOfBrand.get(rxcui) ?? []) {
+          for (const [key, value] of ingredientsOfDrug(generic)) merged.set(key, value);
         }
-        case "GPCK":
-        case "BPCK": {
-          const merged = new Map<string, RxnormIngredient>();
-          for (const contained of packContents.get(rxcui) ?? []) {
-            for (const [key, value] of resolveProduct(contained)) merged.set(key, value);
-          }
-          return merged;
-        }
-        default:
-          return new Map();
+        return merged;
       }
+      if (hasTty(rxcui, "GPCK", "BPCK")) {
+        const merged = new Map<string, RxnormIngredient>();
+        for (const contained of packContents.get(rxcui) ?? []) {
+          for (const [key, value] of resolveProduct(contained)) merged.set(key, value);
+        }
+        return merged;
+      }
+      return new Map();
     };
 
     const productIngredients = new Map<string, ReadonlyArray<RxnormIngredient>>();
