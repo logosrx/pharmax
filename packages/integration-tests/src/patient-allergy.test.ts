@@ -263,6 +263,47 @@ describe("patient_allergy — corrected, never deleted", () => {
     }
   });
 
+  it("denies an in-place recode of content columns", async () => {
+    // The UPDATE grant is column-level: status columns and their change
+    // stamp only. Content — what the allergy IS — is corrected by
+    // retiring the record and recording a new one. This is the
+    // structural guard behind patient-scoped screening acknowledgements:
+    // recordStateToken hashes the allergy-record neighbourhood, and a
+    // recode-in-place that flipped screenability without moving that
+    // hash would leave a stale acknowledgement standing over findings
+    // the pharmacist never saw. No command does this today; this test
+    // is here so one cannot be written without a migration diff.
+    const allergyId = await insertAllergy(owner, tenantA, patientA);
+    const app = await connect("app");
+    try {
+      await setTenantContext(app, tenantA.organizationId);
+
+      const recodes: ReadonlyArray<[string, string]> = [
+        [`"substanceCode" = 'TEST-INGREDIENT-2'`, "substance"],
+        [`"substanceCodeSystem" = 'UNCODED', "substanceCode" = NULL`, "code system"],
+        [`category = 'FOOD'`, "category"],
+        [`"patientId" = '${patientB}'`, "patient"],
+      ];
+      for (const [setClause] of recodes) {
+        await expect(
+          app.query(`UPDATE patient_allergy SET ${setClause} WHERE id = $1`, [allergyId])
+        ).rejects.toMatchObject({ code: PG_INSUFFICIENT_PRIVILEGE });
+      }
+
+      // The record is untouched.
+      const still = await app.query(
+        `SELECT "substanceCode", category::text AS category FROM patient_allergy WHERE id = $1`,
+        [allergyId]
+      );
+      expect(still.rows[0]).toMatchObject({
+        substanceCode: "TEST-INGREDIENT-1",
+        category: "MEDICATION",
+      });
+    } finally {
+      await app.end();
+    }
+  });
+
   it("denies UPDATE and DELETE on a history assertion", async () => {
     // Stronger posture than the allergy table: an assertion is
     // append-only, because a superseded one is the record of who said
