@@ -540,11 +540,20 @@ TF_VAR_alerting_warning_email_subscriptions='["<shift-mailbox>"]' \
   terraform plan -var-file=terraform.tfvars
 ```
 
-In CI, those come from the gated `production` GitHub Environment's
-secrets, which is also the reason a subscription change is a
+In CI, those come from **repository-level** secrets named
+`ALERTING_CRITICAL_EMAIL_SUBSCRIPTIONS`,
+`ALERTING_WARNING_EMAIL_SUBSCRIPTIONS`,
+`ALERTING_CRITICAL_HTTPS_SUBSCRIPTIONS`, and
+`ALERTING_WARNING_HTTPS_SUBSCRIPTIONS` — each a JSON list, e.g.
+`["oncall@example.com"]`. They are repo-level rather than
+environment-scoped because the variables must be present at **plan**
+time (the gated apply replays the saved plan binary and accepts no new
+variables), and the plan job is intentionally ungated so the reviewer
+sees the rendered plan before approving. The apply itself is still
+reviewer-gated, which is why a subscription change is a
 reviewer-approved apply and not a console edit. A console-added
-subscription is drift: the nightly `terraform-drift` job will flag it,
-and the next apply will remove it.
+subscription is drift: the nightly `terraform-drift` job plans with the
+same secrets and will flag it, and the next apply will remove it.
 
 To rotate a paging webhook, update the secret and re-apply; the old
 subscription is destroyed and the new one created. Test with the

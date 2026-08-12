@@ -359,7 +359,29 @@ jobs:
       - name: terraform plan -out=tfplan
         id: plan
         working-directory: ${{ env.WORK_DIR }}
+        # Alerting subscription endpoints (docs/runbooks/alerting.md
+        # § "Changing who gets paged"): never committed, supplied from the
+        # secret store at plan time. Plan time, not apply time, because
+        # `terraform apply tfplan` replays the saved plan binary and accepts
+        # no new variables — a value missing here is missing from the apply.
+        # Repo-level secrets rather than environment secrets because this
+        # job is intentionally ungated: the reviewer must see the rendered
+        # plan, subscription changes included, before approving the apply.
+        # Each secret holds a JSON list, e.g. '["oncall@example.com"]'.
+        env:
+          ALERTING_CRITICAL_EMAILS: ${{ secrets.ALERTING_CRITICAL_EMAIL_SUBSCRIPTIONS }}
+          ALERTING_WARNING_EMAILS: ${{ secrets.ALERTING_WARNING_EMAIL_SUBSCRIPTIONS }}
+          ALERTING_CRITICAL_HTTPS: ${{ secrets.ALERTING_CRITICAL_HTTPS_SUBSCRIPTIONS }}
+          ALERTING_WARNING_HTTPS: ${{ secrets.ALERTING_WARNING_HTTPS_SUBSCRIPTIONS }}
         run: |
+          # Unset secrets stay unset: exporting an empty string would fail
+          # list(string) parsing, and staging legitimately has no
+          # subscribers configured.
+          if [ -n "$ALERTING_CRITICAL_EMAILS" ]; then export TF_VAR_alerting_critical_email_subscriptions="$ALERTING_CRITICAL_EMAILS"; fi
+          if [ -n "$ALERTING_WARNING_EMAILS" ]; then export TF_VAR_alerting_warning_email_subscriptions="$ALERTING_WARNING_EMAILS"; fi
+          if [ -n "$ALERTING_CRITICAL_HTTPS" ]; then export TF_VAR_alerting_critical_https_subscriptions="$ALERTING_CRITICAL_HTTPS"; fi
+          if [ -n "$ALERTING_WARNING_HTTPS" ]; then export TF_VAR_alerting_warning_https_subscriptions="$ALERTING_WARNING_HTTPS"; fi
+
           # -detailed-exitcode: 0=no diff, 1=error, 2=diff present.
           # -lock=false: the read-only plan role cannot write the DynamoDB
           # state lock, and a plan mutates nothing. Skipping the lock is safe
