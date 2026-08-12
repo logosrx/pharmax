@@ -190,6 +190,7 @@ export const UpsertPricingRule: Command<UpsertPricingRuleInput, UpsertPricingRul
         // new ACTIVE row. The partial-unique stopped us.
         throw new errors.ConflictError({
           code: UPSERT_PRICING_RULE_ACTIVE_RACE,
+          cause,
           message:
             "A concurrent UpsertPricingRule already created an ACTIVE rule for this scope. Refresh and retry.",
           metadata: {

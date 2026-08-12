@@ -107,6 +107,7 @@ export const SubmitProviderOnboardingApplication: Command<
         // per prescriber per org.
         throw new errors.ConflictError({
           code: PROVIDER_ONBOARDING_ALREADY_OPEN,
+          cause: err,
           message: `An onboarding application for NPI ${input.npi} is already open in this organization.`,
           metadata: { npi: input.npi },
         });

@@ -152,6 +152,7 @@ export const RegisterProvider: Command<RegisterProviderInput, RegisterProviderOu
         // operator-facing message.
         throw new errors.ConflictError({
           code: "PROVIDER_NPI_TAKEN",
+          cause: err,
           message: `A provider with NPI ${input.npi} is already registered in this organization.`,
           metadata: { npi: input.npi },
         });

@@ -124,6 +124,7 @@ export const PublishCompoundFormula: Command<
         // typed conflict and a decision to make, not a race to win.
         throw new errors.ConflictError({
           code: COMPOUND_FORMULA_PRODUCT_ALREADY_CLAIMED,
+          cause: err,
           message:
             "Another ACTIVE formula already claims this draft's compound product. " +
             "Retire it (or publish a new version of it without the product link) before publishing this one.",

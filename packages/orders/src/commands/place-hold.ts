@@ -286,6 +286,7 @@ export const PlaceHold = defineCommand<PlaceHoldInput, PlaceHoldOutput>({
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
         throw new errors.ConflictError({
           code: ORDER_ALREADY_ON_HOLD,
+          cause: err,
           message: "This order already has an active hold; release it before placing another.",
           metadata: { orderId: target.id },
         });

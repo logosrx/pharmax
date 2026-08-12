@@ -544,6 +544,7 @@ export const CreatePrescription: Command<CreatePrescriptionInput, CreatePrescrip
         // silently overwriting a real prescription.
         throw new errors.ConflictError({
           code: RX_NUMBER_COLLISION,
+          cause: err,
           message: "The allocated prescription number is already in use. Retry the transcription.",
           metadata: { clinicId: input.clinicId, rxNumber },
         });

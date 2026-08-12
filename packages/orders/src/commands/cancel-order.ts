@@ -326,6 +326,7 @@ export const CancelOrder = defineCommand<CancelOrderInput, CancelOrderOutput>({
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
         throw new errors.ConflictError({
           code: ORDER_ALREADY_CANCELLED,
+          cause: err,
           message: "This order has already been cancelled.",
           metadata: { orderId: target.id },
         });

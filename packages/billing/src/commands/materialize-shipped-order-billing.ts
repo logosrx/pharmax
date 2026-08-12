@@ -280,6 +280,7 @@ async function resolveOrCreateOpenInvoice(input: {
         }
         throw new errors.InternalError({
           code: MATERIALIZE_BILLING_INVOICE_NUMBER_COLLISION,
+          cause,
           message: `Invoice number "${invoiceNumber}" collided but no row was readable.`,
           metadata: { organizationId: input.organizationId, invoiceNumber },
         });

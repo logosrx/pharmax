@@ -137,6 +137,7 @@ export const CreateOrganization: SystemCommand<CreateOrganizationInput, CreateOr
         if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
           throw new errors.ConflictError({
             code: "ORG_SLUG_TAKEN",
+            cause: err,
             message: `An organization with slug "${input.slug}" already exists.`,
             metadata: { slug: input.slug },
           });
