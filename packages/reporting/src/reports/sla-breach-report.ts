@@ -16,42 +16,29 @@
 //     `asOf` parameter — operators want to see ACTIVELY breaching
 //     work, not just historical breaches.
 //
-// v1 thresholds are hardcoded (`DEFAULT_STAGE_SLA_THRESHOLDS_MS`).
-// A future slice (`@pharmax/sla` config table) will move them to
-// per-org configurable rows; this module imports the constants so
-// the breach math has a single source of truth.
+// Thresholds come from `@pharmax/sla`, which owns them. That matters
+// more than it looks: the same map is summed into
+// `DEFAULT_END_TO_END_SLA_BUDGET_MS`, which sets every order's
+// `slaDeadlineAt` and therefore drives the live breach evaluator and
+// the queue badges. A second copy here would let this report and the
+// escalation behaviour disagree about what "late" means, and the
+// report is the instrument you would use to notice.
+//
+// Still hardcoded for v1; the follow-up is a per-org `sla_threshold`
+// table that overrides the defaults.
 //
 // PHI invariant: queries only non-PHI columns
 // (`organizationId`, `siteId`, `orderId`, `kind`, `startedAt`,
 // `endedAt`). The row shape excludes patient-identifying data.
 
 import { OrderStageIntervalKind } from "@pharmax/database";
+import { DEFAULT_STAGE_SLA_THRESHOLDS_MS } from "@pharmax/sla";
 import { z } from "zod";
 
 import { dateRangeFields } from "../parameter-fields.js";
 import type { DateRangeParams, ReportDefinition, ReportResult } from "../types.js";
 
-/**
- * Default per-stage SLA thresholds in milliseconds. v1 hardcoded;
- * follow-up: per-org configurable via a `sla_threshold` table.
- *
- * Picked from LifeFile-style operational defaults; tune per
- * clinic / volume / SLA contract once real data lands.
- */
-export const DEFAULT_STAGE_SLA_THRESHOLDS_MS: Readonly<
-  Partial<Record<OrderStageIntervalKind, number>>
-> = Object.freeze({
-  [OrderStageIntervalKind.WAIT_BEFORE_TYPING]: 30 * 60_000, // 30 min
-  [OrderStageIntervalKind.TYPING_ACTIVE]: 30 * 60_000,
-  [OrderStageIntervalKind.WAIT_BEFORE_PV1]: 30 * 60_000,
-  [OrderStageIntervalKind.PV1_ACTIVE]: 20 * 60_000,
-  [OrderStageIntervalKind.WAIT_BEFORE_FILL]: 60 * 60_000, // 1h
-  [OrderStageIntervalKind.FILL_ACTIVE]: 45 * 60_000,
-  [OrderStageIntervalKind.WAIT_BEFORE_FINAL_VERIFICATION]: 30 * 60_000,
-  [OrderStageIntervalKind.FINAL_VERIFICATION_ACTIVE]: 20 * 60_000,
-  [OrderStageIntervalKind.WAIT_BEFORE_SHIPPING]: 4 * 60 * 60_000, // 4h
-  [OrderStageIntervalKind.SHIPPING_ACTIVE]: 24 * 60 * 60_000, // 24h
-});
+export { DEFAULT_STAGE_SLA_THRESHOLDS_MS };
 
 export interface SlaBreachRow {
   readonly intervalId: string;

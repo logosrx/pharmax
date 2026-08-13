@@ -1365,6 +1365,9 @@ importers:
       '@pharmax/rbac':
         specifier: workspace:*
         version: link:../rbac
+      '@pharmax/sla':
+        specifier: workspace:*
+        version: link:../sla
       cron-parser:
         specifier: ^5.7.0
         version: 5.7.0

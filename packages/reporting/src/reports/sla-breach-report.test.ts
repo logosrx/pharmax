@@ -1,4 +1,5 @@
 import { OrderStageIntervalKind } from "@pharmax/database";
+import { DEFAULT_STAGE_SLA_THRESHOLDS_MS as CANONICAL_THRESHOLDS } from "@pharmax/sla";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -34,6 +35,17 @@ const window = {
 const ASOF = new Date("2026-06-01T00:00:00.000Z");
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("slaBreachReport — threshold provenance", () => {
+  // Identity, not deep-equality: a re-declared local map with the
+  // same numbers would satisfy `toEqual` and still be a second
+  // source of truth. The same map is summed into the end-to-end
+  // budget that sets `slaDeadlineAt`, so a fork here would let this
+  // report and the live breach evaluator disagree about "late".
+  it("re-exports the canonical @pharmax/sla map rather than a copy", () => {
+    expect(DEFAULT_STAGE_SLA_THRESHOLDS_MS).toBe(CANONICAL_THRESHOLDS);
+  });
+});
 
 describe("slaBreachReport — closed intervals", () => {
   it("flags closed intervals that exceeded the threshold", async () => {
