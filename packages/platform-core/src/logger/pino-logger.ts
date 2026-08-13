@@ -109,9 +109,24 @@ export function createPinoLogger(options: CreatePinoLoggerOptions): Logger {
     // Guarded on `instanceof Error`: `error` is not a reserved word
     // in a log context, and a caller passing a plain object under it
     // must keep the scrubbed object it already went through.
+    //
+    // Errors that define their own `toJSON` (notably `PharmaxError`)
+    // are serialized through that projection instead of Pino's
+    // `stdSerializers.err`. `PharmaxError.toJSON` intentionally omits
+    // `cause` and `stack` because those chains can transitively carry
+    // HTTP responses, DB rows, and other PHI-adjacent payloads that
+    // the log-context redactor cannot see through an `Error` shell.
+    // `stdSerializers.err` would otherwise flatten `cause` into
+    // `message`/`stack` and leak that content into stdout.
     serializers: {
-      error: (value: unknown): unknown =>
-        value instanceof Error ? stdSerializers.err(value) : value,
+      error: (value: unknown): unknown => {
+        if (!(value instanceof Error)) return value;
+        const toJson = (value as unknown as { toJSON?: unknown }).toJSON;
+        if (typeof toJson === "function") {
+          return (toJson as () => unknown).call(value);
+        }
+        return stdSerializers.err(value);
+      },
     },
   };
 
