@@ -5,5 +5,11 @@ export {
   type CreatePinoLoggerOptions,
   type PinoLogLevel,
 } from "./pino-logger.js";
-export { DEFAULT_REDACT_PATHS, DEFAULT_REDACT_CENSOR } from "./redaction.js";
+export {
+  createLogContextRedactor,
+  DEFAULT_REDACT_CENSOR,
+  DEFAULT_SENSITIVE_FIELDS,
+  type CreateLogContextRedactorOptions,
+  type LogContextRedactor,
+} from "./redaction.js";
 export { noopErrorReporter, withErrorReporter, type ErrorReporter } from "./error-reporter.js";
