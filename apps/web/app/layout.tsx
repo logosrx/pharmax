@@ -55,8 +55,13 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     >
       <head>
         <link rel="preconnect" href="https://use.typekit.net" crossOrigin="anonymous" />
-        <link rel="stylesheet" href={ADOBE_FONTS_KIT} />
+        {/* Ahead of the kit stylesheet on purpose: a classic script is
+            blocked until every preceding stylesheet has a built CSSOM, so
+            placing this after the link would make first-paint theming wait
+            on use.typekit.net. The preload scanner still starts the kit
+            fetch immediately, so the CSS is not delayed by the swap. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
+        <link rel="stylesheet" href={ADOBE_FONTS_KIT} />
       </head>
       <body className="antialiased">{children}</body>
     </html>
