@@ -7,6 +7,7 @@
 // tenancy, or any command path. Allowlisted in proxy.ts.
 
 import { SidebarNav, type NavGroup } from "../../src/components/shell/sidebar-nav.js";
+import { CommandPalette } from "../../src/components/shell/command-palette.js";
 import { OrderSearch } from "../../src/components/shell/order-search.js";
 import { ThemeToggle } from "../../src/components/shell/theme-toggle.js";
 import { PageHeader, Section, FilterTabs } from "../../src/components/ui/page.js";
@@ -86,6 +87,7 @@ export default function PreviewPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur-md sm:px-6">
           <OrderSearch />
+          <CommandPalette groups={NAV} />
           <div className="ml-auto flex items-center gap-3">
             <div className="hidden text-right leading-tight sm:block">
               <div className="text-sm font-medium text-fg">Jordan Pharmacist</div>
