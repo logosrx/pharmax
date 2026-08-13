@@ -353,7 +353,7 @@ export default async function OpsLayout({ children }: Readonly<{ children: React
 
   return (
     <LiveQueueCountsProvider initialCounts={counts}>
-      <div className="flex min-h-screen bg-canvas text-fg">
+      <div className="ambient-canvas flex min-h-screen bg-canvas text-fg">
         <SidebarNav groups={groups} />
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur-md sm:px-6">

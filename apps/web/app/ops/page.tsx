@@ -161,7 +161,7 @@ export default async function DashboardPage() {
         </Banner>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-4 @3xl:grid-cols-4">
+      <div className="stagger-children grid grid-cols-2 gap-4 @3xl:grid-cols-4">
         <Stat
           label="In-flight orders"
           value={inFlight}

@@ -1,10 +1,27 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import { cookies } from "next/headers";
 
 import { THEME_COOKIE_NAME } from "../src/lib/theme.js";
 
 import "./globals.css";
+
+// Self-hosted at build time by next/font — the CSS token layer
+// (`--font-sans` / `--font-mono` in globals.css) references these
+// variables first, so the whole console actually renders Inter +
+// JetBrains Mono instead of silently falling back to system fonts.
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Pharmax",
@@ -25,7 +42,9 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   return (
     <html
       lang="en"
-      className={cookieTheme === "light" ? "light" : undefined}
+      className={[inter.variable, jetbrainsMono.variable, cookieTheme === "light" ? "light" : ""]
+        .filter(Boolean)
+        .join(" ")}
       suppressHydrationWarning
     >
       <head>

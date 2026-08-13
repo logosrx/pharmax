@@ -34,12 +34,14 @@ export function Card({ className, interactive, accent, children }: CardProps) {
   return (
     <div
       className={cx(
-        "relative overflow-hidden rounded-lg border border-line bg-surface shadow-xs",
+        "card-sheen relative overflow-hidden rounded-lg border border-line bg-surface",
         accent &&
           "before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:content-['']",
         accent && ACCENT[accent],
         interactive &&
-          "transition-[transform,box-shadow,border-color] duration-150 hover:-translate-y-0.5 hover:border-line-strong hover:shadow-md",
+          "transition-[transform,box-shadow,border-color] duration-200 ease-(--ease-out) " +
+            "hover:-translate-y-0.5 hover:border-line-strong " +
+            "hover:[box-shadow:var(--shadow-edge),var(--shadow-md)]",
         className
       )}
     >
