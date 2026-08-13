@@ -27,6 +27,7 @@
 
 import {
   pino,
+  stdSerializers,
   type DestinationStream,
   type Logger as PinoLogger,
   type LoggerOptions as PinoLoggerOptions,
@@ -91,6 +92,27 @@ export function createPinoLogger(options: CreatePinoLoggerOptions): Logger {
     // is widely supported. `messageKey: "message"` aligns with our
     // `Logger` interface which takes a `message` arg.
     messageKey: "message",
+    // Pino only applies its error serializer to the key named by
+    // `errorKey`, which defaults to `err`. This codebase logs
+    // `{ error: cause }` — that is the shape `withErrorReporter`
+    // looks for and the shape every call site uses. Without this,
+    // an Error under `error` is handed to JSON.stringify, whose own
+    // properties are non-enumerable, so the line serializes to `{}`
+    // and the message and stack are gone. Sentry still received them
+    // via the reporter, so the loss only showed up in the logs.
+    //
+    // Registered as a serializer rather than by moving `errorKey`,
+    // because moving it would fix `error` by breaking `err`. Pino
+    // prefers `serializers[key]` over the `errorKey` path, so both
+    // spellings work.
+    //
+    // Guarded on `instanceof Error`: `error` is not a reserved word
+    // in a log context, and a caller passing a plain object under it
+    // must keep the scrubbed object it already went through.
+    serializers: {
+      error: (value: unknown): unknown =>
+        value instanceof Error ? stdSerializers.err(value) : value,
+    },
   };
 
   const instance = options.destination ? pino(pinoOptions, options.destination) : pino(pinoOptions);

@@ -12,4 +12,9 @@ export {
   type CreateLogContextRedactorOptions,
   type LogContextRedactor,
 } from "./redaction.js";
-export { noopErrorReporter, withErrorReporter, type ErrorReporter } from "./error-reporter.js";
+export {
+  noopErrorReporter,
+  withErrorReporter,
+  type ErrorReporter,
+  type WithErrorReporterOptions,
+} from "./error-reporter.js";

@@ -17,10 +17,13 @@
 //   - per-component children added via `logger.child({ component: ... })`
 //     at the call site (route handler, billing wiring, etc.)
 //
-// PHI invariant carries through: the Pino redactor scrubs the
-// context BEFORE Sentry receives it (see `error-reporter.ts`), and
-// the Sentry `beforeSend` allowlist (see `sentry-scrubber.ts`)
-// is the second line of defense.
+// PHI invariant carries through, but via two independent scrubs
+// rather than one shared one: `createPinoLogger` scrubs the context
+// on its way to stdout, and `withErrorReporter` scrubs its own copy
+// on the way to Sentry (the wrapper is outside the base logger, so
+// it never sees the log line's scrubbed version). The Sentry
+// `beforeSend` allowlist (see `sentry-scrubber.ts`) is the second
+// line of defense.
 
 import "server-only";
 
