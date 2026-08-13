@@ -48,6 +48,9 @@ const nextConfig = {
   // Workspace packages publish TypeScript source via `main`/`types`
   // pointing at `src/index.ts`. Next must transpile them.
   transpilePackages: ["@pharmax/crypto", "@pharmax/database", "@pharmax/platform-core"],
+  // Stop `next dev` from generating AGENTS.md / CLAUDE.md into the app
+  // directory — this repo manages its agent rules at the workspace root.
+  agentRules: false,
   experimental: {
     // Allow consuming workspace packages whose generated client lives
     // outside the standard node_modules tree.
