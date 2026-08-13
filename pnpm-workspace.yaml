@@ -51,6 +51,15 @@ overrides:
   # this is hygiene rather than an exploitable path here. Patch-level
   # bump inside 3.x.
   "fast-uri@<3.1.4": "^3.1.4"
+  # GHSA-2v37-7h3g-55p8: nanoid's custom-alphabet generator loops
+  # forever when asked for size 0, so a caller that derives the size
+  # from input can hang the event loop. Reached only through
+  # postcss -> next, where sizes are internal constants, so this is
+  # hygiene rather than a live DoS for us — but it is a `high` and it
+  # fails `pnpm audit --prod` on every PR until it is pinned.
+  # postcss declares `nanoid: ^3.3.16`, so 3.3.18 is inside its
+  # existing range: a patch bump, not a deliberate range crossing.
+  "nanoid@<3.3.18": "^3.3.18"
   # GHSA-6g55-p6wh-862q + the sourceMappingURL path-traversal advisory:
   # postcss auto-loads a previous source map from a `sourceMappingURL`
   # comment, so CSS from an untrusted source can read an arbitrary .map
