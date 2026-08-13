@@ -193,12 +193,12 @@ describe("createPinoLogger", () => {
     expect(line?.["durationMs"]).toBe(42);
   });
 
-  it("extraRedactPaths add to the default allowlist without removing defaults", () => {
+  it("extraSensitiveFields add to the defaults without removing them", () => {
     const capture = makeCapture();
     const log = createPinoLogger({
       service: "pharmacy-test",
       destination: capture.stream,
-      extraRedactPaths: ["*.last4"],
+      extraSensitiveFields: ["last4"],
     });
 
     log.info("payment.captured", {
@@ -213,6 +213,148 @@ describe("createPinoLogger", () => {
 
     const user = line?.["user"] as Record<string, unknown> | undefined;
     expect(user?.["password"]).toBe("[Redacted]");
+  });
+
+  it("redacts sensitive fields at ANY depth, not just one level down", () => {
+    // Regression: path-based redaction only reached the depths it
+    // enumerated, so a context nested one level deeper than the path
+    // list leaked in full.
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    });
+
+    log.error("command.failed", {
+      command: {
+        input: {
+          patient: {
+            demographics: { firstName: "Alice", mrn: "MRN-12345" },
+          },
+        },
+      },
+    });
+
+    const line = JSON.stringify(capture.lines()[0]);
+    expect(line).not.toContain("Alice");
+    expect(line).not.toContain("MRN-12345");
+    expect(line).toContain("[Redacted]");
+  });
+
+  it("redacts sensitive fields inside arrays, at any nesting", () => {
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    });
+
+    log.info("batch.processed", {
+      orders: [
+        { id: "ord_1", patient: { lastName: "Anderson" } },
+        { id: "ord_2", contacts: [{ phone: "555-0100" }] },
+      ],
+    });
+
+    const line = JSON.stringify(capture.lines()[0]);
+    expect(line).not.toContain("Anderson");
+    expect(line).not.toContain("555-0100");
+    // Safe identifiers in the same array survive.
+    expect(line).toContain("ord_1");
+    expect(line).toContain("ord_2");
+  });
+
+  it("matches field names case-insensitively", () => {
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    });
+
+    log.info("odd.casing", { FirstName: "Alice", MRN: "MRN-1", Authorization: "Bearer x" });
+
+    const line = capture.lines()[0];
+    expect(line?.["FirstName"]).toBe("[Redacted]");
+    expect(line?.["MRN"]).toBe("[Redacted]");
+    expect(line?.["Authorization"]).toBe("[Redacted]");
+  });
+
+  it("does not mutate the caller's context object", () => {
+    // Domain code often logs an object it is still using. A redactor
+    // with side effects would corrupt the in-flight request.
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    });
+
+    const context = { patient: { firstName: "Alice" }, orderId: "ord_1" };
+    log.info("order.created", context);
+
+    expect(context.patient.firstName).toBe("Alice");
+    const line = capture.lines()[0];
+    expect((line?.["patient"] as Record<string, unknown>)["firstName"]).toBe("[Redacted]");
+  });
+
+  it("survives circular references", () => {
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    });
+
+    const node: Record<string, unknown> = { orderId: "ord_1", mrn: "MRN-1" };
+    node["self"] = node;
+
+    expect(() => log.info("cycle", { node })).not.toThrow();
+    const line = JSON.stringify(capture.lines()[0]);
+    expect(line).not.toContain("MRN-1");
+    expect(line).toContain("ord_1");
+  });
+
+  it("passes Error objects through so Pino can serialize the stack", () => {
+    // The redactor must not rebuild an Error into a plain object —
+    // that would strip the stack before Pino's `err` serializer runs.
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    });
+
+    log.error("dispatch.failed", { err: new Error("upstream timeout"), orderId: "ord_1" });
+
+    const line = capture.lines()[0];
+    const err = line?.["err"] as Record<string, unknown> | undefined;
+    expect(err?.["message"]).toBe("upstream timeout");
+    expect(typeof err?.["stack"]).toBe("string");
+    expect(line?.["orderId"]).toBe("ord_1");
+  });
+
+  it("still scrubs a plain object logged under an error-ish key", () => {
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    });
+
+    log.error("dispatch.failed", { error: { code: "TIMEOUT", firstName: "Alice" } });
+
+    const error = capture.lines()[0]?.["error"] as Record<string, unknown> | undefined;
+    expect(error?.["code"]).toBe("TIMEOUT");
+    expect(error?.["firstName"]).toBe("[Redacted]");
+  });
+
+  it("redacts sensitive bindings on child loggers", () => {
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    }).child({ component: "intake", patient: { mrn: "MRN-1" } });
+
+    log.info("bound");
+
+    const line = JSON.stringify(capture.lines()[0]);
+    expect(line).not.toContain("MRN-1");
+    expect(line).toContain("intake");
   });
 
   it("timestamps are ISO 8601 strings (lexically-sortable)", () => {
