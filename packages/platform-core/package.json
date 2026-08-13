@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "pino": "^9.5.0",
+    "pino": "^10.3.1",
     "stripe": "^22.4.0",
     "ulid": "^3.0.2",
     "zod": "^4.4.3"
