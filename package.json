@@ -77,9 +77,9 @@
   },
   "//prisma": "Prisma CLI config (schema/migrations/seed/datasource) lives in prisma.config.ts as of Prisma 7.",
   "devDependencies": {
-    "@aws-sdk/client-kms": "^3.1103.0",
+    "@aws-sdk/client-kms": "^3.1105.0",
     "@aws-sdk/client-rds": "^3.1103.0",
-    "@aws-sdk/client-s3": "^3.1103.0",
+    "@aws-sdk/client-s3": "^3.1105.0",
     "@eslint/js": "^10.0.1",
     "@pharmax/audit": "workspace:*",
     "@pharmax/billing": "workspace:*",
