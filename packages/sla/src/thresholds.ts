@@ -1,7 +1,7 @@
 // Canonical SLA thresholds for the pharmacy workflow.
 //
 // `@pharmax/sla` OWNS these numbers — every other package
-// (reporting's sla-breach report, the future breach-evaluator
+// (reporting's sla-breach report, the worker breach-evaluator
 // tick, the queue-badge UI) imports them from here so there is a
 // single source of truth. v1 is hardcoded; the follow-up is a
 // per-org `sla_threshold` table that overrides these defaults
