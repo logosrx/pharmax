@@ -236,6 +236,10 @@
     background-color: var(--canvas);
     color: var(--fg);
     font-family: var(--font-sans);
+    /* Brand tracking: -25/1000em, matching the Sofia Pro spec. Explicit
+       tracking utilities (tracking-tight, tracking-caps) still override
+       where a surface needs its own rhythm. */
+    letter-spacing: -0.025em;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -273,12 +277,16 @@
     background-color: var(--subtle);
   }
 
-  /* Numeric/tabular alignment for IDs, counts, timers. */
+  /* Numeric/tabular alignment for IDs, counts, timers. Mono surfaces
+     opt back out of the body's negative brand tracking — order numbers
+     and codes are read character-by-character, so they keep their
+     natural fixed-pitch spacing. */
   .tabular,
   code,
   kbd,
   .font-mono {
     font-variant-numeric: tabular-nums;
+    letter-spacing: normal;
   }
 }
 
