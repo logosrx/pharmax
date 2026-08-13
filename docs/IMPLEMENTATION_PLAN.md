@@ -436,7 +436,7 @@ that doc before implementing any item here.
   **Test coverage**: `ops-scope.test.ts` mocks `@sentry/nextjs::withScope` and exercises (a) callback return value propagation, (b) user identity setting with + without displayName, (c) optional tag setting only when provided, (d) context block shape with + without clerkUserId, (e) error propagation through the scope. **+6 new tests**.
 
   **PHI invariant** through the whole pipeline:
-  1. `logger.error(..., { ...ctx, error: cause })` — Pino redactor scrubs `ctx` against the platform-core redaction allowlist BEFORE forwarding to the reporter
+  1. `logger.error(..., { ...ctx, error: cause })` — `withErrorReporter` scrubs `ctx` against the platform-core redaction allowlist before forwarding to the reporter. Note this is the wrapper's own scrub, not the Pino one: the wrapper sits outside the base logger, so the log line's scrubbed copy is internal to `createPinoLogger` and never reaches the reporter path. Both layers run the same redactor over the same input, which is why the distinction was invisible until someone went looking for it — see `fix/logger-error-fidelity`
   2. Reporter calls `Sentry.captureException(error, { extra: scrubbed_ctx })`
   3. `sentry-scrubber.beforeSend` runs against the event — drops anything not on the per-field allowlist (operator id + organizationId + commandName + route are explicitly permitted; patient ids and any free-text strings outside the allowlist are dropped)
   4. Event leaves the process

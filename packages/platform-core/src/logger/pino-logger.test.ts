@@ -329,6 +329,60 @@ describe("createPinoLogger", () => {
     expect(line?.["orderId"]).toBe("ord_1");
   });
 
+  // Pino only serializes the key named by `errorKey` (default `err`),
+  // but every call site in this repo logs `{ error: cause }` — that
+  // is the shape `withErrorReporter` looks for. Without an explicit
+  // serializer the Error hits JSON.stringify, whose own properties
+  // are non-enumerable, and the line serializes to `{}`.
+  it("serializes an Error logged under the `error` key", () => {
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    });
+
+    log.error("dispatch.failed", { error: new Error("upstream timeout"), orderId: "ord_1" });
+
+    const line = capture.lines()[0];
+    const error = line?.["error"] as Record<string, unknown> | undefined;
+    expect(error?.["message"]).toBe("upstream timeout");
+    expect(typeof error?.["stack"]).toBe("string");
+    expect(line?.["orderId"]).toBe("ord_1");
+  });
+
+  it("does not drop an `error` Error to an empty object", () => {
+    // The precise regression: `{}` is what you get from
+    // JSON.stringify(new Error(...)), and it is indistinguishable
+    // from "no error" once it reaches a log aggregator.
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    });
+
+    log.error("dispatch.failed", { error: new Error("boom") });
+
+    expect(JSON.stringify(capture.lines()[0]?.["error"])).not.toBe("{}");
+  });
+
+  it("keeps serializing the `err` key after the `error` serializer is added", () => {
+    // Registering `serializers.error` must not displace Pino's
+    // errorKey handling — moving `errorKey` instead of adding a
+    // serializer would have fixed one spelling by breaking the other.
+    const capture = makeCapture();
+    const log = createPinoLogger({
+      service: "pharmacy-test",
+      destination: capture.stream,
+    });
+
+    log.error("a", { err: new Error("via err") });
+    log.error("b", { error: new Error("via error") });
+
+    const [first, second] = capture.lines();
+    expect((first?.["err"] as Record<string, unknown>)["message"]).toBe("via err");
+    expect((second?.["error"] as Record<string, unknown>)["message"]).toBe("via error");
+  });
+
   it("still scrubs a plain object logged under an error-ish key", () => {
     const capture = makeCapture();
     const log = createPinoLogger({

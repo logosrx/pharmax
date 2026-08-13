@@ -57,8 +57,8 @@ Every `logger.error(...)` call automatically forwards to Sentry via the [ErrorRe
 
 **PHI defense layers** (all required, all independent):
 
-1. **Logger redactor** (Pino) scrubs the context before it reaches the bridge.
-2. **ErrorReporter bridge** receives the already-scrubbed context.
+1. **Logger redactor** (Pino) scrubs the context on its way to stdout. This protects the log line only — the scrubbed copy lives inside `createPinoLogger` and is never handed back out, so it does **not** protect the Sentry path.
+2. **ErrorReporter bridge** runs the same redactor over its own copy before calling the reporter. It has to: the bridge wraps the base logger from outside, so what it receives is the caller's raw context. The `Error` itself is forwarded unscrubbed and by reference, because rebuilding it would discard the stack — so an error message must never interpolate PHI.
 3. **Sentry `beforeSend`** allowlist (server-side only) drops anything outside the known-safe key list.
 4. **No `replaysSessionSampleRate` / `replaysOnErrorSampleRate`**: browser-side session replay is disabled because a frame could capture an on-screen patient name.
 

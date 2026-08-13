@@ -17,10 +17,14 @@
 //   2. Tests stay decoupled. The default `noopLogger` and the
 //      capturing logger in tests never call Sentry, because the
 //      reporter is wired in at the application layer.
-//   3. PHI redaction works once. The Pino redactor inside
-//      `createPinoLogger` runs BEFORE the wrapper hands the context
-//      to the reporter (see `pino-logger.ts`). The reporter receives
-//      already-scrubbed metadata.
+//   3. PHI redaction happens here, in the wrapper. This is worth
+//      being precise about, because the obvious reading is wrong:
+//      the wrapper sits OUTSIDE the base logger, so `.error(message,
+//      context)` receives the caller's raw context. `base.error`
+//      scrubs internally on its own way to Pino, but that scrubbed
+//      copy is never returned — it is not something the wrapper can
+//      forward. So the wrapper runs the same redactor itself before
+//      handing metadata to the reporter.
 //
 // Apps own the reporter implementation:
 //
@@ -35,7 +39,16 @@
 //   };
 //   export const logger = withErrorReporter(createPinoLogger({ ... }), reporter);
 
+import { createLogContextRedactor, type LogContextRedactor } from "./redaction.js";
 import type { LogContext, Logger } from "./types.js";
+
+export interface WithErrorReporterOptions {
+  /**
+   * Scrubber applied to the context before it reaches the reporter.
+   * Defaults to the standard field list.
+   */
+  readonly redact?: LogContextRedactor;
+}
 
 /**
  * Surface that an application's error-tracking integration must
@@ -52,8 +65,17 @@ import type { LogContext, Logger } from "./types.js";
  *     a network call MUST enqueue / fire-and-forget.
  *   - Never throw. A failed report MUST NOT mask the original log.
  *   - Honour the same PHI invariants as the logger contract. The
- *     `LogContext` arrives ALREADY redacted by the Pino layer; do
- *     not re-add unredacted fields downstream.
+ *     `LogContext` arrives already scrubbed by `withErrorReporter`;
+ *     do not re-add unredacted fields downstream.
+ *
+ * One carve-out, because it is the thing most likely to bite: the
+ * `Error` handed to `captureException` is the caller's original, not
+ * a scrubbed copy. Rebuilding it would destroy the stack, which is
+ * the entire reason to report it. So `Error.message` and any own
+ * properties hung off the error are NOT scrubbed — the standing rule
+ * (mirrored in the redactor and the Sentry scrubber) is that an
+ * error message must never interpolate PHI. Attach detail to the log
+ * context, which is scrubbed, rather than to the error.
  */
 export interface ErrorReporter {
   captureException(error: unknown, context?: LogContext): void;
@@ -74,14 +96,25 @@ export const noopErrorReporter: ErrorReporter = {
  *   - The first `Error` instance found in `context.error`,
  *     `context.cause`, or `context.err` (in that order). If none is
  *     found, the message is reported via `captureMessage`.
- *   - The entire context object as `extra` metadata (already
- *     PHI-scrubbed by the host `Logger` implementation).
+ *   - A SCRUBBED copy of the context as `extra` metadata. The
+ *     caller's object is never mutated and never forwarded as-is.
  *
  * `child(bindings)` returns a new wrapped logger whose bindings are
  * inherited at BOTH layers — Pino's child carries the structured
  * fields, and the wrapper continues to forward errors.
+ *
+ * `options.redact` overrides the scrubber. It exists so an app that
+ * built its base logger with `extraSensitiveFields` can pass a
+ * matching redactor; the default covers the standard field list
+ * only, and a redactor configured on `createPinoLogger` is not
+ * reachable from out here.
  */
-export function withErrorReporter(base: Logger, reporter: ErrorReporter): Logger {
+export function withErrorReporter(
+  base: Logger,
+  reporter: ErrorReporter,
+  options: WithErrorReporterOptions = {}
+): Logger {
+  const redact = options.redact ?? createLogContextRedactor();
   return {
     debug(message, context) {
       base.debug(message, context);
@@ -96,11 +129,15 @@ export function withErrorReporter(base: Logger, reporter: ErrorReporter): Logger
       base.error(message, context);
       // Best-effort: a reporter failure must NEVER mask the log.
       try {
+        // Extract from the RAW context: the scrubbed copy preserves
+        // Error instances, but reading the original keeps this
+        // independent of the redactor's opaque-type policy.
         const error = extractError(context);
+        const safe = context === undefined ? undefined : redact(context);
         if (error !== undefined) {
-          reporter.captureException(error, withErrorMessage(context, message));
+          reporter.captureException(error, withErrorMessage(safe, message));
         } else {
-          reporter.captureMessage(message, context);
+          reporter.captureMessage(message, safe);
         }
       } catch {
         // Swallow — the original `base.error` already ran and the
@@ -109,7 +146,7 @@ export function withErrorReporter(base: Logger, reporter: ErrorReporter): Logger
       }
     },
     child(bindings) {
-      return withErrorReporter(base.child(bindings), reporter);
+      return withErrorReporter(base.child(bindings), reporter, options);
     },
   };
 }
