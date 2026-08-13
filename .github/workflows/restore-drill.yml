@@ -164,7 +164,7 @@ jobs:
     steps:
       - name: Download preflight tail (if any)
         if: needs.preflight.result == 'success' || needs.preflight.result == 'failure'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: restore-drill-preflight-${{ github.run_id }}
           path: preflight-artifact
