@@ -20,13 +20,15 @@
  */
 
 @theme {
-  /* next/font (app/layout.tsx) self-hosts Inter + JetBrains Mono and
-     exposes them as --font-inter / --font-jetbrains-mono; the named
-     families remain as fallbacks for surfaces rendered outside the
-     root layout (emails, error pages). */
+  /* Brand typeface: Sofia Pro, served by the Adobe Fonts kit loaded in
+     app/layout.tsx (weights 300–700). Inter stays next in the stack —
+     self-hosted by next/font as --font-inter — so the console still
+     renders a deliberate face if the kit is blocked or offline. The
+     named families remain as fallbacks for surfaces rendered outside
+     the root layout (emails, error pages). */
   --font-sans:
-    var(--font-inter, "Inter"), "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-    Roboto, "Helvetica Neue", Arial, sans-serif;
+    "sofia-pro", var(--font-inter, "Inter"), "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono:
     var(--font-jetbrains-mono, "JetBrains Mono"), "JetBrains Mono", ui-monospace, "SF Mono",
     "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
@@ -49,6 +51,12 @@
      badge counts). Font-size only (no --line-height pair) so callers
      keep their inherited leading, exactly like the old text-[10px] /
      text-[11px] arbitrary values these tokens replace. */
+  /* Sofia Pro draws lighter than Inter at the same size, so the
+     console's workhorse body size steps up 1px (14 → 15) to keep
+     small text — nav items, descriptions, table cells — comfortably
+     readable. */
+  --text-sm: 0.9375rem; /* 15px */
+  --text-sm--line-height: calc(1.375 / 0.9375); /* 22px */
   --text-2xs: 0.6875rem; /* 11px */
   --text-3xs: 0.625rem; /* 10px */
 
@@ -234,6 +242,13 @@
     background-color: var(--canvas);
     color: var(--fg);
     font-family: var(--font-sans);
+    /* Regular (400) everywhere by default — Sofia Pro's lighter cuts
+       are opt-in via explicit font-weight utilities only. */
+    font-weight: 400;
+    /* Brand tracking: -25/1000em, matching the Sofia Pro spec. Explicit
+       tracking utilities (tracking-tight, tracking-caps) still override
+       where a surface needs its own rhythm. */
+    letter-spacing: -0.025em;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -271,12 +286,16 @@
     background-color: var(--subtle);
   }
 
-  /* Numeric/tabular alignment for IDs, counts, timers. */
+  /* Numeric/tabular alignment for IDs, counts, timers. Mono surfaces
+     opt back out of the body's negative brand tracking — order numbers
+     and codes are read character-by-character, so they keep their
+     natural fixed-pitch spacing. */
   .tabular,
   code,
   kbd,
   .font-mono {
     font-variant-numeric: tabular-nums;
+    letter-spacing: normal;
   }
 }
 
