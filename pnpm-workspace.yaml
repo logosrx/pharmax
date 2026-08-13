@@ -74,9 +74,10 @@ overrides:
   # optimized-deps `.map` path traversal, and the dev-server request
   # reflection. All three are patched at 6.4.3. vitest 3.x still accepts
   # vite 5, so bumping the runner alone left the vulnerable 5.4.21 in the
-  # tree — this is what actually moves it. Held at 6.x rather than 7.x
-  # because vite 7 raises its floor to Node 22.12 while `engines.node`
-  # here is only `>=22.0.0`; the alerts are all satisfied by 6.4.3.
+  # tree — this is what actually moves it. Held at 6.x rather than 7.x:
+  # the original reason was vite 7's Node 22.12 floor, which `engines.node`
+  # now clears, so the only remaining reason is that 6.4.3 already
+  # satisfies every alert and a major bump is its own change.
   # Dev-only: vite is reached exclusively through vitest, never shipped.
   "vite@<6.4.3": "^6.4.3"
   # GHSA-67mh-4wv8-2f99: esbuild's dev server sends permissive CORS, so
