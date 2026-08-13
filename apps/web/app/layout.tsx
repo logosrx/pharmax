@@ -7,10 +7,16 @@ import { THEME_COOKIE_NAME } from "../src/lib/theme.js";
 
 import "./globals.css";
 
+// Adobe Fonts kit serving Sofia Pro (the brand typeface) in weights
+// 300/400/500/600/700. Loaded as a plain stylesheet — Typekit kits
+// cannot be self-hosted by next/font — with Inter (below) as the
+// resilient fallback if the kit is unreachable.
+const ADOBE_FONTS_KIT = "https://use.typekit.net/dej2ilk.css";
+
 // Self-hosted at build time by next/font — the CSS token layer
 // (`--font-sans` / `--font-mono` in globals.css) references these
-// variables first, so the whole console actually renders Inter +
-// JetBrains Mono instead of silently falling back to system fonts.
+// variables after sofia-pro, so the console still renders a deliberate
+// face instead of a raw system font when the kit is blocked.
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
@@ -48,6 +54,8 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
       suppressHydrationWarning
     >
       <head>
+        <link rel="preconnect" href="https://use.typekit.net" crossOrigin="anonymous" />
+        <link rel="stylesheet" href={ADOBE_FONTS_KIT} />
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>
       <body className="antialiased">{children}</body>
