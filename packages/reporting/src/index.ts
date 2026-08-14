@@ -103,6 +103,20 @@ export {
   type VerificationRejectionRateRow,
 } from "./reports/verification-rejection-rate.js";
 
+export {
+  scanFailureRateReport,
+  SCAN_FAILURE_REPORT_CLINIC_SCOPE_UNSUPPORTED,
+  type ScanFailureRateParams,
+  type ScanFailureRateRow,
+} from "./reports/scan-failure-rate.js";
+
+export {
+  labelReprintRateReport,
+  REPRINT_REASON_MISSING,
+  type LabelReprintRateParams,
+  type LabelReprintRateRow,
+} from "./reports/label-reprint-rate.js";
+
 export { REPORT_REGISTRY, type ReportDefinitionAny } from "./report-registry.js";
 
 export {
