@@ -18,11 +18,13 @@ import type { ZodTypeAny } from "zod";
 import { billingSummaryByClinicReport } from "./reports/billing-summary-by-clinic.js";
 import { clinicStatementReport } from "./reports/clinic-statement.js";
 import { invoiceAgingReport } from "./reports/invoice-aging.js";
+import { labelReprintRateReport } from "./reports/label-reprint-rate.js";
 import { lateDeliveriesReport } from "./reports/late-deliveries.js";
 import { lotExpiryWarningsReport } from "./reports/lot-expiry-warnings.js";
 import { orderVolumeByStageReport } from "./reports/order-volume-by-stage.js";
 import { paymentsReceivedReport } from "./reports/payments-received.js";
 import { refundActivityReport } from "./reports/refund-activity.js";
+import { scanFailureRateReport } from "./reports/scan-failure-rate.js";
 import { shipmentExceptionBreakdownReport } from "./reports/shipment-exception-breakdown.js";
 import { shipmentTransitTimeReport } from "./reports/shipment-transit-time.js";
 import { shipmentsInFlightReport } from "./reports/shipments-in-flight.js";
@@ -64,4 +66,6 @@ export const REPORT_REGISTRY: Readonly<Record<string, ReportDefinitionAny>> = Ob
     userProductivityByStageReport as unknown as ReportDefinitionAny,
   [verificationRejectionRateReport.id]:
     verificationRejectionRateReport as unknown as ReportDefinitionAny,
+  [scanFailureRateReport.id]: scanFailureRateReport as unknown as ReportDefinitionAny,
+  [labelReprintRateReport.id]: labelReprintRateReport as unknown as ReportDefinitionAny,
 });
