@@ -123,6 +123,30 @@ export {
   type WaitTimeByStageRow,
 } from "./reports/wait-time-by-stage.js";
 
+export {
+  cancellationReasonsReport,
+  type CancellationReasonsParams,
+  type CancellationReasonsRow,
+} from "./reports/cancellation-reasons.js";
+
+export {
+  reworkRateReport,
+  type ReworkRateParams,
+  type ReworkRateRow,
+} from "./reports/rework-rate.js";
+
+export {
+  emergencyBucketCountsReport,
+  type EmergencyBucketCountsParams,
+  type EmergencyBucketCountsRow,
+} from "./reports/emergency-bucket-counts.js";
+
+export {
+  throughputByClinicReport,
+  type ThroughputByClinicParams,
+  type ThroughputByClinicRow,
+} from "./reports/throughput-by-clinic.js";
+
 export { REPORT_REGISTRY, type ReportDefinitionAny } from "./report-registry.js";
 
 export {

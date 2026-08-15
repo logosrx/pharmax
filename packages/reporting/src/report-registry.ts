@@ -16,7 +16,9 @@
 import type { ZodTypeAny } from "zod";
 
 import { billingSummaryByClinicReport } from "./reports/billing-summary-by-clinic.js";
+import { cancellationReasonsReport } from "./reports/cancellation-reasons.js";
 import { clinicStatementReport } from "./reports/clinic-statement.js";
+import { emergencyBucketCountsReport } from "./reports/emergency-bucket-counts.js";
 import { invoiceAgingReport } from "./reports/invoice-aging.js";
 import { labelReprintRateReport } from "./reports/label-reprint-rate.js";
 import { lateDeliveriesReport } from "./reports/late-deliveries.js";
@@ -24,12 +26,14 @@ import { lotExpiryWarningsReport } from "./reports/lot-expiry-warnings.js";
 import { orderVolumeByStageReport } from "./reports/order-volume-by-stage.js";
 import { paymentsReceivedReport } from "./reports/payments-received.js";
 import { refundActivityReport } from "./reports/refund-activity.js";
+import { reworkRateReport } from "./reports/rework-rate.js";
 import { scanFailureRateReport } from "./reports/scan-failure-rate.js";
 import { shipmentExceptionBreakdownReport } from "./reports/shipment-exception-breakdown.js";
 import { shipmentTransitTimeReport } from "./reports/shipment-transit-time.js";
 import { shipmentsInFlightReport } from "./reports/shipments-in-flight.js";
 import { shippingCostSummaryReport } from "./reports/shipping-cost-summary.js";
 import { slaBreachReport } from "./reports/sla-breach-report.js";
+import { throughputByClinicReport } from "./reports/throughput-by-clinic.js";
 import { userProductivityByStageReport } from "./reports/user-productivity-by-stage.js";
 import { verificationRejectionRateReport } from "./reports/verification-rejection-rate.js";
 import { waitTimeByStageReport } from "./reports/wait-time-by-stage.js";
@@ -70,4 +74,8 @@ export const REPORT_REGISTRY: Readonly<Record<string, ReportDefinitionAny>> = Ob
   [scanFailureRateReport.id]: scanFailureRateReport as unknown as ReportDefinitionAny,
   [labelReprintRateReport.id]: labelReprintRateReport as unknown as ReportDefinitionAny,
   [waitTimeByStageReport.id]: waitTimeByStageReport as unknown as ReportDefinitionAny,
+  [cancellationReasonsReport.id]: cancellationReasonsReport as unknown as ReportDefinitionAny,
+  [reworkRateReport.id]: reworkRateReport as unknown as ReportDefinitionAny,
+  [emergencyBucketCountsReport.id]: emergencyBucketCountsReport as unknown as ReportDefinitionAny,
+  [throughputByClinicReport.id]: throughputByClinicReport as unknown as ReportDefinitionAny,
 });
