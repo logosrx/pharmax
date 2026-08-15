@@ -32,6 +32,7 @@ import { shippingCostSummaryReport } from "./reports/shipping-cost-summary.js";
 import { slaBreachReport } from "./reports/sla-breach-report.js";
 import { userProductivityByStageReport } from "./reports/user-productivity-by-stage.js";
 import { verificationRejectionRateReport } from "./reports/verification-rejection-rate.js";
+import { waitTimeByStageReport } from "./reports/wait-time-by-stage.js";
 import type { ReportDefinition } from "./types.js";
 
 /**
@@ -68,4 +69,5 @@ export const REPORT_REGISTRY: Readonly<Record<string, ReportDefinitionAny>> = Ob
     verificationRejectionRateReport as unknown as ReportDefinitionAny,
   [scanFailureRateReport.id]: scanFailureRateReport as unknown as ReportDefinitionAny,
   [labelReprintRateReport.id]: labelReprintRateReport as unknown as ReportDefinitionAny,
+  [waitTimeByStageReport.id]: waitTimeByStageReport as unknown as ReportDefinitionAny,
 });

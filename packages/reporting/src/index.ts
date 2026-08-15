@@ -117,6 +117,12 @@ export {
   type LabelReprintRateRow,
 } from "./reports/label-reprint-rate.js";
 
+export {
+  waitTimeByStageReport,
+  type WaitTimeByStageParams,
+  type WaitTimeByStageRow,
+} from "./reports/wait-time-by-stage.js";
+
 export { REPORT_REGISTRY, type ReportDefinitionAny } from "./report-registry.js";
 
 export {
