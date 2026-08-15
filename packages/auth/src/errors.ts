@@ -57,6 +57,13 @@ export const WEBAUTHN_NOT_ENROLLED = "WEBAUTHN_NOT_ENROLLED" as const;
 
 /** `configureAuth` was never called for this process. */
 export const AUTH_NOT_CONFIGURED = "AUTH_NOT_CONFIGURED" as const;
+/**
+ * A password-setting command ran outside a `withScreenedPassword`
+ * frame, so no breach verdict exists for the password it was asked to
+ * store. Fails closed: guessing here means a credential path that
+ * silently never consults the breach corpus.
+ */
+export const PASSWORD_BREACH_SCREEN_MISSING = "PASSWORD_BREACH_SCREEN_MISSING" as const;
 
 /**
  * The single client-facing sign-in error. `reasonCode` is for the
@@ -178,6 +185,23 @@ export function webAuthnNotEnrolledError(detail: {
     code: WEBAUTHN_NOT_ENROLLED,
     message: "No security key is registered for this account.",
     metadata: { userId: detail.userId },
+  });
+}
+
+/**
+ * `reason` distinguishes "no frame at all" from "the frame screened a
+ * different password". It is a developer-facing discriminator only —
+ * the plaintext is never included.
+ */
+export function passwordBreachScreenMissingError(
+  reason: "no_active_screen" | "screen_password_mismatch"
+): errors.InternalError {
+  return new errors.InternalError({
+    code: PASSWORD_BREACH_SCREEN_MISSING,
+    message:
+      "No breach screen is available for this password. Wrap the command dispatch in " +
+      "withScreenedPassword(newPassword, () => ...) so the breach check runs before the transaction opens.",
+    metadata: { reason },
   });
 }
 

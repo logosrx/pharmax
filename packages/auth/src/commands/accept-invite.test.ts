@@ -1,30 +1,26 @@
 // AcceptInvite contract tests (bus-integrated, DB-free).
 //
-// The setup link is pre-auth bearer material, so this covers the same
-// token guards as ResetPassword plus the one that is specific to the
-// invite flow: the target must still be INVITED. Anything else — an
-// operator who already activated, or one who was suspended — is the
-// same opaque RESET_TOKEN_INVALID.
+// Runs the real `acceptInvite` orchestration, pre-transaction breach
+// screen included. The setup link is pre-auth bearer material, so this
+// covers the same token guards as ResetPassword plus the one that is
+// specific to the invite flow: the target must still be INVITED.
+// Anything else — an operator who already activated, or one who was
+// suspended — is the same opaque RESET_TOKEN_INVALID.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  configureCommandBus,
-  executeSystemCommand,
-  resetCommandBusConfigurationForTests,
-} from "@pharmax/command-bus";
+import { configureCommandBus, resetCommandBusConfigurationForTests } from "@pharmax/command-bus";
 import { UserStatus } from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
-import { withSystemContext } from "@pharmax/tenancy";
 
 import {
   buildAuthConfiguration,
   configureAuth,
   resetAuthConfigurationForTests,
 } from "../configure.js";
+import { acceptInvite } from "../invite.js";
 import type { PasswordHasher } from "../password/hasher.js";
 import { hashSessionToken } from "../session/token.js";
-import { AcceptInvite } from "./accept-invite.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const USER_ID = "00000000-0000-4000-8000-0000000000a1";
@@ -138,8 +134,10 @@ function configureBus(client: unknown): void {
   });
 }
 
+// The production entry point, so the pre-transaction breach screen the
+// command requires is part of what these tests exercise.
 function run(input: { readonly rawToken: string; readonly newPassword: string }) {
-  return withSystemContext("test:accept-invite", () => executeSystemCommand(AcceptInvite, input));
+  return acceptInvite(input);
 }
 
 /** Neither the credential, the status, nor the token moved. */
@@ -336,5 +334,46 @@ describe("AcceptInvite — password policy", () => {
     // activates the operator without a compliant credential nor burns
     // the only setup link they have.
     expectNoEffect(fake);
+  });
+
+  it("rejects a breached initial password", async () => {
+    const fake = buildFake({});
+    configureAuth(
+      buildAuthConfiguration({
+        clock: clock.createFrozenClock(NOW),
+        hasher: fakeHasher,
+        password: { breachChecker: { isBreached: async () => true } },
+      })
+    );
+    configureBus(fake.client);
+
+    await expect(run({ rawToken: RAW_TOKEN, newPassword: INITIAL_PASSWORD })).rejects.toMatchObject(
+      { code: "PASSWORD_POLICY_VIOLATION" }
+    );
+    expectNoEffect(fake);
+  });
+
+  it("activates the operator when the breach corpus is down, and records the bypass", async () => {
+    const fake = buildFake({});
+    configureAuth(
+      buildAuthConfiguration({
+        clock: clock.createFrozenClock(NOW),
+        hasher: fakeHasher,
+        password: {
+          breachChecker: { isBreached: () => Promise.reject(new Error("corpus unavailable")) },
+        },
+      })
+    );
+    configureBus(fake.client);
+
+    // Fail open: a new hire must not be locked out of onboarding by a
+    // third party's outage. The audit row is what keeps that visible.
+    const out = await run({ rawToken: RAW_TOKEN, newPassword: INITIAL_PASSWORD });
+    expect(out.userId).toBe(USER_ID);
+
+    const audits = fake.tx.auditLog.create.mock.calls as unknown as ReadonlyArray<
+      readonly [{ data: { metadata: Record<string, unknown> } }]
+    >;
+    expect(audits[0]![0].data.metadata["breachScreen"]).toBe("bypassed_error");
   });
 });

@@ -5,7 +5,11 @@
 //   1. Verify the CURRENT password (defeats session-hijack password
 //      changes — a stolen portal cookie alone cannot rotate the
 //      credential).
-//   2. Enforce the operator-grade structural policy + breach screen.
+//   2. Enforce the operator-grade structural policy + the breach
+//      verdict the wrapper computed BEFORE this transaction opened
+//      (see @pharmax/auth's password/breach-screen.ts — the breach
+//      corpus is a third party and must not be called with a
+//      connection held).
 //   3. Reject reuse against the `portal_password_history` window
 //      (same policy depth operators use). This command is what ADDS
 //      portal password history — setup has no prior password by
@@ -22,11 +26,12 @@
 // SESSION in the route handler, never from request input.
 
 import {
-  checkNotBreached,
-  evaluatePasswordPolicy,
+  assertPasswordMeetsPolicy,
   getAuthConfiguration,
-  passwordPolicyViolationError,
+  logBreachScreenBypass,
   passwordReusedError,
+  requireBreachScreen,
+  withScreenedPassword,
 } from "@pharmax/auth";
 import { executeSystemCommand } from "@pharmax/command-bus";
 import type { SystemCommand, SystemHandlerResult } from "@pharmax/command-bus";
@@ -75,9 +80,11 @@ export const ChangePortalPassword: SystemCommand<
     tx,
     commandLogId,
     clock,
+    logger,
   }): Promise<SystemHandlerResult<ChangePortalPasswordOutput>> {
     const config = getAuthConfiguration();
     const now = clock.now();
+    const breachScreen = requireBreachScreen(input.newPassword);
 
     const account = await tx.portalAccount.findUnique({
       where: { id: input.portalAccountId },
@@ -109,19 +116,13 @@ export const ChangePortalPassword: SystemCommand<
 
     // Structural policy + breach screen — identical gates to setup.
     const emailLocalPart = account.email.split("@")[0] ?? "";
-    const structural = evaluatePasswordPolicy({
+    assertPasswordMeetsPolicy({
       plaintext: input.newPassword,
       policy: config.password,
       disallowedSubstrings: [emailLocalPart],
+      breachScreen,
     });
-    const breach = await checkNotBreached({
-      plaintext: input.newPassword,
-      policy: config.password,
-    });
-    const violations = [...structural.violations, ...breach.violations];
-    if (violations.length > 0) {
-      throw passwordPolicyViolationError({ violations });
-    }
+    logBreachScreenBypass(logger, breachScreen, { portalAccountId: account.id });
 
     // Anti-reuse: current hash + the recent history window (same
     // depth as the operator policy).
@@ -189,6 +190,7 @@ export const ChangePortalPassword: SystemCommand<
         metadata: {
           portalAccountId: account.id,
           sessionsRevoked: revoked.count,
+          breachScreen: breachScreen.outcome,
           commandLogId,
         },
       },
@@ -210,11 +212,17 @@ export const ChangePortalPassword: SystemCommand<
   },
 };
 
-/** System-context wrapper (mirrors `setupPortalAccount`). */
+/**
+ * System-context wrapper (mirrors `setupPortalAccount`). Screens the new
+ * password before dispatching so the breach lookup never runs inside the
+ * command's transaction.
+ */
 export async function changePortalPassword(
   input: ChangePortalPasswordInput
 ): Promise<ChangePortalPasswordOutput> {
-  return withSystemContext("portal:change-password", () =>
-    executeSystemCommand(ChangePortalPassword, input)
+  return withScreenedPassword(input.newPassword, () =>
+    withSystemContext("portal:change-password", () =>
+      executeSystemCommand(ChangePortalPassword, input)
+    )
   );
 }

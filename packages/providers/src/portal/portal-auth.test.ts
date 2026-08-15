@@ -35,7 +35,7 @@ import { PortalAccountStatus } from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
 import { withSystemContext } from "@pharmax/tenancy";
 
-import { ChangePortalPassword } from "./change-password.js";
+import { changePortalPassword, type ChangePortalPasswordInput } from "./change-password.js";
 import {
   PORTAL_SESSION_ABSOLUTE_EXPIRED,
   PORTAL_SESSION_ACCOUNT_DISABLED,
@@ -45,7 +45,7 @@ import {
   resolvePortalSession,
 } from "./session.js";
 import { PortalSignIn } from "./sign-in-command.js";
-import { SetupPortalAccount } from "./setup-account.js";
+import { setupPortalAccount, type SetupPortalAccountInput } from "./setup-account.js";
 
 const NOW = new Date("2026-07-31T12:00:00.000Z");
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
@@ -181,10 +181,11 @@ const PENDING_ACCOUNT = {
   providerId: PROVIDER_ID,
 };
 
-function runSetup(input: Record<string, unknown>) {
-  return withSystemContext("test:portal-setup", () =>
-    executeSystemCommand(SetupPortalAccount, { rawToken: "tok-raw", newPassword: "x", ...input })
-  );
+// The production wrapper, not a bare dispatch: it screens the chosen
+// password against the breach corpus BEFORE the command's transaction
+// opens, which is the ordering the command now requires.
+function runSetup(overrides: Partial<SetupPortalAccountInput>) {
+  return setupPortalAccount({ rawToken: "tok-raw", newPassword: "x", ...overrides });
 }
 
 describe("SetupPortalAccount", () => {
@@ -368,15 +369,13 @@ const CHANGE_ACCOUNT = {
   status: PortalAccountStatus.ACTIVE,
 };
 
-function runChange(input: Record<string, unknown>) {
-  return withSystemContext("test:portal-change-password", () =>
-    executeSystemCommand(ChangePortalPassword, {
-      portalAccountId: ACCOUNT_ID,
-      currentPassword: "current-password-9",
-      newPassword: "correct horse battery staple",
-      ...input,
-    })
-  );
+function runChange(overrides: Partial<ChangePortalPasswordInput>) {
+  return changePortalPassword({
+    portalAccountId: ACCOUNT_ID,
+    currentPassword: "current-password-9",
+    newPassword: "correct horse battery staple",
+    ...overrides,
+  });
 }
 
 describe("ChangePortalPassword", () => {

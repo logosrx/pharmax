@@ -13,16 +13,22 @@
 // token. It does NOT mint a session — the prescriber signs in
 // normally afterwards.
 //
+// The breach half of that policy is decided BEFORE this transaction
+// opens: it is a third-party lookup, and the wrapper below runs it so
+// no database connection is held across the call. See
+// @pharmax/auth's password/breach-screen.ts.
+//
 // No password history: a PENDING_SETUP account has no prior
 // password by construction, and portal password CHANGE is a slice-3
 // concern (it will add history when it lands).
 
 import {
-  checkNotBreached,
-  evaluatePasswordPolicy,
+  assertPasswordMeetsPolicy,
   getAuthConfiguration,
   hashSessionToken,
-  passwordPolicyViolationError,
+  logBreachScreenBypass,
+  requireBreachScreen,
+  withScreenedPassword,
 } from "@pharmax/auth";
 import { executeSystemCommand } from "@pharmax/command-bus";
 import type { SystemCommand, SystemHandlerResult } from "@pharmax/command-bus";
@@ -65,9 +71,11 @@ export const SetupPortalAccount: SystemCommand<SetupPortalAccountInput, SetupPor
       tx,
       commandLogId,
       clock,
+      logger,
     }): Promise<SystemHandlerResult<SetupPortalAccountOutput>> {
       const config = getAuthConfiguration();
       const now = clock.now();
+      const breachScreen = requireBreachScreen(input.newPassword);
 
       const token = await tx.portalSetupToken.findUnique({
         where: { tokenHash: hashSessionToken(input.rawToken) },
@@ -97,19 +105,13 @@ export const SetupPortalAccount: SystemCommand<SetupPortalAccountInput, SetupPor
       // Same structural + breach policy as operator passwords. No
       // reuse-history check — a PENDING_SETUP account has none.
       const emailLocalPart = account.email.split("@")[0] ?? "";
-      const structural = evaluatePasswordPolicy({
+      assertPasswordMeetsPolicy({
         plaintext: input.newPassword,
         policy: config.password,
         disallowedSubstrings: [emailLocalPart],
+        breachScreen,
       });
-      const breach = await checkNotBreached({
-        plaintext: input.newPassword,
-        policy: config.password,
-      });
-      const violations = [...structural.violations, ...breach.violations];
-      if (violations.length > 0) {
-        throw passwordPolicyViolationError({ violations });
-      }
+      logBreachScreenBypass(logger, breachScreen, { portalAccountId: account.id });
 
       const hashedPassword = await config.hasher.hash(input.newPassword);
       await tx.portalAccount.update({
@@ -129,7 +131,11 @@ export const SetupPortalAccount: SystemCommand<SetupPortalAccountInput, SetupPor
           action: "portal_account.activated",
           resourceType: "PortalAccount",
           resourceId: account.id,
-          metadata: { portalAccountId: account.id, commandLogId },
+          metadata: {
+            portalAccountId: account.id,
+            breachScreen: breachScreen.outcome,
+            commandLogId,
+          },
         },
         outboxEvents: [
           {
@@ -148,11 +154,15 @@ export const SetupPortalAccount: SystemCommand<SetupPortalAccountInput, SetupPor
     },
   };
 
-/** System-context wrapper (mirrors `acceptInvite`). */
+/**
+ * System-context wrapper (mirrors `acceptInvite`). Screens the chosen
+ * password against the breach corpus BEFORE dispatching, so that
+ * third-party call never runs with the command's transaction open.
+ */
 export async function setupPortalAccount(
   input: SetupPortalAccountInput
 ): Promise<SetupPortalAccountOutput> {
-  return withSystemContext("portal:setup-account", () =>
-    executeSystemCommand(SetupPortalAccount, input)
+  return withScreenedPassword(input.newPassword, () =>
+    withSystemContext("portal:setup-account", () => executeSystemCommand(SetupPortalAccount, input))
   );
 }

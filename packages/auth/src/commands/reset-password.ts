@@ -3,8 +3,33 @@
 // A SYSTEM command: it is pre-auth (the caller holds only the emailed
 // token, no session). The token IS the authorization — resolving it by
 // hash yields the user + org, so the command runs in system context and
-// writes audit/outbox under that org. Invalid / used / expired tokens
-// surface as a single opaque `RESET_TOKEN_INVALID`.
+// writes audit/outbox under that org. Invalid / used / expired tokens,
+// and any user who is not ACTIVE, surface as a single opaque
+// `RESET_TOKEN_INVALID`.
+//
+// The ACTIVE requirement carries more weight than it looks. Reset
+// tokens and invite tokens are the same row shape in
+// `password_reset_token` with no purpose discriminator, so without it:
+//
+//   - A 7-day INVITE token redeemed here would succeed. It would set a
+//     password on a still-INVITED user, burn the single-use link, and
+//     audit the act as `user.password_reset`. The operator then cannot
+//     sign in (SignIn requires ACTIVE) and onboarding has to restart —
+//     a denial of service on onboarding with a misleading audit trail.
+//   - A SUSPENDED user with an outstanding reset token could still
+//     rotate their password. DeactivateUser revokes sessions but does
+//     not invalidate outstanding tokens, so the link would survive
+//     off-boarding.
+//
+// Requiring ACTIVE here also makes the two flows mutually exclusive
+// using state that already exists: an invite token's user is INVITED so
+// this command refuses it, and a reset token's user is ACTIVE so
+// AcceptInvite refuses it (it requires INVITED). No schema change and
+// no `purpose` column needed.
+//
+// Callers must dispatch this inside `withScreenedPassword` so the
+// breach check happens before the transaction opens — see
+// ../password/breach-screen.ts. `resetPassword` does that.
 //
 // On success: sets the new password (shared policy/breach/reuse core),
 // consumes the token, and revokes ALL of the user's sessions
@@ -12,10 +37,12 @@
 // so every existing session dies.
 
 import type { SystemCommand, SystemHandlerResult } from "@pharmax/command-bus";
+import { UserStatus } from "@pharmax/database";
 import { z } from "zod";
 
 import { getAuthConfiguration } from "../configure.js";
 import { resetTokenInvalidError } from "../errors.js";
+import { logBreachScreenBypass, requireBreachScreen } from "../password/breach-screen.js";
 import { applyNewPassword } from "../password/set-password.js";
 import { hashSessionToken } from "../session/token.js";
 
@@ -43,9 +70,11 @@ export const ResetPassword: SystemCommand<ResetPasswordInput, ResetPasswordOutpu
     tx,
     commandLogId,
     clock,
+    logger,
   }): Promise<SystemHandlerResult<ResetPasswordOutput>> {
     const config = getAuthConfiguration();
     const now = clock.now();
+    const breachScreen = requireBreachScreen(input.newPassword);
 
     const token = await tx.passwordResetToken.findUnique({
       where: { tokenHash: hashSessionToken(input.rawToken) },
@@ -57,10 +86,14 @@ export const ResetPassword: SystemCommand<ResetPasswordInput, ResetPasswordOutpu
 
     const user = await tx.user.findUnique({
       where: { id: token.userId },
-      select: { email: true, displayName: true, hashedPassword: true },
+      select: { email: true, displayName: true, hashedPassword: true, status: true },
     });
-    if (user === null) {
-      // Token references a missing user — treat as invalid, do not leak.
+    // A missing user, or any user who is not ACTIVE (still INVITED,
+    // suspended, terminated), is the SAME opaque invalid token. A
+    // distinct code for "suspended" would answer "does this account
+    // exist, and what state is it in?" for anyone holding a stale link,
+    // which is an account-enumeration oracle on a pre-auth endpoint.
+    if (user === null || user.status !== UserStatus.ACTIVE) {
       throw resetTokenInvalidError();
     }
 
@@ -72,9 +105,11 @@ export const ResetPassword: SystemCommand<ResetPasswordInput, ResetPasswordOutpu
       plaintext: input.newPassword,
       disallowedSubstrings: [emailLocalPart, user.displayName],
       currentHash: user.hashedPassword,
+      breachScreen,
       config,
       now,
     });
+    logBreachScreenBypass(logger, breachScreen, { userId: token.userId });
 
     // Consume the token (single-use).
     await tx.passwordResetToken.update({ where: { id: token.id }, data: { usedAt: now } });
@@ -93,7 +128,14 @@ export const ResetPassword: SystemCommand<ResetPasswordInput, ResetPasswordOutpu
         action: "user.password_reset",
         resourceType: "User",
         resourceId: token.userId,
-        metadata: { userId: token.userId, sessionsRevoked: revoked.count, commandLogId },
+        metadata: {
+          userId: token.userId,
+          sessionsRevoked: revoked.count,
+          // Durable per-credential record of whether the breach corpus
+          // actually answered for this password.
+          breachScreen: breachScreen.outcome,
+          commandLogId,
+        },
       },
       outboxEvents: [
         {

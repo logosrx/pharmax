@@ -48,10 +48,21 @@ export {
   evaluatePasswordPolicy,
   checkNotBreached,
   DEFAULT_PASSWORD_POLICY,
+  DEFAULT_BREACH_CHECK_TIMEOUT_MS,
   type PasswordPolicy,
   type PasswordEvaluation,
   type BreachChecker,
+  type BreachScreenOutcome,
+  type BreachScreenResult,
 } from "./password/policy.js";
+export {
+  withScreenedPassword,
+  requireBreachScreen,
+  getBreachScreen,
+  isBreachScreenBypassed,
+  logBreachScreenBypass,
+  type BreachScreen,
+} from "./password/breach-screen.js";
 
 export { mintSessionToken, hashSessionToken, MIN_SESSION_TOKEN_BYTES } from "./session/token.js";
 export {
@@ -175,7 +186,7 @@ export {
   type PasswordResetMailer,
   type PasswordResetDelivery,
 } from "./reset-mailer.js";
-export { applyNewPassword } from "./password/set-password.js";
+export { applyNewPassword, assertPasswordMeetsPolicy } from "./password/set-password.js";
 
 export {
   INVALID_CREDENTIALS,
@@ -190,6 +201,7 @@ export {
   WEBAUTHN_REGISTRATION_FAILED,
   WEBAUTHN_NOT_ENROLLED,
   AUTH_NOT_CONFIGURED,
+  PASSWORD_BREACH_SCREEN_MISSING,
   invalidCredentialsError,
   mfaRequiredError,
   mfaInvalidError,
@@ -202,11 +214,13 @@ export {
   webAuthnRegistrationFailedError,
   webAuthnNotEnrolledError,
   authNotConfiguredError,
+  passwordBreachScreenMissingError,
 } from "./errors.js";
 
 import * as configureModule from "./configure.js";
 import * as argon2Module from "./password/argon2-hasher.js";
 import * as policyModule from "./password/policy.js";
+import * as breachScreenModule from "./password/breach-screen.js";
 import * as tokenModule from "./session/token.js";
 import * as sessionModule from "./session/service.js";
 import * as totpModule from "./mfa/totp.js";
@@ -243,6 +257,7 @@ export const auth = {
   ...configureModule,
   ...argon2Module,
   ...policyModule,
+  ...breachScreenModule,
   ...tokenModule,
   ...sessionModule,
   ...totpModule,

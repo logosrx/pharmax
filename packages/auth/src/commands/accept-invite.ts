@@ -8,6 +8,15 @@
 // password via the shared core, flips INVITED → ACTIVE, and consumes the
 // token. It does NOT mint a session — the operator then signs in
 // normally (which, for a floor role, will run the MFA enrollment step).
+//
+// The INVITED requirement is also what keeps this flow and ResetPassword
+// mutually exclusive: reset and invite tokens share one table with no
+// purpose column, so each command excludes the other's tokens by the
+// user status they imply (ResetPassword requires ACTIVE).
+//
+// Callers must dispatch this inside `withScreenedPassword` so the breach
+// check happens before the transaction opens — see
+// ../password/breach-screen.ts. `acceptInvite` does that.
 
 import { UserStatus } from "@pharmax/database";
 import type { SystemCommand, SystemHandlerResult } from "@pharmax/command-bus";
@@ -15,6 +24,7 @@ import { z } from "zod";
 
 import { getAuthConfiguration } from "../configure.js";
 import { resetTokenInvalidError } from "../errors.js";
+import { logBreachScreenBypass, requireBreachScreen } from "../password/breach-screen.js";
 import { applyNewPassword } from "../password/set-password.js";
 import { hashSessionToken } from "../session/token.js";
 
@@ -41,9 +51,11 @@ export const AcceptInvite: SystemCommand<AcceptInviteInput, AcceptInviteOutput> 
     tx,
     commandLogId,
     clock,
+    logger,
   }): Promise<SystemHandlerResult<AcceptInviteOutput>> {
     const config = getAuthConfiguration();
     const now = clock.now();
+    const breachScreen = requireBreachScreen(input.newPassword);
 
     const token = await tx.passwordResetToken.findUnique({
       where: { tokenHash: hashSessionToken(input.rawToken) },
@@ -72,9 +84,11 @@ export const AcceptInvite: SystemCommand<AcceptInviteInput, AcceptInviteOutput> 
       disallowedSubstrings: [emailLocalPart, user.displayName],
       // An invited user has no prior password.
       currentHash: null,
+      breachScreen,
       config,
       now,
     });
+    logBreachScreenBypass(logger, breachScreen, { userId: token.userId });
 
     await tx.user.update({
       where: { id: token.userId },
@@ -89,7 +103,7 @@ export const AcceptInvite: SystemCommand<AcceptInviteInput, AcceptInviteOutput> 
         action: "user.invite_accepted",
         resourceType: "User",
         resourceId: token.userId,
-        metadata: { userId: token.userId, commandLogId },
+        metadata: { userId: token.userId, breachScreen: breachScreen.outcome, commandLogId },
       },
       outboxEvents: [
         {
