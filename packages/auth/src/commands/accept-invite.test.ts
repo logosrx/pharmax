@@ -4,8 +4,9 @@
 // screen included. The setup link is pre-auth bearer material, so this
 // covers the same token guards as ResetPassword plus the one that is
 // specific to the invite flow: the target must still be INVITED.
-// Anything else — an operator who already activated, or one who was
-// suspended — is the same opaque RESET_TOKEN_INVALID.
+// Anything else — an operator who already activated, one who was
+// suspended, or a token filed under an organization the user does not
+// belong to — is the same opaque RESET_TOKEN_INVALID.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,6 +24,7 @@ import type { PasswordHasher } from "../password/hasher.js";
 import { hashSessionToken } from "../session/token.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
+const OTHER_ORG_ID = "00000000-0000-4000-8000-000000000002";
 const USER_ID = "00000000-0000-4000-8000-0000000000a1";
 const TOKEN_ROW_ID = "00000000-0000-4000-8000-0000000000b1";
 const NOW = new Date("2026-07-13T12:00:00.000Z");
@@ -46,6 +48,12 @@ const fakeHasher: PasswordHasher = {
 interface SeedToken {
   readonly expiresAt?: Date;
   readonly usedAt?: Date | null;
+  /**
+   * Organization stamped on the token row. Defaults to the one the
+   * seeded user actually belongs to; set it to another org to model a
+   * historical row whose (user, organization) pair is mismatched.
+   */
+  readonly organizationId?: string;
 }
 
 function buildFake(opts: {
@@ -61,7 +69,7 @@ function buildFake(opts: {
       : {
           id: TOKEN_ROW_ID,
           userId: USER_ID,
-          organizationId: ORG_ID,
+          organizationId: opts.token?.organizationId ?? ORG_ID,
           // Invites carry a 7-day TTL; anything comfortably future works.
           expiresAt: opts.token?.expiresAt ?? new Date(NOW.getTime() + 24 * 60 * 60 * 1000),
           usedAt: opts.token?.usedAt ?? null,
@@ -80,8 +88,17 @@ function buildFake(opts: {
       }),
     },
     user: {
-      findUnique: vi.fn(async () =>
-        opts.userMissing === true
+      // The fake database holds ONE user row, and it lives in ORG_ID.
+      // It answers whatever `where` it is handed the way Postgres would:
+      // every clause present must match, and a clause that is ABSENT
+      // constrains nothing. So a command that filters on the wrong
+      // organization gets a real miss, and one that forgot to filter at
+      // all gets a HIT — which is what makes the tenancy tests below
+      // fail for the right reason instead of looking like a missing user.
+      findFirst: vi.fn(async (args: { where: { id: string; organizationId?: string } }) =>
+        opts.userMissing === true ||
+        args.where.id !== USER_ID ||
+        (args.where.organizationId !== undefined && args.where.organizationId !== ORG_ID)
           ? null
           : {
               email: "newhire@example.com",
@@ -140,11 +157,32 @@ function run(input: { readonly rawToken: string; readonly newPassword: string })
   return acceptInvite(input);
 }
 
-/** Neither the credential, the status, nor the token moved. */
+/**
+ * Neither the credential, the status, nor the token moved, and no
+ * tenant-scoped record of the attempt was written. `user.update` covers
+ * both writes the success path makes — the password hash and the
+ * INVITED → ACTIVE flip.
+ */
 function expectNoEffect(fake: ReturnType<typeof buildFake>): void {
   expect(fake.tx.user.update).not.toHaveBeenCalled();
+  expect(fake.tx.passwordHistory.create).not.toHaveBeenCalled();
   expect(fake.tx.passwordResetToken.update).not.toHaveBeenCalled();
   expect(fake.tx.auditLog.create).not.toHaveBeenCalled();
+  expect(fake.tx.eventOutbox.createMany).not.toHaveBeenCalled();
+}
+
+/**
+ * `code|message` of the refusal, so two failure paths can be compared
+ * for indistinguishability rather than merely both being errors.
+ */
+async function refusalFingerprint(rawToken: string): Promise<string> {
+  try {
+    await run({ rawToken, newPassword: INITIAL_PASSWORD });
+  } catch (cause) {
+    const err = cause as { code: string; message: string };
+    return `${err.code}|${err.message}`;
+  }
+  return "<did not reject>";
 }
 
 function userUpdateData(fake: ReturnType<typeof buildFake>): ReadonlyArray<{
@@ -319,6 +357,95 @@ describe("AcceptInvite — token guards", () => {
       { code: "RESET_TOKEN_INVALID" }
     );
     expectNoEffect(fake);
+  });
+});
+
+// The token row is where this command learns which organization to write
+// under: `targetOrganizationId`, the audit entry, and the
+// `user.invite_accepted.v1` payload all come from it. So a row whose
+// `organizationId` does not match its user's would file one tenant's
+// activation in another tenant's audit trail and event stream — the two
+// artifacts that are supposed to be tenant-scoped truth, and the kind of
+// cross-tenant write the repo treats as a critical incident.
+//
+// IssueInvite now proves that pairing before it mints, so this is
+// defence in depth rather than a live exploit: `password_reset_token`
+// long predates that check, so a historical row could already carry a
+// mismatched pair, and a future writer to the table would not
+// necessarily repeat the membership check.
+describe("AcceptInvite — tenancy", () => {
+  it("refuses a token whose organization is not the user's", async () => {
+    // The user row lives in ORG_ID; the token claims OTHER_ORG_ID.
+    const fake = buildFake({ token: { organizationId: OTHER_ORG_ID } });
+    configureBus(fake.client);
+
+    await expect(run({ rawToken: RAW_TOKEN, newPassword: INITIAL_PASSWORD })).rejects.toMatchObject(
+      {
+        code: "RESET_TOKEN_INVALID",
+      }
+    );
+  });
+
+  it("writes nothing at all when it refuses a mismatched token", async () => {
+    const fake = buildFake({ token: { organizationId: OTHER_ORG_ID } });
+    configureBus(fake.client);
+
+    await expect(run({ rawToken: RAW_TOKEN, newPassword: INITIAL_PASSWORD })).rejects.toThrow();
+
+    // No credential, no activation, no consumed link, no audit row and
+    // no event — and because a system command resolves its target org
+    // inside the handler, no command_log row under OTHER_ORG_ID either.
+    // A refusal that still filed bookkeeping under the token's claimed
+    // organization would itself be the cross-tenant write.
+    expectNoEffect(fake);
+    expect(fake.tx.commandLog.create).not.toHaveBeenCalled();
+  });
+
+  it("looks the user up with the organization filter, not by id alone", async () => {
+    const fake = buildFake({});
+    configureBus(fake.client);
+
+    await run({ rawToken: RAW_TOKEN, newPassword: INITIAL_PASSWORD });
+
+    // Pins the mechanism, not just the outcome: the guard is one
+    // org-scoped read, so a foreign row is never loaded at all rather
+    // than fetched by id and compared afterwards.
+    expect(fake.tx.user.findFirst).toHaveBeenCalledWith({
+      where: { id: USER_ID, organizationId: ORG_ID },
+      select: { email: true, displayName: true, status: true },
+    });
+  });
+
+  it("uses the SAME opaque code and message for every refusal, tenancy included", async () => {
+    // A caller here is anonymous — it holds an emailed link and nothing
+    // else. If the organization mismatch had its own code, that caller
+    // would learn that the token names a real user in a real (other)
+    // organization, which is exactly the cross-tenant existence oracle
+    // the shared refusal exists to deny.
+    const fingerprints: string[] = [];
+    const cases = [
+      buildFake({ token: { organizationId: OTHER_ORG_ID } }),
+      buildFake({ status: UserStatus.ACTIVE }),
+      buildFake({ status: UserStatus.SUSPENDED }),
+      buildFake({ status: UserStatus.TERMINATED }),
+      buildFake({ userMissing: true }),
+      buildFake({ token: { usedAt: new Date(NOW.getTime() - 60_000) } }),
+      buildFake({ token: { expiresAt: new Date(NOW.getTime() - 1) } }),
+    ];
+    for (const fake of cases) {
+      configureBus(fake.client);
+      fingerprints.push(await refusalFingerprint(RAW_TOKEN));
+      resetCommandBusConfigurationForTests();
+    }
+
+    configureBus(buildFake({}).client);
+    fingerprints.push(await refusalFingerprint("never-minted"));
+
+    // Compared against the literal rather than merely "all equal", so
+    // this cannot pass by every case failing to reject at all.
+    expect([...new Set(fingerprints)]).toEqual([
+      "RESET_TOKEN_INVALID|This password reset link is invalid or has expired.",
+    ]);
   });
 });
 
