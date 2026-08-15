@@ -2,7 +2,7 @@
 //
 // The raw token this command returns is, for its lifetime, the entire
 // credential for an account that has no password yet: whoever holds it
-// sets the first password. That makes three properties load-bearing:
+// sets the first password. That makes four properties load-bearing:
 //
 //   - Only a hash of the token is persisted, and the raw value appears
 //     in no bookkeeping row.
@@ -10,6 +10,8 @@
 //     link that leaked cannot be redeemed after a re-invite.
 //   - The token is high-entropy and unique per issue, and its lifetime
 //     is the invitation TTL rather than the (much shorter) reset TTL.
+//   - The token is filed under an organization the user actually
+//     belongs to. See the tenancy block at the bottom of this file.
 
 import { createHash } from "node:crypto";
 
@@ -29,7 +31,7 @@ import {
   resetAuthConfigurationForTests,
 } from "../configure.js";
 import type { PasswordHasher } from "../password/hasher.js";
-import { DEFAULT_INVITE_TTL_MS, IssueInvite } from "./issue-invite.js";
+import { DEFAULT_INVITE_TTL_MS, ISSUE_INVITE_USER_NOT_FOUND, IssueInvite } from "./issue-invite.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const OTHER_ORG_ID = "00000000-0000-4000-8000-000000000002";
@@ -48,8 +50,27 @@ const fakeHasher: PasswordHasher = {
   },
 };
 
-function buildFake() {
+/**
+ * `member` is the ONE user row the fake database holds. `user.findFirst`
+ * answers it only when BOTH `id` and `organizationId` in the `where`
+ * match — the same thing Postgres would do — so a test that points the
+ * command at the wrong organization gets a real miss rather than a
+ * stubbed one.
+ */
+function buildFake(
+  member: { userId: string; organizationId: string } = {
+    userId: USER_ID,
+    organizationId: ORG_ID,
+  }
+) {
   const tx = {
+    user: {
+      findFirst: vi.fn(async (args: { where: { id: string; organizationId: string } }) =>
+        args.where.id === member.userId && args.where.organizationId === member.organizationId
+          ? { id: member.userId }
+          : null
+      ),
+    },
     passwordResetToken: {
       updateMany: vi.fn(async (_args: unknown) => ({ count: 1 })),
       create: vi.fn(async (_args: unknown) => ({ id: "prt-1" })),
@@ -185,7 +206,7 @@ describe("IssueInvite", () => {
     // also leaves already-redeemed rows with their original stamp
     // instead of rewriting when they were consumed.
     expect(fake.tx.passwordResetToken.updateMany).toHaveBeenCalledWith({
-      where: { userId: USER_ID, usedAt: null },
+      where: { userId: USER_ID, organizationId: ORG_ID, usedAt: null },
       data: { usedAt: NOW },
     });
     const invalidateOrder = fake.tx.passwordResetToken.updateMany.mock.invocationCallOrder[0]!;
@@ -193,12 +214,21 @@ describe("IssueInvite", () => {
     expect(invalidateOrder).toBeLessThan(mintOrder);
   });
 
-  it("files the token, the audit entry, and the event under the requested organization", async () => {
-    const fake = buildFake();
+  it("files the token, the audit entry, and the event under the requested organization once the user is proven to belong to it", async () => {
+    // The organization comes from the input — but only after the input
+    // has been checked against the user's actual row. Seeding the user
+    // INTO `OTHER_ORG_ID` is what makes the request legitimate; the
+    // same call against the default fixture is refused by the test
+    // below.
+    const fake = buildFake({ userId: USER_ID, organizationId: OTHER_ORG_ID });
     configureBus(fake.client);
 
     await run({ organizationId: OTHER_ORG_ID });
 
+    expect(fake.tx.user.findFirst).toHaveBeenCalledWith({
+      where: { id: USER_ID, organizationId: OTHER_ORG_ID },
+      select: { id: true },
+    });
     expect(storedToken(fake).data.organizationId).toBe(OTHER_ORG_ID);
     expect(fake.tx.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -254,5 +284,82 @@ describe("IssueInvite", () => {
         }),
       })
     );
+  });
+});
+
+// `userId` and `organizationId` arrive as two independent inputs, and a
+// SystemCommand runs in system context, where the tenancy extension
+// passes through by design. Nothing below this command would notice a
+// mispaired call: the token row would carry the wrong org, and
+// AcceptInvite reads the org back OFF that row — putting one
+// organization's user activation into another organization's audit
+// trail and event stream. Those two artifacts are the tenant-scoped
+// record of truth, so the pairing has to be proved here.
+describe("IssueInvite — tenancy", () => {
+  it("refuses a userId that belongs to a different organization", async () => {
+    const fake = buildFake({ userId: USER_ID, organizationId: OTHER_ORG_ID });
+    configureBus(fake.client);
+
+    await expect(run({ organizationId: ORG_ID })).rejects.toMatchObject({
+      name: "NotFoundError",
+      code: ISSUE_INVITE_USER_NOT_FOUND,
+      // 404, not 403: a "wrong organization" answer would confirm the
+      // id exists somewhere, which is the cross-tenant existence leak
+      // NotFoundError is documented to avoid. A caller who is entitled
+      // to the id cannot tell it apart from a typo, and neither can a
+      // caller who is not.
+      httpStatus: 404,
+    });
+  });
+
+  it("writes nothing at all when it refuses", async () => {
+    const fake = buildFake({ userId: USER_ID, organizationId: OTHER_ORG_ID });
+    configureBus(fake.client);
+
+    await expect(run({ organizationId: ORG_ID })).rejects.toThrow();
+
+    // No token to redeem, and — because a system command resolves its
+    // target org from the handler and so writes command_log INSIDE the
+    // transaction — no bookkeeping row under the org that was asked
+    // for either. A refusal that still filed an audit entry under
+    // ORG_ID would itself be the cross-tenant write.
+    expect(fake.tx.passwordResetToken.create).not.toHaveBeenCalled();
+    expect(fake.tx.passwordResetToken.updateMany).not.toHaveBeenCalled();
+    expect(fake.tx.auditLog.create).not.toHaveBeenCalled();
+    expect(fake.tx.eventOutbox.createMany).not.toHaveBeenCalled();
+    expect(fake.tx.commandLog.create).not.toHaveBeenCalled();
+  });
+
+  it("proves membership before it writes anything", async () => {
+    const fake = buildFake();
+    configureBus(fake.client);
+
+    await run();
+
+    // A check that runs after the sweep would already have burned the
+    // user's live invitation on the way to refusing.
+    const checkOrder = fake.tx.user.findFirst.mock.invocationCallOrder[0]!;
+    expect(checkOrder).toBeLessThan(
+      fake.tx.passwordResetToken.updateMany.mock.invocationCallOrder[0]!
+    );
+    expect(checkOrder).toBeLessThan(fake.tx.passwordResetToken.create.mock.invocationCallOrder[0]!);
+  });
+
+  it("scopes the prior-token sweep to the organization, not the user alone", async () => {
+    // Seeded in OTHER_ORG_ID so a sweep that quietly used ORG_ID, or
+    // dropped the organization entirely, cannot pass by coincidence.
+    const fake = buildFake({ userId: USER_ID, organizationId: OTHER_ORG_ID });
+    configureBus(fake.client);
+
+    await run({ organizationId: OTHER_ORG_ID });
+
+    // `usedAt` is a mutation. Filtering by `userId` alone would let one
+    // organization's re-invite stamp another organization's live token
+    // as consumed — a cross-tenant write, and an invite that stops
+    // working for reasons no one in that org can explain.
+    expect(fake.tx.passwordResetToken.updateMany).toHaveBeenCalledWith({
+      where: { userId: USER_ID, organizationId: OTHER_ORG_ID, usedAt: null },
+      data: { usedAt: NOW },
+    });
   });
 });
