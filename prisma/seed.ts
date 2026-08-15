@@ -53,6 +53,10 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     description:
       "Edit pharmacy site profile and ship-from address used by the carrier auto-purchase flow",
   },
+  {
+    code: "org.manage_buckets",
+    description: "Create / rename / reorder / delete custom operational queue buckets",
+  },
   { code: "patients.create", description: "Register a new patient at a clinic" },
   { code: "patients.read", description: "Read patient identity (PHI access)" },
   {

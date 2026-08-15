@@ -96,6 +96,9 @@ import { OrderTypingResumedV1 } from "./events/order/typing-resumed-v1.js";
 import { OrderTypingStartedV1 } from "./events/order/typing-started-v1.js";
 
 // ---- org (tenant administration) ----------------------------------------
+import { OrgBucketCreatedV1 } from "./events/org/bucket-created-v1.js";
+import { OrgBucketDeletedV1 } from "./events/org/bucket-deleted-v1.js";
+import { OrgBucketUpdatedV1 } from "./events/org/bucket-updated-v1.js";
 import { OrgBucketsProvisionedV1 } from "./events/org/buckets-provisioned-v1.js";
 import { OrgRoleCreatedV1 } from "./events/org/role-created-v1.js";
 import { OrgRolePermissionsUpdatedV1 } from "./events/org/role-permissions-updated-v1.js";
@@ -244,6 +247,9 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   OrderTypingResumedV1,
   OrderTypingStartedV1,
   // org / organization
+  OrgBucketCreatedV1,
+  OrgBucketDeletedV1,
+  OrgBucketUpdatedV1,
   OrgBucketsProvisionedV1,
   OrgRoleCreatedV1,
   OrgRolePermissionsUpdatedV1,

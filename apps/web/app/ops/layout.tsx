@@ -221,6 +221,12 @@ const NAV: ReadonlyArray<GroupSpec> = [
         requires: PERMISSIONS.ORG_MANAGE_SITES,
       },
       {
+        href: "/ops/admin/buckets",
+        label: "Buckets",
+        icon: "dashboard",
+        requires: PERMISSIONS.ORG_MANAGE_BUCKETS,
+      },
+      {
         href: "/ops/admin/carriers",
         label: "Carriers",
         icon: "carriers",

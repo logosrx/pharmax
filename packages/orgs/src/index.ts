@@ -25,6 +25,47 @@ export {
 } from "./commands/provision-default-buckets.js";
 
 export {
+  CreateBucket,
+  CREATE_BUCKET_CODE_ALREADY_EXISTS,
+  CREATE_BUCKET_CODE_RESERVED,
+  CREATE_BUCKET_KIND_RESERVED,
+  CREATE_BUCKET_SITE_NOT_IN_ORG,
+  CREATE_BUCKET_CLINIC_NOT_IN_ORG,
+  CREATE_BUCKET_TEAM_NOT_IN_ORG,
+  type CreateBucketInput,
+  type CreateBucketOutput,
+} from "./commands/create-bucket.js";
+
+export {
+  UpdateBucket,
+  UPDATE_BUCKET_NOT_FOUND,
+  UPDATE_BUCKET_SYSTEM_FIELD_IMMUTABLE,
+  UPDATE_BUCKET_KIND_RESERVED,
+  type UpdateBucketInput,
+  type UpdateBucketOutput,
+  type UpdateBucketField,
+} from "./commands/update-bucket.js";
+
+export {
+  DeleteBucket,
+  DELETE_BUCKET_NOT_FOUND,
+  DELETE_BUCKET_IS_SYSTEM,
+  DELETE_BUCKET_HAS_ORDERS,
+  type DeleteBucketInput,
+  type DeleteBucketOutput,
+} from "./commands/delete-bucket.js";
+
+export {
+  ASSIGNABLE_BUCKET_KINDS,
+  BUCKET_CODE_REGEX,
+  RESERVED_BUCKET_CODES,
+  RESERVED_BUCKET_KINDS,
+  SYSTEM_BUCKET_MUTABLE_FIELDS,
+  isReservedBucketCode,
+  isReservedBucketKind,
+} from "./buckets/bucket-guards.js";
+
+export {
   UpdatePharmacySiteAddress,
   PHARMACY_SITE_NOT_FOUND,
   type UpdatePharmacySiteAddressInput,
@@ -86,6 +127,9 @@ export {
 
 import * as createOrganizationModule from "./commands/create-organization.js";
 import * as provisionDefaultBucketsModule from "./commands/provision-default-buckets.js";
+import * as createBucketModule from "./commands/create-bucket.js";
+import * as updateBucketModule from "./commands/update-bucket.js";
+import * as deleteBucketModule from "./commands/delete-bucket.js";
 import * as updatePharmacySiteAddressModule from "./commands/update-pharmacy-site-address.js";
 import * as inviteUserModule from "./commands/invite-user.js";
 import * as assignRoleModule from "./commands/assign-role.js";
@@ -98,6 +142,9 @@ export const orgs = {
   commands: {
     CreateOrganization: createOrganizationModule.CreateOrganization,
     ProvisionDefaultBuckets: provisionDefaultBucketsModule.ProvisionDefaultBuckets,
+    CreateBucket: createBucketModule.CreateBucket,
+    UpdateBucket: updateBucketModule.UpdateBucket,
+    DeleteBucket: deleteBucketModule.DeleteBucket,
     UpdatePharmacySiteAddress: updatePharmacySiteAddressModule.UpdatePharmacySiteAddress,
     InviteUser: inviteUserModule.InviteUser,
     AssignRole: assignRoleModule.AssignRole,
