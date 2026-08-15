@@ -13,6 +13,16 @@
 // token. It does NOT mint a session — the prescriber signs in
 // normally afterwards.
 //
+// The organization on the token row is not taken on trust. It is what
+// this command files the audit entry and the outbox event under, so a
+// row whose `organizationId` did not match its account's would write
+// one tenant's activation into another tenant's record of truth. The
+// account is therefore read with BOTH ids, and a mismatch resolves to
+// no account at all — the same opaque refusal as an unknown token.
+// IssuePortalSetupToken proves that pairing before minting, so this is
+// defence in depth: a future writer to `portal_setup_token` would not
+// necessarily repeat that check.
+//
 // The breach half of that policy is decided BEFORE this transaction
 // opens: it is a third-party lookup, and the wrapper below runs it so
 // no database connection is held across the call. See
@@ -91,12 +101,18 @@ export const SetupPortalAccount: SystemCommand<SetupPortalAccountInput, SetupPor
         throw setupTokenInvalidError();
       }
 
-      const account = await tx.portalAccount.findUnique({
-        where: { id: token.portalAccountId },
+      // Read by account AND organization together, so a token whose
+      // pair is mismatched never loads an account row at all — the org
+      // this command then audits and publishes under is proven, not
+      // assumed. `findFirst`, not `findUnique`: `portal_account` has no
+      // compound unique on (id, organizationId).
+      const account = await tx.portalAccount.findFirst({
+        where: { id: token.portalAccountId, organizationId: token.organizationId },
         select: { id: true, email: true, status: true, providerId: true },
       });
       // Setup applies only to a still-PENDING_SETUP account. Anything
-      // else (already ACTIVE, DISABLED) is the same opaque invalid
+      // else (already ACTIVE, DISABLED, or an account that does not
+      // belong to the token's organization) is the same opaque invalid
       // token — no enumeration.
       if (account === null || account.status !== PortalAccountStatus.PENDING_SETUP) {
         throw setupTokenInvalidError();

@@ -413,7 +413,12 @@ describe("ResetPassword — account state guard", () => {
     configureBus(buildFake({}).client);
     fingerprints.push(await refusalFingerprint({ rawToken: "never-minted" }));
 
-    expect(new Set(fingerprints).size).toBe(1);
+    // Compared against the literal rather than merely "all equal", so
+    // this cannot pass by every case failing to reject at all — which is
+    // exactly the shape a dropped status or organization guard takes.
+    expect([...new Set(fingerprints)]).toEqual([
+      "RESET_TOKEN_INVALID|This password reset link is invalid or has expired.",
+    ]);
   });
 });
 
