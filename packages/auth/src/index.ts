@@ -151,6 +151,7 @@ export { resetPassword } from "./reset-password.js";
 export {
   IssueInvite,
   DEFAULT_INVITE_TTL_MS,
+  ISSUE_INVITE_USER_NOT_FOUND,
   type IssueInviteInput,
   type IssueInviteOutput,
 } from "./commands/issue-invite.js";
