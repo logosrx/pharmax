@@ -62,9 +62,10 @@ import {
   type TenancyContext,
 } from "@pharmax/tenancy";
 import { requirePermission } from "@pharmax/rbac";
-import { CommandStatus, OutboxStatus, Prisma } from "@pharmax/database";
+import { CommandStatus, OutboxStatus, type Prisma } from "@pharmax/database";
 
 import { getCommandBusConfiguration, type CommandBusConfiguration } from "./configure.js";
+import { classifyCommandLogConflict, isUniqueViolation } from "./conflict-recovery.js";
 import {
   commandAlreadyExecutedError,
   commandInFlightError,
@@ -471,16 +472,22 @@ async function runInTenantTx<T>(
 /**
  * A command_log unique violation means another attempt with the
  * same (organizationId, commandName, idempotencyKey) exists.
- * Resolve by prior-attempt status:
+ * `classifyCommandLogConflict` (shared with the system executor)
+ * reads the prior row and decides; this function applies the
+ * TENANT-side action for each outcome:
  *
  *   FAILED             → reuse the row: flip it back to RUNNING and
- *                        re-execute (idempotency-key retry).
+ *                        re-execute (idempotency-key retry). Safe
+ *                        here because command_log is written PRE-tx,
+ *                        so a FAILED row provably belongs to an
+ *                        attempt whose mutation rolled back.
  *   SUCCEEDED          → replay from the idempotency row (which
  *                        also enforces the payload-mismatch check);
  *                        if the idempotency row is gone (expired /
  *                        purged) surface COMMAND_ALREADY_EXECUTED.
  *   RUNNING / PENDING  → COMMAND_IN_FLIGHT (stable 409; the client
- *                        should retry shortly, not resubmit).
+ *                        should retry shortly, not resubmit) —
+ *                        thrown by the classifier.
  *
  * Runs in a FRESH transaction — the one that hit the violation is
  * aborted (Postgres refuses further statements after an error).
@@ -494,55 +501,46 @@ async function recoverFromCommandLogConflict(input: {
   readonly redactedRequest: Record<string, unknown>;
 }): Promise<PreflightResult> {
   return runInTenantTx(input.config, input.ctx, async (tx) => {
-    const existing = await tx.commandLog.findUnique({
-      where: {
-        organizationId_commandName_idempotencyKey: {
+    const conflict = await classifyCommandLogConflict(tx, {
+      organizationId: input.ctx.organizationId,
+      commandName: input.commandName,
+      idempotencyKey: input.idempotencyKey,
+    });
+
+    switch (conflict.kind) {
+      case "prior-failed": {
+        await tx.commandLog.update({
+          where: { id: conflict.prior.id },
+          data: {
+            status: CommandStatus.RUNNING,
+            errorCode: null,
+            errorMessage: null,
+            completedAt: null,
+            requestPayload: input.redactedRequest as Prisma.InputJsonValue,
+            startedAt: input.config.clock.now(),
+          },
+        });
+        return { kind: "proceed", commandLogId: conflict.prior.id };
+      }
+      case "prior-succeeded": {
+        // Throws COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH if the hash
+        // differs — exactly the contract the pre-flight lookup applies.
+        const lookup: LookupResult = await lookupIdempotency(tx, {
           organizationId: input.ctx.organizationId,
           commandName: input.commandName,
-          idempotencyKey: input.idempotencyKey,
-        },
-      },
-      select: { id: true, status: true },
-    });
-    if (existing === null) {
-      // The conflicting row vanished between the violation and this
-      // read (e.g. the concurrent attempt rolled back). Surface the
-      // in-flight conflict; an immediate client retry will succeed.
-      throw commandInFlightError({ commandName: input.commandName });
-    }
-
-    if (existing.status === CommandStatus.FAILED) {
-      await tx.commandLog.update({
-        where: { id: existing.id },
-        data: {
-          status: CommandStatus.RUNNING,
-          errorCode: null,
-          errorMessage: null,
-          completedAt: null,
-          requestPayload: input.redactedRequest as Prisma.InputJsonValue,
-          startedAt: input.config.clock.now(),
-        },
-      });
-      return { kind: "proceed", commandLogId: existing.id };
-    }
-
-    if (existing.status === CommandStatus.SUCCEEDED) {
-      // Throws COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH if the hash
-      // differs — exactly the contract the pre-flight lookup applies.
-      const lookup: LookupResult = await lookupIdempotency(tx, {
-        organizationId: input.ctx.organizationId,
-        commandName: input.commandName,
-        key: input.idempotencyKey,
-        currentRequestHash: input.requestHash,
-      });
-      if (lookup.kind === "replay") {
-        return { kind: "replay", responsePayload: lookup.responsePayload };
+          key: input.idempotencyKey,
+          currentRequestHash: input.requestHash,
+        });
+        if (lookup.kind === "replay") {
+          return { kind: "replay", responsePayload: lookup.responsePayload };
+        }
+        throw commandAlreadyExecutedError({ commandName: input.commandName });
       }
-      throw commandAlreadyExecutedError({ commandName: input.commandName });
+      default: {
+        const _never: never = conflict;
+        throw new Error(`unhandled command_log conflict: ${String(_never)}`);
+      }
     }
-
-    // RUNNING or PENDING — a concurrent attempt is executing.
-    throw commandInFlightError({ commandName: input.commandName });
   });
 }
 
@@ -559,28 +557,6 @@ function resolveRequestHashKey(
     );
   }
   return FALLBACK_REQUEST_HASH_KEY;
-}
-
-/**
- * Detect a Prisma P2002 unique-constraint violation on a specific
- * model. Prisma 7 sets `meta.modelName`; older/adapter paths set
- * only `meta.target` (the constrained columns), so we match either.
- */
-function isUniqueViolation(err: unknown, model: "CommandLog" | "IdempotencyKey"): boolean {
-  if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== "P2002") {
-    return false;
-  }
-  const meta = (err.meta ?? {}) as { modelName?: unknown; target?: unknown };
-  if (typeof meta.modelName === "string") {
-    return meta.modelName === model;
-  }
-  if (Array.isArray(meta.target)) {
-    const target = meta.target.map(String);
-    // command_log:     (organizationId, commandName, idempotencyKey)
-    // idempotency_key: (organizationId, commandName, key)
-    return model === "CommandLog" ? target.includes("idempotencyKey") : target.includes("key");
-  }
-  return false;
 }
 
 /**

@@ -8,6 +8,7 @@
 
 import { vi } from "vitest";
 
+import { Prisma } from "@pharmax/database";
 import { clock as clockNs, logger as loggerNs } from "@pharmax/platform-core";
 
 import type { CommandBusConfiguration } from "./configure.js";
@@ -34,9 +35,12 @@ export interface FakePrisma {
   throwOnCommit: (err: Error | null) => void;
   /**
    * Set the row that `commandLog.findUnique` returns (used by the
-   * unique-violation recovery path). Default null.
+   * unique-violation recovery path). Default null. `responsePayload`
+   * defaults to null, matching what Postgres returns for a row that
+   * has not completed — the system executor's replay reads it, so an
+   * absent field would be a fake that lies.
    */
-  setCommandLogRow: (row: { id: string; status: string } | null) => void;
+  setCommandLogRow: (row: { id: string; status: string; responsePayload?: unknown } | null) => void;
   /**
    * If set, the NEXT `commandLog.create` throws this error (then
    * resets). Use to simulate the (org, commandName, idempotencyKey)
@@ -107,7 +111,7 @@ export function buildFakePrisma(): FakePrisma {
   const calls: FakeCall[] = [];
   let idempotencyHit: Record<string, unknown> | null = null;
   let commitError: Error | null = null;
-  let commandLogRow: { id: string; status: string } | null = null;
+  let commandLogRow: { id: string; status: string; responsePayload: unknown } | null = null;
   let commandLogCreateError: Error | null = null;
   // The variables below are mutated by the `setXxx` setters returned
   // at the bottom of this function and READ inside the per-table
@@ -328,7 +332,7 @@ export function buildFakePrisma(): FakePrisma {
       commitError = err;
     },
     setCommandLogRow: (row) => {
-      commandLogRow = row === null ? null : { ...row };
+      commandLogRow = row === null ? null : { responsePayload: null, ...row };
     },
     throwOnCommandLogCreate: (err) => {
       commandLogCreateError = err;
@@ -370,4 +374,27 @@ export function buildFakeConfig(prisma: FakePrisma): CommandBusConfiguration {
 
 export function callsTo(prisma: FakePrisma, table: string, op?: string): FakeCall[] {
   return prisma.calls.filter((c) => c.table === table && (op === undefined || c.op === op));
+}
+
+/**
+ * The P2002 the `(organizationId, commandName, idempotencyKey)`
+ * unique index on `command_log` raises when a second attempt reuses a
+ * key. Feed it to `throwOnCommandLogCreate` to exercise either
+ * executor's conflict recovery.
+ *
+ * We can't `new` a real `PrismaClientKnownRequestError` without the
+ * client runtime, so we build one off the prototype the bus's
+ * `instanceof` check tests against.
+ */
+export function uniqueViolationOnCommandLog(): Error {
+  const err = Object.create(Prisma.PrismaClientKnownRequestError.prototype) as Error & {
+    code: string;
+    meta: Record<string, unknown>;
+  };
+  Object.assign(err, {
+    code: "P2002",
+    meta: { modelName: "CommandLog" },
+    message: "Unique constraint failed",
+  });
+  return err;
 }

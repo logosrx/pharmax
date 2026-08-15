@@ -12,18 +12,35 @@
 //      bridge pattern as the EasyPost / shipping target resolvers,
 //      eslint Override 3b allowlists `apps/worker/src/drains/**`).
 //   3. Dispatches the matching `@pharmax/billing` SystemCommand
-//      with `idempotencyKey = stripe-event:{eventId}` so the bus
-//      short-circuits Stripe redelivery before hitting the DB.
+//      with `idempotencyKey = stripe-event:{eventId}`. That key is
+//      NOT what stops Stripe redelivery — see the durability notes
+//      below for what does, and for the duplicate the key exists to
+//      absorb.
 //
 // EONPRO-grade durability semantics (see EONPRO
 // `wellmedr/webhooks/stripe/route.ts` for the reference shape):
 //
-//   - At-most-once dispatch via the `stripe_webhook_event` table's
-//     `externalEventId` unique index (writer side, already shipped).
-//   - Bus-level idempotency keyed on the Stripe event id makes
-//     manual replays safe.
+//   - Stripe REDELIVERY is stopped at INGEST, before this file runs.
+//     `stripe_webhook_event.stripeEventId` is unique and the writer
+//     inserts catch-and-refetch (equivalent to ON CONFLICT DO
+//     NOTHING), so a redelivered event resolves to the existing inbox
+//     row and is never dispatched a second time.
+//   - The bus-level key covers the OTHER duplicate, the one ingest
+//     cannot see: the drain claims an inbox row under a lease, and a
+//     crash after the command's transaction COMMITS but before the
+//     row is marked processed leaves the lease to expire and the row
+//     to be re-claimed. That re-dispatch carries the same key, hits
+//     the `(organizationId, commandName, idempotencyKey)` unique
+//     index on `command_log`, and `executeSystemCommand` resolves the
+//     violation by returning the first attempt's recorded output. The
+//     re-dispatched handler runs and rolls back, so no second money
+//     mutation, audit row, or outbox event lands — and because the
+//     drain gets a normal result instead of a raw Prisma P2002, it can
+//     finally mark the row processed. Without that recovery the row
+//     failed on every re-claim forever.
 //   - Per-command "already in target status" short-circuit is the
-//     row-level second line of defense.
+//     row-level second line of defense, and the only one that covers
+//     a re-dispatch under a DIFFERENT key (a manual replay, say).
 //   - Orphan events (Stripe invoice not linked to any Pharmax
 //     invoice) return cleanly with `recognized: false`; the drain
 //     marks the row SUCCEEDED. Stripe will NOT keep retrying.

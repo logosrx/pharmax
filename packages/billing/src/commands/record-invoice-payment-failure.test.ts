@@ -18,8 +18,12 @@
 //     outside the target org is unrecognized and emits nothing.
 //   - Evidence: audit action + `billing.invoice.payment_failed.v1`.
 //   - Replay: the handler holds no dedupe of its own (see the test
-//     that names this) — the idempotency key reaching command_log is
-//     what backs redelivery.
+//     that names this). What backs redelivery is the idempotency key
+//     reaching `command_log`: dispatch the same key twice and the bus
+//     replays the first attempt's output instead of recording a second
+//     one. The fake below models that unique index, so both halves of
+//     that claim — same key replays, different keys don't — are
+//     assertions here rather than prose.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,7 +32,7 @@ import {
   executeSystemCommand,
   resetCommandBusConfigurationForTests,
 } from "@pharmax/command-bus";
-import { InvoiceStatus } from "@pharmax/database";
+import { InvoiceStatus, Prisma } from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
 import { withSystemContext } from "@pharmax/tenancy";
 
@@ -70,12 +74,51 @@ const defaultInvoice = (): FakeInvoice => ({
   stripeInvoiceId: STRIPE_INVOICE_ID,
 });
 
+/**
+ * The P2002 the `(organizationId, commandName, idempotencyKey)` unique
+ * index on `command_log` raises when a second attempt reuses a key.
+ * Built off the prototype rather than `new`-ed because the real
+ * constructor needs the Prisma client runtime.
+ */
+function commandLogKeyCollision(): Error {
+  const err = Object.create(Prisma.PrismaClientKnownRequestError.prototype) as Error & {
+    code: string;
+    meta: Record<string, unknown>;
+  };
+  Object.assign(err, {
+    code: "P2002",
+    meta: { modelName: "CommandLog" },
+    message: "Unique constraint failed",
+  });
+  return err;
+}
+
+interface FakeCommandLogRow {
+  id: string;
+  organizationId: string;
+  commandName: string;
+  idempotencyKey: string;
+  status: string;
+  responsePayload: unknown;
+}
+
 function buildPrismaFake(overrides: FakeOverrides = {}): {
   client: unknown;
   calls: FakeCall[];
 } {
   const calls: FakeCall[] = [];
   const invoice = overrides.invoice === undefined ? defaultInvoice() : overrides.invoice;
+
+  // `command_log` rows this fake has accepted, so the unique index on
+  // (organizationId, commandName, idempotencyKey) is modelled rather
+  // than assumed. Without it a same-key re-dispatch would silently
+  // insert twice here and the replay tests below would prove nothing.
+  const commandLogRows: FakeCommandLogRow[] = [];
+  const uniqueKeyOf = (row: {
+    organizationId: string;
+    commandName: string;
+    idempotencyKey: string;
+  }): string => `${row.organizationId}::${row.commandName}::${row.idempotencyKey}`;
 
   const tx = {
     invoice: {
@@ -97,15 +140,40 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     commandLog: {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "commandLog", op: "create", args });
-        return { id: "cl" };
+        const data = (args as { data: FakeCommandLogRow }).data;
+        if (commandLogRows.some((r) => uniqueKeyOf(r) === uniqueKeyOf(data))) {
+          throw commandLogKeyCollision();
+        }
+        commandLogRows.push({ ...data, responsePayload: null });
+        return { id: data.id };
       }),
       update: vi.fn(async (args: unknown) => {
         calls.push({ table: "commandLog", op: "update", args });
+        const { where, data } = args as {
+          where: { id: string };
+          data: { status?: string; responsePayload?: unknown };
+        };
+        const row = commandLogRows.find((r) => r.id === where.id);
+        if (row !== undefined) {
+          if (data.status !== undefined) row.status = data.status;
+          if (data.responsePayload !== undefined) row.responsePayload = data.responsePayload;
+        }
         return { ok: true };
       }),
       findUnique: vi.fn(async (args: unknown) => {
         calls.push({ table: "commandLog", op: "findUnique", args });
-        return null;
+        const where = (
+          args as {
+            where: {
+              organizationId_commandName_idempotencyKey: {
+                organizationId: string;
+                commandName: string;
+                idempotencyKey: string;
+              };
+            };
+          }
+        ).where.organizationId_commandName_idempotencyKey;
+        return commandLogRows.find((r) => uniqueKeyOf(r) === uniqueKeyOf(where)) ?? null;
       }),
     },
     auditLog: {
@@ -376,14 +444,32 @@ describe("RecordInvoicePaymentFailure — evidence and replay", () => {
     await run();
     await run();
 
-    // Pinning a gap, not blessing one. The module header claims
-    // re-delivery of the same event is a no-op; the handler contains
-    // no such check, and `executeSystemCommand` keeps no idempotency
-    // cache. What actually prevents a duplicate dunning notification
-    // is the webhook ingest table plus the command_log unique index —
-    // both outside this command. If either is relaxed, this test
-    // starts describing production behaviour.
+    // Both dispatches carry the SAME `stripeEventId` and land twice,
+    // because neither passes an idempotency key and the bus defaults
+    // to a fresh ULID per attempt. Nothing in this handler looks at
+    // `stripeEventId`, so a caller that does not supply a key gets a
+    // second dunning record — which is why the drain supplies one (see
+    // the next test). Add a `stripeEventId` check here and this test
+    // stops describing production behaviour.
     expect(outboxRowsOf(fake.calls)).toHaveLength(2);
     expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(2);
+  });
+
+  it("re-dispatching under the SAME idempotency key replays instead of recording again", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    const key = "stripe-event:evt_TestFailed1";
+    const first = await run(validInput, key);
+    const second = await run(validInput, key);
+
+    // This is the drain's real duplicate: the worker crashed after the
+    // command committed but before the webhook inbox row was marked
+    // processed, the lease expired, and the row was re-claimed. The
+    // second dispatch hits the command_log unique index on the key and
+    // the bus hands back the first attempt's recorded output.
+    expect(second).toEqual(first);
+    expect(outboxRowsOf(fake.calls)).toHaveLength(1);
+    expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(1);
   });
 });
