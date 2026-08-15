@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { CommandStatus, Prisma as PrismaNs } from "@pharmax/database";
+import { CommandStatus } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import {
   configureRbac,
@@ -29,6 +29,7 @@ import {
   buildFakePrisma,
   callsTo,
   TEST_REQUEST_HASH_KEY,
+  uniqueViolationOnCommandLog,
   type FakePrisma,
 } from "./test-helpers.js";
 
@@ -662,22 +663,6 @@ describe("executeCommand — redaction", () => {
 
 describe("executeCommand — command_log unique-violation recovery", () => {
   const orderId = "77777777-7777-7777-a777-777777777777";
-
-  function uniqueViolationOnCommandLog(): Error {
-    // Structurally a Prisma P2002. We can't construct a real
-    // PrismaClientKnownRequestError without the client runtime, so
-    // build one via the class the bus checks against.
-    const err = Object.create(PrismaNs.PrismaClientKnownRequestError.prototype) as Error & {
-      code: string;
-      meta: Record<string, unknown>;
-    };
-    Object.assign(err, {
-      code: "P2002",
-      meta: { modelName: "CommandLog" },
-      message: "Unique constraint failed",
-    });
-    return err;
-  }
 
   it("prior attempt FAILED → row is reused (flipped to RUNNING) and the command re-executes", async () => {
     prisma.throwOnCommandLogCreate(uniqueViolationOnCommandLog());

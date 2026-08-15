@@ -15,8 +15,17 @@
 //     contact without coupling the notification logic to the
 //     webhook drain.
 //
-//   - Idempotent on the originating Stripe event id — re-delivery
-//     of the same event is a no-op.
+//   - Idempotent on the originating Stripe event id THROUGH THE
+//     IDEMPOTENCY KEY ITS CALLER SUPPLIES, not through anything in
+//     this handler. The worker drain dispatches with
+//     `stripe-event:{eventId}`; a re-dispatch of that same event hits
+//     the `command_log` unique index on the key and
+//     `executeSystemCommand` returns the first attempt's recorded
+//     output, so no second audit row and no second
+//     `billing.invoice.payment_failed.v1` land. Dispatch this command
+//     with a fresh key and it WILL record the attempt again — there is
+//     no `stripeEventId` check below to stop it, and one would be
+//     redundant with the key.
 //
 // Why a command instead of inline logging:
 //
