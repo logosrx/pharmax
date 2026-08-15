@@ -32,7 +32,7 @@ import {
   executeCommand,
   resetCommandBusConfigurationForTests,
 } from "@pharmax/command-bus";
-import { Prisma, RoleScope, WorkflowPolicyOverlayStatus } from "@pharmax/database";
+import { BucketKind, Prisma, RoleScope, WorkflowPolicyOverlayStatus } from "@pharmax/database";
 import { clock, errors, logger } from "@pharmax/platform-core";
 import {
   configureRbac,
@@ -49,6 +49,8 @@ import {
   UPSERT_OVERLAY_BASE_POLICY_NOT_READABLE,
   UPSERT_OVERLAY_BASE_POLICY_UNSUPPORTED,
   UPSERT_OVERLAY_CLINIC_NOT_FOUND,
+  UPSERT_OVERLAY_ROUTE_BUCKET_NOT_FOUND,
+  UPSERT_OVERLAY_ROUTE_TARGET_EMERGENCY,
   UpsertWorkflowPolicyOverlay,
 } from "./upsert-workflow-policy-overlay.js";
 
@@ -96,16 +98,59 @@ interface FakeCall {
   args: unknown;
 }
 
+interface BucketRow {
+  code: string;
+  kind: BucketKind;
+}
+
 interface FakeOpts {
   policy: PolicyRow | null;
   prior?: PriorOverlayRow | null;
   clinic?: ClinicRow | null;
   insertError?: unknown;
+  /**
+   * Bucket rows visible to THIS organization. `bucket.findMany` filters
+   * them by the command's own `where.code.in` AND by `where.organizationId`
+   * — modelling the org predicate in the fake rather than ignoring it is
+   * what lets a test prove the tenant-isolation guard actually bites.
+   */
+  buckets?: ReadonlyArray<BucketRow>;
 }
+
+/**
+ * Buckets belonging to a DIFFERENT tenant. `ORG_ID` must never resolve
+ * a routing target against these, no matter what code it names.
+ */
+const FOREIGN_BUCKETS: ReadonlyArray<BucketRow> = [
+  { code: "OTHER_TENANT_QUEUE", kind: BucketKind.CUSTOM },
+];
+
+/** Buckets this organization owns, available to routing overrides. */
+const OWN_BUCKETS: ReadonlyArray<BucketRow> = [
+  { code: "TYPING_REWORK", kind: BucketKind.EXCEPTION },
+  { code: "COMPOUNDING", kind: BucketKind.CUSTOM },
+  { code: "EMERGENCY", kind: BucketKind.EMERGENCY },
+];
 
 function buildPrismaFake(opts: FakeOpts) {
   const calls: FakeCall[] = [];
   const tx = {
+    bucket: {
+      findMany: vi.fn(async (args: unknown) => {
+        calls.push({ table: "bucket", op: "findMany", args });
+        const where = (args as { where: Record<string, unknown> }).where;
+        // The fake owns rows for ORG_ID only. A query that drops the
+        // organizationId predicate would, in production, also see the
+        // foreign tenant's rows — so the fake mirrors that: it returns
+        // the foreign row set too when the predicate is absent.
+        const visible: ReadonlyArray<BucketRow> =
+          where["organizationId"] === ORG_ID
+            ? (opts.buckets ?? [])
+            : [...(opts.buckets ?? []), ...FOREIGN_BUCKETS];
+        const codes = (where["code"] as { in: ReadonlyArray<string> } | undefined)?.in ?? [];
+        return visible.filter((bucket) => codes.includes(bucket.code));
+      }),
+    },
     workflowPolicy: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "workflowPolicy", op: "findFirst", args });
@@ -593,5 +638,311 @@ describe("UpsertWorkflowPolicyOverlay — race", () => {
         )
       )
     ).rejects.toMatchObject({ code: UPSERT_OVERLAY_ACTIVE_RACE });
+  });
+});
+
+// ---------------------------------------------------------------------
+// Per-tenant stage → bucket routing
+// ---------------------------------------------------------------------
+//
+// A misrouted stage sends live prescriptions to a queue nobody watches,
+// so every override is validated against live bucket rows at write time.
+// These tests pin the four things that validation must do: accept a
+// legitimate route, refuse a target that does not exist, refuse a target
+// that belongs to another tenant, and refuse an EMERGENCY-kind target.
+
+const ROUTE_INPUT = {
+  workflowPolicyId: POLICY_ID,
+  clinicId: null,
+  overlay: {
+    routeStatesToBucketCodes: { PV1_REJECTED: "TYPING_REWORK" },
+  },
+} as const;
+
+describe("UpsertWorkflowPolicyOverlay — routing happy path", () => {
+  it("accepts a routing-only overlay and persists the route", async () => {
+    const fake = buildPrismaFake({
+      policy: ACTIVE_BASE_POLICY,
+      prior: null,
+      buckets: OWN_BUCKETS,
+    });
+    configureBus(fake.client);
+
+    const out = await withTenancyContext(ctx(), () =>
+      executeCommand(UpsertWorkflowPolicyOverlay, { ...ROUTE_INPUT }, { idempotencyKey: "r-1" })
+    );
+
+    expect(out.routeTargetBucketCodes).toEqual(["TYPING_REWORK"]);
+
+    const insert = fake.calls.find((c) => c.table === "workflowPolicyOverlay" && c.op === "create");
+    const data = (insert!.args as { data: Record<string, unknown> }).data;
+    expect(data["overlayJson"]).toMatchObject({
+      routeStatesToBucketCodes: { PV1_REJECTED: "TYPING_REWORK" },
+    });
+    // Routing alone does not touch the transition table.
+    expect(out.affectedTransitionIds).toEqual([]);
+  });
+
+  it("accepts routing alongside a transition tightening", async () => {
+    const fake = buildPrismaFake({
+      policy: ACTIVE_BASE_POLICY,
+      prior: null,
+      buckets: OWN_BUCKETS,
+    });
+    configureBus(fake.client);
+
+    const out = await withTenancyContext(ctx(), () =>
+      executeCommand(
+        UpsertWorkflowPolicyOverlay,
+        {
+          ...VALID_FORBID_INPUT,
+          overlay: {
+            ...VALID_FORBID_INPUT.overlay,
+            routeStatesToBucketCodes: { PV1_REJECTED: "TYPING_REWORK" },
+          },
+        },
+        { idempotencyKey: "r-2" }
+      )
+    );
+
+    expect(out.routeTargetBucketCodes).toEqual(["TYPING_REWORK"]);
+    expect(out.affectedTransitionIds.length).toBeGreaterThan(0);
+  });
+
+  it("reports no route targets for an overlay that declares none", async () => {
+    const fake = buildPrismaFake({ policy: ACTIVE_BASE_POLICY, prior: null });
+    configureBus(fake.client);
+
+    const out = await withTenancyContext(ctx(), () =>
+      executeCommand(
+        UpsertWorkflowPolicyOverlay,
+        { ...VALID_FORBID_INPUT },
+        { idempotencyKey: "r-3" }
+      )
+    );
+
+    expect(out.routeTargetBucketCodes).toEqual([]);
+    // No routes means no reason to read the bucket table at all.
+    expect(fake.tx.bucket.findMany).not.toHaveBeenCalled();
+  });
+
+  it("records the routed states and targets on the audit row", async () => {
+    const fake = buildPrismaFake({
+      policy: ACTIVE_BASE_POLICY,
+      prior: null,
+      buckets: OWN_BUCKETS,
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctx(), () =>
+      executeCommand(
+        UpsertWorkflowPolicyOverlay,
+        {
+          workflowPolicyId: POLICY_ID,
+          clinicId: null,
+          overlay: {
+            routeStatesToBucketCodes: {
+              PV1_REJECTED: "TYPING_REWORK",
+              FILL_IN_PROGRESS: "COMPOUNDING",
+            },
+          },
+        },
+        { idempotencyKey: "r-4" }
+      )
+    );
+
+    const audit = fake.calls.find((c) => c.table === "auditLog" && c.op === "create");
+    const metadata = (audit!.args as { data: { metadata: Record<string, unknown> } }).data.metadata;
+    expect(metadata["routeTargetBucketCodes"]).toEqual(["COMPOUNDING", "TYPING_REWORK"]);
+    expect(metadata["routedStates"]).toEqual(["FILL_IN_PROGRESS", "PV1_REJECTED"]);
+  });
+});
+
+describe("UpsertWorkflowPolicyOverlay — routing target validation", () => {
+  it("refuses a target bucket that does not exist in this organization", async () => {
+    const fake = buildPrismaFake({
+      policy: ACTIVE_BASE_POLICY,
+      prior: null,
+      buckets: OWN_BUCKETS,
+    });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          UpsertWorkflowPolicyOverlay,
+          {
+            workflowPolicyId: POLICY_ID,
+            clinicId: null,
+            overlay: { routeStatesToBucketCodes: { PV1_REJECTED: "NO_SUCH_BUCKET" } },
+          },
+          { idempotencyKey: "r-5" }
+        )
+      )
+    ).rejects.toMatchObject({
+      code: UPSERT_OVERLAY_ROUTE_BUCKET_NOT_FOUND,
+      metadata: { missingBucketCodes: ["NO_SUCH_BUCKET"] },
+    });
+
+    expect(fake.tx.workflowPolicyOverlay.create).not.toHaveBeenCalled();
+  });
+
+  // THE tenant-isolation guard. `OTHER_TENANT_QUEUE` is a real bucket
+  // row — it just belongs to a different organization. Dropping the
+  // organizationId predicate from the lookup makes this test go green
+  // on a route that must never be accepted.
+  it("refuses a target bucket that exists only in another organization", async () => {
+    const fake = buildPrismaFake({
+      policy: ACTIVE_BASE_POLICY,
+      prior: null,
+      buckets: OWN_BUCKETS,
+    });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          UpsertWorkflowPolicyOverlay,
+          {
+            workflowPolicyId: POLICY_ID,
+            clinicId: null,
+            overlay: { routeStatesToBucketCodes: { PV1_REJECTED: "OTHER_TENANT_QUEUE" } },
+          },
+          { idempotencyKey: "r-6" }
+        )
+      )
+    ).rejects.toMatchObject({
+      code: UPSERT_OVERLAY_ROUTE_BUCKET_NOT_FOUND,
+      metadata: { missingBucketCodes: ["OTHER_TENANT_QUEUE"] },
+    });
+
+    expect(fake.tx.workflowPolicyOverlay.create).not.toHaveBeenCalled();
+  });
+
+  it("scopes the routing-target lookup by organizationId", async () => {
+    const fake = buildPrismaFake({
+      policy: ACTIVE_BASE_POLICY,
+      prior: null,
+      buckets: OWN_BUCKETS,
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctx(), () =>
+      executeCommand(UpsertWorkflowPolicyOverlay, { ...ROUTE_INPUT }, { idempotencyKey: "r-7" })
+    );
+
+    const lookup = fake.calls.find((c) => c.table === "bucket" && c.op === "findMany");
+    const where = (lookup!.args as { where: Record<string, unknown> }).where;
+    expect(where["organizationId"]).toBe(ORG_ID);
+    expect(where["code"]).toEqual({ in: ["TYPING_REWORK"] });
+  });
+
+  it("names every missing target, not just the first", async () => {
+    const fake = buildPrismaFake({
+      policy: ACTIVE_BASE_POLICY,
+      prior: null,
+      buckets: OWN_BUCKETS,
+    });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          UpsertWorkflowPolicyOverlay,
+          {
+            workflowPolicyId: POLICY_ID,
+            clinicId: null,
+            overlay: {
+              routeStatesToBucketCodes: { PV1_REJECTED: "GHOST_A", RECEIVED: "GHOST_B" },
+            },
+          },
+          { idempotencyKey: "r-8" }
+        )
+      )
+    ).rejects.toMatchObject({
+      code: UPSERT_OVERLAY_ROUTE_BUCKET_NOT_FOUND,
+      metadata: { missingBucketCodes: ["GHOST_A", "GHOST_B"] },
+    });
+  });
+
+  it("refuses an EMERGENCY-kind bucket as a routing target", async () => {
+    // The emergency bucket is selected by kind by the SLA breach report
+    // and by a raw `code = 'EMERGENCY'` literal in the breach claim
+    // query's already-escalated filter. Routing an ordinary stage into
+    // it corrupts both.
+    const fake = buildPrismaFake({
+      policy: ACTIVE_BASE_POLICY,
+      prior: null,
+      buckets: OWN_BUCKETS,
+    });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          UpsertWorkflowPolicyOverlay,
+          {
+            workflowPolicyId: POLICY_ID,
+            clinicId: null,
+            overlay: { routeStatesToBucketCodes: { PV1_REJECTED: "EMERGENCY" } },
+          },
+          { idempotencyKey: "r-9" }
+        )
+      )
+    ).rejects.toMatchObject({
+      code: UPSERT_OVERLAY_ROUTE_TARGET_EMERGENCY,
+      metadata: { emergencyBucketCodes: ["EMERGENCY"] },
+    });
+
+    expect(fake.tx.workflowPolicyOverlay.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("UpsertWorkflowPolicyOverlay — routing Zod boundary", () => {
+  async function expectRejected(overlay: unknown, key: string): Promise<void> {
+    const fake = buildPrismaFake({
+      policy: ACTIVE_BASE_POLICY,
+      prior: null,
+      buckets: OWN_BUCKETS,
+    });
+    configureBus(fake.client);
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          UpsertWorkflowPolicyOverlay,
+          { workflowPolicyId: POLICY_ID, clinicId: null, overlay } as never,
+          { idempotencyKey: key }
+        )
+      )
+    ).rejects.toBeInstanceOf(errors.ValidationError);
+    expect(fake.tx.workflowPolicyOverlay.create).not.toHaveBeenCalled();
+    resetCommandBusConfigurationForTests();
+  }
+
+  it("rejects a state that is not in the vocabulary", async () => {
+    await expectRejected({ routeStatesToBucketCodes: { NOT_A_STATE: "TYPING_REWORK" } }, "rz-1");
+  });
+
+  // Widening guard: these are real states, but the canonical map
+  // deliberately gives them no bucket. An overlay may narrow base, not
+  // introduce routing base does not have.
+  it("rejects CANCELLED, which has no canonical bucket", async () => {
+    await expectRejected({ routeStatesToBucketCodes: { CANCELLED: "TYPING_REWORK" } }, "rz-2");
+  });
+
+  it("rejects ON_HOLD, which has no canonical bucket", async () => {
+    await expectRejected({ routeStatesToBucketCodes: { ON_HOLD: "TYPING_REWORK" } }, "rz-3");
+  });
+
+  it("rejects a malformed bucket code", async () => {
+    await expectRejected({ routeStatesToBucketCodes: { PV1_REJECTED: "lower case" } }, "rz-4");
+  });
+
+  it("rejects an empty bucket code", async () => {
+    await expectRejected({ routeStatesToBucketCodes: { PV1_REJECTED: "" } }, "rz-5");
+  });
+
+  it("rejects an overlay whose only key is an empty routing map", async () => {
+    await expectRejected({ routeStatesToBucketCodes: {} }, "rz-6");
   });
 });

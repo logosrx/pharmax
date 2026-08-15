@@ -27,7 +27,7 @@
 // The audit row and `org.bucket.deleted.v1` carry a full attribute
 // snapshot, so the bucket's history survives the row.
 //
-// Two guards, both refusals:
+// Three guards, all refusals:
 //
 //   1. `isSystem` — the seeded seven are load-bearing. The workflow
 //      engine resolves them by code on every transition and the SLA
@@ -43,9 +43,21 @@
 //      races a concurrent order landing in the bucket, the FK still
 //      holds the line inside the same transaction.
 //
+//   3. Referencing ROUTING OVERRIDES — an ACTIVE workflow policy overlay
+//      that routes a workflow stage into this bucket. Unlike (2) there
+//      is NO foreign key here and there cannot be one: the reference is
+//      a bucket CODE inside `workflow_policy_overlay.overlayJson`, a
+//      `Json` column. So guard (2) does not cover it, and an EMPTY
+//      custom bucket — zero orders, refusal (2) silent — could be
+//      deleted out from under a live route. See
+//      `../buckets/bucket-route-references.ts` for why this refuses
+//      rather than letting the route lapse, and for the runtime
+//      fallback that keeps orders moving if a row disappears anyway.
+//
 // Permission: `org.manage_buckets` (ORGANIZATION scope).
 //
-// PHI: none. Bucket identifiers and an order COUNT (never order ids).
+// PHI: none. Bucket identifiers, an order COUNT (never order ids), and
+// overlay/clinic ids.
 
 import type { Command, HandlerResult } from "@pharmax/command-bus";
 import type { BucketKind } from "@pharmax/database";
@@ -53,9 +65,15 @@ import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
 
+import {
+  findActiveOverlaysRoutingToCode,
+  referencedStateNames,
+} from "../buckets/bucket-route-references.js";
+
 export const DELETE_BUCKET_NOT_FOUND = "DELETE_BUCKET_NOT_FOUND";
 export const DELETE_BUCKET_IS_SYSTEM = "DELETE_BUCKET_IS_SYSTEM";
 export const DELETE_BUCKET_HAS_ORDERS = "DELETE_BUCKET_HAS_ORDERS";
+export const DELETE_BUCKET_HAS_ROUTING_OVERRIDE = "DELETE_BUCKET_HAS_ROUTING_OVERRIDE";
 
 const inputSchema = z
   .object({
@@ -116,6 +134,32 @@ export const DeleteBucket: Command<DeleteBucketInput, DeleteBucketOutput> = {
         code: DELETE_BUCKET_HAS_ORDERS,
         message: `Bucket "${bucket.code}" still holds ${orderCount} order${orderCount === 1 ? "" : "s"}. Move them to another bucket before deleting it.`,
         metadata: { bucketId: bucket.id, code: bucket.code, orderCount },
+      });
+    }
+
+    // Ordered AFTER the order-count check on purpose. A bucket that
+    // holds orders AND carries a route needs the orders moved either
+    // way, and "move the orders out" is the step the admin has to take
+    // first; leading with the routing message would send them to the
+    // overlay screen for a bucket they cannot delete yet regardless.
+    const routeReferences = await findActiveOverlaysRoutingToCode(tx, {
+      organizationId: ctx.organizationId,
+      code: bucket.code,
+    });
+    if (routeReferences.length > 0) {
+      const states = referencedStateNames(routeReferences);
+      throw new errors.ConflictError({
+        code: DELETE_BUCKET_HAS_ROUTING_OVERRIDE,
+        message:
+          `Bucket "${bucket.code}" is the routing target for ${states.join(", ")}. ` +
+          `Re-point ${states.length === 1 ? "that stage" : "those stages"} in the workflow policy overlay before deleting it, ` +
+          `or the stage silently falls back to its default bucket.`,
+        metadata: {
+          bucketId: bucket.id,
+          code: bucket.code,
+          routedStates: [...states],
+          overlayIds: routeReferences.map((reference) => reference.overlayId),
+        },
       });
     }
 

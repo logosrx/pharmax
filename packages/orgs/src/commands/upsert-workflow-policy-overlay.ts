@@ -13,7 +13,9 @@
 //        readable (ACTIVE or SUPERSEDED — grandfather rule from
 //        ADR-0017 lets overlays bind to SUPERSEDED bases for
 //        in-flight orders).
-//     3. Re-runs `mergePolicyWithOverlay` against the live base shape
+//     3. Validates every stage-routing target against live `bucket`
+//        rows in THIS organization (see `validateRouteTargets`).
+//     4. Re-runs `mergePolicyWithOverlay` against the live base shape
 //        as a write-time safety check. The merge function rejects
 //        any overlay that would LOOSEN base, raising
 //        ValidationError(OVERLAY_LOOSENS_BASE_POLICY). Doing the
@@ -22,7 +24,7 @@
 //        a write-time merge surfaces the failure to the admin
 //        immediately instead of failing the first downstream
 //        command.
-//     4. Atomically:
+//     5. Atomically:
 //          a. Demotes any prior ACTIVE row in the same scope to
 //             SUPERSEDED.
 //          b. INSERTs the new ACTIVE row at
@@ -31,10 +33,41 @@
 //        is the structural guarantee — a concurrent racer that
 //        beats us to the swap surfaces as P2002 →
 //        OVERLAY_ACTIVE_RACE so the UI can refresh.
-//     5. Emits `workflow.overlay.upserted.v1` with the supersede
+//     6. Emits `workflow.overlay.upserted.v1` with the supersede
 //        chain + affected transitions so sibling workers can
 //        invalidate their overlay cache and the SOC-2 admin-change
 //        feed picks it up.
+//
+// Why stage routing rides on THIS row (replay correctness):
+//
+//   A routing override has to be answerable historically — "which
+//   bucket did PV1_REJECTED route to when this order was rejected
+//   on 2026-03-15?" — for the same reason every verification record
+//   stamps `workflow_policy_id` + `workflow_policy_version`. The
+//   overlay row already has the two properties that make that
+//   answerable, and neither is easy to retrofit elsewhere:
+//
+//     - It is BOUND TO A BASE POLICY ROW, not to "the org's current
+//       policy". An order stamps the `workflowPolicyId` it was born
+//       under, and the bus reloads the policy `from: "target"` for
+//       every in-flight command. Overlays authored against a later
+//       base version are bound to a DIFFERENT row and are therefore
+//       invisible to that order, forever. Activating v2 cannot
+//       re-route an order living on v1.
+//
+//     - It is SUPERSEDED, NEVER MUTATED. Rotating a route writes a
+//       NEW row at version N+1 and demotes the old one to
+//       SUPERSEDED; the historical shape stays on disk verbatim,
+//       addressable by (organizationId, clinicId|null,
+//       workflowPolicyId, version). An UPDATE-in-place would answer
+//       today's question and destroy every earlier one.
+//
+//   Putting routes in a mutable settings table would have broken
+//   both properties at once; putting them in `WorkflowPolicy.definition`
+//   would have preserved them but made every routing tweak a new
+//   policy VERSION activation, which is a far heavier operation than
+//   the change deserves and would drag unrelated in-flight orders
+//   through a grandfather transition.
 //
 // Why supersedure (vs. UPDATE-in-place):
 //
@@ -66,21 +99,27 @@
 // itself.
 
 import type { Command, HandlerResult, PrismaTxClient } from "@pharmax/command-bus";
-import { Prisma, WorkflowPolicyOverlayStatus } from "@pharmax/database";
+import { BucketKind, Prisma, WorkflowPolicyOverlayStatus } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import {
   ORDER_STANDARD_V1,
+  ROUTABLE_ORDER_STATES,
   isOrderState,
   isOrderWorkflowCommand,
+  isRoutableOrderState,
   mergePolicyWithOverlay,
+  routeTargetCodes,
   type OrderState,
   type OrderWorkflowCommand,
   type OrderWorkflowPolicy,
+  type StageBucketRouteTable,
   type WorkflowPolicyOverlay,
 } from "@pharmax/workflow";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+
+import { BUCKET_CODE_REGEX } from "../buckets/bucket-guards.js";
 
 // ---------------------------------------------------------------------------
 // Error codes
@@ -91,6 +130,8 @@ export const UPSERT_OVERLAY_BASE_POLICY_NOT_READABLE = "UPSERT_OVERLAY_BASE_POLI
 export const UPSERT_OVERLAY_BASE_POLICY_UNSUPPORTED = "UPSERT_OVERLAY_BASE_POLICY_UNSUPPORTED";
 export const UPSERT_OVERLAY_CLINIC_NOT_FOUND = "UPSERT_OVERLAY_CLINIC_NOT_FOUND";
 export const UPSERT_OVERLAY_ACTIVE_RACE = "UPSERT_OVERLAY_ACTIVE_RACE";
+export const UPSERT_OVERLAY_ROUTE_BUCKET_NOT_FOUND = "UPSERT_OVERLAY_ROUTE_BUCKET_NOT_FOUND";
+export const UPSERT_OVERLAY_ROUTE_TARGET_EMERGENCY = "UPSERT_OVERLAY_ROUTE_TARGET_EMERGENCY";
 
 // ---------------------------------------------------------------------------
 // Input schema
@@ -132,6 +173,11 @@ const overlayShapeSchema = z
     addRequiredAttestations: z
       .record(z.string().min(1), z.array(attestationRequirementSchema).min(1))
       .optional(),
+    // Stage → bucket-code redirects. Same partial-keyed-map treatment
+    // as the two above: `z.record` with string keys plus a refine that
+    // checks each key against the ROUTABLE state vocabulary, so every
+    // error path is field-scoped for the admin UI.
+    routeStatesToBucketCodes: z.record(z.string().min(1), z.string().trim().min(1)).optional(),
   })
   .strict()
   .superRefine((overlay, ctx) => {
@@ -157,17 +203,47 @@ const overlayShapeSchema = z
         }
       }
     }
+    if (overlay.routeStatesToBucketCodes !== undefined) {
+      for (const state of Object.keys(overlay.routeStatesToBucketCodes)) {
+        if (!isRoutableOrderState(state)) {
+          // Two distinct causes, one message: the state is not in the
+          // vocabulary at all, or it is a real state that the canonical
+          // map deliberately leaves unrouted (ON_HOLD, CANCELLED).
+          // Both are "you cannot route this", and listing the routable
+          // set is more use to the admin than distinguishing them.
+          ctx.addIssue({
+            code: "custom",
+            message:
+              `State ${state} has no canonical bucket and cannot be routed. ` +
+              `Routable states: ${ROUTABLE_ORDER_STATES.join(", ")}.`,
+            path: ["routeStatesToBucketCodes", state],
+          });
+          continue;
+        }
+        const code = overlay.routeStatesToBucketCodes[state] ?? "";
+        if (!BUCKET_CODE_REGEX.test(code)) {
+          ctx.addIssue({
+            code: "custom",
+            message: `Bucket code "${code}" is malformed; expected SCREAMING_SNAKE, 2-64 characters, letter-initial.`,
+            path: ["routeStatesToBucketCodes", state],
+          });
+        }
+      }
+    }
     const forbidEmpty =
       overlay.forbidTransitionsFromStates === undefined ||
       Object.keys(overlay.forbidTransitionsFromStates).length === 0;
     const attestationsEmpty =
       overlay.addRequiredAttestations === undefined ||
       Object.keys(overlay.addRequiredAttestations).length === 0;
-    if (forbidEmpty && attestationsEmpty) {
+    const routesEmpty =
+      overlay.routeStatesToBucketCodes === undefined ||
+      Object.keys(overlay.routeStatesToBucketCodes).length === 0;
+    if (forbidEmpty && attestationsEmpty && routesEmpty) {
       ctx.addIssue({
         code: "custom",
         message:
-          "Overlay must declare at least one of `forbidTransitionsFromStates` or `addRequiredAttestations`. An empty overlay is a no-op; do not persist one.",
+          "Overlay must declare at least one of `forbidTransitionsFromStates`, `addRequiredAttestations`, or `routeStatesToBucketCodes`. An empty overlay is a no-op; do not persist one.",
         path: [],
       });
     }
@@ -197,6 +273,13 @@ export interface UpsertWorkflowPolicyOverlayOutput {
   readonly workflowPolicyId: string;
   readonly overlayVersion: number;
   readonly affectedTransitionIds: ReadonlyArray<string>;
+  /**
+   * Distinct bucket codes this overlay's stage routes point at,
+   * sorted. Empty when the overlay declares no routing. Echoed back so
+   * the admin surface can confirm what it just bound without re-reading
+   * the row.
+   */
+  readonly routeTargetBucketCodes: ReadonlyArray<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +340,87 @@ function computeAffectedTransitionIds(
   // Stable order so the audit row + outbox row + test snapshots
   // are deterministic across runs.
   return [...ids].sort();
+}
+
+/**
+ * Assert every routing target names a real bucket in THIS organization
+ * that is eligible to receive a workflow stage.
+ *
+ * This is the load-bearing guard of the whole routing surface. The Zod
+ * schema can only check that a target LOOKS like a bucket code; it has
+ * no way to know whether `TYPING_REWORK` exists, and a route to a code
+ * that does not exist is a stage pointed at nothing. The runtime
+ * resolver falls back to the canonical bucket in that case, so no
+ * prescription is lost — but the admin would have configured a route
+ * that silently never applies, and would find out only by noticing an
+ * empty queue. Rejecting at write time turns that into a 400 with the
+ * offending codes named.
+ *
+ * Two refusals:
+ *
+ *   1. NOT FOUND — no bucket with that code in this organization. The
+ *      `organizationId` predicate is what makes this a tenant-isolation
+ *      guard and not just a typo check: without it, an admin could name
+ *      a code that exists only in ANOTHER tenant's organization, the
+ *      lookup would succeed, and the overlay would be accepted against
+ *      a bucket this organization cannot see. It would then resolve to
+ *      nothing at runtime (the stage handlers are org-scoped too), so
+ *      the practical result is a permanently dead route — but the read
+ *      itself would have confirmed the existence of another tenant's
+ *      configuration, which is the part that matters.
+ *
+ *   2. EMERGENCY-kind target — see the EMERGENCY note in
+ *      `@pharmax/workflow`'s `bucket-routing.ts`. The emergency bucket
+ *      is selected by `kind` by the SLA breach report and by a raw SQL
+ *      `code = 'EMERGENCY'` literal in the breach claim query, which is
+ *      also the anti-double-escalation guard. Routing an ordinary stage
+ *      INTO it makes every order in that stage look already-escalated
+ *      to the claim query and inflates the emergency report ops reads
+ *      as ground truth during a breach.
+ *
+ * Returns the sorted target codes so the caller can cite them in the
+ * audit row without recomputing.
+ */
+async function validateRouteTargets(
+  tx: PrismaTxClient,
+  args: { organizationId: string; routes: StageBucketRouteTable | undefined }
+): Promise<ReadonlyArray<string>> {
+  const targetCodes = routeTargetCodes(args.routes);
+  if (targetCodes.length === 0) return targetCodes;
+
+  const buckets = await tx.bucket.findMany({
+    where: { organizationId: args.organizationId, code: { in: [...targetCodes] } },
+    select: { code: true, kind: true },
+  });
+  const kindByCode = new Map(buckets.map((bucket) => [bucket.code, bucket.kind]));
+
+  const missing = targetCodes.filter((code) => !kindByCode.has(code));
+  if (missing.length > 0) {
+    throw new errors.NotFoundError({
+      code: UPSERT_OVERLAY_ROUTE_BUCKET_NOT_FOUND,
+      message:
+        `Routing override targets ${missing.length === 1 ? "a bucket" : "buckets"} that ` +
+        `${missing.length === 1 ? "does" : "do"} not exist in this organization: ${missing.join(", ")}. ` +
+        `Create the bucket first, then author the route.`,
+      metadata: { missingBucketCodes: missing },
+    });
+  }
+
+  const emergencyTargets = targetCodes.filter(
+    (code) => kindByCode.get(code) === BucketKind.EMERGENCY
+  );
+  if (emergencyTargets.length > 0) {
+    throw new errors.ValidationError({
+      code: UPSERT_OVERLAY_ROUTE_TARGET_EMERGENCY,
+      message:
+        `Routing override targets an EMERGENCY-kind bucket (${emergencyTargets.join(", ")}). ` +
+        `The emergency bucket is selected by kind by the SLA breach report and by code by the ` +
+        `breach claim query's already-escalated filter; routing an ordinary stage into it corrupts both.`,
+      metadata: { emergencyBucketCodes: emergencyTargets },
+    });
+  }
+
+  return targetCodes;
 }
 
 async function validateClinicScope(
@@ -336,7 +500,17 @@ export const UpsertWorkflowPolicyOverlay: Command<
       clinicId: input.clinicId,
     });
 
-    // ---- 3. Re-run the tighten-only merge against the live base ----
+    // ---- 3. Validate routing targets against live bucket rows ----
+    // Ordered before the merge because this is the check most likely
+    // to fail in practice (an admin typing a bucket code by hand) and
+    // its error names the exact codes; the merge failure is a single
+    // whole-document verdict.
+    const routeTargets = await validateRouteTargets(tx, {
+      organizationId: ctx.organizationId,
+      routes: input.overlay.routeStatesToBucketCodes,
+    });
+
+    // ---- 4. Re-run the tighten-only merge against the live base ----
     // The Zod parse already accepted the shape; this is the
     // semantic check. Throws ValidationError(OVERLAY_LOOSENS_BASE_POLICY)
     // if the overlay would widen base or references an unknown
@@ -345,7 +519,7 @@ export const UpsertWorkflowPolicyOverlay: Command<
     const baseShape = resolveBasePolicyShape(basePolicy);
     mergePolicyWithOverlay(baseShape, input.overlay as WorkflowPolicyOverlay);
 
-    // ---- 4. Find + supersede the prior ACTIVE row in this scope ----
+    // ---- 5. Find + supersede the prior ACTIVE row in this scope ----
     // The findFirst is a SELECT against the partial-unique
     // (org, COALESCE(clinic, sentinel), policy) WHERE status =
     // ACTIVE — at most one row by construction.
@@ -365,7 +539,7 @@ export const UpsertWorkflowPolicyOverlay: Command<
       });
     }
 
-    // ---- 5. Insert the new ACTIVE row ----
+    // ---- 6. Insert the new ACTIVE row ----
     // overlayJson is the raw declarative shape; the Zod parse + the
     // merge step are the load-bearing validators. Reading the JSON
     // back is a structural cast (the resolver parses it with the
@@ -416,6 +590,7 @@ export const UpsertWorkflowPolicyOverlay: Command<
         workflowPolicyId: basePolicy.id,
         overlayVersion,
         affectedTransitionIds,
+        routeTargetBucketCodes: routeTargets,
       },
       audit: {
         action: "workflow.overlay.upserted",
@@ -431,6 +606,13 @@ export const UpsertWorkflowPolicyOverlay: Command<
           policyVersion: basePolicy.version,
           overlayVersion,
           affectedTransitionIds,
+          // Routing detail lives on the audit row only. The
+          // `workflow.overlay.upserted.v1` payload schema is `.strict()`
+          // and deliberately does not re-emit overlay shape (consumers
+          // read the row); the audit row is where an incident reviewer
+          // reconstructs "what changed" without a join.
+          routeTargetBucketCodes: [...routeTargets],
+          routedStates: Object.keys(input.overlay.routeStatesToBucketCodes ?? {}).sort(),
           commandLogId,
           occurredAt,
         },

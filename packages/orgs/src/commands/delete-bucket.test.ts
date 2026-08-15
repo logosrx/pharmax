@@ -18,7 +18,7 @@ import {
   executeCommand,
   resetCommandBusConfigurationForTests,
 } from "@pharmax/command-bus";
-import { BucketKind, RoleScope } from "@pharmax/database";
+import { BucketKind, RoleScope, WorkflowPolicyOverlayStatus } from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
 import {
   configureRbac,
@@ -32,6 +32,7 @@ import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
 import {
   DeleteBucket,
   DELETE_BUCKET_HAS_ORDERS,
+  DELETE_BUCKET_HAS_ROUTING_OVERRIDE,
   DELETE_BUCKET_IS_SYSTEM,
   DELETE_BUCKET_NOT_FOUND,
 } from "./delete-bucket.js";
@@ -71,12 +72,38 @@ const CUSTOM_BUCKET: ExistingBucket = {
   isSystem: false,
 };
 
-function buildPrismaFake(input: { existing?: ExistingBucket | null; orderCount?: number }) {
+/**
+ * A `workflow_policy_overlay` row as the route-reference guard reads
+ * it. `overlayJson` is deliberately typed `unknown`: it is a `Json`
+ * column and the guard has to tolerate whatever is in it.
+ */
+interface OverlayRow {
+  id: string;
+  clinicId: string | null;
+  status: WorkflowPolicyOverlayStatus;
+  overlayJson: unknown;
+}
+
+function buildPrismaFake(input: {
+  existing?: ExistingBucket | null;
+  orderCount?: number;
+  /** Overlay rows in this org, of any status. */
+  overlays?: ReadonlyArray<OverlayRow>;
+}) {
   const calls: Array<{ table: string; op: string; args: unknown }> = [];
   const outboxRows: Array<Record<string, unknown>> = [];
   const auditRows: Array<Record<string, unknown>> = [];
 
   const tx = {
+    workflowPolicyOverlay: {
+      findMany: vi.fn(async (args: unknown) => {
+        calls.push({ table: "workflowPolicyOverlay", op: "findMany", args });
+        const where = (args as { where: Record<string, unknown> }).where;
+        return (input.overlays ?? []).filter(
+          (overlay) => where["organizationId"] === ORG_ID && overlay.status === where["status"]
+        );
+      }),
+    },
     bucket: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "bucket", op: "findFirst", args });
@@ -348,5 +375,210 @@ describe("DeleteBucket — tenancy and RBAC", () => {
       )
     ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
     expect(fake.tx.bucket.delete).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------
+// Guard 3: routing overrides
+// ---------------------------------------------------------------------
+//
+// The interaction this closes: `Order.currentBucketId` is an FK, so
+// guard 2 is backed by the database. A routing override is a bucket
+// CODE inside `workflow_policy_overlay.overlayJson`, a `Json` column
+// with no FK — so an EMPTY custom bucket (guard 2 silent) could be
+// deleted out from under a live route, and PV1 rejections would quietly
+// stop arriving in the rework queue.
+
+const OVERLAY_ID = "00000000-0000-4000-8000-0000000000e1";
+const CLINIC_ID = "00000000-0000-4000-8000-0000000000c1";
+
+function overlayRouting(
+  routes: Record<string, unknown>,
+  overrides: Partial<OverlayRow> = {}
+): OverlayRow {
+  return {
+    id: OVERLAY_ID,
+    clinicId: null,
+    status: WorkflowPolicyOverlayStatus.ACTIVE,
+    overlayJson: { routeStatesToBucketCodes: routes },
+    ...overrides,
+  };
+}
+
+describe("DeleteBucket — routing overrides", () => {
+  it("refuses to delete an EMPTY bucket that an ACTIVE overlay routes a stage to", async () => {
+    const fake = buildPrismaFake({
+      existing: CUSTOM_BUCKET,
+      orderCount: 0,
+      overlays: [overlayRouting({ PV1_REJECTED: "PRIOR_AUTH" })],
+    });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(DeleteBucket, { bucketId: BUCKET_ID }, { idempotencyKey: "db-r1" })
+      )
+    ).rejects.toMatchObject({
+      code: DELETE_BUCKET_HAS_ROUTING_OVERRIDE,
+      metadata: { routedStates: ["PV1_REJECTED"], overlayIds: [OVERLAY_ID] },
+    });
+    expect(fake.tx.bucket.delete).not.toHaveBeenCalled();
+  });
+
+  it("names every routed stage so the operator knows what to re-point", async () => {
+    const fake = buildPrismaFake({
+      existing: CUSTOM_BUCKET,
+      orderCount: 0,
+      overlays: [
+        overlayRouting({ PV1_REJECTED: "PRIOR_AUTH", FINAL_VERIFICATION_REJECTED: "PRIOR_AUTH" }),
+      ],
+    });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(DeleteBucket, { bucketId: BUCKET_ID }, { idempotencyKey: "db-r2" })
+      )
+    ).rejects.toMatchObject({
+      code: DELETE_BUCKET_HAS_ROUTING_OVERRIDE,
+      metadata: { routedStates: ["PV1_REJECTED", "FINAL_VERIFICATION_REJECTED"] },
+    });
+  });
+
+  it("refuses when the route lives on a CLINIC-scoped overlay, not just an org-wide one", async () => {
+    const fake = buildPrismaFake({
+      existing: CUSTOM_BUCKET,
+      orderCount: 0,
+      overlays: [overlayRouting({ RECEIVED: "PRIOR_AUTH" }, { clinicId: CLINIC_ID })],
+    });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(DeleteBucket, { bucketId: BUCKET_ID }, { idempotencyKey: "db-r3" })
+      )
+    ).rejects.toMatchObject({ code: DELETE_BUCKET_HAS_ROUTING_OVERRIDE });
+  });
+
+  it("allows the delete when only a SUPERSEDED overlay routed to the bucket", async () => {
+    // Superseded rows are history — they are what makes a historical
+    // replay resolvable. Were they counted, the first routing override
+    // an org ever authored would pin its target bucket forever.
+    const fake = buildPrismaFake({
+      existing: CUSTOM_BUCKET,
+      orderCount: 0,
+      overlays: [
+        overlayRouting(
+          { PV1_REJECTED: "PRIOR_AUTH" },
+          { status: WorkflowPolicyOverlayStatus.SUPERSEDED }
+        ),
+      ],
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctx(), () =>
+      executeCommand(DeleteBucket, { bucketId: BUCKET_ID }, { idempotencyKey: "db-r4" })
+    );
+
+    expect(fake.tx.bucket.delete).toHaveBeenCalled();
+  });
+
+  it("allows the delete when the ACTIVE overlay routes a stage somewhere else", async () => {
+    const fake = buildPrismaFake({
+      existing: CUSTOM_BUCKET,
+      orderCount: 0,
+      overlays: [overlayRouting({ PV1_REJECTED: "SOME_OTHER_QUEUE" })],
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctx(), () =>
+      executeCommand(DeleteBucket, { bucketId: BUCKET_ID }, { idempotencyKey: "db-r5" })
+    );
+
+    expect(fake.tx.bucket.delete).toHaveBeenCalled();
+  });
+
+  it("allows the delete when the ACTIVE overlay declares no routing at all", async () => {
+    const fake = buildPrismaFake({
+      existing: CUSTOM_BUCKET,
+      orderCount: 0,
+      overlays: [
+        {
+          id: OVERLAY_ID,
+          clinicId: null,
+          status: WorkflowPolicyOverlayStatus.ACTIVE,
+          overlayJson: { forbidTransitionsFromStates: { CANCEL: ["RECEIVED"] } },
+        },
+      ],
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctx(), () =>
+      executeCommand(DeleteBucket, { bucketId: BUCKET_ID }, { idempotencyKey: "db-r6" })
+    );
+
+    expect(fake.tx.bucket.delete).toHaveBeenCalled();
+  });
+
+  // The read side must tolerate history. A row written by an older
+  // build, or hand-patched during an incident, must not be able to
+  // break the bucket admin screen.
+  it.each([
+    ["null overlayJson", null],
+    ["a scalar overlayJson", 7],
+    ["an array overlayJson", []],
+    ["a non-object routing map", { routeStatesToBucketCodes: "PRIOR_AUTH" }],
+    ["an array routing map", { routeStatesToBucketCodes: [] }],
+    ["a routing map of junk values", { routeStatesToBucketCodes: { PV1_REJECTED: 7 } }],
+  ])("tolerates %s and allows the delete", async (_label, overlayJson) => {
+    const fake = buildPrismaFake({
+      existing: CUSTOM_BUCKET,
+      orderCount: 0,
+      overlays: [
+        {
+          id: OVERLAY_ID,
+          clinicId: null,
+          status: WorkflowPolicyOverlayStatus.ACTIVE,
+          overlayJson,
+        },
+      ],
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctx(), () =>
+      executeCommand(DeleteBucket, { bucketId: BUCKET_ID }, { idempotencyKey: `db-r7-${_label}` })
+    );
+
+    expect(fake.tx.bucket.delete).toHaveBeenCalled();
+    resetCommandBusConfigurationForTests();
+  });
+
+  it("scopes the overlay scan to the actor's organization and ACTIVE rows", async () => {
+    const fake = buildPrismaFake({ existing: CUSTOM_BUCKET, orderCount: 0 });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctx(), () =>
+      executeCommand(DeleteBucket, { bucketId: BUCKET_ID }, { idempotencyKey: "db-r8" })
+    );
+
+    const scan = fake.calls.find((c) => c.table === "workflowPolicyOverlay" && c.op === "findMany");
+    const where = (scan!.args as { where: Record<string, unknown> }).where;
+    expect(where["organizationId"]).toBe(ORG_ID);
+    expect(where["status"]).toBe(WorkflowPolicyOverlayStatus.ACTIVE);
+  });
+
+  it("checks orders BEFORE routes, so a full bucket reports the actionable step first", async () => {
+    const fake = buildPrismaFake({
+      existing: CUSTOM_BUCKET,
+      orderCount: 3,
+      overlays: [overlayRouting({ PV1_REJECTED: "PRIOR_AUTH" })],
+    });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(DeleteBucket, { bucketId: BUCKET_ID }, { idempotencyKey: "db-r9" })
+      )
+    ).rejects.toMatchObject({ code: DELETE_BUCKET_HAS_ORDERS });
   });
 });
