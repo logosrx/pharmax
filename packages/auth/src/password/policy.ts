@@ -8,8 +8,11 @@
 // enabled per deployment without touching the engine.
 //
 // This module holds NO secrets and does NO hashing — it only judges
-// plaintext strength. It is called by the ChangePassword / ResetPassword
-// / SignUp commands before the hasher runs.
+// plaintext strength. `evaluatePasswordPolicy` is called from inside the
+// command transaction (it is pure and synchronous); `checkNotBreached`
+// reaches a third-party corpus and is therefore called from the
+// PRE-TRANSACTION screen in breach-screen.ts, never with a database
+// transaction open.
 
 export interface BreachChecker {
   /**
@@ -30,7 +33,28 @@ export interface PasswordPolicy {
   readonly minCharacterClasses: number;
   /** Optional breach screen. Null/undefined disables it. */
   readonly breachChecker?: BreachChecker | null;
+  /**
+   * Wall-clock budget for ONE `breachChecker.isBreached` call.
+   * Exceeding it is a BYPASS, not a rejection — see `checkNotBreached`.
+   */
+  readonly breachCheckTimeoutMs: number;
 }
+
+/**
+ * Budget for a single breach-corpus lookup: 2 seconds.
+ *
+ * The ceiling is set by what a person will wait on an interactive
+ * credential-setting request, not by what a degraded provider might
+ * eventually manage. A k-anonymity range query is one small HTTPS GET
+ * against a CDN-fronted corpus and answers in tens of milliseconds
+ * when healthy, so 2s leaves roughly an order of magnitude of
+ * headroom: long enough that an ordinary latency spike still yields a
+ * real verdict, short enough that a wedged provider costs a user two
+ * seconds instead of their whole request. Raise it per deployment via
+ * `PasswordPolicy.breachCheckTimeoutMs` if a slower self-hosted
+ * corpus needs more room.
+ */
+export const DEFAULT_BREACH_CHECK_TIMEOUT_MS = 2_000;
 
 /** NIST-aligned default: length + breach, no forced composition. */
 export const DEFAULT_PASSWORD_POLICY: PasswordPolicy = Object.freeze({
@@ -42,6 +66,7 @@ export const DEFAULT_PASSWORD_POLICY: PasswordPolicy = Object.freeze({
   requireCharacterClasses: false,
   minCharacterClasses: 3,
   breachChecker: null,
+  breachCheckTimeoutMs: DEFAULT_BREACH_CHECK_TIMEOUT_MS,
 });
 
 export interface PasswordEvaluation {
@@ -97,22 +122,99 @@ export function evaluatePasswordPolicy(input: {
   return Object.freeze({ ok: violations.length === 0, violations: Object.freeze(violations) });
 }
 
+/** How a breach screen arrived at its verdict. */
+export type BreachScreenOutcome =
+  /** The checker answered within its budget; the verdict is real. */
+  | "checked"
+  /** No checker is wired for this deployment; nothing was screened. */
+  | "not_configured"
+  /** The checker threw. Failed open — treated as not breached. */
+  | "bypassed_error"
+  /** The checker exceeded its budget. Failed open — treated as not breached. */
+  | "bypassed_timeout";
+
+export interface BreachScreenResult extends PasswordEvaluation {
+  readonly outcome: BreachScreenOutcome;
+}
+
+/** Marker for a checker that blew its budget. Never surfaces to a caller. */
+class BreachCheckTimeout extends Error {
+  constructor() {
+    super("breach check exceeded its budget");
+    this.name = "BreachCheckTimeout";
+  }
+}
+
+function notBreached(outcome: BreachScreenOutcome): BreachScreenResult {
+  return Object.freeze({ ok: true, violations: Object.freeze([]), outcome });
+}
+
 /**
- * Runs the configured breach check (if any). Returns a violation list
- * so the caller can merge it with the structural evaluation. Fails
- * OPEN on checker error (the breach service being down must not block
- * a legitimate password change) — the error is the caller's to log.
+ * Runs the configured breach check (if any) under a wall-clock budget.
+ * Returns a violation list so the caller can merge it with the
+ * structural evaluation, plus the `outcome` that produced it.
+ *
+ * FAILS OPEN on checker error OR timeout: a breach-corpus outage must
+ * not block a legitimate password change, and an operator locked out
+ * of rotating a compromised credential is the worse failure. The cost
+ * is that the control silently stops existing during the outage, so
+ * the bypass is NOT swallowed — `outcome` names it, and callers carry
+ * it into audit metadata and a warning log (see breach-screen.ts).
+ *
+ * A timed-out check is abandoned, not cancelled: `BreachChecker` takes
+ * no abort signal, so the underlying request may still be in flight
+ * when this returns. That is survivable ONLY because this runs before
+ * the command's transaction opens — a stalled call holds no database
+ * connection and no row locks.
  */
 export async function checkNotBreached(input: {
   readonly plaintext: string;
   readonly policy: PasswordPolicy;
-}): Promise<PasswordEvaluation> {
+}): Promise<BreachScreenResult> {
   const checker = input.policy.breachChecker;
   if (checker === null || checker === undefined) {
-    return Object.freeze({ ok: true, violations: Object.freeze([]) });
+    return notBreached("not_configured");
   }
-  const breached = await checker.isBreached(input.plaintext);
+
+  let breached: boolean;
+  try {
+    breached = await withTimeout(
+      checker.isBreached(input.plaintext),
+      input.policy.breachCheckTimeoutMs
+    );
+  } catch (cause) {
+    return notBreached(cause instanceof BreachCheckTimeout ? "bypassed_timeout" : "bypassed_error");
+  }
+
   return breached
-    ? Object.freeze({ ok: false, violations: Object.freeze(["appears in a known data breach"]) })
-    : Object.freeze({ ok: true, violations: Object.freeze([]) });
+    ? Object.freeze({
+        ok: false,
+        violations: Object.freeze(["appears in a known data breach"]),
+        outcome: "checked",
+      })
+    : notBreached("checked");
+}
+
+/**
+ * Resolve `work`, or reject with `BreachCheckTimeout` after
+ * `timeoutMs`. `Promise.race` subscribes to `work`, so a later
+ * rejection from an abandoned call is already handled and cannot
+ * become an unhandled rejection.
+ */
+async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<never>((_resolve, reject) => {
+    // Deliberately NOT unref'd: for a checker that hangs without a
+    // ref'd handle of its own, this timer is the only thing that can
+    // settle the race, and an unref'd one would let the process exit
+    // mid-request instead of failing open. The `finally` below clears
+    // it as soon as the check answers, so a healthy call does not pay
+    // the budget in wall-clock time.
+    timer = setTimeout(() => reject(new BreachCheckTimeout()), timeoutMs);
+  });
+  try {
+    return await Promise.race([work, budget]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

@@ -1,21 +1,18 @@
 // ResetPassword contract tests (bus-integrated, DB-free).
 //
-// Runs the command through `executeSystemCommand` against a mocked
-// Prisma client + a fast fake hasher. The token IS the authorization
-// here, so the guards get the attention: unknown / consumed / expired
-// tokens all surface as one opaque RESET_TOKEN_INVALID and write
-// nothing, a redeemed token cannot be redeemed twice, and a success
-// stores a HASH, stamps `usedAt`, and kills every live session.
+// Runs the real `resetPassword` orchestration — pre-transaction breach
+// screen included — against a mocked Prisma client + a fast fake
+// hasher. The token IS the authorization here, so the guards get the
+// attention: unknown / consumed / expired tokens and any non-ACTIVE
+// user all surface as one opaque RESET_TOKEN_INVALID and write nothing,
+// a redeemed token cannot be redeemed twice, and a success stores a
+// HASH, stamps `usedAt`, and kills every live session.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  configureCommandBus,
-  executeSystemCommand,
-  resetCommandBusConfigurationForTests,
-} from "@pharmax/command-bus";
+import { configureCommandBus, resetCommandBusConfigurationForTests } from "@pharmax/command-bus";
+import { UserStatus } from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
-import { withSystemContext } from "@pharmax/tenancy";
 
 import {
   buildAuthConfiguration,
@@ -23,8 +20,9 @@ import {
   resetAuthConfigurationForTests,
 } from "../configure.js";
 import type { PasswordHasher } from "../password/hasher.js";
+import type { BreachChecker } from "../password/policy.js";
+import { resetPassword } from "../reset-password.js";
 import { hashSessionToken } from "../session/token.js";
-import { ResetPassword } from "./reset-password.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const USER_ID = "00000000-0000-4000-8000-0000000000a1";
@@ -58,6 +56,7 @@ interface SeedToken {
 function buildFake(opts: {
   readonly token?: SeedToken | null;
   readonly userMissing?: boolean;
+  readonly status?: UserStatus;
   readonly revokedCount?: number;
 }) {
   // Mutable on purpose: `usedAt` has to survive between two attempts
@@ -95,6 +94,7 @@ function buildFake(opts: {
               email: "operator@example.com",
               displayName: "Operator",
               hashedPassword: `h:${OLD_PASSWORD}`,
+              status: opts.status ?? UserStatus.ACTIVE,
             }
       ),
       update: vi.fn(async (_args: unknown) => ({})),
@@ -127,12 +127,24 @@ function buildFake(opts: {
     $executeRaw: vi.fn(async () => 0),
   };
 
+  // Whether a database transaction is currently open. Lets a test prove
+  // where in the sequence the breach check happens, rather than trusting
+  // the call graph to stay the way it is today.
+  const state = { txOpen: false };
+
   const client = {
     commandLog: { update: vi.fn(async () => ({})) },
-    $transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
+    $transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => {
+      state.txOpen = true;
+      try {
+        return await fn(tx);
+      } finally {
+        state.txOpen = false;
+      }
+    }),
   };
 
-  return { client, tx };
+  return { client, tx, state };
 }
 
 function configureBus(client: unknown): void {
@@ -143,8 +155,33 @@ function configureBus(client: unknown): void {
   });
 }
 
+// The production entry point: it screens the password against the
+// breach corpus and THEN dispatches the command, which is the ordering
+// the whole flow depends on.
 function run(input: { readonly rawToken: string; readonly newPassword: string }) {
-  return withSystemContext("test:reset-password", () => executeSystemCommand(ResetPassword, input));
+  return resetPassword(input);
+}
+
+/**
+ * `code|message` of the refusal, so two failure paths can be compared
+ * for indistinguishability rather than merely both being errors.
+ */
+async function refusalFingerprint(input: { readonly rawToken: string }): Promise<string> {
+  try {
+    await run({ rawToken: input.rawToken, newPassword: NEW_PASSWORD });
+  } catch (cause) {
+    const err = cause as { code: string; message: string };
+    return `${err.code}|${err.message}`;
+  }
+  return "<did not reject>";
+}
+
+/** Audit metadata the bus wrote for the (single) audited command. */
+function auditMetadata(fake: ReturnType<typeof buildFake>): Record<string, unknown> {
+  const calls = fake.tx.auditLog.create.mock.calls as unknown as ReadonlyArray<
+    readonly [{ data: { metadata: Record<string, unknown> } }]
+  >;
+  return calls[0]![0].data.metadata;
 }
 
 /** Nothing about the account changed and no audit trail was written. */
@@ -298,6 +335,179 @@ describe("ResetPassword — token guards", () => {
       code: "RESET_TOKEN_INVALID",
     });
     expectNoEffect(fake);
+  });
+});
+
+describe("ResetPassword — account state guard", () => {
+  // Reset tokens and invite tokens are the same row shape in
+  // `password_reset_token` with no purpose column, so the ACTIVE
+  // requirement is the ONLY thing keeping the two flows apart. Without
+  // it, an invite token redeemed here sets a password on a still-INVITED
+  // user, burns the single-use link, and audits the act as
+  // `user.password_reset` — leaving an operator who cannot sign in
+  // (SignIn requires ACTIVE) and an onboarding that has to restart.
+  it("rejects a token for an operator who is still INVITED", async () => {
+    const fake = buildFake({ status: UserStatus.INVITED });
+    configureBus(fake.client);
+
+    await expect(run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD })).rejects.toMatchObject({
+      code: "RESET_TOKEN_INVALID",
+    });
+    expectNoEffect(fake);
+  });
+
+  // DeactivateUser revokes sessions but does NOT invalidate outstanding
+  // reset tokens, so without this guard a link mailed before suspension
+  // stays a working credential-rotation primitive after off-boarding.
+  it("rejects a token for a SUSPENDED operator", async () => {
+    const fake = buildFake({ status: UserStatus.SUSPENDED });
+    configureBus(fake.client);
+
+    await expect(run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD })).rejects.toMatchObject({
+      code: "RESET_TOKEN_INVALID",
+    });
+    expectNoEffect(fake);
+  });
+
+  it("rejects a token for a TERMINATED operator", async () => {
+    const fake = buildFake({ status: UserStatus.TERMINATED });
+    configureBus(fake.client);
+
+    await expect(run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD })).rejects.toMatchObject({
+      code: "RESET_TOKEN_INVALID",
+    });
+    expectNoEffect(fake);
+  });
+
+  it("uses the SAME opaque code and message for every account state", async () => {
+    // The refusal must not distinguish "no such token" from "suspended
+    // account": a pre-auth caller holding a stale link would otherwise
+    // learn whether the account exists and what state it is in.
+    const fingerprints: string[] = [];
+    for (const status of [UserStatus.INVITED, UserStatus.SUSPENDED, UserStatus.TERMINATED]) {
+      const fake = buildFake({ status });
+      configureBus(fake.client);
+      fingerprints.push(await refusalFingerprint({ rawToken: RAW_TOKEN }));
+      resetCommandBusConfigurationForTests();
+    }
+
+    configureBus(buildFake({}).client);
+    fingerprints.push(await refusalFingerprint({ rawToken: "never-minted" }));
+
+    expect(new Set(fingerprints).size).toBe(1);
+  });
+});
+
+describe("ResetPassword — breach screen", () => {
+  /** A checker that records whether a transaction was open when it ran. */
+  function recordingChecker(
+    state: { txOpen: boolean },
+    seen: { txOpen: boolean | null; calls: number },
+    answer: () => Promise<boolean>
+  ): BreachChecker {
+    return {
+      isBreached: async () => {
+        seen.calls += 1;
+        seen.txOpen = state.txOpen;
+        return answer();
+      },
+    };
+  }
+
+  function configureWithChecker(checker: BreachChecker, timeoutMs?: number): void {
+    configureAuth(
+      buildAuthConfiguration({
+        clock: clock.createFrozenClock(NOW),
+        hasher: fakeHasher,
+        password: {
+          breachChecker: checker,
+          ...(timeoutMs === undefined ? {} : { breachCheckTimeoutMs: timeoutMs }),
+        },
+      })
+    );
+  }
+
+  it("consults the corpus with NO transaction open", async () => {
+    const fake = buildFake({});
+    const seen = { txOpen: null as boolean | null, calls: 0 };
+    configureWithChecker(recordingChecker(fake.state, seen, async () => false));
+    configureBus(fake.client);
+
+    await run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD });
+
+    // The point of the whole arrangement: this is a third-party network
+    // call, and a hung provider must not be holding a pooled connection
+    // and the row locks the transaction already took.
+    expect(seen.calls).toBe(1);
+    expect(seen.txOpen).toBe(false);
+  });
+
+  it("still rejects a breached password (the verdict is enforced, not just computed)", async () => {
+    const fake = buildFake({});
+    configureWithChecker({ isBreached: async () => true });
+    configureBus(fake.client);
+
+    await expect(run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD })).rejects.toMatchObject({
+      code: "PASSWORD_POLICY_VIOLATION",
+    });
+    // Hoisting the check must not turn it into a no-op, and a rejected
+    // attempt must not burn the operator's only link.
+    expectNoEffect(fake);
+  });
+
+  it("fails OPEN when the checker throws, and records the bypass", async () => {
+    const fake = buildFake({});
+    configureWithChecker({
+      isBreached: () => Promise.reject(new Error("breach corpus unavailable")),
+    });
+    configureBus(fake.client);
+
+    // A breach-service outage must not stop an operator rotating a
+    // credential they may believe is compromised.
+    const out = await run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD });
+    expect(out.userId).toBe(USER_ID);
+    // ...but the skip is on the record. A fail-open nobody can see is
+    // how a control quietly stops existing.
+    expect(auditMetadata(fake)["breachScreen"]).toBe("bypassed_error");
+  });
+
+  it("cuts off a hanging checker at the timeout instead of blocking", async () => {
+    const fake = buildFake({});
+    // Never settles: the timeout is the only thing that can end this.
+    configureWithChecker({ isBreached: () => new Promise<boolean>(() => undefined) }, 25);
+    configureBus(fake.client);
+
+    const startedAt = Date.now();
+    const out = await run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD });
+
+    expect(out.userId).toBe(USER_ID);
+    expect(auditMetadata(fake)["breachScreen"]).toBe("bypassed_timeout");
+    // Bounded by the budget, not by the provider. Generous multiple of
+    // the 25ms budget so a loaded CI runner cannot make this flake,
+    // while a lost timeout (which would hang until vitest's 15s cap)
+    // still fails.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("records that no corpus was consulted when none is configured", async () => {
+    const fake = buildFake({});
+    configureBus(fake.client);
+
+    await run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD });
+
+    // The default deployment has no checker wired. The audit trail says
+    // so rather than implying the password was screened.
+    expect(auditMetadata(fake)["breachScreen"]).toBe("not_configured");
+  });
+
+  it("records a real verdict when the corpus answers", async () => {
+    const fake = buildFake({});
+    configureWithChecker({ isBreached: async () => false });
+    configureBus(fake.client);
+
+    await run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD });
+
+    expect(auditMetadata(fake)["breachScreen"]).toBe("checked");
   });
 });
 

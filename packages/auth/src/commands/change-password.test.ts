@@ -1,7 +1,13 @@
 // ChangePassword contract tests (bus-integrated, DB-free).
 //
-// Pins: current-password verification, anti-reuse rejection, and that a
-// successful change revokes other sessions (keeping the current one).
+// Pins: current-password verification, anti-reuse rejection, that a
+// successful change revokes other sessions (keeping the current one),
+// and that the command refuses to run at all unless the caller screened
+// the password against the breach corpus first.
+//
+// ChangePassword has no orchestration wrapper yet (no route calls it),
+// so these tests enter the `withScreenedPassword` frame the way a future
+// route handler must.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,8 +29,9 @@ import {
   configureAuth,
   resetAuthConfigurationForTests,
 } from "../configure.js";
+import { withScreenedPassword } from "../password/breach-screen.js";
 import type { PasswordHasher } from "../password/hasher.js";
-import { ChangePassword } from "./change-password.js";
+import { ChangePassword, type ChangePasswordInput } from "./change-password.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const USER_ID = "00000000-0000-4000-8000-0000000000a1";
@@ -113,21 +120,25 @@ afterEach(() => {
   resetAuthConfigurationForTests();
 });
 
+/** Screen, then dispatch — the sequence a route handler must follow. */
+function run(input: ChangePasswordInput, idempotencyKey: string) {
+  return withScreenedPassword(input.newPassword, () =>
+    withTenancyContext(ctx(), () => executeCommand(ChangePassword, input, { idempotencyKey }))
+  );
+}
+
 describe("ChangePassword", () => {
   it("changes the password and revokes OTHER sessions (keeps current)", async () => {
     const fake = buildFake();
     configureBus(fake.client);
 
-    const out = await withTenancyContext(ctx(), () =>
-      executeCommand(
-        ChangePassword,
-        {
-          currentPassword: CURRENT,
-          newPassword: "brand-new-secret-9x",
-          exceptSessionId: "00000000-0000-4000-8000-0000000000ff",
-        },
-        { idempotencyKey: "cp-1" }
-      )
+    const out = await run(
+      {
+        currentPassword: CURRENT,
+        newPassword: "brand-new-secret-9x",
+        exceptSessionId: "00000000-0000-4000-8000-0000000000ff",
+      },
+      "cp-1"
     );
 
     expect(out.sessionsRevoked).toBe(2);
@@ -147,13 +158,7 @@ describe("ChangePassword", () => {
     const fake = buildFake();
     configureBus(fake.client);
     await expect(
-      withTenancyContext(ctx(), () =>
-        executeCommand(
-          ChangePassword,
-          { currentPassword: "WRONG", newPassword: "brand-new-secret-9x" },
-          { idempotencyKey: "cp-2" }
-        )
-      )
+      run({ currentPassword: "WRONG", newPassword: "brand-new-secret-9x" }, "cp-2")
     ).rejects.toMatchObject({ code: "CURRENT_PASSWORD_INVALID" });
     expect(fake.tx.authSession.updateMany).not.toHaveBeenCalled();
   });
@@ -162,14 +167,72 @@ describe("ChangePassword", () => {
     const fake = buildFake();
     configureBus(fake.client);
     await expect(
+      run({ currentPassword: CURRENT, newPassword: CURRENT }, "cp-3")
+    ).rejects.toMatchObject({ code: "PASSWORD_REUSED" });
+    expect(fake.tx.authSession.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("ChangePassword — breach screen", () => {
+  it("refuses to run when the caller never screened the password", async () => {
+    const fake = buildFake();
+    configureBus(fake.client);
+
+    // Fails CLOSED. If a missing screen were treated as "not breached",
+    // a route that forgot the frame would look like a working password
+    // change while silently never consulting the breach corpus.
+    await expect(
       withTenancyContext(ctx(), () =>
         executeCommand(
           ChangePassword,
-          { currentPassword: CURRENT, newPassword: CURRENT },
-          { idempotencyKey: "cp-3" }
+          { currentPassword: CURRENT, newPassword: "brand-new-secret-9x" },
+          { idempotencyKey: "cp-unscreened" }
         )
       )
-    ).rejects.toMatchObject({ code: "PASSWORD_REUSED" });
+    ).rejects.toMatchObject({ code: "PASSWORD_BREACH_SCREEN_MISSING" });
+    expect(fake.tx.user.update).not.toHaveBeenCalled();
     expect(fake.tx.authSession.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("refuses a screen that judged a DIFFERENT password", async () => {
+    const fake = buildFake();
+    configureBus(fake.client);
+
+    // A frame is only evidence about the password it screened. Reusing
+    // one across two passwords would launder an unscreened credential
+    // through an earlier verdict.
+    await expect(
+      withScreenedPassword("some-other-passphrase-2", () =>
+        withTenancyContext(ctx(), () =>
+          executeCommand(
+            ChangePassword,
+            { currentPassword: CURRENT, newPassword: "brand-new-secret-9x" },
+            { idempotencyKey: "cp-mismatch" }
+          )
+        )
+      )
+    ).rejects.toMatchObject({ code: "PASSWORD_BREACH_SCREEN_MISSING" });
+    expect(fake.tx.user.update).not.toHaveBeenCalled();
+  });
+
+  it("changes the password when the corpus is down, and records the bypass", async () => {
+    const fake = buildFake();
+    configureAuth(
+      buildAuthConfiguration({
+        clock: clock.createFrozenClock(new Date()),
+        hasher: fakeHasher,
+        password: {
+          breachChecker: { isBreached: () => Promise.reject(new Error("corpus unavailable")) },
+        },
+      })
+    );
+    configureBus(fake.client);
+
+    await run({ currentPassword: CURRENT, newPassword: "brand-new-secret-9x" }, "cp-open");
+
+    const audits = fake.tx.auditLog.create.mock.calls as unknown as ReadonlyArray<
+      readonly [{ data: { metadata: Record<string, unknown> } }]
+    >;
+    expect(audits[0]![0].data.metadata["breachScreen"]).toBe("bypassed_error");
   });
 });

@@ -13,6 +13,18 @@
 //      session cannot outlive the credential it was born under. The
 //      caller may keep the current session via `exceptSessionId`.
 //
+// The breach screen in step 2 is NOT performed here: it is a
+// third-party network call and the bus has already opened the
+// transaction by the time `handle` runs. Dispatch this command inside a
+// `withScreenedPassword` frame so the check happens first:
+//
+//     await withScreenedPassword(newPassword, () =>
+//       executeCommand(ChangePassword, input, { idempotencyKey })
+//     );
+//
+// Without the frame the command fails closed with
+// PASSWORD_BREACH_SCREEN_MISSING. See ../password/breach-screen.ts.
+//
 // PHI: none. Passwords are on the redaction allowlist.
 
 import type { Command, HandlerResult } from "@pharmax/command-bus";
@@ -21,6 +33,7 @@ import { z } from "zod";
 
 import { getAuthConfiguration } from "../configure.js";
 import { currentPasswordInvalidError } from "../errors.js";
+import { logBreachScreenBypass, requireBreachScreen } from "../password/breach-screen.js";
 import { applyNewPassword } from "../password/set-password.js";
 
 const inputSchema = z
@@ -52,10 +65,12 @@ export const ChangePassword: Command<ChangePasswordInput, ChangePasswordOutput> 
     tx,
     commandLogId,
     clock,
+    logger,
   }): Promise<HandlerResult<ChangePasswordOutput>> {
     const config = getAuthConfiguration();
     const userId = ctx.actor.userId;
     const now = clock.now();
+    const breachScreen = requireBreachScreen(input.newPassword);
 
     const user = await tx.user.findUnique({
       where: { id: userId },
@@ -89,9 +104,11 @@ export const ChangePassword: Command<ChangePasswordInput, ChangePasswordOutput> 
       plaintext: input.newPassword,
       disallowedSubstrings: [emailLocalPart, user.displayName],
       currentHash: user.hashedPassword,
+      breachScreen,
       config,
       now,
     });
+    logBreachScreenBypass(logger, breachScreen, { userId });
 
     // Revoke sessions (all, or all-but-current).
     const revoked = await tx.authSession.updateMany({
@@ -109,7 +126,12 @@ export const ChangePassword: Command<ChangePasswordInput, ChangePasswordOutput> 
         action: "user.password_changed",
         resourceType: "User",
         resourceId: userId,
-        metadata: { userId, sessionsRevoked: revoked.count, commandLogId },
+        metadata: {
+          userId,
+          sessionsRevoked: revoked.count,
+          breachScreen: breachScreen.outcome,
+          commandLogId,
+        },
       },
       outboxEvents: [
         {

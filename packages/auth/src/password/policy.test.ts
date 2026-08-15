@@ -81,6 +81,8 @@ describe("checkNotBreached", () => {
       policy: DEFAULT_PASSWORD_POLICY,
     });
     expect(result.ok).toBe(true);
+    // Distinguishable from a real pass: nothing was screened.
+    expect(result.outcome).toBe("not_configured");
   });
 
   it("flags a breached password", async () => {
@@ -91,6 +93,7 @@ describe("checkNotBreached", () => {
     });
     expect(result.ok).toBe(false);
     expect(result.violations.join(" ")).toContain("data breach");
+    expect(result.outcome).toBe("checked");
   });
 
   it("passes a non-breached password", async () => {
@@ -100,5 +103,89 @@ describe("checkNotBreached", () => {
       policy: { ...DEFAULT_PASSWORD_POLICY, breachChecker: checker },
     });
     expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("checked");
+  });
+});
+
+describe("checkNotBreached — degraded checker", () => {
+  const PLAINTEXT = "a-unique-strong-passphrase";
+
+  it("fails OPEN when the checker throws", async () => {
+    const checker: BreachChecker = {
+      isBreached: () => Promise.reject(new Error("corpus 503")),
+    };
+    const result = await checkNotBreached({
+      plaintext: PLAINTEXT,
+      policy: { ...DEFAULT_PASSWORD_POLICY, breachChecker: checker },
+    });
+
+    // The module documents fail-open and now implements it: an outage in
+    // a third-party corpus must not block an operator from rotating a
+    // credential they believe is compromised.
+    expect(result.ok).toBe(true);
+    expect(result.violations).toHaveLength(0);
+    expect(result.outcome).toBe("bypassed_error");
+  });
+
+  it("fails OPEN when the checker throws a non-Error value", async () => {
+    const checker: BreachChecker = {
+      isBreached: () => Promise.reject("string rejection"),
+    };
+    const result = await checkNotBreached({
+      plaintext: PLAINTEXT,
+      policy: { ...DEFAULT_PASSWORD_POLICY, breachChecker: checker },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("bypassed_error");
+  });
+
+  it("gives up at the timeout instead of waiting on a hung checker", async () => {
+    // Never settles. Before the budget existed this promise WAS the
+    // request: the command's transaction stayed open behind it.
+    const checker: BreachChecker = { isBreached: () => new Promise<boolean>(() => undefined) };
+    const startedAt = Date.now();
+    const result = await checkNotBreached({
+      plaintext: PLAINTEXT,
+      policy: { ...DEFAULT_PASSWORD_POLICY, breachChecker: checker, breachCheckTimeoutMs: 20 },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("bypassed_timeout");
+    // Bounded by the budget. Loose upper bound so a busy CI runner
+    // cannot flake it; a lost timeout hangs until vitest's cap instead.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("still returns a real verdict for a checker that is slow but inside its budget", async () => {
+    const checker: BreachChecker = {
+      isBreached: () =>
+        new Promise<boolean>((resolve) => {
+          setTimeout(() => resolve(true), 5);
+        }),
+    };
+    const result = await checkNotBreached({
+      plaintext: PLAINTEXT,
+      policy: { ...DEFAULT_PASSWORD_POLICY, breachChecker: checker, breachCheckTimeoutMs: 5_000 },
+    });
+
+    // Pins the direction of the race: the budget must not pre-empt a
+    // checker that answers in time.
+    expect(result.ok).toBe(false);
+    expect(result.outcome).toBe("checked");
+  });
+
+  it("never echoes the plaintext in what it returns", async () => {
+    const checker: BreachChecker = {
+      isBreached: () => Promise.reject(new Error(`failed while checking ${PLAINTEXT}`)),
+    };
+    const result = await checkNotBreached({
+      plaintext: PLAINTEXT,
+      policy: { ...DEFAULT_PASSWORD_POLICY, breachChecker: checker },
+    });
+
+    // A careless checker may put the password in its error message; the
+    // screen result is carried into audit metadata, so it must not
+    // forward any of it.
+    expect(JSON.stringify(result)).not.toContain(PLAINTEXT);
   });
 });
