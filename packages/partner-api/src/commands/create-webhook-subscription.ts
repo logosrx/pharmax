@@ -11,6 +11,11 @@
 // event with `phiSafe: true` (derived set — see eligible-events.ts).
 // A phi-bearing event type cannot be subscribed by construction.
 //
+// Endpoint validation: the URL is an instruction for our worker to
+// make a request from inside the VPC, so it is screened for
+// non-public destinations before it is stored (see endpoint-url.ts
+// for the threat model and for what DNS still leaves open).
+//
 // Permission: `webhooks.manage` (ORGANIZATION scope).
 //
 // PHI: none.
@@ -28,16 +33,30 @@ import {
   isWebhookEligibleEventType,
   listWebhookEligibleEventTypes,
 } from "../webhooks/eligible-events.js";
+import {
+  classifyWebhookEndpoint,
+  type WebhookEndpointRejection,
+} from "../webhooks/endpoint-url.js";
 import { WEBHOOK_SECRET_PREFIX } from "../api-key/token.js";
 
 export const CREATE_WEBHOOK_SUBSCRIPTION_INELIGIBLE_EVENT =
   "CREATE_WEBHOOK_SUBSCRIPTION_INELIGIBLE_EVENT";
 export const CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_HTTPS =
   "CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_HTTPS";
+export const CREATE_WEBHOOK_SUBSCRIPTION_URL_UNPARSEABLE =
+  "CREATE_WEBHOOK_SUBSCRIPTION_URL_UNPARSEABLE";
+export const CREATE_WEBHOOK_SUBSCRIPTION_URL_HAS_CREDENTIALS =
+  "CREATE_WEBHOOK_SUBSCRIPTION_URL_HAS_CREDENTIALS";
+export const CREATE_WEBHOOK_SUBSCRIPTION_URL_NON_DEFAULT_PORT =
+  "CREATE_WEBHOOK_SUBSCRIPTION_URL_NON_DEFAULT_PORT";
+export const CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_PUBLIC =
+  "CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_PUBLIC";
+export const CREATE_WEBHOOK_SUBSCRIPTION_DUPLICATE_ENDPOINT =
+  "CREATE_WEBHOOK_SUBSCRIPTION_DUPLICATE_ENDPOINT";
 
 const inputSchema = z
   .object({
-    /** Partner endpoint. HTTPS-only (checked below with a typed error). */
+    /** Partner endpoint. Screened below with a typed error. */
     url: z.url().max(2000),
     /** Versioned registry event names. phi-safe only. */
     eventTypes: z.array(z.string().trim().min(1).max(128)).min(1).max(100),
@@ -53,6 +72,26 @@ const inputSchema = z
   .strict();
 
 export type CreateWebhookSubscriptionInput = z.infer<typeof inputSchema>;
+
+/** One greppable command error code per endpoint-refusal cause. */
+function rejectionCode(reason: WebhookEndpointRejection): string {
+  switch (reason) {
+    case "unparseable":
+      return CREATE_WEBHOOK_SUBSCRIPTION_URL_UNPARSEABLE;
+    case "not_https":
+      return CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_HTTPS;
+    case "embedded_credentials":
+      return CREATE_WEBHOOK_SUBSCRIPTION_URL_HAS_CREDENTIALS;
+    case "non_default_port":
+      return CREATE_WEBHOOK_SUBSCRIPTION_URL_NON_DEFAULT_PORT;
+    case "non_public_host":
+      return CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_PUBLIC;
+    default: {
+      const exhaustive: never = reason;
+      return exhaustive;
+    }
+  }
+}
 
 export interface CreateWebhookSubscriptionOutput {
   readonly subscriptionId: string;
@@ -83,10 +122,11 @@ export const CreateWebhookSubscription: Command<
     tx,
     commandLogId,
   }): Promise<HandlerResult<CreateWebhookSubscriptionOutput>> {
-    if (!input.url.startsWith("https://")) {
+    const endpoint = classifyWebhookEndpoint(input.url);
+    if (!endpoint.ok) {
       throw new errors.ValidationError({
-        code: CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_HTTPS,
-        message: "Webhook endpoints must be HTTPS.",
+        code: rejectionCode(endpoint.reason),
+        message: `Webhook endpoint refused. ${endpoint.detail}`,
       });
     }
 
@@ -97,6 +137,30 @@ export const CreateWebhookSubscription: Command<
         code: CREATE_WEBHOOK_SUBSCRIPTION_INELIGIBLE_EVENT,
         message: `Event type(s) not subscribable: ${ineligible.join(", ")}. Subscribable types are registered phi-safe events.`,
         metadata: { ineligible, eligible: listWebhookEligibleEventTypes() },
+      });
+    }
+
+    // Every ACTIVE subscription on a URL receives every matching
+    // event, so a second registration of the same endpoint doubles
+    // the partner's traffic and their signature-verification load
+    // with no way to tell the copies apart. Scoped to ACTIVE because
+    // RevokeWebhookSubscription retains the DISABLED row for audit
+    // and re-registering a revoked endpoint is legitimate.
+    //
+    // Advisory, not atomic: `webhook_subscription` has no unique
+    // constraint on (organizationId, url), so two concurrent creates
+    // can still both pass. The bus's idempotency key covers the
+    // realistic case (a retried submit); the constraint that would
+    // make this airtight is tracked as a follow-up.
+    const duplicate = await tx.webhookSubscription.findFirst({
+      where: { organizationId: ctx.organizationId, url: input.url, status: "ACTIVE" },
+      select: { id: true },
+    });
+    if (duplicate !== null) {
+      throw new errors.ConflictError({
+        code: CREATE_WEBHOOK_SUBSCRIPTION_DUPLICATE_ENDPOINT,
+        message: "An active webhook subscription already exists for this endpoint.",
+        metadata: { existingSubscriptionId: duplicate.id },
       });
     }
 

@@ -52,8 +52,13 @@ export {
 
 export {
   CreateWebhookSubscription,
+  CREATE_WEBHOOK_SUBSCRIPTION_DUPLICATE_ENDPOINT,
   CREATE_WEBHOOK_SUBSCRIPTION_INELIGIBLE_EVENT,
+  CREATE_WEBHOOK_SUBSCRIPTION_URL_HAS_CREDENTIALS,
+  CREATE_WEBHOOK_SUBSCRIPTION_URL_NON_DEFAULT_PORT,
   CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_HTTPS,
+  CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_PUBLIC,
+  CREATE_WEBHOOK_SUBSCRIPTION_URL_UNPARSEABLE,
   type CreateWebhookSubscriptionInput,
   type CreateWebhookSubscriptionOutput,
 } from "./commands/create-webhook-subscription.js";
@@ -79,6 +84,14 @@ export {
   isWebhookEligibleEventType,
   listWebhookEligibleEventTypes,
 } from "./webhooks/eligible-events.js";
+
+export {
+  classifyWebhookEndpoint,
+  type WebhookEndpointAccepted,
+  type WebhookEndpointRejected,
+  type WebhookEndpointRejection,
+  type WebhookEndpointVerdict,
+} from "./webhooks/endpoint-url.js";
 
 export {
   signWebhookPayload,
