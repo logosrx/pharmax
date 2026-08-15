@@ -1,12 +1,32 @@
-// Partner webhook endpoint validation — the SSRF guard (ADR-0032).
+// Outbound URL validation — the shared SSRF guard (ADR-0032).
 //
-// A registered subscription is a standing instruction for OUR worker
-// to POST a signed payload at a partner-chosen URL, on a poll loop,
-// from inside the VPC (apps/worker/src/drains/webhook-delivery-
-// drainer.ts). Without a host check, `https://` alone lets an
-// authenticated tenant aim that loop at the loopback interface, the
-// cloud metadata service, or any RFC1918 neighbour, and read back
-// internal reachability through the recorded `responseStatus`.
+// Any stored, caller-supplied URL that OUR infrastructure will later
+// dial from inside the VPC has to pass through here first. Two
+// call sites today:
+//
+//   - `CreateWebhookSubscription` (@pharmax/partner-api). A
+//     subscription is a standing instruction for the delivery drain
+//     to POST a signed payload at a partner-chosen URL on a poll
+//     loop. Without a host check, `https://` alone lets an
+//     authenticated tenant aim that loop at the loopback interface,
+//     the cloud metadata service, or any RFC1918 neighbour, and read
+//     back internal reachability through the recorded
+//     `responseStatus`.
+//
+//   - `RegisterCarrierCredential` (@pharmax/shipping). The optional
+//     `baseUrl` override is dialled by the FedEx/UPS/EasyPost clients
+//     WITH THE CARRIER CREDENTIAL ATTACHED — FedEx posts
+//     `client_id`/`client_secret` as a form body to
+//     `<baseUrl>/oauth/token`, UPS sends `Authorization: Basic
+//     base64(id:secret)`, EasyPost sends the API key as Basic auth on
+//     every call. A hostile `baseUrl` therefore exfiltrates the
+//     credential itself, not just reachability, and the tracking
+//     pollers re-dial it unattended on every tick.
+//
+// This module is deliberately generic and lives in platform-core so
+// both callers share ONE copy of the CIDR tables. A forked second
+// copy would drift, and the divergence would not be visible in
+// either package's tests.
 //
 // WHAT THIS CLOSES
 //
@@ -30,32 +50,42 @@
 // was validated — or an egress allowlist / forward proxy. See the
 // PR that introduced this module for the follow-up.
 //
-// The residual exposure is bounded by three things already true of
-// the delivery path: deliveries are POST-only (IMDSv2 needs a PUT to
-// mint a token), `deliver.ts` sets `redirect: "error"` so a public
-// endpoint cannot 302 the worker inward, and this module refuses any
-// port but 443, so even a hostile DNS answer reaches exactly one port.
+// What bounds the residual differs by call site, so do not read one
+// caller's mitigations onto the other:
+//
+//   - Webhook delivery is POST-only (IMDSv2 needs a PUT to mint a
+//     token) and `deliver.ts` sets `redirect: "error"`, so a public
+//     endpoint cannot 302 the worker inward.
+//   - The carrier clients have NEITHER property: `FedExClient`
+//     issues a PUT for shipment cancellation, and none of the three
+//     clients set `redirect`, so they follow by default. Their
+//     bound is instead that `baseUrl` is settable only by an
+//     internal operator holding `ship.manage_carrier_credentials`,
+//     never by a partner.
+//
+// Common to both: refusing any port but 443 means even a hostile DNS
+// answer reaches exactly one port instead of scanning.
 //
 // PHI: none. Verdict details name the address CLASS that fired and
 // never echo the caller's URL.
 
-/** Which rule refused the endpoint. One code per distinct cause. */
-export type WebhookEndpointRejection =
+/** Which rule refused the URL. One code per distinct cause. */
+export type OutboundUrlRejection =
   "unparseable" | "not_https" | "embedded_credentials" | "non_default_port" | "non_public_host";
 
-export interface WebhookEndpointAccepted {
+export interface OutboundUrlAccepted {
   readonly ok: true;
   readonly url: URL;
 }
 
-export interface WebhookEndpointRejected {
+export interface OutboundUrlRejected {
   readonly ok: false;
-  readonly reason: WebhookEndpointRejection;
+  readonly reason: OutboundUrlRejection;
   /** Human-readable class that fired. Never contains the input URL. */
   readonly detail: string;
 }
 
-export type WebhookEndpointVerdict = WebhookEndpointAccepted | WebhookEndpointRejected;
+export type OutboundUrlVerdict = OutboundUrlAccepted | OutboundUrlRejected;
 
 /** WHATWG normalizes every numeric IPv4 form to a dotted quad. */
 const IPV4_DOTTED_QUAD = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
@@ -234,7 +264,7 @@ function classifyIpv6(address: string): string | null {
  * Names that can only resolve through a local resolver, a search
  * domain, or /etc/hosts. A public endpoint always has a registrable
  * domain, so a single-label host is included: `https://intranet/`
- * reaches a neighbour, never a partner.
+ * reaches a neighbour, never a partner or a carrier.
  */
 const LOCAL_HOSTNAME_SUFFIXES: readonly string[] = [".localhost", ".local", ".internal"];
 
@@ -257,11 +287,12 @@ function classifyHostname(hostname: string): string | null {
 }
 
 /**
- * Decide whether a partner-supplied URL is a legitimate outbound
- * webhook destination. Lexical only — see the DNS note in the module
- * header for what this deliberately does not cover.
+ * Decide whether a caller-supplied URL is a legitimate outbound
+ * destination for our infrastructure to dial. Lexical only — see the
+ * DNS note in the module header for what this deliberately does not
+ * cover.
  */
-export function classifyWebhookEndpoint(rawUrl: string): WebhookEndpointVerdict {
+export function classifyOutboundUrl(rawUrl: string): OutboundUrlVerdict {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -282,10 +313,13 @@ export function classifyWebhookEndpoint(rawUrl: string): WebhookEndpointVerdict 
   }
 
   // `https://user:pass@host/` is refused for two independent reasons:
-  // it is the classic host-confusion disguise, and this URL is
-  // persisted verbatim into audit metadata and the outbox payload —
-  // neither of which redacts it — so a credential here becomes a
-  // plaintext secret in the append-only chain.
+  // it is the classic host-confusion disguise, and both callers
+  // persist the URL verbatim somewhere that does not redact it —
+  // webhook: audit metadata + outbox payload; carrier: the
+  // `carrier_credential` row and `command_log.requestPayload`, whose
+  // redaction list covers the key material but not `baseUrl`. A
+  // credential here becomes a plaintext secret in the append-only
+  // chain.
   if (url.username !== "" || url.password !== "") {
     return Object.freeze({
       ok: false as const,

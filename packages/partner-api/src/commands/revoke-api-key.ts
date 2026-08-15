@@ -38,7 +38,13 @@ export const RevokeApiKey: Command<RevokeApiKeyInput, RevokeApiKeyOutput> = {
   permission: PERMISSIONS.API_KEYS_MANAGE,
   redactFields: [],
 
-  async handle({ input, ctx, tx, commandLogId }): Promise<HandlerResult<RevokeApiKeyOutput>> {
+  async handle({
+    input,
+    ctx,
+    tx,
+    clock,
+    commandLogId,
+  }): Promise<HandlerResult<RevokeApiKeyOutput>> {
     // Tenancy-scoped read: the auto-filter + RLS guarantee an
     // operator can only revoke keys in their own org.
     const existing = await tx.apiKey.findUnique({
@@ -60,7 +66,10 @@ export const RevokeApiKey: Command<RevokeApiKeyInput, RevokeApiKeyOutput> = {
       });
     }
 
-    const revokedAt = new Date();
+    // Injected clock, not `new Date()`: the row, the command output,
+    // and the outbox `occurredAt` must all be the SAME instant, and a
+    // test has to be able to pin it.
+    const revokedAt = clock.now();
     await tx.apiKey.update({
       where: { id: input.apiKeyId },
       data: {

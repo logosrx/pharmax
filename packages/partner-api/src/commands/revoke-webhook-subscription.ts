@@ -47,6 +47,7 @@ export const RevokeWebhookSubscription: Command<
     input,
     ctx,
     tx,
+    clock,
     commandLogId,
   }): Promise<HandlerResult<RevokeWebhookSubscriptionOutput>> {
     const existing = await tx.webhookSubscription.findUnique({
@@ -68,7 +69,10 @@ export const RevokeWebhookSubscription: Command<
       });
     }
 
-    const disabledAt = new Date();
+    // Injected clock, not `new Date()`: the row, the command output,
+    // and the outbox `occurredAt` must all be the SAME instant, and a
+    // test has to be able to pin it.
+    const disabledAt = clock.now();
     await tx.webhookSubscription.update({
       where: { id: input.subscriptionId },
       data: { status: "DISABLED", disabledAt },

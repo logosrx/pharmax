@@ -85,13 +85,11 @@ export {
   listWebhookEligibleEventTypes,
 } from "./webhooks/eligible-events.js";
 
-export {
-  classifyWebhookEndpoint,
-  type WebhookEndpointAccepted,
-  type WebhookEndpointRejected,
-  type WebhookEndpointRejection,
-  type WebhookEndpointVerdict,
-} from "./webhooks/endpoint-url.js";
+// The endpoint SSRF guard formerly exported from here now lives in
+// `@pharmax/platform-core` (`net.classifyOutboundUrl`), because
+// @pharmax/shipping needs the same check on carrier base URLs and a
+// domain package may not import a sibling domain. Import it from
+// platform-core directly.
 
 export {
   signWebhookPayload,

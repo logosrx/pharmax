@@ -41,6 +41,12 @@ const OTHER_ORG_ID = "00000000-0000-4000-8000-0000000000ff";
 const ACTOR_USER_ID = "00000000-0000-4000-8000-000000000009";
 const API_KEY_ID = "00000000-0000-4000-8000-0000000000a1";
 const REASON = "Rotated after a laptop was lost.";
+/**
+ * The instant the bus clock is frozen at. `revokedAt` is stamped from
+ * the injected clock, so the row, the command output, and the outbox
+ * `occurredAt` are all pinned to this exact value.
+ */
+const FROZEN_NOW = new Date("2026-07-31T12:00:00.000Z");
 
 const grants: ReadonlyArray<ResolvedGrant> = [
   {
@@ -186,7 +192,7 @@ function buildPrismaFake(rows: ReadonlyArray<ApiKeyRow>) {
 function configureBus(client: unknown): void {
   configureCommandBus({
     prisma: client as unknown as Parameters<typeof configureCommandBus>[0]["prisma"],
-    clock: clock.createFrozenClock(new Date("2026-07-31T12:00:00.000Z")),
+    clock: clock.createFrozenClock(FROZEN_NOW),
     logger: logger.noopLogger,
   });
 }
@@ -242,11 +248,11 @@ describe("RevokeApiKey — happy path", () => {
     const row = fake.store.get(API_KEY_ID)!;
     expect(row.status).toBe("REVOKED");
     expect(row.revokedReason).toBe(REASON);
-    expect(row.revokedAt).toBeInstanceOf(Date);
+    expect(row.revokedAt).toEqual(FROZEN_NOW);
 
     expect(out.apiKeyId).toBe(API_KEY_ID);
     expect(out.tokenPrefix).toBe("pxk_tttt");
-    expect(out.revokedAt).toBe(row.revokedAt!.toISOString());
+    expect(out.revokedAt).toBe(FROZEN_NOW.toISOString());
   });
 
   it("records who cut the key off, when, and why", async () => {
@@ -270,6 +276,9 @@ describe("RevokeApiKey — happy path", () => {
     const payload = rows[0]!["payload"] as Record<string, unknown>;
     expect(payload["revokedByUserId"]).toBe(ACTOR_USER_ID);
     expect(payload["organizationId"]).toBe(ORG_ID);
+    // Same instant as the row, from the same injected clock — a
+    // subscriber reconciling against `revokedAt` must not see skew.
+    expect(payload["occurredAt"]).toBe(FROZEN_NOW.toISOString());
   });
 });
 
