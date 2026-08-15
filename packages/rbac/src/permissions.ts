@@ -29,6 +29,13 @@ export const PERMISSIONS = Object.freeze({
   USERS_MANAGE: "users.manage",
   ROLES_MANAGE: "roles.manage",
   ORG_MANAGE_SITES: "org.manage_sites",
+  // Create / edit / delete the org's operational queue buckets. Held
+  // separately from ORG_MANAGE_SITES because a bucket is the unit the
+  // workflow engine routes orders INTO: a bad bucket edit misroutes
+  // live work, whereas a bad site-address edit only breaks label
+  // purchase. The seven seeded buckets stay immutable in the fields
+  // that matter (`code`, `kind`) regardless of who holds this.
+  ORG_MANAGE_BUCKETS: "org.manage_buckets",
 
   // Patient roster.
   PATIENTS_CREATE: "patients.create",
@@ -282,6 +289,11 @@ export const PERMISSION_METADATA: Readonly<
   [PERMISSIONS.ORG_MANAGE_SITES]: {
     description:
       "Edit pharmacy site profile and ship-from address used by the carrier auto-purchase flow.",
+    category: "Administration",
+  },
+  [PERMISSIONS.ORG_MANAGE_BUCKETS]: {
+    description:
+      "Create, rename, reorder, and delete custom operational queue buckets. System buckets seeded by ProvisionDefaultBuckets accept display changes only; their code and kind stay immutable, and no bucket holding orders can be deleted.",
     category: "Administration",
   },
   [PERMISSIONS.PATIENTS_CREATE]: {

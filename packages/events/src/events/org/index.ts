@@ -1,5 +1,8 @@
 // Per-domain barrel for org.* event definitions.
 
+export { OrgBucketCreatedV1 } from "./bucket-created-v1.js";
+export { OrgBucketDeletedV1 } from "./bucket-deleted-v1.js";
+export { OrgBucketUpdatedV1 } from "./bucket-updated-v1.js";
 export { OrgBucketsProvisionedV1 } from "./buckets-provisioned-v1.js";
 export { OrgRoleCreatedV1 } from "./role-created-v1.js";
 export { OrgRolePermissionsUpdatedV1 } from "./role-permissions-updated-v1.js";

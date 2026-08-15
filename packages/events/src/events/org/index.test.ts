@@ -7,8 +7,8 @@ import * as OrgEvents from "./index.js";
 const ALL = Object.values(OrgEvents);
 
 describe("org domain barrel", () => {
-  it("7 org.* events are registered", () => {
-    expect(ALL.length).toBe(7);
+  it("10 org.* events are registered", () => {
+    expect(ALL.length).toBe(10);
   });
 
   it("every org.* event is owned by `orgs`", () => {

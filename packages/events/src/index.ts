@@ -84,6 +84,9 @@ export * from "./events/index.js";
 // a `git grep` for a payload type name resolves to this file.
 export type { OrganizationCreatedV1Payload } from "./events/organization/created-v1.js";
 
+export type { OrgBucketCreatedV1Payload } from "./events/org/bucket-created-v1.js";
+export type { OrgBucketDeletedV1Payload } from "./events/org/bucket-deleted-v1.js";
+export type { OrgBucketUpdatedV1Payload } from "./events/org/bucket-updated-v1.js";
 export type { OrgBucketsProvisionedV1Payload } from "./events/org/buckets-provisioned-v1.js";
 export type { OrgSiteAddressUpdatedV1Payload } from "./events/org/site-address-updated-v1.js";
 export type { OrgUserInvitedV1Payload } from "./events/org/user-invited-v1.js";
