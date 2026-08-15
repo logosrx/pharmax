@@ -3,10 +3,11 @@
 // Runs the real `resetPassword` orchestration — pre-transaction breach
 // screen included — against a mocked Prisma client + a fast fake
 // hasher. The token IS the authorization here, so the guards get the
-// attention: unknown / consumed / expired tokens and any non-ACTIVE
-// user all surface as one opaque RESET_TOKEN_INVALID and write nothing,
-// a redeemed token cannot be redeemed twice, and a success stores a
-// HASH, stamps `usedAt`, and kills every live session.
+// attention: unknown / consumed / expired tokens, any non-ACTIVE user,
+// and a token whose organization is not the user's all surface as one
+// opaque RESET_TOKEN_INVALID and write nothing, a redeemed token cannot
+// be redeemed twice, and a success stores a HASH, stamps `usedAt`, and
+// kills every live session.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,6 +26,7 @@ import { resetPassword } from "../reset-password.js";
 import { hashSessionToken } from "../session/token.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
+const OTHER_ORG_ID = "00000000-0000-4000-8000-000000000002";
 const USER_ID = "00000000-0000-4000-8000-0000000000a1";
 const TOKEN_ROW_ID = "00000000-0000-4000-8000-0000000000b1";
 const NOW = new Date("2026-07-13T12:00:00.000Z");
@@ -51,6 +53,12 @@ const fakeHasher: PasswordHasher = {
 interface SeedToken {
   readonly expiresAt?: Date;
   readonly usedAt?: Date | null;
+  /**
+   * Organization stamped on the token row. Defaults to the one the
+   * seeded user actually belongs to; set it to another org to model a
+   * historical row whose (user, organization) pair is mismatched.
+   */
+  readonly organizationId?: string;
 }
 
 function buildFake(opts: {
@@ -67,7 +75,7 @@ function buildFake(opts: {
       : {
           id: TOKEN_ROW_ID,
           userId: USER_ID,
-          organizationId: ORG_ID,
+          organizationId: opts.token?.organizationId ?? ORG_ID,
           expiresAt: opts.token?.expiresAt ?? new Date(NOW.getTime() + 30 * 60 * 1000),
           usedAt: opts.token?.usedAt ?? null,
         };
@@ -87,8 +95,17 @@ function buildFake(opts: {
       }),
     },
     user: {
-      findUnique: vi.fn(async () =>
-        opts.userMissing === true
+      // The fake database holds ONE user row, and it lives in ORG_ID.
+      // It answers whatever `where` it is handed the way Postgres would:
+      // every clause present must match, and a clause that is ABSENT
+      // constrains nothing. So a command that filters on the wrong
+      // organization gets a real miss, and one that forgot to filter at
+      // all gets a HIT — which is what makes the tenancy tests below
+      // fail for the right reason instead of looking like a missing user.
+      findFirst: vi.fn(async (args: { where: { id: string; organizationId?: string } }) =>
+        opts.userMissing === true ||
+        args.where.id !== USER_ID ||
+        (args.where.organizationId !== undefined && args.where.organizationId !== ORG_ID)
           ? null
           : {
               email: "operator@example.com",
@@ -187,9 +204,11 @@ function auditMetadata(fake: ReturnType<typeof buildFake>): Record<string, unkno
 /** Nothing about the account changed and no audit trail was written. */
 function expectNoEffect(fake: ReturnType<typeof buildFake>): void {
   expect(fake.tx.user.update).not.toHaveBeenCalled();
+  expect(fake.tx.passwordHistory.create).not.toHaveBeenCalled();
   expect(fake.tx.passwordResetToken.update).not.toHaveBeenCalled();
   expect(fake.tx.authSession.updateMany).not.toHaveBeenCalled();
   expect(fake.tx.auditLog.create).not.toHaveBeenCalled();
+  expect(fake.tx.eventOutbox.createMany).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
@@ -395,6 +414,82 @@ describe("ResetPassword — account state guard", () => {
     fingerprints.push(await refusalFingerprint({ rawToken: "never-minted" }));
 
     expect(new Set(fingerprints).size).toBe(1);
+  });
+});
+
+// The token row is where this command learns which organization to write
+// under: `targetOrganizationId`, the audit entry, and the
+// `user.password_reset.v1` payload all come from it. So a row whose
+// `organizationId` does not match its user's would file one tenant's
+// credential rotation in another tenant's audit trail and event stream —
+// the two artifacts that are supposed to be tenant-scoped truth, and the
+// kind of cross-tenant write the repo treats as a critical incident.
+//
+// Defence in depth: nothing that mints into `password_reset_token` today
+// can produce such a row, but the table long predates the membership
+// check IssueInvite now performs, and a future writer would not
+// necessarily repeat it.
+describe("ResetPassword — tenancy", () => {
+  it("refuses a token whose organization is not the user's", async () => {
+    // The user row lives in ORG_ID; the token claims OTHER_ORG_ID.
+    const fake = buildFake({ token: { organizationId: OTHER_ORG_ID } });
+    configureBus(fake.client);
+
+    await expect(run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD })).rejects.toMatchObject({
+      code: "RESET_TOKEN_INVALID",
+    });
+  });
+
+  it("writes nothing at all when it refuses a mismatched token", async () => {
+    const fake = buildFake({ token: { organizationId: OTHER_ORG_ID } });
+    configureBus(fake.client);
+
+    await expect(run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD })).rejects.toThrow();
+
+    // No credential, no consumed link, no session revocation, no audit
+    // row and no event — and because a system command resolves its
+    // target org inside the handler, no command_log row under
+    // OTHER_ORG_ID either. A refusal that still filed bookkeeping under
+    // the token's claimed organization would itself be the cross-tenant
+    // write.
+    expectNoEffect(fake);
+    expect(fake.tx.commandLog.create).not.toHaveBeenCalled();
+  });
+
+  it("looks the user up with the organization filter, not by id alone", async () => {
+    const fake = buildFake({});
+    configureBus(fake.client);
+
+    await run({ rawToken: RAW_TOKEN, newPassword: NEW_PASSWORD });
+
+    // Pins the mechanism, not just the outcome: the guard is one
+    // org-scoped read, so a foreign row is never loaded at all rather
+    // than fetched by id and compared afterwards.
+    expect(fake.tx.user.findFirst).toHaveBeenCalledWith({
+      where: { id: USER_ID, organizationId: ORG_ID },
+      select: { email: true, displayName: true, hashedPassword: true, status: true },
+    });
+  });
+
+  it("refuses a mismatched token with the same fingerprint as an unknown one", async () => {
+    // A caller here is anonymous — it holds an emailed link and nothing
+    // else. A distinct code for "wrong organization" would tell it that
+    // the token names a real user in a real (other) organization, which
+    // is the cross-tenant existence oracle the shared refusal denies.
+    const mismatched = buildFake({ token: { organizationId: OTHER_ORG_ID } });
+    configureBus(mismatched.client);
+    const mismatchedFingerprint = await refusalFingerprint({ rawToken: RAW_TOKEN });
+    resetCommandBusConfigurationForTests();
+
+    configureBus(buildFake({}).client);
+    const unknownFingerprint = await refusalFingerprint({ rawToken: "never-minted" });
+
+    expect(mismatchedFingerprint).toBe(unknownFingerprint);
+    // Pinned to the literal so this cannot pass by neither case
+    // rejecting at all.
+    expect(mismatchedFingerprint).toBe(
+      "RESET_TOKEN_INVALID|This password reset link is invalid or has expired."
+    );
   });
 });
 

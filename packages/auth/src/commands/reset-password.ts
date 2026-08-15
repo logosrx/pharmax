@@ -27,6 +27,16 @@
 // AcceptInvite refuses it (it requires INVITED). No schema change and
 // no `purpose` column needed.
 //
+// The organization on the token row is likewise not taken on trust. It
+// is what the audit entry and the outbox event are filed under, so a row
+// whose `organizationId` did not match its user's would write one
+// tenant's password reset into another tenant's record of truth. The
+// user is read with BOTH ids and a mismatch resolves to no user, taking
+// the same opaque refusal as an unknown token. Defence in depth: the
+// table predates the membership check IssueInvite now performs, and a
+// future writer to `password_reset_token` would not necessarily repeat
+// it.
+//
 // Callers must dispatch this inside `withScreenedPassword` so the
 // breach check happens before the transaction opens — see
 // ../password/breach-screen.ts. `resetPassword` does that.
@@ -84,15 +94,19 @@ export const ResetPassword: SystemCommand<ResetPasswordInput, ResetPasswordOutpu
       throw resetTokenInvalidError();
     }
 
-    const user = await tx.user.findUnique({
-      where: { id: token.userId },
+    // Read by user AND organization together, so a token whose pair is
+    // mismatched never loads a user row at all — the org this command
+    // then audits and publishes under is proven, not assumed.
+    const user = await tx.user.findFirst({
+      where: { id: token.userId, organizationId: token.organizationId },
       select: { email: true, displayName: true, hashedPassword: true, status: true },
     });
-    // A missing user, or any user who is not ACTIVE (still INVITED,
-    // suspended, terminated), is the SAME opaque invalid token. A
-    // distinct code for "suspended" would answer "does this account
-    // exist, and what state is it in?" for anyone holding a stale link,
-    // which is an account-enumeration oracle on a pre-auth endpoint.
+    // A missing user, a user outside the token's organization, or any
+    // user who is not ACTIVE (still INVITED, suspended, terminated) is
+    // the SAME opaque invalid token. A distinct code for "suspended" or
+    // "wrong organization" would answer "does this account exist, and
+    // what state is it in?" for anyone holding a stale link, which is an
+    // account-enumeration oracle on a pre-auth endpoint.
     if (user === null || user.status !== UserStatus.ACTIVE) {
       throw resetTokenInvalidError();
     }

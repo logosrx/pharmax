@@ -14,6 +14,16 @@
 // purpose column, so each command excludes the other's tokens by the
 // user status they imply (ResetPassword requires ACTIVE).
 //
+// The organization on the token row is not taken on trust either. It is
+// what this command files the audit entry and the outbox event under,
+// so a row whose `organizationId` did not match its user's would write
+// one tenant's activation into another tenant's record of truth. The
+// user is therefore read with BOTH ids, and a mismatch resolves to no
+// user at all — the same opaque refusal as an unknown token. IssueInvite
+// proves that pairing before minting, so this is defence in depth: the
+// table predates that check, and a future writer to
+// `password_reset_token` would not necessarily repeat it.
+//
 // Callers must dispatch this inside `withScreenedPassword` so the breach
 // check happens before the transaction opens — see
 // ../password/breach-screen.ts. `acceptInvite` does that.
@@ -65,12 +75,18 @@ export const AcceptInvite: SystemCommand<AcceptInviteInput, AcceptInviteOutput> 
       throw resetTokenInvalidError();
     }
 
-    const user = await tx.user.findUnique({
-      where: { id: token.userId },
+    // Read by user AND organization together, so a token whose pair is
+    // mismatched never loads a user row at all — the org this command
+    // then audits and publishes under is proven, not assumed.
+    const user = await tx.user.findFirst({
+      where: { id: token.userId, organizationId: token.organizationId },
       select: { email: true, displayName: true, status: true },
     });
     // The setup flow only applies to a still-INVITED user. Anything else
-    // (already ACTIVE, suspended, terminated) is an opaque invalid token.
+    // (already ACTIVE, suspended, terminated, or a user who does not
+    // belong to the token's organization) is an opaque invalid token: a
+    // caller holding only an emailed link must not be able to tell those
+    // cases apart.
     if (user === null || user.status !== UserStatus.INVITED) {
       throw resetTokenInvalidError();
     }
