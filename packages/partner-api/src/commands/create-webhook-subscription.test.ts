@@ -7,6 +7,11 @@
 //   - the endpoint is HTTPS and the subscribed event types are the
 //     registry's phi-safe subset, so a phi-bearing event cannot be
 //     routed off-platform;
+//   - the endpoint is a PUBLIC host, so a tenant cannot point the
+//     delivery worker at the loopback interface, the cloud metadata
+//     service, or an RFC1918 neighbour (the address-class matrix
+//     itself lives in webhooks/endpoint-url.test.ts; what is pinned
+//     here is that the command refuses and writes nothing);
 //   - the row is written into the caller's own organization;
 //   - the secret is excluded from the idempotency hash surface so
 //     transport retries replay instead of 409ing.
@@ -37,8 +42,12 @@ import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
 
 import {
   CreateWebhookSubscription,
+  CREATE_WEBHOOK_SUBSCRIPTION_DUPLICATE_ENDPOINT,
   CREATE_WEBHOOK_SUBSCRIPTION_INELIGIBLE_EVENT,
+  CREATE_WEBHOOK_SUBSCRIPTION_URL_HAS_CREDENTIALS,
+  CREATE_WEBHOOK_SUBSCRIPTION_URL_NON_DEFAULT_PORT,
   CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_HTTPS,
+  CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_PUBLIC,
 } from "./create-webhook-subscription.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
@@ -85,6 +94,12 @@ function buildPrismaFake() {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "webhookSubscription", op: "create", args });
         return { id: (args as { data: { id: string } }).data.id };
+      }),
+      // The command reads before it writes (duplicate-endpoint
+      // guard). Default: no existing subscription.
+      findFirst: vi.fn(async (args: unknown): Promise<{ id: string } | null> => {
+        calls.push({ table: "webhookSubscription", op: "findFirst", args });
+        return null;
       }),
     },
     commandLog: {
@@ -340,6 +355,150 @@ describe("CreateWebhookSubscription — endpoint and event guards", () => {
       )
     ).rejects.toMatchObject({ name: "ValidationError" });
     expect(fake.tx.webhookSubscription.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("CreateWebhookSubscription — SSRF guard on the endpoint host", () => {
+  // A subscription is a standing instruction for the delivery worker
+  // to POST from inside the VPC on a poll loop, so an unvalidated
+  // host turns an authenticated tenant into an internal port
+  // scanner: the recorded responseStatus is the oracle. One case per
+  // address class; the exhaustive matrix (numeric obfuscation,
+  // IPv4-mapped IPv6, boundary arithmetic) lives beside the guard in
+  // webhooks/endpoint-url.test.ts.
+  const nonPublicEndpoints: ReadonlyArray<readonly [string, string]> = [
+    ["IPv4 loopback", "https://127.0.0.1/admin"],
+    ["cloud instance metadata", "https://169.254.169.254/latest/meta-data/"],
+    ["ECS task metadata", "https://169.254.170.2/v2/credentials"],
+    ["RFC1918 10/8", "https://10.1.2.3/internal"],
+    ["RFC1918 172.16/12", "https://172.20.0.5/internal"],
+    ["RFC1918 192.168/16", "https://192.168.10.20/internal"],
+    ["carrier-grade NAT", "https://100.64.1.1/internal"],
+    ["0.0.0.0/8", "https://0.0.0.0/internal"],
+    ["IPv6 loopback", "https://[::1]/admin"],
+    ["IPv6 unique-local", "https://[fd00::1]/internal"],
+    ["IPv6 link-local", "https://[fe80::1]/internal"],
+    ["localhost", "https://localhost/admin"],
+    ["mDNS .local name", "https://printer.local/admin"],
+    ["private .internal name", "https://vault.internal/admin"],
+  ];
+
+  for (const [index, entry] of nonPublicEndpoints.entries()) {
+    const [label, url] = entry;
+    it(`refuses ${label} and writes nothing`, async () => {
+      const fake = buildPrismaFake();
+      configureBus(fake.client);
+
+      await expect(
+        withTenancyContext(ctx(), () =>
+          executeCommand(
+            CreateWebhookSubscription,
+            { ...VALID_INPUT, url },
+            { idempotencyKey: `cws-ssrf-${index}` }
+          )
+        )
+      ).rejects.toMatchObject({ code: CREATE_WEBHOOK_SUBSCRIPTION_URL_NOT_PUBLIC });
+      expect(fake.tx.webhookSubscription.create).not.toHaveBeenCalled();
+    });
+  }
+
+  it("refuses credentials embedded in the endpoint URL", async () => {
+    // The url field is NOT redacted: it is persisted to the row, the
+    // audit metadata, and the outbox payload. Userinfo here would be
+    // a plaintext secret in an append-only chain.
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          CreateWebhookSubscription,
+          { ...VALID_INPUT, url: "https://user:pass@partner.example.com/hooks" },
+          { idempotencyKey: "cws-ssrf-creds" }
+        )
+      )
+    ).rejects.toMatchObject({ code: CREATE_WEBHOOK_SUBSCRIPTION_URL_HAS_CREDENTIALS });
+    expect(fake.tx.webhookSubscription.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a non-default port", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          CreateWebhookSubscription,
+          { ...VALID_INPUT, url: "https://partner.example.com:8443/hooks" },
+          { idempotencyKey: "cws-ssrf-port" }
+        )
+      )
+    ).rejects.toMatchObject({ code: CREATE_WEBHOOK_SUBSCRIPTION_URL_NON_DEFAULT_PORT });
+    expect(fake.tx.webhookSubscription.create).not.toHaveBeenCalled();
+  });
+
+  it("still registers a legitimate public HTTPS endpoint", async () => {
+    // The guard has to refuse private destinations WITHOUT refusing
+    // the ordinary case, including an explicit :443 (which WHATWG
+    // normalizes away) and a globally routable literal.
+    for (const [index, url] of [
+      "https://hooks.partner.example.com/pharmax",
+      "https://partner.example.com:443/hooks",
+      "https://8.8.8.8/hooks",
+    ].entries()) {
+      const fake = buildPrismaFake();
+      configureBus(fake.client);
+
+      const out = await withTenancyContext(ctx(), () =>
+        executeCommand(
+          CreateWebhookSubscription,
+          { ...VALID_INPUT, url },
+          { idempotencyKey: `cws-ssrf-ok-${index}` }
+        )
+      );
+
+      expect(out.status).toBe("ACTIVE");
+      expect(createdRowData(fake.calls)["url"]).toBe(url);
+      resetCommandBusConfigurationForTests();
+    }
+  });
+});
+
+describe("CreateWebhookSubscription — duplicate endpoints", () => {
+  it("refuses a second ACTIVE subscription on the same endpoint", async () => {
+    // Every ACTIVE copy receives every matching event, so a repeated
+    // submit silently doubles the partner's delivery volume.
+    const fake = buildPrismaFake();
+    fake.tx.webhookSubscription.findFirst.mockResolvedValueOnce({ id: "existing-subscription-id" });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(CreateWebhookSubscription, VALID_INPUT, { idempotencyKey: "cws-dupe-1" })
+      )
+    ).rejects.toMatchObject({ code: CREATE_WEBHOOK_SUBSCRIPTION_DUPLICATE_ENDPOINT });
+    expect(fake.tx.webhookSubscription.create).not.toHaveBeenCalled();
+  });
+
+  it("scopes the duplicate lookup to the caller's org and to ACTIVE rows", async () => {
+    // An unscoped lookup would leak the existence of another
+    // tenant's endpoint, and matching DISABLED rows would block the
+    // legitimate re-registration of a revoked endpoint.
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withTenancyContext(ctx(), () =>
+      executeCommand(CreateWebhookSubscription, VALID_INPUT, { idempotencyKey: "cws-dupe-2" })
+    );
+
+    const lookup = fake.calls.find(
+      (c) => c.table === "webhookSubscription" && c.op === "findFirst"
+    );
+    expect((lookup!.args as { where: Record<string, unknown> }).where).toEqual({
+      organizationId: ORG_ID,
+      url: ENDPOINT_URL,
+      status: "ACTIVE",
+    });
   });
 });
 
