@@ -43,6 +43,7 @@
 
 import { errors } from "@pharmax/platform-core";
 
+import { composeStageBucketRouteTables, type StageBucketRouteTable } from "./bucket-routing.js";
 import type { OrderWorkflowCommand } from "./commands.js";
 import type {
   AttestationRequirement,
@@ -124,6 +125,37 @@ export interface WorkflowPolicyOverlay {
   readonly addRequiredAttestations?: Readonly<
     Record<string, ReadonlyArray<AttestationRequirement>>
   >;
+
+  /**
+   * Per-state redirect of the canonical stage → bucket route, so an
+   * organization can send a workflow stage to a bucket of its own
+   * choosing (see `bucket-routing.ts`). Substitutive: each entry
+   * replaces the destination for ONE state; states absent from the map
+   * keep their canonical bucket.
+   *
+   * This key is orthogonal to the other two. It does not appear in the
+   * `OrderWorkflowPolicy` that `mergePolicyWithOverlay` returns and
+   * cannot add, remove, or re-target a TRANSITION — it only changes
+   * which queue an order is parked in once a transition has already
+   * been authorized by the (unchanged) transition table. The
+   * tighten-only invariant on `transitions` is therefore untouched by
+   * routing, which is exactly why routing rides here rather than
+   * inside the merged policy: widening the merged shape would have
+   * meant widening the thing the invariant is stated over.
+   *
+   * Constraint: every key MUST be a state that already HAS a canonical
+   * bucket (`ROUTABLE_ORDER_STATES`). A state the canonical map leaves
+   * unrouted cannot acquire a bucket here — that would be widening.
+   * Targets are validated against live `bucket` rows at write time by
+   * `UpsertWorkflowPolicyOverlay`, which is the only place that can
+   * check "this code exists in this organization".
+   *
+   * Use case:
+   *   - Route PV1 rejections to a dedicated rework queue instead of
+   *     bouncing them into the shared typing queue:
+   *       { PV1_REJECTED: "TYPING_REWORK" }
+   */
+  readonly routeStatesToBucketCodes?: StageBucketRouteTable;
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +453,20 @@ export interface MergedWorkflowPolicy {
    * accept it unchanged.
    */
   readonly merged: OrderWorkflowPolicy;
+  /**
+   * Composed stage → bucket redirects for this tenant, last-wins by
+   * binding priority. Empty (`{}`) when no binding declares one,
+   * which is the state every organization is in until an admin
+   * configures a route — and the state in which
+   * `resolveStageBucketRoute` returns the canonical code for every
+   * stage, i.e. exactly today's behavior.
+   *
+   * Carried HERE rather than on `merged` because a route is not part
+   * of the `OrderWorkflowPolicy` contract: it does not participate in
+   * the transition table, and folding it in would widen the very
+   * shape the tighten-only invariant is stated over.
+   */
+  readonly bucketRoutes: StageBucketRouteTable;
 }
 
 /**
@@ -435,6 +481,12 @@ export interface MergedWorkflowPolicy {
  *     only when activation policy mandates uniqueness — which is
  *     out of scope here, so we let bookkeeping at the caller drop
  *     duplicates if needed).
+ *   - `routeStatesToBucketCodes`: per-state LAST-WINS, not union. A
+ *     state has exactly one destination bucket, so two overlays
+ *     naming different buckets for it is a real conflict with no
+ *     union-like answer; the later (higher-priority, i.e. more
+ *     specific) overlay takes it. See
+ *     `composeStageBucketRouteTables`.
  *
  * Pure: no I/O, no clock, no exceptions.
  *
@@ -488,7 +540,15 @@ export function composeOverlays(
       Partial<Record<OrderWorkflowCommand, ReadonlyArray<OrderState>>>
     >;
     addRequiredAttestations?: Readonly<Record<string, ReadonlyArray<AttestationRequirement>>>;
+    routeStatesToBucketCodes?: StageBucketRouteTable;
   } = {};
+
+  const routes = composeStageBucketRouteTables(
+    ...overlays.map((overlay) => overlay.routeStatesToBucketCodes)
+  );
+  if (Object.keys(routes).length > 0) {
+    out.routeStatesToBucketCodes = routes;
+  }
 
   if (Object.keys(forbidUnion).length > 0) {
     const frozen: Partial<Record<OrderWorkflowCommand, ReadonlyArray<OrderState>>> = {};
@@ -559,12 +619,18 @@ export function buildMergedPolicy(input: {
     input.basePolicy,
     ordered.map((b) => b.overlay)
   );
+  // Same ascending-priority order as the transition merge, so the
+  // clinic binding (200) overwrites the org-wide one (100) per state.
+  const bucketRoutes = composeStageBucketRouteTables(
+    ...ordered.map((b) => b.overlay.routeStatesToBucketCodes)
+  );
   return Object.freeze({
     basePolicyId: input.basePolicyId,
     basePolicyVersion: input.basePolicyVersion,
     basePolicy: input.basePolicy,
     overlays: Object.freeze(ordered),
     merged,
+    bucketRoutes,
   });
 }
 

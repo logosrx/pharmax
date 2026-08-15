@@ -13,6 +13,8 @@ import { describe, expect, it } from "vitest";
 import { ORDER_WORKFLOW_COMMANDS } from "./commands.js";
 import {
   OVERLAY_LOOSENS_BASE_POLICY,
+  buildMergedPolicy,
+  composeOverlays,
   mergePolicyWithOverlay,
   type WorkflowPolicyOverlay,
 } from "./policy-overlay.js";
@@ -302,4 +304,172 @@ describe("mergePolicyWithOverlay — exhaustive command coverage", () => {
       expect(stillThere).toBe(false);
     }
   );
+});
+
+describe("overlay routing — orthogonality to the tightening invariant", () => {
+  // Routing changes WHICH QUEUE an order is parked in after a
+  // transition has already been authorized. It must not be able to
+  // change WHETHER the transition is authorized. That separation is
+  // why routes ride on MergedWorkflowPolicy rather than inside the
+  // OrderWorkflowPolicy the invariant is stated over — these tests are
+  // what fail if someone folds them in.
+  it("leaves the merged policy identical to base for a routing-only overlay", () => {
+    const merged = mergePolicyWithOverlay(BASE, {
+      routeStatesToBucketCodes: { PV1_REJECTED: "TYPING_REWORK" },
+    });
+    expect(merged).toBe(BASE);
+    expect(merged.transitions).toBe(BASE.transitions);
+  });
+
+  it("does not add a routing key to the merged OrderWorkflowPolicy", () => {
+    const merged = mergePolicyWithOverlay(BASE, {
+      forbidTransitionsFromStates: { CANCEL: ["RECEIVED"] },
+      routeStatesToBucketCodes: { PV1_REJECTED: "TYPING_REWORK" },
+    });
+    expect(Object.keys(merged)).not.toContain("routeStatesToBucketCodes");
+    expect(Object.keys(merged)).not.toContain("bucketRoutes");
+  });
+
+  it("still tightens transitions normally when routing rides alongside", () => {
+    const before = BASE.transitions.length;
+    const merged = mergePolicyWithOverlay(BASE, {
+      forbidTransitionsFromStates: { CANCEL: ["RECEIVED"] },
+      routeStatesToBucketCodes: { RECEIVED: "TRIAGE" },
+    });
+    expect(merged.transitions.length).toBe(before - 1);
+  });
+});
+
+describe("composeOverlays — routing", () => {
+  it("carries routes through a single overlay unchanged", () => {
+    const only: WorkflowPolicyOverlay = {
+      routeStatesToBucketCodes: { PV1_REJECTED: "TYPING_REWORK" },
+    };
+    expect(composeOverlays(only)).toBe(only);
+  });
+
+  it("merges disjoint routes from two overlays", () => {
+    const composed = composeOverlays(
+      { routeStatesToBucketCodes: { PV1_REJECTED: "TYPING_REWORK" } },
+      { routeStatesToBucketCodes: { FILL_IN_PROGRESS: "COMPOUNDING" } }
+    );
+    expect(composed.routeStatesToBucketCodes).toEqual({
+      PV1_REJECTED: "TYPING_REWORK",
+      FILL_IN_PROGRESS: "COMPOUNDING",
+    });
+  });
+
+  it("resolves a contested state last-wins, not by union", () => {
+    const composed = composeOverlays(
+      { routeStatesToBucketCodes: { PV1_REJECTED: "ORG_REWORK" } },
+      { routeStatesToBucketCodes: { PV1_REJECTED: "CLINIC_REWORK" } }
+    );
+    expect(composed.routeStatesToBucketCodes?.["PV1_REJECTED"]).toBe("CLINIC_REWORK");
+  });
+
+  it("omits the routing key entirely when no overlay declares one", () => {
+    const composed = composeOverlays(
+      { forbidTransitionsFromStates: { CANCEL: ["RECEIVED"] } },
+      { forbidTransitionsFromStates: { CANCEL: ["TYPING_IN_PROGRESS"] } }
+    );
+    expect(composed.routeStatesToBucketCodes).toBeUndefined();
+  });
+
+  it("stays associative with routing present", () => {
+    const a: WorkflowPolicyOverlay = { routeStatesToBucketCodes: { PV1_REJECTED: "A" } };
+    const b: WorkflowPolicyOverlay = { routeStatesToBucketCodes: { PV1_REJECTED: "B" } };
+    const c: WorkflowPolicyOverlay = { routeStatesToBucketCodes: { RECEIVED: "C" } };
+    expect(composeOverlays(composeOverlays(a, b), c)).toEqual(
+      composeOverlays(a, composeOverlays(b, c))
+    );
+  });
+});
+
+describe("buildMergedPolicy — bucketRoutes snapshot", () => {
+  const SNAPSHOT_ARGS = {
+    basePolicy: BASE,
+    basePolicyId: "11111111-1111-4111-8111-111111111111",
+    basePolicyVersion: 1,
+  } as const;
+
+  it("exposes an empty route table when there are no bindings", () => {
+    const snapshot = buildMergedPolicy({ ...SNAPSHOT_ARGS, bindings: [] });
+    expect(snapshot.bucketRoutes).toEqual({});
+  });
+
+  it("exposes an empty route table when bindings declare no routes", () => {
+    const snapshot = buildMergedPolicy({
+      ...SNAPSHOT_ARGS,
+      bindings: [
+        {
+          id: "b1",
+          version: 1,
+          priority: 100,
+          overlay: { forbidTransitionsFromStates: { CANCEL: ["RECEIVED"] } },
+        },
+      ],
+    });
+    expect(snapshot.bucketRoutes).toEqual({});
+  });
+
+  it("composes routes across bindings", () => {
+    const snapshot = buildMergedPolicy({
+      ...SNAPSHOT_ARGS,
+      bindings: [
+        {
+          id: "b1",
+          version: 1,
+          priority: 100,
+          overlay: { routeStatesToBucketCodes: { RECEIVED: "TRIAGE" } },
+        },
+        {
+          id: "b2",
+          version: 1,
+          priority: 200,
+          overlay: { routeStatesToBucketCodes: { PV1_REJECTED: "TYPING_REWORK" } },
+        },
+      ],
+    });
+    expect(snapshot.bucketRoutes).toEqual({
+      RECEIVED: "TRIAGE",
+      PV1_REJECTED: "TYPING_REWORK",
+    });
+  });
+
+  it("lets the clinic binding (priority 200) beat the org-wide one (100) regardless of input order", () => {
+    const orgWide = {
+      id: "b-org",
+      version: 1,
+      priority: 100,
+      overlay: { routeStatesToBucketCodes: { PV1_REJECTED: "ORG_REWORK" } },
+    };
+    const clinic = {
+      id: "b-clinic",
+      version: 1,
+      priority: 200,
+      clinicId: "22222222-2222-4222-8222-222222222222",
+      overlay: { routeStatesToBucketCodes: { PV1_REJECTED: "CLINIC_REWORK" } },
+    };
+    // Passed clinic-first, so only the priority sort can produce the
+    // right answer — this is the test that catches a resolver that
+    // trusts array order.
+    const snapshot = buildMergedPolicy({ ...SNAPSHOT_ARGS, bindings: [clinic, orgWide] });
+    expect(snapshot.bucketRoutes["PV1_REJECTED"]).toBe("CLINIC_REWORK");
+  });
+
+  it("freezes the snapshot so an in-flight command cannot observe a later activation", () => {
+    const snapshot = buildMergedPolicy({
+      ...SNAPSHOT_ARGS,
+      bindings: [
+        {
+          id: "b1",
+          version: 1,
+          priority: 100,
+          overlay: { routeStatesToBucketCodes: { RECEIVED: "TRIAGE" } },
+        },
+      ],
+    });
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.bucketRoutes)).toBe(true);
+  });
 });

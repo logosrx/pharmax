@@ -93,6 +93,18 @@ export {
 } from "./status-bucket-map.js";
 
 export {
+  ROUTABLE_ORDER_STATES,
+  canonicalBucketCodeForState,
+  composeStageBucketRouteTables,
+  isRoutableOrderState,
+  resolveStageBucketRoute,
+  routeTargetCodes,
+  statesRoutedTo,
+  type ResolvedStageBucketRoute,
+  type StageBucketRouteTable,
+} from "./bucket-routing.js";
+
+export {
   CREATE_READABLE_STATUSES,
   IN_FLIGHT_READABLE_STATUSES,
   OVERLAY_DEACTIVATION_BLOCKED,
@@ -131,6 +143,7 @@ export {
   type WorkflowPolicyStatusValue,
 } from "./policy-lifecycle.js";
 
+import * as bucketRoutingModule from "./bucket-routing.js";
 import * as commandsModule from "./commands.js";
 import * as engineModule from "./engine.js";
 import * as errorsModule from "./errors.js";
@@ -151,4 +164,5 @@ export const workflow = {
   ...policyLifecycleModule,
   ...engineModule,
   ...statusBucketModule,
+  ...bucketRoutingModule,
 } as const;
