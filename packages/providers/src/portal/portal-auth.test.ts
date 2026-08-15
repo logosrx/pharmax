@@ -49,9 +49,12 @@ import { setupPortalAccount, type SetupPortalAccountInput } from "./setup-accoun
 
 const NOW = new Date("2026-07-31T12:00:00.000Z");
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
+const OTHER_ORG_ID = "00000000-0000-4000-8000-000000000002";
 const ACCOUNT_ID = "00000000-0000-4000-8000-0000000000b1";
 const PROVIDER_ID = "00000000-0000-4000-8000-0000000000c1";
 const TOKEN_ID = "00000000-0000-4000-8000-0000000000d1";
+// Synthetic office contact for the one seeded account — not PHI.
+const ACCOUNT_EMAIL = "a.patel@example-practice.test";
 
 // Deterministic fake: a stored hash "h:<plaintext>" verifies that
 // plaintext (Argon2id itself is covered in the auth package).
@@ -95,10 +98,31 @@ function buildFake(opts: FakeOptions = {}) {
       findUnique: vi.fn(async () => opts.setupToken ?? null),
       update: vi.fn(async (_args: unknown) => ({})),
     },
+    // The fake database holds ONE portal account, and it lives in
+    // ORG_ID under ACCOUNT_EMAIL. Both readers answer whatever `where`
+    // they are handed the way Postgres would: every clause present must
+    // match, and a clause that is ABSENT constrains nothing. So a
+    // command that filters on the wrong organization gets a real miss,
+    // and one that forgot to filter at all gets a HIT — which is what
+    // makes the tenancy tests below fail for the right reason instead
+    // of looking like a missing account.
     portalAccount: {
-      findUnique: vi.fn(async (args: { where: Record<string, unknown> }) =>
-        "id" in args.where ? (opts.accountById ?? null) : (opts.accountByEmail ?? null)
+      findFirst: vi.fn(async (args: { where: { id?: string; organizationId?: string } }) =>
+        (args.where.id !== undefined && args.where.id !== ACCOUNT_ID) ||
+        (args.where.organizationId !== undefined && args.where.organizationId !== ORG_ID)
+          ? null
+          : (opts.accountById ?? null)
       ),
+      findUnique: vi.fn(async (args: { where: Record<string, unknown> }) => {
+        const byEmail = args.where["organizationId_email"] as
+          { organizationId: string; email: string } | undefined;
+        if (byEmail !== undefined) {
+          return byEmail.organizationId === ORG_ID && byEmail.email === ACCOUNT_EMAIL
+            ? (opts.accountByEmail ?? null)
+            : null;
+        }
+        return args.where["id"] === ACCOUNT_ID ? (opts.accountById ?? null) : null;
+      }),
       update: vi.fn(async (_args: unknown) => ({ id: ACCOUNT_ID })),
     },
     portalPasswordHistory: {
@@ -176,7 +200,7 @@ const VALID_TOKEN = {
 
 const PENDING_ACCOUNT = {
   id: ACCOUNT_ID,
-  email: "a.patel@example-practice.test",
+  email: ACCOUNT_EMAIL,
   status: PortalAccountStatus.PENDING_SETUP,
   providerId: PROVIDER_ID,
 };
@@ -272,6 +296,133 @@ describe("SetupPortalAccount", () => {
   });
 });
 
+/**
+ * `code|message` of the refusal, so two failure paths can be compared
+ * for indistinguishability rather than merely both being errors.
+ */
+async function setupRefusalFingerprint(): Promise<string> {
+  try {
+    await runSetup({ newPassword: "correct horse battery staple" });
+  } catch (cause) {
+    const err = cause as { code: string; message: string };
+    return `${err.code}|${err.message}`;
+  }
+  return "<did not reject>";
+}
+
+/** Neither the credential, the status, nor the token moved. */
+function expectNoSetupEffect(fake: ReturnType<typeof buildFake>): void {
+  expect(fake.tx.portalAccount.update).not.toHaveBeenCalled();
+  expect(fake.tx.portalSetupToken.update).not.toHaveBeenCalled();
+  expect(fake.tx.auditLog.create).not.toHaveBeenCalled();
+  expect(fake.tx.eventOutbox.createMany).not.toHaveBeenCalled();
+}
+
+// The token row is where this command learns which organization to write
+// under: `targetOrganizationId`, the audit entry, and the
+// `provider.portal_account.activated.v1` payload all come from it. So a
+// row whose `organizationId` does not match its account's would file one
+// tenant's activation in another tenant's audit trail and event stream —
+// the two artifacts that are supposed to be tenant-scoped truth, and the
+// kind of cross-tenant write the repo treats as a critical incident.
+//
+// IssuePortalSetupToken proves that pairing before it mints, so this is
+// defence in depth rather than a live exploit: a future writer to
+// `portal_setup_token` would not necessarily repeat the membership
+// check.
+describe("SetupPortalAccount — tenancy", () => {
+  it("refuses a token whose organization is not the account's", async () => {
+    // The account row lives in ORG_ID; the token claims OTHER_ORG_ID.
+    const fake = buildFake({
+      setupToken: { ...VALID_TOKEN, organizationId: OTHER_ORG_ID },
+      accountById: PENDING_ACCOUNT,
+    });
+    configureBus(fake.client);
+
+    await expect(runSetup({ newPassword: "correct horse battery staple" })).rejects.toMatchObject({
+      code: "PORTAL_SETUP_TOKEN_INVALID",
+    });
+  });
+
+  it("writes nothing at all when it refuses a mismatched token", async () => {
+    const fake = buildFake({
+      setupToken: { ...VALID_TOKEN, organizationId: OTHER_ORG_ID },
+      accountById: PENDING_ACCOUNT,
+    });
+    configureBus(fake.client);
+
+    await expect(runSetup({ newPassword: "correct horse battery staple" })).rejects.toThrow();
+
+    // No credential, no activation, no consumed link, no audit row and
+    // no event — and because a system command resolves its target org
+    // inside the handler, no command_log row under OTHER_ORG_ID either.
+    // A refusal that still filed bookkeeping under the token's claimed
+    // organization would itself be the cross-tenant write.
+    expectNoSetupEffect(fake);
+    expect(fake.tx.commandLog.create).not.toHaveBeenCalled();
+  });
+
+  it("looks the account up with the organization filter, not by id alone", async () => {
+    const fake = buildFake({ setupToken: VALID_TOKEN, accountById: PENDING_ACCOUNT });
+    configureBus(fake.client);
+
+    await runSetup({ newPassword: "correct horse battery staple" });
+
+    // Pins the mechanism, not just the outcome: the guard is one
+    // org-scoped read, so a foreign row is never loaded at all rather
+    // than fetched by id and compared afterwards. `findFirst` because
+    // `portal_account` has no compound unique on (id, organizationId).
+    expect(fake.tx.portalAccount.findFirst).toHaveBeenCalledWith({
+      where: { id: ACCOUNT_ID, organizationId: ORG_ID },
+      select: { id: true, email: true, status: true, providerId: true },
+    });
+  });
+
+  it("uses the SAME opaque code and message for every refusal, tenancy included", async () => {
+    // A caller here is anonymous — it holds an emailed link and nothing
+    // else. If the organization mismatch had its own code, that caller
+    // would learn that the token names a real account in a real (other)
+    // organization, which is exactly the cross-tenant existence oracle
+    // the shared refusal exists to deny.
+    const fingerprints: string[] = [];
+    const cases = [
+      buildFake({
+        setupToken: { ...VALID_TOKEN, organizationId: OTHER_ORG_ID },
+        accountById: PENDING_ACCOUNT,
+      }),
+      buildFake({
+        setupToken: VALID_TOKEN,
+        accountById: { ...PENDING_ACCOUNT, status: PortalAccountStatus.ACTIVE },
+      }),
+      buildFake({
+        setupToken: VALID_TOKEN,
+        accountById: { ...PENDING_ACCOUNT, status: PortalAccountStatus.DISABLED },
+      }),
+      buildFake({ setupToken: VALID_TOKEN, accountById: null }),
+      buildFake({
+        setupToken: { ...VALID_TOKEN, usedAt: new Date(NOW.getTime() - 1) },
+        accountById: PENDING_ACCOUNT,
+      }),
+      buildFake({
+        setupToken: { ...VALID_TOKEN, expiresAt: new Date(NOW.getTime() - 1) },
+        accountById: PENDING_ACCOUNT,
+      }),
+      buildFake({ setupToken: null }),
+    ];
+    for (const fake of cases) {
+      configureBus(fake.client);
+      fingerprints.push(await setupRefusalFingerprint());
+      resetCommandBusConfigurationForTests();
+    }
+
+    // Compared against the literal rather than merely "all equal", so
+    // this cannot pass by every case failing to reject at all.
+    expect([...new Set(fingerprints)]).toEqual([
+      "PORTAL_SETUP_TOKEN_INVALID|This setup link is invalid or has expired.",
+    ]);
+  });
+});
+
 // ---------------------------------------------------------------------
 // PortalSignIn
 // ---------------------------------------------------------------------
@@ -287,7 +438,7 @@ function runSignIn(input: Record<string, unknown>) {
   return withSystemContext("test:portal-sign-in", () =>
     executeSystemCommand(PortalSignIn, {
       organizationId: ORG_ID,
-      email: "a.patel@example-practice.test",
+      email: ACCOUNT_EMAIL,
       password: "correct-password",
       ...input,
     })
@@ -364,7 +515,7 @@ const CHANGE_ACCOUNT = {
   id: ACCOUNT_ID,
   organizationId: ORG_ID,
   providerId: PROVIDER_ID,
-  email: "a.patel@example-practice.test",
+  email: ACCOUNT_EMAIL,
   hashedPassword: "h:current-password-9",
   status: PortalAccountStatus.ACTIVE,
 };
@@ -473,7 +624,11 @@ interface SessionRow {
   idleExpiresAt: Date;
   absoluteExpiresAt: Date;
   revokedAt: Date | null;
-  portalAccount: { status: PortalAccountStatus; providerId: string };
+  portalAccount: {
+    status: PortalAccountStatus;
+    providerId: string;
+    organizationId: string;
+  };
 }
 
 function sessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -485,7 +640,13 @@ function sessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
     idleExpiresAt: new Date(NOW.getTime() + 60_000),
     absoluteExpiresAt: new Date(NOW.getTime() + 3_600_000),
     revokedAt: null,
-    portalAccount: { status: PortalAccountStatus.ACTIVE, providerId: PROVIDER_ID },
+    // The joined account row. Its organization is the one the session's
+    // own `organizationId` has to agree with.
+    portalAccount: {
+      status: PortalAccountStatus.ACTIVE,
+      providerId: PROVIDER_ID,
+      organizationId: ORG_ID,
+    },
     ...overrides,
   };
 }
@@ -579,7 +740,11 @@ describe("resolvePortalSession", () => {
   it("auto-revokes and rejects a session whose account is no longer ACTIVE", async () => {
     const { client } = sessionClient(
       sessionRow({
-        portalAccount: { status: PortalAccountStatus.DISABLED, providerId: PROVIDER_ID },
+        portalAccount: {
+          status: PortalAccountStatus.DISABLED,
+          providerId: PROVIDER_ID,
+          organizationId: ORG_ID,
+        },
       })
     );
     const result = await resolvePortalSession({
@@ -588,6 +753,38 @@ describe("resolvePortalSession", () => {
       config: sessionConfig(),
     });
     expect(result).toEqual({ ok: false, reason: PORTAL_SESSION_ACCOUNT_DISABLED });
+  });
+
+  // The organization this returns is the tenancy scope every /portal
+  // read and write then runs under (the profile route builds its
+  // tenancy context straight from it). A session row whose
+  // `organizationId` disagreed with its account's would therefore scope
+  // one tenant's request to another — so the pairing is proven here, not
+  // assumed, and a mismatch is the same opaque refusal as an unknown
+  // token.
+  it("refuses a session whose organization is not its account's", async () => {
+    const { client, tx } = sessionClient(
+      sessionRow({
+        // Session filed under ORG_ID; the account it points at lives in
+        // OTHER_ORG_ID.
+        portalAccount: {
+          status: PortalAccountStatus.ACTIVE,
+          providerId: PROVIDER_ID,
+          organizationId: OTHER_ORG_ID,
+        },
+      })
+    );
+    const result = await resolvePortalSession({
+      rawToken: "tok",
+      client: client as never,
+      config: sessionConfig(),
+    });
+
+    // Indistinguishable from a token that was never minted, and no
+    // write: a row whose tenancy cannot be proven is not one to file
+    // bookkeeping against.
+    expect(result).toEqual({ ok: false, reason: PORTAL_SESSION_NOT_FOUND });
+    expect(tx.portalSession.update).not.toHaveBeenCalled();
   });
 
   it("slides the idle window on activity past the write throttle", async () => {

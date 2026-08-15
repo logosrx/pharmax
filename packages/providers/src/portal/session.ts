@@ -10,7 +10,9 @@
 //     `SessionPolicy` the operator engine uses (HIPAA automatic
 //     logoff applies to external principals too).
 //   - Resolution runs in a SYSTEM-CONTEXT transaction (tenant-less
-//     until the token matches a row).
+//     until the token matches a row), and the organization it hands
+//     back is proven against the account's rather than read off the
+//     session row alone.
 //
 // A separate table + service (not a discriminator on auth_session):
 // a portal token can never resolve an operator session and vice
@@ -141,11 +143,20 @@ export async function resolvePortalSession(
           idleExpiresAt: true,
           absoluteExpiresAt: true,
           revokedAt: true,
-          portalAccount: { select: { status: true, providerId: true } },
+          portalAccount: { select: { status: true, providerId: true, organizationId: true } },
         },
       });
 
       if (row === null) {
+        return { ok: false, reason: PORTAL_SESSION_NOT_FOUND } as const;
+      }
+      // The session row's organization is what callers use as the
+      // tenancy scope for every portal read and write, so it is not
+      // taken on trust: a row whose `organizationId` did not match its
+      // account's would scope one tenant's request to another. Same
+      // opaque refusal as an unknown token, and no write — a row whose
+      // tenancy cannot be proven is not one to file bookkeeping against.
+      if (row.portalAccount.organizationId !== row.organizationId) {
         return { ok: false, reason: PORTAL_SESSION_NOT_FOUND } as const;
       }
       if (row.revokedAt !== null) {
