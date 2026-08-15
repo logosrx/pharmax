@@ -10,8 +10,9 @@
 //   - the endpoint is a PUBLIC host, so a tenant cannot point the
 //     delivery worker at the loopback interface, the cloud metadata
 //     service, or an RFC1918 neighbour (the address-class matrix
-//     itself lives in webhooks/endpoint-url.test.ts; what is pinned
-//     here is that the command refuses and writes nothing);
+//     itself lives beside the shared guard, in platform-core's
+//     net/outbound-url.test.ts; what is pinned here is that the
+//     command refuses and writes nothing);
 //   - the row is written into the caller's own organization;
 //   - the secret is excluded from the idempotency hash surface so
 //     transport retries replay instead of 409ing.
@@ -198,6 +199,12 @@ describe("CreateWebhookSubscription — happy path", () => {
     expect(out.subscriptionId).toBe(data["id"]);
     expect(out.status).toBe("ACTIVE");
     expect(out.eventTypes).toEqual([EVENT_TYPE]);
+
+    // The reported status has to be one the command actually wrote.
+    // Leaving it to the schema's `@default(ACTIVE)` made the output a
+    // claim about the schema rather than about this row.
+    expect(data["status"]).toBe("ACTIVE");
+    expect(data["status"]).toBe(out.status);
   });
 
   it("de-duplicates repeated event types before persisting", async () => {
@@ -365,7 +372,7 @@ describe("CreateWebhookSubscription — SSRF guard on the endpoint host", () => 
   // scanner: the recorded responseStatus is the oracle. One case per
   // address class; the exhaustive matrix (numeric obfuscation,
   // IPv4-mapped IPv6, boundary arithmetic) lives beside the guard in
-  // webhooks/endpoint-url.test.ts.
+  // platform-core's net/outbound-url.test.ts.
   const nonPublicEndpoints: ReadonlyArray<readonly [string, string]> = [
     ["IPv4 loopback", "https://127.0.0.1/admin"],
     ["cloud instance metadata", "https://169.254.169.254/latest/meta-data/"],

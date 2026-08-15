@@ -42,6 +42,12 @@ const ACTOR_USER_ID = "00000000-0000-4000-8000-000000000009";
 const SUBSCRIPTION_ID = "00000000-0000-4000-8000-0000000000e1";
 const SUBSCRIPTION_URL = "https://partner.example.com/hooks";
 const REASON = "Partner reported their receiver was compromised.";
+/**
+ * The instant the bus clock is frozen at. `disabledAt` is stamped
+ * from the injected clock, so the row, the command output, and the
+ * outbox `occurredAt` are all pinned to this exact value.
+ */
+const FROZEN_NOW = new Date("2026-07-31T12:00:00.000Z");
 
 const grants: ReadonlyArray<ResolvedGrant> = [
   {
@@ -186,7 +192,7 @@ function buildPrismaFake(rows: ReadonlyArray<SubscriptionRow>) {
 function configureBus(client: unknown): void {
   configureCommandBus({
     prisma: client as unknown as Parameters<typeof configureCommandBus>[0]["prisma"],
-    clock: clock.createFrozenClock(new Date("2026-07-31T12:00:00.000Z")),
+    clock: clock.createFrozenClock(FROZEN_NOW),
     logger: logger.noopLogger,
   });
 }
@@ -244,11 +250,11 @@ describe("RevokeWebhookSubscription — happy path", () => {
     // delivering; if the write is lost the endpoint stays live.
     const row = fake.store.get(SUBSCRIPTION_ID)!;
     expect(row.status).toBe("DISABLED");
-    expect(row.disabledAt).toBeInstanceOf(Date);
+    expect(row.disabledAt).toEqual(FROZEN_NOW);
 
     expect(out.subscriptionId).toBe(SUBSCRIPTION_ID);
     expect(out.url).toBe(SUBSCRIPTION_URL);
-    expect(out.disabledAt).toBe(row.disabledAt!.toISOString());
+    expect(out.disabledAt).toBe(FROZEN_NOW.toISOString());
   });
 
   it("records who cut the endpoint off and why", async () => {
@@ -272,6 +278,9 @@ describe("RevokeWebhookSubscription — happy path", () => {
     const payload = rows[0]!["payload"] as Record<string, unknown>;
     expect(payload["revokedByUserId"]).toBe(ACTOR_USER_ID);
     expect(payload["organizationId"]).toBe(ORG_ID);
+    // Same instant as the row, from the same injected clock — a
+    // subscriber reconciling against `disabledAt` must not see skew.
+    expect(payload["occurredAt"]).toBe(FROZEN_NOW.toISOString());
   });
 });
 

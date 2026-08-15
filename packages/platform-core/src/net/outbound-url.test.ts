@@ -1,52 +1,54 @@
-// classifyWebhookEndpoint contract tests.
+// classifyOutboundUrl contract tests.
 //
-// This is the SSRF boundary for partner-supplied webhook URLs, so the
-// table below is written as an inventory of what an attacker would
-// actually aim the delivery worker at: the loopback interface, the
-// cloud metadata services, every RFC1918 neighbour, and the numeric
-// spellings that hide them from a naive string check.
+// This is the SSRF boundary for every caller-supplied URL our
+// infrastructure later dials — partner webhook endpoints and carrier
+// API base URLs alike — so the table below is written as an inventory
+// of what an attacker would actually aim an outbound caller at: the
+// loopback interface, the cloud metadata services, every RFC1918
+// neighbour, and the numeric spellings that hide them from a naive
+// string check.
 //
 // All hosts are RFC 2606 reserved names or reserved address blocks.
 
 import { describe, expect, it } from "vitest";
 
-import { classifyWebhookEndpoint } from "./endpoint-url.js";
+import { classifyOutboundUrl } from "./outbound-url.js";
 
 const PUBLIC_ENDPOINT = "https://partner.example.com/hooks";
 
-describe("classifyWebhookEndpoint — accepts", () => {
+describe("classifyOutboundUrl — accepts", () => {
   it("accepts a public HTTPS endpoint", () => {
-    const verdict = classifyWebhookEndpoint(PUBLIC_ENDPOINT);
+    const verdict = classifyOutboundUrl(PUBLIC_ENDPOINT);
     expect(verdict.ok).toBe(true);
   });
 
   it("accepts an explicit :443, which is the default port", () => {
     // WHATWG normalizes the default port away, so this must not be
     // mistaken for the non-default-port refusal.
-    expect(classifyWebhookEndpoint("https://partner.example.com:443/hooks").ok).toBe(true);
+    expect(classifyOutboundUrl("https://partner.example.com:443/hooks").ok).toBe(true);
   });
 
   it("accepts a public endpoint with a query string and a trailing-dot FQDN", () => {
-    expect(classifyWebhookEndpoint("https://partner.example.com/hooks?tenant=acme").ok).toBe(true);
-    expect(classifyWebhookEndpoint("https://partner.example.com./hooks").ok).toBe(true);
+    expect(classifyOutboundUrl("https://partner.example.com/hooks?tenant=acme").ok).toBe(true);
+    expect(classifyOutboundUrl("https://partner.example.com./hooks").ok).toBe(true);
   });
 
   it("accepts a globally routable IPv4 literal", () => {
     // Rejecting all literals would be easy but wrong: the control is
     // "not a private destination", not "not an IP".
-    expect(classifyWebhookEndpoint("https://8.8.8.8/hooks").ok).toBe(true);
+    expect(classifyOutboundUrl("https://8.8.8.8/hooks").ok).toBe(true);
   });
 });
 
-describe("classifyWebhookEndpoint — scheme, credentials, port", () => {
+describe("classifyOutboundUrl — scheme, credentials, port", () => {
   it("refuses a plaintext http endpoint", () => {
-    const verdict = classifyWebhookEndpoint("http://partner.example.com/hooks");
+    const verdict = classifyOutboundUrl("http://partner.example.com/hooks");
     expect(verdict).toMatchObject({ ok: false, reason: "not_https" });
   });
 
   it("refuses non-http(s) schemes that can reach the local filesystem", () => {
-    expect(classifyWebhookEndpoint("file:///etc/passwd")).toMatchObject({ reason: "not_https" });
-    expect(classifyWebhookEndpoint("gopher://partner.example.com/")).toMatchObject({
+    expect(classifyOutboundUrl("file:///etc/passwd")).toMatchObject({ reason: "not_https" });
+    expect(classifyOutboundUrl("gopher://partner.example.com/")).toMatchObject({
       reason: "not_https",
     });
   });
@@ -54,11 +56,11 @@ describe("classifyWebhookEndpoint — scheme, credentials, port", () => {
   it("refuses userinfo credentials in the URL", () => {
     // Both a host-confusion disguise and a plaintext secret headed
     // for the audit chain, which does not redact the url field.
-    expect(classifyWebhookEndpoint("https://user:pass@partner.example.com/hooks")).toMatchObject({
+    expect(classifyOutboundUrl("https://user:pass@partner.example.com/hooks")).toMatchObject({
       ok: false,
       reason: "embedded_credentials",
     });
-    expect(classifyWebhookEndpoint("https://user@partner.example.com/hooks")).toMatchObject({
+    expect(classifyOutboundUrl("https://user@partner.example.com/hooks")).toMatchObject({
       reason: "embedded_credentials",
     });
   });
@@ -66,14 +68,14 @@ describe("classifyWebhookEndpoint — scheme, credentials, port", () => {
   it("refuses a non-default port", () => {
     // Pinning 443 is what bounds the residual DNS risk: a name we
     // cannot see through reaches one port, not a port scan.
-    expect(classifyWebhookEndpoint("https://partner.example.com:8443/hooks")).toMatchObject({
+    expect(classifyOutboundUrl("https://partner.example.com:8443/hooks")).toMatchObject({
       ok: false,
       reason: "non_default_port",
     });
   });
 
   it("never reports a rejection detail containing the caller's URL", () => {
-    const verdict = classifyWebhookEndpoint("https://user:hunter2@10.1.2.3:9999/secret-path");
+    const verdict = classifyOutboundUrl("https://user:hunter2@10.1.2.3:9999/secret-path");
     expect(verdict.ok).toBe(false);
     const detail = (verdict as { detail: string }).detail;
     expect(detail).not.toContain("hunter2");
@@ -81,7 +83,7 @@ describe("classifyWebhookEndpoint — scheme, credentials, port", () => {
   });
 });
 
-describe("classifyWebhookEndpoint — non-public IPv4", () => {
+describe("classifyOutboundUrl — non-public IPv4", () => {
   const rejected: ReadonlyArray<readonly [string, string]> = [
     ["loopback", "https://127.0.0.1/admin"],
     ["loopback, non-canonical octet", "https://127.1.2.3/admin"],
@@ -99,7 +101,7 @@ describe("classifyWebhookEndpoint — non-public IPv4", () => {
 
   for (const [label, url] of rejected) {
     it(`refuses ${label}`, () => {
-      expect(classifyWebhookEndpoint(url)).toMatchObject({
+      expect(classifyOutboundUrl(url)).toMatchObject({
         ok: false,
         reason: "non_public_host",
       });
@@ -109,8 +111,8 @@ describe("classifyWebhookEndpoint — non-public IPv4", () => {
   it("refuses 172.32.0.1 only if it is genuinely private (it is not)", () => {
     // Guards the /12 boundary arithmetic: 172.32 is outside RFC1918
     // and a mask that swallowed it would be silently over-blocking.
-    expect(classifyWebhookEndpoint("https://172.32.0.1/hooks").ok).toBe(true);
-    expect(classifyWebhookEndpoint("https://172.15.0.1/hooks").ok).toBe(true);
+    expect(classifyOutboundUrl("https://172.32.0.1/hooks").ok).toBe(true);
+    expect(classifyOutboundUrl("https://172.15.0.1/hooks").ok).toBe(true);
   });
 
   it("refuses obfuscated numeric spellings of loopback", () => {
@@ -118,12 +120,12 @@ describe("classifyWebhookEndpoint — non-public IPv4", () => {
     // is exactly why validation runs on the parsed host and not the
     // raw string a `startsWith` check would see.
     for (const url of ["https://2130706433/", "https://0x7f.1/", "https://0177.0.0.1/"]) {
-      expect(classifyWebhookEndpoint(url)).toMatchObject({ reason: "non_public_host" });
+      expect(classifyOutboundUrl(url)).toMatchObject({ reason: "non_public_host" });
     }
   });
 });
 
-describe("classifyWebhookEndpoint — non-public IPv6", () => {
+describe("classifyOutboundUrl — non-public IPv6", () => {
   const rejected: ReadonlyArray<readonly [string, string]> = [
     ["IPv6 loopback", "https://[::1]/admin"],
     ["IPv6 unspecified", "https://[::]/admin"],
@@ -138,7 +140,7 @@ describe("classifyWebhookEndpoint — non-public IPv6", () => {
 
   for (const [label, url] of rejected) {
     it(`refuses ${label}`, () => {
-      expect(classifyWebhookEndpoint(url)).toMatchObject({
+      expect(classifyOutboundUrl(url)).toMatchObject({
         ok: false,
         reason: "non_public_host",
       });
@@ -149,23 +151,23 @@ describe("classifyWebhookEndpoint — non-public IPv6", () => {
     // The parser rewrites [::ffff:127.0.0.1] to [::ffff:7f00:1], so
     // the guard has to unwrap the low 32 bits rather than pattern
     // match the dotted form.
-    expect(classifyWebhookEndpoint("https://[::ffff:127.0.0.1]/admin")).toMatchObject({
+    expect(classifyOutboundUrl("https://[::ffff:127.0.0.1]/admin")).toMatchObject({
       reason: "non_public_host",
     });
-    expect(classifyWebhookEndpoint("https://[::ffff:a9fe:a9fe]/latest/meta-data/")).toMatchObject({
+    expect(classifyOutboundUrl("https://[::ffff:a9fe:a9fe]/latest/meta-data/")).toMatchObject({
       reason: "non_public_host",
     });
-    expect(classifyWebhookEndpoint("https://[::ffff:10.0.0.1]/internal")).toMatchObject({
+    expect(classifyOutboundUrl("https://[::ffff:10.0.0.1]/internal")).toMatchObject({
       reason: "non_public_host",
     });
   });
 
   it("accepts a globally routable IPv6 literal", () => {
-    expect(classifyWebhookEndpoint("https://[2606:4700:4700::1111]/hooks").ok).toBe(true);
+    expect(classifyOutboundUrl("https://[2606:4700:4700::1111]/hooks").ok).toBe(true);
   });
 });
 
-describe("classifyWebhookEndpoint — local hostnames", () => {
+describe("classifyOutboundUrl — local hostnames", () => {
   const rejected: ReadonlyArray<readonly [string, string]> = [
     ["localhost", "https://localhost/admin"],
     ["localhost with a trailing dot", "https://localhost./admin"],
@@ -178,7 +180,7 @@ describe("classifyWebhookEndpoint — local hostnames", () => {
 
   for (const [label, url] of rejected) {
     it(`refuses ${label}`, () => {
-      expect(classifyWebhookEndpoint(url)).toMatchObject({
+      expect(classifyOutboundUrl(url)).toMatchObject({
         ok: false,
         reason: "non_public_host",
       });
@@ -188,19 +190,19 @@ describe("classifyWebhookEndpoint — local hostnames", () => {
   it("does not over-block names that merely contain a local-ish label", () => {
     // `local` as an interior label is ordinary; only the suffix is
     // special. Over-blocking here would break real partners.
-    expect(classifyWebhookEndpoint("https://local.example.com/hooks").ok).toBe(true);
-    expect(classifyWebhookEndpoint("https://internal-api.example.com/hooks").ok).toBe(true);
+    expect(classifyOutboundUrl("https://local.example.com/hooks").ok).toBe(true);
+    expect(classifyOutboundUrl("https://internal-api.example.com/hooks").ok).toBe(true);
   });
 });
 
-describe("classifyWebhookEndpoint — unparseable input", () => {
+describe("classifyOutboundUrl — unparseable input", () => {
   it("refuses a string the URL parser rejects", () => {
     // Zod's z.url() screens most of these first; the guard fails
     // closed rather than trusting that ordering.
-    expect(classifyWebhookEndpoint("https://")).toMatchObject({
+    expect(classifyOutboundUrl("https://")).toMatchObject({
       ok: false,
       reason: "unparseable",
     });
-    expect(classifyWebhookEndpoint("not a url at all")).toMatchObject({ reason: "unparseable" });
+    expect(classifyOutboundUrl("not a url at all")).toMatchObject({ reason: "unparseable" });
   });
 });

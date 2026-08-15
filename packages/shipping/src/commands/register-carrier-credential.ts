@@ -27,17 +27,47 @@
 //     metadata + outbox payload echo only the provider name, the
 //     new credential id, and whether a webhook secret is set —
 //     never the key material itself.
+//
+// baseUrl is a CREDENTIAL-BEARING destination, not a hint:
+//   - Whatever is stored here is dialled later by the carrier
+//     clients with the decrypted credential attached. `FedExClient`
+//     posts `client_id`/`client_secret` as a form body to
+//     `<baseUrl>/oauth/token`; `UpsClient` sends
+//     `Authorization: Basic base64(id:secret)`; `EasyPostClient`
+//     sends the API key as Basic auth on every request. The FedEx
+//     and UPS tracking pollers rebuild those clients each tick, so a
+//     hostile host is re-fed the credential unattended.
+//   - A bare `z.string().url()` accepted `http://`, any host, and
+//     any port, so this field was a one-shot carrier-credential
+//     exfiltration primitive for anyone holding
+//     `ship.manage_carrier_credentials`. It now goes through the
+//     same guard as a partner webhook endpoint.
+//   - The guard's 443-only rule costs nothing here: every base URL
+//     these clients target — apis.fedex.com, apis-sandbox.fedex.com,
+//     onlinetools.ups.com, wwwcie.ups.com, api.easypost.com — is a
+//     public host on default HTTPS. Nothing was relaxed for carriers.
 
 import { randomUUID } from "node:crypto";
 
 import type { Command, HandlerResult } from "@pharmax/command-bus";
 import { encryptField } from "@pharmax/crypto";
 import { CarrierCredentialStatus, Prisma, ShippingProvider } from "@pharmax/database";
-import { errors } from "@pharmax/platform-core";
+import { errors, net } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
 
 export const CARRIER_CREDENTIAL_REPLACED_PRIOR = "CARRIER_CREDENTIAL_REPLACED_PRIOR";
+
+export const REGISTER_CARRIER_CREDENTIAL_BASE_URL_UNPARSEABLE =
+  "REGISTER_CARRIER_CREDENTIAL_BASE_URL_UNPARSEABLE";
+export const REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_HTTPS =
+  "REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_HTTPS";
+export const REGISTER_CARRIER_CREDENTIAL_BASE_URL_HAS_CREDENTIALS =
+  "REGISTER_CARRIER_CREDENTIAL_BASE_URL_HAS_CREDENTIALS";
+export const REGISTER_CARRIER_CREDENTIAL_BASE_URL_NON_DEFAULT_PORT =
+  "REGISTER_CARRIER_CREDENTIAL_BASE_URL_NON_DEFAULT_PORT";
+export const REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_PUBLIC =
+  "REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_PUBLIC";
 
 const providerSchema = z.enum([
   ShippingProvider.EASYPOST,
@@ -57,6 +87,26 @@ const inputSchema = z
   .strict();
 
 export type RegisterCarrierCredentialInput = z.infer<typeof inputSchema>;
+
+/** One greppable command error code per baseUrl-refusal cause. */
+function baseUrlRejectionCode(reason: net.OutboundUrlRejection): string {
+  switch (reason) {
+    case "unparseable":
+      return REGISTER_CARRIER_CREDENTIAL_BASE_URL_UNPARSEABLE;
+    case "not_https":
+      return REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_HTTPS;
+    case "embedded_credentials":
+      return REGISTER_CARRIER_CREDENTIAL_BASE_URL_HAS_CREDENTIALS;
+    case "non_default_port":
+      return REGISTER_CARRIER_CREDENTIAL_BASE_URL_NON_DEFAULT_PORT;
+    case "non_public_host":
+      return REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_PUBLIC;
+    default: {
+      const exhaustive: never = reason;
+      return exhaustive;
+    }
+  }
+}
 
 export interface RegisterCarrierCredentialOutput {
   readonly credentialId: string;
@@ -81,6 +131,19 @@ export const RegisterCarrierCredential: Command<
     tx,
     commandLogId,
   }): Promise<HandlerResult<RegisterCarrierCredentialOutput>> {
+    // Screened before anything else: this refusal must cost no KMS
+    // call, no prior-credential disable, and no row.
+    if (input.baseUrl !== undefined) {
+      const endpoint = net.classifyOutboundUrl(input.baseUrl);
+      if (!endpoint.ok) {
+        throw new errors.ValidationError({
+          code: baseUrlRejectionCode(endpoint.reason),
+          message: `Carrier base URL refused. ${endpoint.detail}`,
+          metadata: { provider: input.provider },
+        });
+      }
+    }
+
     const credentialId = randomUUID();
     const tenantId = ctx.organizationId;
 

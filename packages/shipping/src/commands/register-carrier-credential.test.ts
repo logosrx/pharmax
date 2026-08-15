@@ -24,7 +24,13 @@ import {
 } from "@pharmax/rbac";
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
 
-import { RegisterCarrierCredential } from "./register-carrier-credential.js";
+import {
+  REGISTER_CARRIER_CREDENTIAL_BASE_URL_HAS_CREDENTIALS,
+  REGISTER_CARRIER_CREDENTIAL_BASE_URL_NON_DEFAULT_PORT,
+  REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_HTTPS,
+  REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_PUBLIC,
+  RegisterCarrierCredential,
+} from "./register-carrier-credential.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const USER_ID = "00000000-0000-4000-8000-000000000009";
@@ -255,5 +261,191 @@ describe("RegisterCarrierCredential — happy path", () => {
     expect(requestPayload["webhookSecret"]).toBe("[Redacted]");
     expect(requestPayload["provider"]).toBe(ShippingProvider.FEDEX);
     expect(requestPayload["carrierAccountId"]).toBe("123456789");
+  });
+});
+
+describe("RegisterCarrierCredential — SSRF guard on baseUrl", () => {
+  // Unlike a webhook endpoint, this destination is dialled WITH THE
+  // CARRIER CREDENTIAL ATTACHED: FedEx posts client_id/client_secret
+  // to <baseUrl>/oauth/token, UPS sends Basic base64(id:secret), and
+  // EasyPost sends the API key as Basic auth on every call. A
+  // non-public or attacker-controlled host here is credential
+  // exfiltration, not just internal reachability probing — and the
+  // tracking pollers re-dial it on every tick. One case per address
+  // class; the exhaustive matrix lives beside the guard in
+  // platform-core's net/outbound-url.test.ts.
+  const nonPublicBaseUrls: ReadonlyArray<readonly [string, string]> = [
+    ["IPv4 loopback", "https://127.0.0.1"],
+    ["cloud instance metadata", "https://169.254.169.254"],
+    ["ECS task metadata", "https://169.254.170.2"],
+    ["RFC1918 10/8", "https://10.1.2.3"],
+    ["RFC1918 172.16/12", "https://172.20.0.5"],
+    ["RFC1918 192.168/16", "https://192.168.10.20"],
+    ["carrier-grade NAT", "https://100.64.1.1"],
+    ["0.0.0.0/8", "https://0.0.0.0"],
+    ["IPv6 loopback", "https://[::1]"],
+    ["IPv6 unique-local", "https://[fd00::1]"],
+    ["IPv6 link-local", "https://[fe80::1]"],
+    ["localhost", "https://localhost"],
+    ["mDNS .local name", "https://printer.local"],
+    ["private .internal name", "https://vault.internal"],
+  ];
+
+  for (const [index, entry] of nonPublicBaseUrls.entries()) {
+    const [label, baseUrl] = entry;
+    it(`refuses ${label} and writes nothing`, async () => {
+      const fake = buildPrismaFake({});
+      configureBus(fake.client);
+
+      await expect(
+        withTenancyContext(ctx(), () =>
+          executeCommand(
+            RegisterCarrierCredential,
+            {
+              provider: ShippingProvider.FEDEX,
+              apiKey: "fedex_key:fedex_secret",
+              carrierAccountId: "123456789",
+              baseUrl,
+            },
+            { idempotencyKey: `rcc-ssrf-${index}` }
+          )
+        )
+      ).rejects.toMatchObject({ code: REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_PUBLIC });
+      expect(fake.createArgs()).toBeUndefined();
+    });
+  }
+
+  it("refuses a plaintext http base URL", async () => {
+    // `z.string().url()` accepted this, so the OAuth token exchange
+    // would have gone out over cleartext with the client secret in
+    // the form body.
+    const fake = buildPrismaFake({});
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          RegisterCarrierCredential,
+          {
+            provider: ShippingProvider.FEDEX,
+            apiKey: "fedex_key:fedex_secret",
+            carrierAccountId: "123456789",
+            baseUrl: "http://apis.fedex.com",
+          },
+          { idempotencyKey: "rcc-ssrf-http" }
+        )
+      )
+    ).rejects.toMatchObject({ code: REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_HTTPS });
+    expect(fake.createArgs()).toBeUndefined();
+  });
+
+  it("refuses credentials embedded in the base URL", async () => {
+    // baseUrl is NOT in redactFields, so userinfo here lands in
+    // command_log.requestPayload and the carrier_credential row as
+    // plaintext.
+    const fake = buildPrismaFake({});
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          RegisterCarrierCredential,
+          {
+            provider: ShippingProvider.FEDEX,
+            apiKey: "fedex_key:fedex_secret",
+            carrierAccountId: "123456789",
+            baseUrl: "https://user:pass@apis.fedex.com",
+          },
+          { idempotencyKey: "rcc-ssrf-creds" }
+        )
+      )
+    ).rejects.toMatchObject({ code: REGISTER_CARRIER_CREDENTIAL_BASE_URL_HAS_CREDENTIALS });
+    expect(fake.createArgs()).toBeUndefined();
+  });
+
+  it("refuses a non-default port", async () => {
+    // No carrier endpoint we target listens off 443, so the port
+    // rule is not relaxed for carriers: allowing one would reopen
+    // exfiltration to an arbitrary listener on a public host.
+    const fake = buildPrismaFake({});
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          RegisterCarrierCredential,
+          {
+            provider: ShippingProvider.FEDEX,
+            apiKey: "fedex_key:fedex_secret",
+            carrierAccountId: "123456789",
+            baseUrl: "https://apis.fedex.com:8443",
+          },
+          { idempotencyKey: "rcc-ssrf-port" }
+        )
+      )
+    ).rejects.toMatchObject({ code: REGISTER_CARRIER_CREDENTIAL_BASE_URL_NON_DEFAULT_PORT });
+    expect(fake.createArgs()).toBeUndefined();
+  });
+
+  it("leaves a prior ACTIVE credential untouched when the base URL is refused", async () => {
+    // The guard runs before the replace step. If it did not, a
+    // refused registration would disable the org's working
+    // credential and leave shipping with none.
+    const fake = buildPrismaFake({ priorActive: { id: "prior-cred-1" } });
+    configureBus(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          RegisterCarrierCredential,
+          {
+            provider: ShippingProvider.FEDEX,
+            apiKey: "fedex_key:fedex_secret",
+            carrierAccountId: "123456789",
+            baseUrl: "https://169.254.169.254",
+          },
+          { idempotencyKey: "rcc-ssrf-keeps-prior" }
+        )
+      )
+    ).rejects.toMatchObject({ code: REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_PUBLIC });
+    expect(fake.credentialUpdateCalls).toBe(0);
+    expect(fake.createArgs()).toBeUndefined();
+  });
+
+  it("accepts every real carrier base URL the clients target", async () => {
+    // The evidence that 443-only costs carriers nothing. Production
+    // and sandbox/CIE hosts for all three providers are public names
+    // on default HTTPS:
+    //   FedEx    apis.fedex.com      / apis-sandbox.fedex.com
+    //   UPS      onlinetools.ups.com / wwwcie.ups.com
+    //   EasyPost api.easypost.com    (test mode selects on key, not host)
+    const carrierBaseUrls = [
+      "https://apis.fedex.com",
+      "https://apis-sandbox.fedex.com",
+      "https://onlinetools.ups.com",
+      "https://wwwcie.ups.com",
+      "https://api.easypost.com",
+    ];
+
+    for (const [index, baseUrl] of carrierBaseUrls.entries()) {
+      const fake = buildPrismaFake({});
+      configureBus(fake.client);
+
+      await withTenancyContext(ctx(), () =>
+        executeCommand(
+          RegisterCarrierCredential,
+          {
+            provider: ShippingProvider.FEDEX,
+            apiKey: "fedex_key:fedex_secret",
+            carrierAccountId: "123456789",
+            baseUrl,
+          },
+          { idempotencyKey: `rcc-ssrf-ok-${index}` }
+        )
+      );
+
+      expect(fake.createArgs()!.data["baseUrl"]).toBe(baseUrl);
+      resetCommandBusConfigurationForTests();
+    }
   });
 });

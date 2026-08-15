@@ -13,8 +13,10 @@
 //
 // Endpoint validation: the URL is an instruction for our worker to
 // make a request from inside the VPC, so it is screened for
-// non-public destinations before it is stored (see endpoint-url.ts
-// for the threat model and for what DNS still leaves open).
+// non-public destinations before it is stored. The guard is shared
+// with @pharmax/shipping's carrier base URL — see
+// platform-core net/outbound-url.ts for the threat model and for
+// what DNS still leaves open.
 //
 // Permission: `webhooks.manage` (ORGANIZATION scope).
 //
@@ -24,8 +26,8 @@ import { randomUUID } from "node:crypto";
 
 import type { Command, HandlerResult } from "@pharmax/command-bus";
 import { encryptField } from "@pharmax/crypto";
-import type { Prisma } from "@pharmax/database";
-import { errors } from "@pharmax/platform-core";
+import { WebhookSubscriptionStatus, type Prisma } from "@pharmax/database";
+import { errors, net } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
 
@@ -33,10 +35,6 @@ import {
   isWebhookEligibleEventType,
   listWebhookEligibleEventTypes,
 } from "../webhooks/eligible-events.js";
-import {
-  classifyWebhookEndpoint,
-  type WebhookEndpointRejection,
-} from "../webhooks/endpoint-url.js";
 import { WEBHOOK_SECRET_PREFIX } from "../api-key/token.js";
 
 export const CREATE_WEBHOOK_SUBSCRIPTION_INELIGIBLE_EVENT =
@@ -74,7 +72,7 @@ const inputSchema = z
 export type CreateWebhookSubscriptionInput = z.infer<typeof inputSchema>;
 
 /** One greppable command error code per endpoint-refusal cause. */
-function rejectionCode(reason: WebhookEndpointRejection): string {
+function rejectionCode(reason: net.OutboundUrlRejection): string {
   switch (reason) {
     case "unparseable":
       return CREATE_WEBHOOK_SUBSCRIPTION_URL_UNPARSEABLE;
@@ -93,11 +91,25 @@ function rejectionCode(reason: WebhookEndpointRejection): string {
   }
 }
 
+/**
+ * The status this command puts a new subscription in. Written to the
+ * row AND returned in the output from this one binding, so the two
+ * cannot disagree.
+ *
+ * Previously the row relied on the `@default(ACTIVE)` in the Prisma
+ * schema while the output hard-coded the literal. That is true today
+ * but is a latent lie: changing the schema default would leave the
+ * command reporting a state it did not create. Writing the column
+ * explicitly also matches `RegisterCarrierCredential`, which has
+ * always set `status` rather than leaning on the default.
+ */
+const CREATED_STATUS = WebhookSubscriptionStatus.ACTIVE;
+
 export interface CreateWebhookSubscriptionOutput {
   readonly subscriptionId: string;
   readonly url: string;
   readonly eventTypes: ReadonlyArray<string>;
-  readonly status: "ACTIVE";
+  readonly status: typeof CREATED_STATUS;
 }
 
 export const CreateWebhookSubscription: Command<
@@ -122,7 +134,7 @@ export const CreateWebhookSubscription: Command<
     tx,
     commandLogId,
   }): Promise<HandlerResult<CreateWebhookSubscriptionOutput>> {
-    const endpoint = classifyWebhookEndpoint(input.url);
+    const endpoint = net.classifyOutboundUrl(input.url);
     if (!endpoint.ok) {
       throw new errors.ValidationError({
         code: rejectionCode(endpoint.reason),
@@ -185,6 +197,7 @@ export const CreateWebhookSubscription: Command<
         secretEnc,
         eventTypes,
         description: input.description ?? null,
+        status: CREATED_STATUS,
         createdByUserId: ctx.actor.userId,
         createCommandLogId: commandLogId,
       },
@@ -197,7 +210,7 @@ export const CreateWebhookSubscription: Command<
         subscriptionId,
         url: input.url,
         eventTypes: Object.freeze(eventTypes),
-        status: "ACTIVE" as const,
+        status: CREATED_STATUS,
       }),
       audit: {
         action: "platform.webhook_subscription.created",
