@@ -17,6 +17,7 @@
     "@pharmax/rbac": "workspace:*",
     "@pharmax/telemetry": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
+    "undici": "^8.10.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

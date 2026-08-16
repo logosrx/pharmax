@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { classifyOutboundUrl } from "./outbound-url.js";
+import { classifyOutboundAddress, classifyOutboundUrl } from "./outbound-url.js";
 
 const PUBLIC_ENDPOINT = "https://partner.example.com/hooks";
 
@@ -204,5 +204,81 @@ describe("classifyOutboundUrl — unparseable input", () => {
       reason: "unparseable",
     });
     expect(classifyOutboundUrl("not a url at all")).toMatchObject({ reason: "unparseable" });
+  });
+});
+
+describe("classifyOutboundAddress — bare literals", () => {
+  // The entry point the delivery-time pin uses on each address a
+  // resolver returns. It exists so that path reuses the tables above
+  // instead of forking them.
+
+  it("accepts globally routable literals in both families", () => {
+    expect(classifyOutboundAddress("8.8.8.8").ok).toBe(true);
+    expect(classifyOutboundAddress("2606:4700:4700::1111").ok).toBe(true);
+  });
+
+  it("refuses the same blocks the URL guard refuses", () => {
+    for (const address of [
+      "127.0.0.1",
+      "169.254.169.254",
+      "10.0.0.7",
+      "192.168.1.1",
+      "100.64.0.1",
+      "0.0.0.0",
+      "224.0.0.1",
+      "::1",
+      "fd00::1",
+      "fe80::1",
+      "64:ff9b::a00:1",
+      "::ffff:127.0.0.1",
+    ]) {
+      expect(classifyOutboundAddress(address)).toMatchObject({ ok: false });
+    }
+  });
+
+  it("agrees with classifyOutboundUrl on every literal — ONE set of tables", () => {
+    // The point of exporting this rather than writing a second CIDR
+    // table for the delivery path. If a future block is added above
+    // and only one entry point picks it up, this goes red.
+    const literals = [
+      "8.8.8.8",
+      "172.32.0.1",
+      "172.16.0.1",
+      "127.0.0.1",
+      "169.254.169.254",
+      "100.64.0.1",
+      "198.51.100.7",
+      "2606:4700:4700::1111",
+      "::1",
+      "fc00::1",
+      "2001:db8::1",
+      "2002:a00:1::",
+    ];
+    for (const address of literals) {
+      const asBare = classifyOutboundAddress(address).ok;
+      const asUrl = classifyOutboundUrl(
+        address.includes(":") ? `https://[${address}]/hooks` : `https://${address}/hooks`
+      ).ok;
+      expect({ address, asBare }).toEqual({ address, asBare: asUrl });
+    }
+  });
+
+  it("accepts the bracketed IPv6 spelling a URL's hostname carries", () => {
+    expect(classifyOutboundAddress("[2606:4700:4700::1111]").ok).toBe(true);
+    expect(classifyOutboundAddress("[::1]")).toMatchObject({ ok: false });
+  });
+
+  it("fails closed on anything that is not an IP literal", () => {
+    // The only callers are about to open a socket, so "we could not
+    // tell" must never mean "connect anyway".
+    for (const input of ["", "partner.example.com", "not-an-address", "999.1.1.1", "12345"]) {
+      expect(classifyOutboundAddress(input)).toMatchObject({ ok: false });
+    }
+  });
+
+  it("never echoes the address it refused", () => {
+    const verdict = classifyOutboundAddress("169.254.169.254");
+    expect(verdict.ok).toBe(false);
+    expect((verdict as { detail: string }).detail).not.toContain("169.254.169.254");
   });
 });
