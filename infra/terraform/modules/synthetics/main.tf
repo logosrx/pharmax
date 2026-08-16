@@ -29,7 +29,11 @@ locals {
   warning_topic_arn  = var.warning_alarm_sns_topic_arn != "" ? var.warning_alarm_sns_topic_arn : var.alarm_sns_topic_arn
 
   critical_alarm_actions = local.critical_topic_arn != "" ? [local.critical_topic_arn] : []
-  warning_alarm_actions  = local.warning_topic_arn != "" ? [local.warning_topic_arn] : []
+  # The canary alarm is critical-tier, so this list is unused today — but
+  # scripts/check-alarm-actions.ts requires both severity action lists to be
+  # declared in every alarm-bearing file, so it must stay.
+  # tflint-ignore: terraform_unused_declarations
+  warning_alarm_actions = local.warning_topic_arn != "" ? [local.warning_topic_arn] : []
 
   # Canary names are limited to 21 lowercase [a-z0-9_-] characters. The
   # staging prefix (`pharmax-staging-ue1`) + a suffix does not fit, so the
