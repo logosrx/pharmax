@@ -16,7 +16,9 @@
 //   - Nothing is cached, so an answer that passed once cannot keep
 //     authorising connections later.
 //
-// The resolver is always injected. No test here touches real DNS.
+// The resolver is injected everywhere except one bracketed-literal
+// test, which uses the real resolver on a NUMERIC name — getaddrinfo
+// answers those locally, so no test here issues a real DNS query.
 // All addresses are reserved documentation blocks or well-known
 // public resolver addresses; no hostname is real.
 
@@ -94,6 +96,39 @@ describe("resolvePinnedAddresses — accepts a public answer", () => {
       PUBLIC_V6.address,
       PUBLIC_V4.address,
     ]);
+  });
+});
+
+describe("resolvePinnedAddresses — WHATWG-bracketed IPv6 literals", () => {
+  // `url.hostname` keeps an IPv6 literal bracketed
+  // (`[2606:4700:4700::1111]`), and the delivery transport passes
+  // `url.hostname` straight in. `getaddrinfo` refuses the bracketed
+  // spelling outright, so unless the brackets are stripped here every
+  // public IPv6-literal endpoint records as unresolvable and never
+  // dials.
+
+  it("hands the resolver the bare literal, never the bracketed spelling", async () => {
+    const resolver = vi.fn<AddressResolver>(async () => [PUBLIC_V6]);
+    const resolution = await resolvePinnedAddresses(`[${PUBLIC_V6.address}]`, resolver);
+    expect(resolver).toHaveBeenCalledWith(PUBLIC_V6.address);
+    expect(resolution).toMatchObject({ ok: true });
+  });
+
+  it("resolves a bracketed public literal through the REAL resolver", async () => {
+    // The regression as it actually presented: systemAddressResolver
+    // + `url.hostname`. getaddrinfo maps a numeric name to itself
+    // without a DNS query, so this touches no network.
+    const resolution = await resolvePinnedAddresses(`[${PUBLIC_V6.address}]`);
+    expect(resolution.ok).toBe(true);
+    if (!resolution.ok) return;
+    expect(resolution.addresses).toEqual([PUBLIC_V6]);
+  });
+
+  it("still refuses a bracketed non-public literal", async () => {
+    const resolution = await resolvePinnedAddresses("[::1]", async () => [
+      { address: "::1", family: 6 },
+    ]);
+    expect(resolution).toMatchObject({ ok: false, reason: "non_public_address" });
   });
 });
 

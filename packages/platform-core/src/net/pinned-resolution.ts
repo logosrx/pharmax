@@ -62,7 +62,9 @@ export interface ResolvedAddress {
 /**
  * Hostname -> every address the name resolves to. Injectable so the
  * test suite can drive this path without touching a real resolver;
- * production passes `systemAddressResolver`.
+ * production passes `systemAddressResolver`. Always receives the bare
+ * hostname — `resolvePinnedAddresses` strips WHATWG's IPv6 brackets
+ * before the resolver sees the name.
  */
 export type AddressResolver = (hostname: string) => Promise<readonly ResolvedAddress[]>;
 
@@ -167,9 +169,18 @@ export async function resolvePinnedAddresses(
   hostname: string,
   resolver: AddressResolver = systemAddressResolver
 ): Promise<PinnedResolution> {
+  // A caller holding `url.hostname` has WHATWG's bracketed spelling
+  // for an IPv6 literal (`[2606:4700:4700::1111]`), which
+  // `getaddrinfo` refuses outright. Strip the brackets so the
+  // resolver sees the bare literal — `getaddrinfo` maps a numeric
+  // name to itself without a DNS query — and the address then goes
+  // through the same table check as any resolved answer.
+  const bareHostname =
+    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+
   let addresses: readonly ResolvedAddress[];
   try {
-    addresses = await resolver(hostname);
+    addresses = await resolver(bareHostname);
   } catch (cause) {
     return Object.freeze({
       ok: false as const,

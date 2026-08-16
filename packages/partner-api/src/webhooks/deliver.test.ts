@@ -229,6 +229,27 @@ describe("attemptWebhookDelivery — refuses non-public destinations at delivery
     expect(calls).toHaveLength(0);
   });
 
+  it("delivers to a public IPv6-literal endpoint — the resolver must see the bare literal", async () => {
+    // `url.hostname` keeps the WHATWG brackets (`[2606:...]`), which
+    // getaddrinfo refuses. If they leak through, every IPv6-literal
+    // endpoint records as unresolvable and never dials.
+    const { fetchImpl, calls } = captureFetch(200);
+    const resolveAddresses = vi.fn(async (hostname: string) => [
+      { address: hostname, family: 6 as const },
+    ]);
+    const result = await attemptWebhookDelivery({
+      ...BASE,
+      url: "https://[2606:4700:4700::1111]/hooks",
+      occurredAt: new Date(),
+      fetchImpl,
+      resolveAddresses,
+    });
+
+    expect(resolveAddresses).toHaveBeenCalledWith("2606:4700:4700::1111");
+    expect(result).toEqual({ ok: true, responseStatus: 200 });
+    expect(calls).toHaveLength(1);
+  });
+
   it("never echoes the hostname or the resolved address in the refusal", async () => {
     const { fetchImpl } = captureFetch(200);
     const result = await attemptWebhookDelivery({
