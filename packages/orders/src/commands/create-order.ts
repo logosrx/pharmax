@@ -66,7 +66,10 @@ export const ORDER_SITE_NOT_FOUND = "ORDER_SITE_NOT_FOUND";
 export const ORDER_SITE_NOT_LINKED_TO_CLINIC = "ORDER_SITE_NOT_LINKED_TO_CLINIC";
 export const ORDER_PATIENT_NOT_FOUND = "ORDER_PATIENT_NOT_FOUND";
 export const ORDER_PATIENT_CLINIC_MISMATCH = "ORDER_PATIENT_CLINIC_MISMATCH";
-export const ORDER_PRESCRIPTION_NOT_FOUND = "ORDER_PRESCRIPTION_NOT_FOUND";
+// Deliberately no ORDER_PRESCRIPTION_NOT_FOUND: stale id, wrong clinic
+// and wrong patient all collapse into ORDER_PRESCRIPTION_MISMATCH — one
+// stable code, shared with AddPrescription, because the caller's remedy
+// is identical in every case (re-check the rx against the patient).
 export const ORDER_PRESCRIPTION_MISMATCH = "ORDER_PRESCRIPTION_MISMATCH";
 export const ORDER_INTAKE_BUCKET_NOT_CONFIGURED = "ORDER_INTAKE_BUCKET_NOT_CONFIGURED";
 
