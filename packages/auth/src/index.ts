@@ -20,6 +20,7 @@ export {
   DEFAULT_MFA_POLICY,
   DEFAULT_LOCKOUT_POLICY,
   DEFAULT_SIGN_IN_RATE_LIMIT,
+  DEFAULT_CREDENTIAL_SETUP_RATE_LIMIT,
   DEFAULT_RESET_TOKEN_TTL_MS,
   DEFAULT_WEBAUTHN_CHALLENGE_TTL_MS,
   MFA_REQUIRED_ROLE_CODES,
@@ -29,6 +30,7 @@ export {
   type WebAuthnPolicy,
   type LockoutPolicy,
   type SignInRateLimitPolicy,
+  type CredentialSetupRateLimitPolicy,
 } from "./configure.js";
 export {
   InMemoryRateLimiter,
@@ -37,6 +39,10 @@ export {
   type RateLimitRule,
   type RateLimitResult,
 } from "./rate-limit.js";
+export {
+  guardCredentialSetupBurst,
+  type CredentialSetupBurstInput,
+} from "./credential-setup-limit.js";
 
 export type { PasswordHasher } from "./password/hasher.js";
 export {
@@ -158,7 +164,7 @@ export {
   type ResetPasswordOutput,
 } from "./commands/reset-password.js";
 export { requestPasswordReset, type RequestPasswordResetInput } from "./request-password-reset.js";
-export { resetPassword } from "./reset-password.js";
+export { resetPassword, type ResetPasswordRequest } from "./reset-password.js";
 export {
   IssueInvite,
   DEFAULT_INVITE_TTL_MS,
@@ -181,7 +187,7 @@ export {
   type SetThemePreferenceInput,
   type SetThemePreferenceOutput,
 } from "./commands/set-theme-preference.js";
-export { issueInvite, acceptInvite } from "./invite.js";
+export { issueInvite, acceptInvite, type AcceptInviteRequest } from "./invite.js";
 export {
   NOOP_PASSWORD_RESET_MAILER,
   type PasswordResetMailer,
@@ -252,6 +258,7 @@ import * as setThemePreferenceModule from "./commands/set-theme-preference.js";
 import * as inviteModule from "./invite.js";
 import * as resetMailerModule from "./reset-mailer.js";
 import * as rateLimitModule from "./rate-limit.js";
+import * as credentialSetupLimitModule from "./credential-setup-limit.js";
 import * as errorsModule from "./errors.js";
 
 export const auth = {
@@ -289,5 +296,6 @@ export const auth = {
   ...inviteModule,
   ...resetMailerModule,
   ...rateLimitModule,
+  ...credentialSetupLimitModule,
   ...errorsModule,
 } as const;

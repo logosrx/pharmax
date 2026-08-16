@@ -21,6 +21,7 @@ import {
 } from "../configure.js";
 import { acceptInvite } from "../invite.js";
 import type { PasswordHasher } from "../password/hasher.js";
+import type { RateLimiter } from "../rate-limit.js";
 import { hashSessionToken } from "../session/token.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
@@ -151,9 +152,14 @@ function configureBus(client: unknown): void {
   });
 }
 
-// The production entry point, so the pre-transaction breach screen the
-// command requires is part of what these tests exercise.
-function run(input: { readonly rawToken: string; readonly newPassword: string }) {
+// The production entry point, so the pre-transaction breach screen and
+// the public-route burst gate the command sits behind are part of what
+// these tests exercise.
+function run(input: {
+  readonly rawToken: string;
+  readonly newPassword: string;
+  readonly ipAddress?: string;
+}) {
   return acceptInvite(input);
 }
 
@@ -175,9 +181,13 @@ function expectNoEffect(fake: ReturnType<typeof buildFake>): void {
  * `code|message` of the refusal, so two failure paths can be compared
  * for indistinguishability rather than merely both being errors.
  */
-async function refusalFingerprint(rawToken: string): Promise<string> {
+async function refusalFingerprint(rawToken: string, ipAddress?: string): Promise<string> {
   try {
-    await run({ rawToken, newPassword: INITIAL_PASSWORD });
+    await run({
+      rawToken,
+      newPassword: INITIAL_PASSWORD,
+      ...(ipAddress === undefined ? {} : { ipAddress }),
+    });
   } catch (cause) {
     const err = cause as { code: string; message: string };
     return `${err.code}|${err.message}`;
@@ -502,5 +512,146 @@ describe("AcceptInvite — password policy", () => {
       readonly [{ data: { metadata: Record<string, unknown> } }]
     >;
     expect(audits[0]![0].data.metadata["breachScreen"]).toBe("bypassed_error");
+  });
+});
+
+// The public-route burst gate (credential-setup-limit.ts). This route is
+// unauthenticated and the breach screen runs before the token is
+// resolved, so without a limit every request buys one outbound corpus
+// lookup — the amplification R-026 records as the prerequisite to wiring
+// a checker at all. Keying and ordering are pinned in
+// ../credential-setup-limit.test.ts; what follows is the behaviour a
+// caller actually sees.
+describe("AcceptInvite — public-route burst limit", () => {
+  const IP_A = "198.51.100.7";
+  const IP_B = "203.0.113.9";
+
+  /** Re-configure with a low threshold so the boundary is reachable. */
+  function configureWithLimit(limit: number, rateLimiter?: RateLimiter): void {
+    configureAuth(
+      buildAuthConfiguration({
+        clock: clock.createFrozenClock(NOW),
+        hasher: fakeHasher,
+        credentialSetupRateLimit: { perIp: { limit, windowMs: 60_000 } },
+        ...(rateLimiter === undefined ? {} : { rateLimiter }),
+      })
+    );
+  }
+
+  it("refuses past the configured threshold, even for a token that would have worked", async () => {
+    const fake = buildFake({});
+    configureWithLimit(2);
+    configureBus(fake.client);
+
+    // Two probes spend the budget. Both would be refused on their own
+    // merits; what matters is that they COUNT.
+    await expect(
+      run({ rawToken: "guess-one", newPassword: INITIAL_PASSWORD, ipAddress: IP_A })
+    ).rejects.toMatchObject({ code: "RESET_TOKEN_INVALID" });
+    await expect(
+      run({ rawToken: "guess-two", newPassword: INITIAL_PASSWORD, ipAddress: IP_A })
+    ).rejects.toMatchObject({ code: "RESET_TOKEN_INVALID" });
+
+    // The third request carries the REAL token. Refusing it is what
+    // makes this a limit rather than a filter on obviously-bad input.
+    await expect(
+      run({ rawToken: RAW_TOKEN, newPassword: INITIAL_PASSWORD, ipAddress: IP_A })
+    ).rejects.toMatchObject({ code: "RESET_TOKEN_INVALID" });
+
+    // And it left the invite intact: a limited operator has not had
+    // their single-use link burned.
+    expectNoEffect(fake);
+  });
+
+  it("gives a limited caller the SAME code and message as an unknown token", async () => {
+    const fake = buildFake({});
+    configureWithLimit(1);
+    configureBus(fake.client);
+
+    // Budget spent on an unknown token; the valid token is then refused
+    // by the limiter rather than by the handler.
+    const unknownToken = await refusalFingerprint("never-minted", IP_A);
+    const limitedWithRealToken = await refusalFingerprint(RAW_TOKEN, IP_A);
+
+    // The attack this denies: probe until limited, then submit the
+    // candidate. If the limiter answered differently from the handler,
+    // the pair of responses would reveal whether the candidate token
+    // existed — undoing the single opaque refusal the rest of this file
+    // asserts. Compared against the literal, not merely "equal", so it
+    // cannot pass by neither case rejecting.
+    expect([...new Set([unknownToken, limitedWithRealToken])]).toEqual([
+      "RESET_TOKEN_INVALID|This password reset link is invalid or has expired.",
+    ]);
+    expectNoEffect(fake);
+  });
+
+  it("does not block a first-time acceptance, policy fumbles included", async () => {
+    const fake = buildFake({});
+    // The DEFAULT allowance, because the point is that the shipped
+    // number tolerates a real operator rather than that some number does.
+    configureBus(fake.client);
+
+    // A new hire picking a first password usually fails policy once or
+    // twice before landing on one. Every one of those attempts counts
+    // against the limit, so a threshold that could not absorb them
+    // would turn onboarding into a support ticket.
+    for (const tooShort of ["short", "abc", "12345", "no"]) {
+      await expect(
+        run({ rawToken: RAW_TOKEN, newPassword: tooShort, ipAddress: IP_A })
+      ).rejects.toMatchObject({ code: "PASSWORD_POLICY_VIOLATION" });
+    }
+
+    const out = await run({
+      rawToken: RAW_TOKEN,
+      newPassword: INITIAL_PASSWORD,
+      ipAddress: IP_A,
+    });
+    expect(out.userId).toBe(USER_ID);
+  });
+
+  it("counts a successful acceptance too, not only refusals", async () => {
+    const hits: string[] = [];
+    const recording: RateLimiter = {
+      async hit(key) {
+        hits.push(key);
+        return { allowed: true, retryAfterMs: 0 };
+      },
+    };
+    const fake = buildFake({});
+    configureWithLimit(20, recording);
+    configureBus(fake.client);
+
+    await run({ rawToken: RAW_TOKEN, newPassword: INITIAL_PASSWORD, ipAddress: IP_A });
+
+    // A limiter that only charged failures would leak: an attacker could
+    // interleave a candidate token with known-bad ones and read which
+    // request tripped the limit to learn whether the candidate had been
+    // charged — i.e. whether it was real.
+    expect(hits).toEqual([`credential-setup:ip:${IP_A}`]);
+  });
+
+  it("scopes the budget per IP, so one caller cannot lock out another", async () => {
+    const fake = buildFake({});
+    configureWithLimit(1);
+    configureBus(fake.client);
+
+    await expect(
+      run({ rawToken: "guess-one", newPassword: INITIAL_PASSWORD, ipAddress: IP_A })
+    ).rejects.toMatchObject({ code: "RESET_TOKEN_INVALID" });
+    await expect(
+      run({ rawToken: RAW_TOKEN, newPassword: INITIAL_PASSWORD, ipAddress: IP_A })
+    ).rejects.toMatchObject({ code: "RESET_TOKEN_INVALID" });
+
+    // A different address — a second clinic, or a second tenant — is
+    // untouched. The client IP is the ONLY dimension in the key, so
+    // there is no tenant-wide or global bucket for one tenant's traffic
+    // to exhaust on another's behalf, and no account-level state for an
+    // attacker who merely knows an invite is outstanding to poison.
+    const out = await run({
+      rawToken: RAW_TOKEN,
+      newPassword: INITIAL_PASSWORD,
+      ipAddress: IP_B,
+    });
+    expect(out.userId).toBe(USER_ID);
   });
 });
