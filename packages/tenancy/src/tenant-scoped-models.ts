@@ -325,12 +325,15 @@ export const TENANT_EXCLUDED_MODELS: ReadonlySet<string> = new Set([
   // resolves the shipment by tracking number and enters that org's
   // tenancy to execute RecordShipmentTrackingEvent.
   "FedExWebhookEvent",
-  // Inbound Clerk (identity) webhook events. Same reason as the two
-  // above — the platform does not know which tenant a Clerk event
-  // resolves to until the dispatcher (apps/web/src/server/auth/
-  // clerk-webhook-handlers.ts) looks the Pharmax user row up by
-  // `clerkUserId` in system context. The svix-id-keyed idempotency
-  // ledger is platform-level by construction.
+  // Inbound Clerk (identity) webhook events. DORMANT: ADR-0030 retired
+  // Clerk and deleted both the route and the dispatcher that wrote this
+  // ledger, so nothing has written it since. The model is still in the
+  // schema and the table is still RLS-exempt, so it must stay listed
+  // here — dropping it from this set would make the schema linter
+  // demand a tenancy scope for a table that has none and never can:
+  // the rows are keyed by svix message id and carry no organization.
+  // Remove this entry only in the same change that drops the model
+  // (see EI-6 in docs/soc2/evidence-integrity-findings.md).
   "ClerkWebhookEvent",
   // Inbound Resend (email delivery) webhook events. Same reason as
   // the webhook ledgers above — the platform does not know which

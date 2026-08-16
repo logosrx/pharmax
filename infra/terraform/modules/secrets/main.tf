@@ -55,6 +55,15 @@ locals {
     "stripe-webhook-secret",
     "easypost-api-key",
     "easypost-webhook-secret",
+    # UNREFERENCED since 2026-08-15 — no task definition injects these
+    # three, and no application code reads them (ADR-0030 retired
+    # Clerk). They are retained ONLY so that a rollback to a
+    # task-definition revision registered before that date still
+    # resolves its secret ARNs. Remove them once no rollback-eligible
+    # revision references them, together with their entries in
+    # `rotation_candidates` below and the populate steps in
+    # infra/terraform/README.md. Tracked as the vendor-decom half of
+    # EI-6 (docs/soc2/evidence-integrity-findings.md).
     "clerk-secret-key",
     "clerk-webhook-secret",
     "next-public-clerk-publishable-key",
