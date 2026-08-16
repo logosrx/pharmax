@@ -38,6 +38,7 @@ import { OrderSearch } from "../../src/components/shell/order-search.js";
 import { ThemeToggle } from "../../src/components/shell/theme-toggle.js";
 import { type IconName } from "../../src/components/ui/icon.js";
 import { EmptyState } from "../../src/components/ui/feedback.js";
+import { ToastProvider } from "../../src/components/ui/toast.js";
 
 interface NavSpec {
   readonly href: string;
@@ -360,36 +361,38 @@ export default async function OpsLayout({ children }: Readonly<{ children: React
 
   return (
     <LiveQueueCountsProvider initialCounts={counts}>
-      <div className="ambient-canvas flex min-h-screen bg-canvas text-fg">
-        <SidebarNav groups={groups} />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur-md sm:px-6">
-            <div className="flex items-center gap-2 sm:hidden">
-              <BrandMark className="h-8 w-8" />
-            </div>
-            <OrderSearch />
-            <CommandPalette groups={groups} />
-            <div className="ml-auto flex items-center gap-3">
-              <Link
-                href="/ops/account/security"
-                className="hidden rounded-md text-right leading-tight hover:opacity-80 sm:block"
-                title="Account security"
-              >
-                <div className="text-sm font-medium text-fg">{result.operator.displayName}</div>
-                <div className="text-2xs text-subtle">{result.operator.email}</div>
-              </Link>
-              <ThemeToggle />
-              <SignOutButton />
-            </div>
-          </header>
-          {/* The content pane is a container-query root: page grids size
+      <ToastProvider>
+        <div className="ambient-canvas flex min-h-screen bg-canvas text-fg">
+          <SidebarNav groups={groups} />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur-md sm:px-6">
+              <div className="flex items-center gap-2 sm:hidden">
+                <BrandMark className="h-8 w-8" />
+              </div>
+              <OrderSearch />
+              <CommandPalette groups={groups} />
+              <div className="ml-auto flex items-center gap-3">
+                <Link
+                  href="/ops/account/security"
+                  className="hidden rounded-md text-right leading-tight hover:opacity-80 sm:block"
+                  title="Account security"
+                >
+                  <div className="text-sm font-medium text-fg">{result.operator.displayName}</div>
+                  <div className="text-2xs text-subtle">{result.operator.email}</div>
+                </Link>
+                <ThemeToggle />
+                <SignOutButton />
+              </div>
+            </header>
+            {/* The content pane is a container-query root: page grids size
               against the pane (which the sidebar eats into), not the
               viewport, via @sm/@3xl/… variants. */}
-          <main className="@container mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
-            {children}
-          </main>
+            <main className="@container mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
+              {children}
+            </main>
+          </div>
         </div>
-      </div>
+      </ToastProvider>
     </LiveQueueCountsProvider>
   );
 }

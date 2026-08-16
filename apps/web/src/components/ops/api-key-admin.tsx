@@ -25,6 +25,7 @@ import { buttonClass } from "../ui/button.js";
 import { Banner } from "../ui/feedback.js";
 import { Field, Input } from "../ui/field.js";
 import { Icon } from "../ui/icon.js";
+import { useToast } from "../ui/toast.js";
 
 export interface ScopeOption {
   readonly code: string;
@@ -53,12 +54,12 @@ export function MintApiKeyForm({
   readonly quotaTierOptions: ReadonlyArray<QuotaTierOption>;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const defaultTier = quotaTierOptions[0]?.tier ?? "STANDARD";
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<ReadonlySet<string>>(new Set());
   const [quotaTier, setQuotaTier] = useState<string>(defaultTier);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [minted, setMinted] = useState<MintSuccess | null>(null);
   const [copied, setCopied] = useState(false);
   const idempotencyKeyRef = useRef<string | null>(null);
@@ -83,11 +84,10 @@ export function MintApiKeyForm({
   async function onSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     if (pending) return;
-    setError(null);
     setMinted(null);
     setCopied(false);
     if (scopes.size === 0) {
-      setError("Select at least one scope.");
+      toast.warning("Select at least one scope.");
       return;
     }
     idempotencyKeyRef.current ??= crypto.randomUUID();
@@ -106,7 +106,10 @@ export function MintApiKeyForm({
         error?: { code?: string; message?: string };
       } | null;
       if (!response.ok || body?.data === undefined) {
-        setError(body?.error?.message ?? `Mint failed (HTTP ${response.status}).`);
+        toast.error("That mint didn't go through", {
+          description: body?.error?.message ?? `Mint failed (HTTP ${response.status}).`,
+          ...(body?.error?.code !== undefined ? { detail: body.error.code } : {}),
+        });
         return;
       }
       // Success (fresh or replay): this attempt series is finished.
@@ -115,10 +118,16 @@ export function MintApiKeyForm({
       setName("");
       setScopes(new Set());
       setQuotaTier(defaultTier);
+      toast.success(`API key "${body.data.name}" minted`, {
+        description: "The one-time token is shown above — store it now.",
+        detail: `${body.data.tokenPrefix}…`,
+      });
       router.refresh();
     } catch {
       // Network failure: keep the idempotency key so a retry replays.
-      setError("Network error — retrying is safe (the same request will not mint twice).");
+      toast.error("Network error", {
+        description: "Retrying is safe — the same request will not mint twice.",
+      });
     } finally {
       setPending(false);
     }
@@ -161,12 +170,6 @@ export function MintApiKeyForm({
             on first creation; if it was lost, revoke this key and mint a new one.
           </Banner>
         )
-      ) : null}
-
-      {error !== null ? (
-        <Banner tone="danger" title="That mint didn't go through">
-          {error}
-        </Banner>
       ) : null}
 
       <form onSubmit={(e) => void onSubmit(e)} className="space-y-4">
@@ -252,8 +255,8 @@ export function RevokeApiKeyButton({
   readonly tokenPrefix: string;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   async function onRevoke(): Promise<void> {
     if (pending) return;
@@ -263,10 +266,9 @@ export function RevokeApiKeyButton({
     if (reason === null) return;
     const trimmed = reason.trim();
     if (trimmed.length === 0) {
-      setError("A reason is required.");
+      toast.warning("A reason is required to revoke a key.");
       return;
     }
-    setError(null);
     setPending(true);
     try {
       const response = await fetch("/api/ops/admin/api-keys/revoke", {
@@ -276,30 +278,33 @@ export function RevokeApiKeyButton({
       });
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
+          error?: { code?: string; message?: string };
         } | null;
-        setError(body?.error?.message ?? `Revoke failed (HTTP ${response.status}).`);
+        toast.error("That revoke didn't go through", {
+          description: body?.error?.message ?? `Revoke failed (HTTP ${response.status}).`,
+          ...(body?.error?.code !== undefined ? { detail: body.error.code } : {}),
+        });
         return;
       }
+      toast.success(`API key "${name}" revoked`, { detail: `${tokenPrefix}…` });
       router.refresh();
     } catch {
-      setError("Network error — the revoke may not have applied; retry.");
+      toast.error("Network error", {
+        description: "The revoke may not have applied — retry.",
+      });
     } finally {
       setPending(false);
     }
   }
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      <button
-        type="button"
-        onClick={() => void onRevoke()}
-        disabled={pending}
-        className={buttonClass({ variant: "danger", size: "sm" })}
-      >
-        {pending ? "Revoking…" : "Revoke"}
-      </button>
-      {error !== null ? <span className="text-2xs text-tone-danger-accent">{error}</span> : null}
-    </div>
+    <button
+      type="button"
+      onClick={() => void onRevoke()}
+      disabled={pending}
+      className={buttonClass({ variant: "danger", size: "sm" })}
+    >
+      {pending ? "Revoking…" : "Revoke"}
+    </button>
   );
 }

@@ -11,9 +11,13 @@ import { useEffect, useState } from "react";
 import { applyThemeChoice, persistThemeChoice } from "../../lib/theme-client.js";
 import { Icon } from "../ui/icon.js";
 import { cx } from "../ui/cx.js";
+import { useToastOptional } from "../ui/toast.js";
 
 export function ThemeToggle({ className }: { readonly className?: string }) {
   const [light, setLight] = useState(false);
+  // Optional: /preview renders this toggle outside the ops shell,
+  // where no ToastProvider is mounted — degrade to silence there.
+  const toast = useToastOptional();
 
   useEffect(() => {
     setLight(document.documentElement.classList.contains("light"));
@@ -27,6 +31,10 @@ export function ThemeToggle({ className }: { readonly className?: string }) {
     // Fire-and-forget: on signed-out surfaces (/preview) this 401s,
     // which is fine — the cookie/localStorage stores still applied.
     void persistThemeChoice(choice);
+    toast?.info(next ? "Switched to light theme" : "Switched to dark theme", {
+      description: "Saved to your account — follows you to other devices.",
+      durationMs: 2_500,
+    });
   }
 
   return (
