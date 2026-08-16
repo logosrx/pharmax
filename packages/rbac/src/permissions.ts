@@ -99,6 +99,22 @@ export const PERMISSIONS = Object.freeze({
   // extends the Lot, credits the inventory ledger, and stores the
   // DSCSA transaction record.
   INVENTORY_RECEIVE: "inventory.receive",
+  // Create / edit catalog products AND their AI typing-assist
+  // guardrails. One grant for both surfaces on purpose: the guardrail
+  // is part of the product's safety configuration, authored at
+  // product-creation time. This permission closes the write-surface
+  // requirement documented on `product.ndcKind` — flipping
+  // NATIONAL → IN_HOUSE_COMPOUND silences an acknowledge-tier PV1
+  // prompt, so every ndcKind change is permission-gated here and
+  // audit-logged by the command.
+  INVENTORY_PRODUCTS_MANAGE: "inventory.products.manage",
+
+  // Org-level AI typing-assist policy (master switch, confidence
+  // threshold, controlled-substance opt-in). Separate from
+  // INVENTORY_PRODUCTS_MANAGE because enabling the model org-wide is
+  // a higher-blast-radius decision than bounding one product —
+  // restricted to OrgAdmin by default.
+  AI_ASSIST_POLICY_MANAGE: "ai.assist_policy.manage",
 
   // Compounding (ADR-0035): Master Formulation Records. MANAGE covers
   // the whole formula lifecycle (author/publish/retire) — pharmacist-
@@ -395,6 +411,16 @@ export const PERMISSION_METADATA: Readonly<
     description:
       "Receive an inbound lot shipment (ADR-0035 slice 3): creates or extends the Lot, credits the inventory ledger with LOT_RECEIVED, and stores the DSCSA transaction record (TI snapshot + Transaction Statement gate). Refuses expired stock and shipments without the seller's TS.",
     category: "Inventory",
+  },
+  [PERMISSIONS.INVENTORY_PRODUCTS_MANAGE]: {
+    description:
+      "Create and edit catalog products and their AI typing-assist guardrails (quantity/days-supply/refills ceilings, per-product AI kill switch). Gates ndcKind and controlled-substance-schedule changes — both alter downstream screening behavior, so every change is audit-logged with before/after values.",
+    category: "Inventory",
+  },
+  [PERMISSIONS.AI_ASSIST_POLICY_MANAGE]: {
+    description:
+      "Set the org-level AI typing-assist policy: master switch for model-backed suggestions, minimum confidence threshold, and the controlled-substance opt-in. Enabling the model org-wide is a high-blast-radius decision — OrgAdmin only by default.",
+    category: "Administration",
   },
   [PERMISSIONS.COMPOUNDING_READ]: {
     description:

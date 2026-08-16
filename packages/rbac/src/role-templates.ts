@@ -57,6 +57,13 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       PERMISSIONS.CLINICS_READ,
       PERMISSIONS.INVENTORY_READ,
       PERMISSIONS.INVENTORY_RECEIVE,
+      // Product catalog + AI guardrail authority. Pharmacist-level
+      // because both ndcKind and the controlled-substance schedule
+      // change downstream screening behavior, and the guardrail
+      // ceilings are a clinical plausibility judgement. Technicians
+      // deliberately do NOT carry this — a tech works inside the
+      // envelope, a pharmacist authors it.
+      PERMISSIONS.INVENTORY_PRODUCTS_MANAGE,
       // Defining a compound product (name, strength, serial identity)
       // is catalog authority of the same weight as authoring its
       // formula — pharmacist-level, not a technician grant. The

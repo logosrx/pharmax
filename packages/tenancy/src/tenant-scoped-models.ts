@@ -183,6 +183,19 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // tenant's safety gate.
   ["PatientScreeningAcknowledgement", { kind: "organizationId" }] as const,
   ["Product", { kind: "organizationId" }] as const,
+  // ProductAiGuardrail is the tenant-authored safety envelope the AI
+  // typing assistant must operate inside (typing-assist phase 1).
+  // Auto-scoping is load-bearing beyond row isolation: the typing
+  // validators READ this table to decide what a plausible fill looks
+  // like, and an unscoped read would validate one tenant's
+  // prescription against another tenant's ceilings.
+  ["ProductAiGuardrail", { kind: "organizationId" }] as const,
+  // AiAssistPolicy is the org-level master switch for model-backed
+  // typing suggestions (one row per org). An unscoped read here would
+  // let one tenant's opt-in enable the model for another tenant's
+  // orders — the exact failure the off-by-default posture exists to
+  // prevent.
+  ["AiAssistPolicy", { kind: "organizationId" }] as const,
   ["Lot", { kind: "organizationId" }] as const,
   ["LotAssignment", { kind: "organizationId" }] as const,
   ["InventoryTransaction", { kind: "organizationId" }] as const,

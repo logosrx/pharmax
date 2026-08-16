@@ -11,6 +11,21 @@ export {
   type CreateCompoundProductInput,
   type CreateCompoundProductOutput,
 } from "./commands/create-compound-product.js";
+export {
+  CreateProduct,
+  type CreateProductInput,
+  type CreateProductOutput,
+} from "./commands/create-product.js";
+export {
+  UpdateProduct,
+  type UpdateProductInput,
+  type UpdateProductOutput,
+} from "./commands/update-product.js";
+export {
+  SetProductAiGuardrail,
+  type SetProductAiGuardrailInput,
+  type SetProductAiGuardrailOutput,
+} from "./commands/set-product-ai-guardrail.js";
 export { getLotChainOfCustody, type LotChainOfCustody } from "./queries/lot-chain-of-custody.js";
 
 export {
@@ -25,8 +40,11 @@ export {
   CATALOG_DUPLICATE_COMPOUND_PRODUCT,
   CATALOG_PRODUCT_CREATE_CONFLICT,
   INVENTORY_EXPIRATION_MISMATCH,
+  INVENTORY_GUARDRAIL_CONFLICT,
   INVENTORY_LOT_EXPIRED_AT_RECEIPT,
   INVENTORY_LOT_NOT_FOUND,
+  INVENTORY_PRODUCT_NDC_CONFLICT,
+  INVENTORY_PRODUCT_NO_CHANGES,
   INVENTORY_PRODUCT_NOT_FOUND,
   INVENTORY_RECEIPT_CONFLICT,
   INVENTORY_SITE_NOT_FOUND,

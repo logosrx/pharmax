@@ -124,6 +124,9 @@ importers:
       '@pharmax/tenancy':
         specifier: workspace:*
         version: link:packages/tenancy
+      '@pharmax/typing-assist':
+        specifier: workspace:*
+        version: link:packages/typing-assist
       '@pharmax/verification':
         specifier: workspace:*
         version: link:packages/verification
@@ -1581,6 +1584,34 @@ importers:
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
+
+  packages/typing-assist:
+    dependencies:
+      '@pharmax/command-bus':
+        specifier: workspace:*
+        version: link:../command-bus
+      '@pharmax/database':
+        specifier: workspace:*
+        version: link:../database
+      '@pharmax/platform-core':
+        specifier: workspace:*
+        version: link:../platform-core
+      '@pharmax/rbac':
+        specifier: workspace:*
+        version: link:../rbac
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.50.0)(tsx@4.23.11)(yaml@2.9.0)
 
   packages/verification:
     dependencies:

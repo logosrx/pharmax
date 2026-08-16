@@ -54,6 +54,9 @@ import { CompoundingFormulaPublishedV1 } from "./events/compounding/formula-publ
 import { CompoundingFormulaRetiredV1 } from "./events/compounding/formula-retired-v1.js";
 import { CompoundingPreparationRecordedV1 } from "./events/compounding/preparation-recorded-v1.js";
 import { InventoryLotReceivedV1 } from "./events/inventory/lot-received-v1.js";
+import { InventoryProductAiGuardrailSetV1 } from "./events/inventory/product-ai-guardrail-set-v1.js";
+import { InventoryProductCreatedV1 } from "./events/inventory/product-created-v1.js";
+import { InventoryProductUpdatedV1 } from "./events/inventory/product-updated-v1.js";
 
 // ---- fill ----------------------------------------------------------------
 import { FillLotAssignedV1 } from "./events/fill/lot-assigned-v1.js";
@@ -99,6 +102,7 @@ import { OrderTypingResumedV1 } from "./events/order/typing-resumed-v1.js";
 import { OrderTypingStartedV1 } from "./events/order/typing-started-v1.js";
 
 // ---- org (tenant administration) ----------------------------------------
+import { AiAssistPolicySetV1 } from "./events/org/ai-assist-policy-set-v1.js";
 import { OrgBucketCreatedV1 } from "./events/org/bucket-created-v1.js";
 import { OrgBucketDeletedV1 } from "./events/org/bucket-deleted-v1.js";
 import { OrgBucketUpdatedV1 } from "./events/org/bucket-updated-v1.js";
@@ -211,8 +215,13 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   CompoundingFormulaRetiredV1,
   CompoundingPreparationRecordedV1,
   InventoryLotReceivedV1,
+  InventoryProductAiGuardrailSetV1,
+  InventoryProductCreatedV1,
+  InventoryProductUpdatedV1,
   // fill
   FillLotAssignedV1,
+  // ai typing assist (org policy)
+  AiAssistPolicySetV1,
   // labels
   LabelsVialPrintCompletedV1,
   LabelsVialPrintFailedV1,
