@@ -935,6 +935,7 @@ model Organization {
   screeningAcknowledgements        OrderScreeningAcknowledgement[]
   patientScreeningAcknowledgements PatientScreeningAcknowledgement[]
   products                         Product[]
+  pharmaxProductIdSequence         PharmaxProductIdSequence?
   lots                             Lot[]
   lotAssignments                   LotAssignment[]
   inventoryTransactions            InventoryTransaction[]
@@ -4612,6 +4613,20 @@ enum ProductNdcKind {
   IN_HOUSE_COMPOUND
 }
 
+// Physical unit a compounded product is counted and serialized in.
+// Drives the batch-creation surface ("how many VIALS in this batch")
+// and the wording on batch labels. Deliberately coarse — this is a
+// counting unit, not a dosage form (that nuance stays in `form`).
+enum ProductUnitKind {
+  VIAL
+  TABLET
+  CAPSULE
+  SYRINGE
+  PEN
+  TROCHE
+  OTHER
+}
+
 model Product {
   id             String       @id @default(uuid()) @db.Uuid
   organizationId String       @db.Uuid
@@ -4632,9 +4647,11 @@ model Product {
   // WRITE-SURFACE REQUIREMENT (screening-suppression vector): flipping
   // NATIONAL → IN_HOUSE_COMPOUND converts the acknowledge-tier "verify
   // the NDC" prompt into an informational gap on every order for this
-  // product. No application write path for `product` exists today (the
-  // catalog is seeded/ops-managed); whoever builds product CRUD must
-  // make `ndcKind` changes permission-gated and audit-logged, or that
+  // product. The only application write path today is
+  // `CreateCompoundProduct` (`@pharmax/inventory`), which CREATES rows
+  // with `IN_HOUSE_COMPOUND` fixed at birth and offers no kind-flip on
+  // existing rows. Whoever builds a product EDIT surface must make
+  // `ndcKind` changes permission-gated and audit-logged, or that
   // surface becomes a channel for silencing a screening prompt.
   ndcKind ProductNdcKind @default(NATIONAL)
 
@@ -4646,6 +4663,30 @@ model Product {
   // issued.
   controlledSubstanceSchedule ControlledSubstanceSchedule @default(NON_CONTROLLED)
 
+  // ----- Pharmax compound catalog identity -----------------------------
+  //
+  // Human-readable catalog identifier minted by the per-org allocator
+  // inside the `CreateCompoundProduct` transaction ("PXP-000042").
+  // For in-house compounds `ndc` holds the SAME value — the minted id
+  // IS the org-local identifier the schema comment above promises —
+  // so lots, labels, and billing keyed on `ndc` keep working while
+  // operators get a column that is explicitly "the Pharmax Product ID".
+  // Null on NATIONAL products (they are identified by their real NDC).
+  pharmaxProductId String?
+
+  // Serial identity for compounded-batch unit numbers, e.g. the "T30"
+  // in PHX-T30-1-040327-11: first letter of the PRIMARY drug plus the
+  // total mg of that drug in one container (Tirzepatide 10mg/mL ×
+  // 3mL = 30). Stored explicitly rather than derived from `name` /
+  // `strength` so an admin controls exactly what prints on serials,
+  // and FROZEN per product after creation — a changed serial identity
+  // would orphan every already-printed batch label. Compound-only.
+  serialDrugInitial String?
+  serialDrugMg      Int?
+
+  // Counting unit for batch creation ("how many VIALS"). Compound-only.
+  unitKind ProductUnitKind?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -4656,6 +4697,7 @@ model Product {
   aiGuardrail                ProductAiGuardrail?
 
   @@unique([organizationId, ndc])
+  @@unique([organizationId, pharmaxProductId])
   @@index([organizationId, name])
   @@map("product")
 }
@@ -4752,6 +4794,31 @@ model AiAssistPolicy {
 
   @@unique([organizationId])
   @@map("ai_assist_policy")
+}
+
+// Pharmax Product ID allocator, one counter row per organization.
+//
+// The Pharmax Product ID is printed on batch labels and quoted by the
+// testing lab, so — like the Rx number — it must be dense, monotonic,
+// and never operator-typed. Same design as `RxNumberSequence`:
+// `CreateCompoundProduct` increments this row inside its transaction,
+// the row lock serializes concurrent creations for one org, and a
+// rolled-back transaction consumes its number (a gap is explainable;
+// a reused catalog id is not).
+//
+// Granularity is per-ORG (not per-site): the catalog is org-wide —
+// the same compound is one product regardless of which site batches
+// it — mirroring `product(organizationId, pharmaxProductId)`.
+model PharmaxProductIdSequence {
+  organizationId String       @id @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  lastValue Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("pharmax_product_id_sequence")
 }
 
 // Inventory lot at a pharmacy site. Expired lots are rejected at

@@ -64,6 +64,12 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       // deliberately do NOT carry this — a tech works inside the
       // envelope, a pharmacist authors it.
       PERMISSIONS.INVENTORY_PRODUCTS_MANAGE,
+      // Defining a compound product (name, strength, serial identity)
+      // is catalog authority of the same weight as authoring its
+      // formula — pharmacist-level, not a technician grant. The
+      // minted Pharmax Product ID and serial identity are frozen at
+      // creation and stamped on every batch label thereafter.
+      PERMISSIONS.CATALOG_COMPOUND_PRODUCT_CREATE,
       // Compounding formula authority (ADR-0035): the Master
       // Formulation Record is a pharmacist-owned document per
       // USP <795>/<797> — authoring/publish/retire sits here, not

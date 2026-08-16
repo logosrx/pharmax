@@ -127,6 +127,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
       "View the drug product catalog and inventory lots/batches (NDC, name, lot number, expiration, status); read-only",
   },
   {
+    code: "catalog.compound_product.create",
+    description:
+      "Create an in-house compound product in the catalog: mints the org's next Pharmax Product ID (PXP series) and fixes the serial identity (primary-drug initial + mg) stamped on every batch unit number. Creation only — no edit surface",
+  },
+  {
     code: "inventory.receive",
     description:
       "Receive an inbound lot shipment (ADR-0035 slice 3): creates or extends the Lot, credits the inventory ledger, and stores the DSCSA transaction record (TI snapshot + Transaction Statement gate)",

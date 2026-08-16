@@ -27,7 +27,6 @@ export {
   ORDER_SITE_NOT_LINKED_TO_CLINIC,
   ORDER_PATIENT_NOT_FOUND,
   ORDER_PATIENT_CLINIC_MISMATCH,
-  ORDER_PRESCRIPTION_NOT_FOUND,
   ORDER_PRESCRIPTION_MISMATCH,
   ORDER_INTAKE_BUCKET_NOT_CONFIGURED,
 } from "./commands/create-order.js";
@@ -74,6 +73,21 @@ export {
   ORDER_NOT_IN_ADDABLE_STATE,
   ORDER_PRESCRIPTION_ALREADY_ON_ORDER,
 } from "./commands/add-prescription.js";
+
+export {
+  DispenseRefill,
+  type DispenseRefillInput,
+  type DispenseRefillOutput,
+  REFILL_PRESCRIPTION_NOT_FOUND,
+  REFILL_PRESCRIPTION_NOT_ACTIVE,
+  REFILL_PATIENT_NOT_ACTIVE,
+  REFILL_SCHEDULE_II_PROHIBITED,
+  REFILL_PRESCRIPTION_EXPIRED,
+  REFILL_SIX_MONTH_HORIZON_ELAPSED,
+  REFILL_NONE_REMAINING,
+  REFILL_ORDER_ALREADY_IN_FLIGHT,
+  REFILL_STATE_CHANGED_CONCURRENTLY,
+} from "./commands/dispense-refill.js";
 
 export {
   CancelOrder,
@@ -142,6 +156,7 @@ export { ORDER_EVENT_TYPE_TO_PERMISSION, orderEventTypeToPermission } from "./ev
 import * as createPrescriptionModule from "./commands/create-prescription.js";
 import * as createOrderModule from "./commands/create-order.js";
 import * as addPrescriptionModule from "./commands/add-prescription.js";
+import * as dispenseRefillModule from "./commands/dispense-refill.js";
 import * as cancelOrderModule from "./commands/cancel-order.js";
 import * as placeHoldModule from "./commands/place-hold.js";
 import * as releaseHoldModule from "./commands/release-hold.js";
@@ -153,6 +168,7 @@ export const orders = {
     CreatePrescription: createPrescriptionModule.CreatePrescription,
     CreateOrder: createOrderModule.CreateOrder,
     AddPrescription: addPrescriptionModule.AddPrescription,
+    DispenseRefill: dispenseRefillModule.DispenseRefill,
     CancelOrder: cancelOrderModule.CancelOrder,
     PlaceHold: placeHoldModule.PlaceHold,
     ReleaseHold: releaseHoldModule.ReleaseHold,
