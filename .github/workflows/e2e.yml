@@ -1,0 +1,106 @@
+# End-to-end smoke workflow (Playwright).
+#
+# Separate from ci.yml on purpose:
+#   1. It needs a Postgres service container, a seeded database, and a
+#      browser download, which dominate the job's wall clock. Keeping
+#      it out of ci.yml keeps the required-check latency unchanged.
+#   2. It is NOT part of the `ci-pass` aggregate, so a flake here can
+#      never block a merge while the suite stabilizes. Failures are
+#      real signal (the job does not use continue-on-error) — they
+#      show red on the PR — but the check is not required. Promoting
+#      it to required is a branch-protection change once the flake
+#      rate is proven near zero (tracked in e2e/README.md).
+#
+# The suite is hermetic: throwaway database, synthetic seed data, the
+# web app booted via `next dev` on the hermetic dev/test path (local
+# KMS adapter, in-memory storage adapters — see e2e/README.md for why
+# a production bundle can't run here). No external services, no
+# secrets.
+
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "11.1.1"
+  CI: "true"
+
+jobs:
+  e2e:
+    name: Playwright smoke suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          # e2e/setup.ts creates `pharmax_e2e` itself; this default DB
+          # only needs to exist so the maintenance connection works.
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Cache the browser download (~150 MB). Keyed on the lockfile:
+      # a Playwright version bump changes pnpm-lock.yaml and rolls the
+      # cache; anything else reuses it.
+      - name: Resolve Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install chromium (+ system deps)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install chromium system deps (cached browser)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
+      - name: Run e2e suite
+        run: pnpm test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.sha }}
+          path: e2e/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -5,6 +5,7 @@
     "packages/*/src/**/*.tsx",
     "prisma/seed.ts",
     "scripts/**/*.ts",
+    "e2e/**/*.ts",
     "vitest.config.ts",
     "eslint.config.js"
   ],
