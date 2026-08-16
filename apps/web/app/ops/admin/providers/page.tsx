@@ -121,7 +121,12 @@ export default async function ProviderAdminPage({
 
       <Section title="Roster" count={result.rows.length}>
         {result.rows.length === 0 ? (
-          <EmptyState icon="providers" title="No providers match" />
+          <EmptyState
+            icon="providers"
+            title="No providers match"
+            description="Check the name or NPI spelling, or review the onboarding queue — applicants aren't listed here until they're approved."
+            action={{ label: "Review provider onboarding", href: "/ops/admin/provider-onboarding" }}
+          />
         ) : (
           <Table>
             <THead>

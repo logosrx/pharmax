@@ -60,7 +60,11 @@ export default async function PracticeAdminPage() {
       />
 
       {clinics.length === 0 ? (
-        <EmptyState icon="practices" title="No practices configured" />
+        <EmptyState
+          icon="practices"
+          title="No practices configured"
+          description="Practices are the clinic accounts that submit prescriptions — orders can't be attributed to a clinic until one exists."
+        />
       ) : (
         <Section title="Practices" count={clinics.length}>
           <Table>

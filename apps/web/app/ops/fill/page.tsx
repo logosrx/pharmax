@@ -86,7 +86,8 @@ export default async function FillQueuePage({
         <EmptyState
           icon="fill"
           title="No orders waiting for fill"
-          description="PV1-approved orders land here for the fill bench."
+          description="The bench is clear — PV1-approved orders land here ready to fill."
+          hint="The queue refreshes live; new arrivals appear without a reload."
         />
       ) : (
         <ul className="space-y-3">

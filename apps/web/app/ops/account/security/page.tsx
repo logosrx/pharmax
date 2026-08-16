@@ -55,8 +55,9 @@ export default async function AccountSecurityPage() {
       <Section title="Security keys & passkeys">
         {security.webAuthnCredentials.length === 0 ? (
           <EmptyState
-            title="No security keys"
-            description="Register a hardware key or platform passkey for phishing-resistant sign-in."
+            icon="key"
+            title="No security keys registered"
+            description="Register a hardware key or platform passkey below for phishing-resistant sign-in."
           />
         ) : (
           <Table>

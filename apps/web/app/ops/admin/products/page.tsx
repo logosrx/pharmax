@@ -92,10 +92,20 @@ export default async function ProductAdminPage({
 
       <Section title="Catalog" count={result.rows.length}>
         {result.rows.length === 0 ? (
-          <EmptyState
-            icon="products"
-            title={q === undefined ? "No products in the catalog" : "No products match"}
-          />
+          q === undefined ? (
+            <EmptyState
+              icon="products"
+              title="No products in the catalog"
+              description="The catalog fills as products are registered for this organization — orders can't reference an NDC until it exists here."
+            />
+          ) : (
+            <EmptyState
+              icon="products"
+              title="No products match"
+              description="Check the NDC or name spelling, or clear the search to browse the full catalog."
+              action={{ label: "Clear search", href: "/ops/admin/products" }}
+            />
+          )
         ) : (
           <Table>
             <THead>

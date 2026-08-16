@@ -54,7 +54,12 @@ export default async function ReportsCatalogPage() {
       />
 
       {definitions.length === 0 ? (
-        <EmptyState icon="reports" title="No reports registered" />
+        <EmptyState
+          icon="reports"
+          title="No reports registered"
+          description="Report definitions ship with the platform build and appear here automatically — an empty catalog means the registry failed to load."
+          hint="Quote this page to support if you expected reports here."
+        />
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {definitions.map((def) => (

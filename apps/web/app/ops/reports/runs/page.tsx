@@ -78,6 +78,7 @@ export default async function ReportRunsHistoryPage({
           icon="history"
           title="No report runs yet"
           description="Run one from the reports catalog or set up a schedule under Administration."
+          action={{ label: "Browse the reports catalog", href: "/ops/reports", icon: "reports" }}
         />
       ) : (
         <Table>

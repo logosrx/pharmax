@@ -379,7 +379,8 @@ export default async function ShippingQueuePage({
           <EmptyState
             icon="shipping"
             title="No orders waiting on shipping"
-            description="Final-verified orders land here for release and carrier hand-off."
+            description="Nothing to release right now — final-verified orders land here for carrier hand-off."
+            hint="The queue refreshes live; new arrivals appear without a reload."
           />
         ) : (
           <ul className="space-y-3">

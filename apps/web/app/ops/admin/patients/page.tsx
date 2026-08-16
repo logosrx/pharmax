@@ -223,7 +223,11 @@ export default async function PatientAdminSearchPage({
       {results !== null && audited !== null ? (
         <Section title="Results" count={audited.visible.length} aside={`${results.tookMs}ms`}>
           {results.rows.length === 0 ? (
-            <EmptyState icon="patients" title="No patients match" />
+            <EmptyState
+              icon="patients"
+              title="No patients match this search"
+              description="Check the spelling or date of birth and search again — inactive, deceased, or merged patients don't appear here."
+            />
           ) : audited.visible.length === 0 ? (
             <EmptyState
               icon="patients"

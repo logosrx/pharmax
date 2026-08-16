@@ -132,7 +132,8 @@ export default async function Pv1QueuePage({
         <EmptyState
           icon="verify"
           title="No orders waiting for PV1"
-          description="Approved typing lands here for pharmacist verification."
+          description="Nothing needs verification right now — approved typing lands here for pharmacist review."
+          hint="The queue refreshes live; new arrivals appear without a reload."
         />
       ) : (
         <ul className="space-y-3">

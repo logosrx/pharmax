@@ -92,6 +92,8 @@ export default async function BucketsAdminPage({
           icon="dashboard"
           title="No buckets yet"
           description="This organization has not been provisioned with the canonical workflow buckets. Order intake will fail until it is."
+          action={{ label: "Create a custom bucket", href: "/ops/admin/buckets/new", icon: "plus" }}
+          hint="Canonical workflow buckets are provisioned by ProvisionDefaultBuckets, not created by hand."
         />
       ) : (
         <Table>
