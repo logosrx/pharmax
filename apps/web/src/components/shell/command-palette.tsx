@@ -65,6 +65,7 @@ export function CommandPalette({ groups }: { readonly groups: ReadonlyArray<NavG
   const [isMac, setIsMac] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setIsMac(!/windows|linux/i.test(window.navigator.userAgent));
@@ -74,6 +75,9 @@ export function CommandPalette({ groups }: { readonly groups: ReadonlyArray<NavG
     setOpen(false);
     setQuery("");
     setActiveIndex(0);
+    // Return focus to the trigger so the keyboard position is not
+    // lost when the dialog unmounts (harmless before a navigation).
+    triggerRef.current?.focus();
   }, []);
 
   const commands = useMemo<ReadonlyArray<PaletteCommand>>(() => {
@@ -228,6 +232,7 @@ export function CommandPalette({ groups }: { readonly groups: ReadonlyArray<NavG
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         onClick={openPalette}
         aria-label="Open command palette"

@@ -18,19 +18,25 @@ export function StageTimeline({ status }: { readonly status: string }) {
 
   return (
     <div className="space-y-3">
-      <ol className="flex items-center gap-1 overflow-x-auto pb-1">
+      <ol aria-label="Workflow stage" className="flex items-center gap-1 overflow-x-auto pb-1">
         {STAGE_ORDER.map((stage, i) => {
           const done = !isException && i < currentIndex;
           const current = !isException && i === currentIndex;
           const last = i === STAGE_ORDER.length - 1;
           return (
-            <li key={stage} className="flex min-w-0 flex-1 items-center">
+            <li
+              key={stage}
+              aria-current={current ? "step" : undefined}
+              className="flex min-w-0 flex-1 items-center"
+            >
               <div className="flex min-w-0 flex-col items-center gap-1.5">
                 <span
                   className={cx(
                     "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors",
                     done && "border-emerald-500/40 bg-emerald-500/15 text-tone-success",
-                    current && "border-brand bg-brand/15 text-brand shadow-glow",
+                    // tone-brand (not brand): the step number is text
+                    // and must hold 4.5:1 on the brand/15 tint.
+                    current && "border-brand bg-brand/15 text-tone-brand shadow-glow",
                     !done && !current && "border-line bg-surface-2 text-subtle"
                   )}
                 >

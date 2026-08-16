@@ -61,7 +61,9 @@ export function QueueRow({
             <div className="flex flex-wrap items-center gap-2">
               <Link
                 href={`/ops/orders/${orderId}`}
-                className="font-mono text-sm font-medium text-fg transition-colors hover:text-brand"
+                // tone-brand (not brand): the hover color must hold
+                // 4.5:1 as text on the card surface in dark theme.
+                className="font-mono text-sm font-medium text-fg transition-colors hover:text-tone-brand"
               >
                 {externalOrderNumber ?? orderId}
               </Link>

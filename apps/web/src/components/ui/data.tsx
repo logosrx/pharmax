@@ -100,14 +100,18 @@ export function THead({ children }: { readonly children: ReactNode }) {
 export function TH({
   children,
   align = "left",
+  scope = "col",
   className,
 }: {
   readonly children?: ReactNode;
   readonly align?: "left" | "right" | "center";
+  /** `col` for THead cells (the default); pass `row` for row headers. */
+  readonly scope?: "col" | "row";
   readonly className?: string;
 }) {
   return (
     <th
+      scope={scope}
       className={cx(
         "px-4 py-2.5 text-2xs font-semibold uppercase tracking-caps text-subtle",
         align === "right" && "text-right",

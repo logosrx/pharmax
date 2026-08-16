@@ -20,7 +20,8 @@ import {
 } from "@simplewebauthn/browser";
 
 const inputClass =
-  "w-full rounded-md border border-line-strong bg-surface-2 px-3 py-2 text-sm text-fg outline-none focus:border-brand";
+  "w-full rounded-md border border-line-strong bg-surface-2 px-3 py-2 text-sm text-fg outline-none " +
+  "focus:border-brand focus:ring-2 focus:ring-ring/40";
 
 interface SignInErrorBody {
   error?: string;
@@ -158,7 +159,11 @@ export function SignInForm() {
           />
         </label>
       ) : null}
-      {error ? <p className="text-sm text-danger">{error}</p> : null}
+      {error ? (
+        <p role="alert" className="text-sm text-tone-danger">
+          {error}
+        </p>
+      ) : null}
       <button
         type="submit"
         disabled={busy}

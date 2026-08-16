@@ -11,7 +11,8 @@
 import { useState, type FormEvent } from "react";
 
 const inputClass =
-  "w-full rounded-md border border-line-strong bg-surface-2 px-3 py-2 text-sm text-fg outline-none focus:border-brand";
+  "w-full rounded-md border border-line-strong bg-surface-2 px-3 py-2 text-sm text-fg outline-none " +
+  "focus:border-brand focus:ring-2 focus:ring-ring/40";
 
 export function PortalChangePasswordForm() {
   const [currentPassword, setCurrentPassword] = useState("");
@@ -103,15 +104,19 @@ export function PortalChangePasswordForm() {
         />
       </label>
       {violations.length > 0 ? (
-        <ul className="list-disc space-y-1 pl-5 text-sm text-danger">
+        <ul role="alert" className="list-disc space-y-1 pl-5 text-sm text-tone-danger">
           {violations.map((message, index) => (
             <li key={index}>{message}</li>
           ))}
         </ul>
       ) : null}
-      {error ? <p className="text-sm text-danger">{error}</p> : null}
+      {error ? (
+        <p role="alert" className="text-sm text-tone-danger">
+          {error}
+        </p>
+      ) : null}
       {done ? (
-        <p className="text-sm text-tone-success">
+        <p role="status" className="text-sm text-tone-success">
           Password updated. Other signed-in devices have been signed out.
         </p>
       ) : null}
