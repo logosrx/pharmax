@@ -110,7 +110,7 @@ schedule II–V remains ADR-0037's problem, not this ADR's.
   seam), `packages/orders/src/commands/create-prescription.ts` (the
   command every intake path dispatches), `IntakeSourceKind` in
   `packages/database` (`MANUAL | CSV | API | EHR_INTEGRATION |
-  TRANSFERRED_IN` — deliberately no `SURESCRIPTS` value)
+TRANSFERRED_IN` — deliberately no `SURESCRIPTS` value)
 - Companion ADRs: `0032-partner-api-keys-and-outbound-webhooks.md`,
   `0033-provider-portal-self-serve-onboarding.md`,
   `0037-epcs-controlled-substance-prescribing.md`
