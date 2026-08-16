@@ -30,7 +30,7 @@ The companion documentation is at
 | ---------------------------------- | ----------------------------------------------- | ----------------- | ---------------- |
 | `export-user-roster.ts`            | `user-roster.csv`                               | Quarterly         | CC6.1-1, CC6.5-1 |
 | `export-access-grants.ts`          | `access-grants.csv`                             | Quarterly         | CC6.1-2, CC6.2-1 |
-| `export-clerk-session-log.ts`      | `clerk-session-log.csv`                         | Quarterly         | CC6.1-1, CC6.5-1 |
+| `export-session-log.ts`            | `session-log.csv` + `session-revocations.csv`   | Quarterly         | CC6.1-1, CC6.5-1 |
 | `export-change-control-summary.ts` | `change-control-summary.csv`                    | Quarterly         | CC8.1-1, CC8.1-2 |
 | `export-vendor-inventory.ts`       | `vendor-inventory.csv`                          | Annual, on-change | CC9.2-1, P6.1-1  |
 | `export-audit-chain-summary.ts`    | `audit-chain-summary.csv`                       | Quarterly         | CC7.2-2, PI1.4-2 |

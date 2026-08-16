@@ -2,39 +2,14 @@
 //
 // These pages live outside the operator shell, so they bring their own
 // chrome: the Pharmax mark, a headline, and a soft brand glow. The
-// exported `clerkAppearance` themes Clerk's embedded widgets to match
-// the console (brand color, dark surfaces, our radii) so the auth flow
-// doesn't look like a bolt-on.
+// forms themselves are ours (ADR-0030 in-house identity); this file
+// used to also export a `clerkAppearance` token map for a vendor's
+// embedded widgets, which no page has rendered since those widgets
+// were removed.
 
 import type { ReactNode } from "react";
 
 import { BrandWordmark } from "./brand.js";
-
-export const clerkAppearance = {
-  variables: {
-    colorPrimary: "#6b66f1",
-    colorBackground: "#0f131c",
-    colorText: "#e9edf5",
-    colorTextSecondary: "#98a4ba",
-    colorInputBackground: "#161b27",
-    colorInputText: "#e9edf5",
-    colorDanger: "#f87171",
-    borderRadius: "0.5rem",
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
-  },
-  elements: {
-    rootBox: "w-full",
-    card: "bg-surface border border-line shadow-lg",
-    headerTitle: "text-fg",
-    headerSubtitle: "text-muted",
-    socialButtonsBlockButton: "border border-line-strong bg-surface-2 text-fg",
-    formButtonPrimary:
-      "bg-brand hover:bg-brand-hover text-brand-fg shadow-sm normal-case text-sm font-medium",
-    formFieldInput: "bg-surface-2 border border-line-strong text-fg",
-    footerActionLink: "text-brand hover:text-brand-hover",
-    footer: "bg-surface",
-  },
-} as const;
 
 export function AuthShell({
   title,

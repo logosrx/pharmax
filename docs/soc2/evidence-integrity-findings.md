@@ -13,14 +13,14 @@ this cycle. Findings marked **APP** require a change under `apps/` or
 
 ## Summary
 
-| ID     | Finding                                                            | Severity | Owner            | Type  | Status              |
-| ------ | ------------------------------------------------------------------ | -------- | ---------------- | ----- | ------------------- |
-| `EI-1` | Access-review evidence packs are written to ephemeral task storage | High     | Engineering Lead | APP   | Resolved 2026-08-06 |
-| `EI-2` | Audit-archive bucket policy is missing its Object-Lock-mode deny   | Medium   | Engineering Lead | INFRA | Resolved 2026-08-06 |
-| `EI-3` | Every production CloudWatch alarm notifies nobody                  | High     | Engineering Lead | INFRA | Resolved 2026-08-06 |
-| `EI-4` | No durable security-incident record exists                         | Medium   | Security Officer | APP   | Open                |
-| `EI-5` | The DR region has no Terraform variable file                       | Medium   | Engineering Lead | INFRA | Open                |
-| `EI-6` | `clerk_webhook_event` is an orphaned evidence table                | Low      | Engineering Lead | APP   | Open                |
+| ID     | Finding                                                            | Severity | Owner            | Type  | Status                                                       |
+| ------ | ------------------------------------------------------------------ | -------- | ---------------- | ----- | ------------------------------------------------------------ |
+| `EI-1` | Access-review evidence packs are written to ephemeral task storage | High     | Engineering Lead | APP   | Resolved 2026-08-06                                          |
+| `EI-2` | Audit-archive bucket policy is missing its Object-Lock-mode deny   | Medium   | Engineering Lead | INFRA | Resolved 2026-08-06                                          |
+| `EI-3` | Every production CloudWatch alarm notifies nobody                  | High     | Engineering Lead | INFRA | Resolved 2026-08-06                                          |
+| `EI-4` | No durable security-incident record exists                         | Medium   | Security Officer | APP   | Open                                                         |
+| `EI-5` | The DR region has no Terraform variable file                       | Medium   | Engineering Lead | INFRA | Open                                                         |
+| `EI-6` | `clerk_webhook_event` is an orphaned evidence table                | Low      | Engineering Lead | APP   | Open (exporter re-pointed 2026-08-15; schema object remains) |
 
 Resolved findings keep their original text below, unedited — the
 finding is the written basis for a control-status change, and the
@@ -313,3 +313,49 @@ as a read-only historical artifact — or dropped in a migration and the
 exporter deleted along with its reference in
 `scripts/soc2/run-quarterly-evidence-pack.ts`. Either is defensible; an
 orphan with neither decision recorded is not.
+
+**Partial closure 2026-08-15 — the exporter half.** Neither option above
+was taken, because both assumed the exporter's only job was the orphaned
+table. It was not: CC6.1-1 and CC6.5-1 need session evidence, and
+retaining a read-only historical artifact would have left the current
+period unevidenced while still occupying the evidence-pack slot for two
+controls. `scripts/soc2/export-clerk-session-log.ts` is therefore
+**deleted and replaced** by `scripts/soc2/export-session-log.ts`, which
+reads `auth_session` and `portal_session` — the tables the in-house
+engine writes — and emits `session-log.csv` (sessions opened in the
+period) and `session-revocations.csv` (revocations with reason, the
+`USER_TERMINATED` slice being the CC6.5-1 evidence). The evidence
+inventory, the quarterly-access-review playbook, the TSC mapping rows,
+and `scripts/soc2/README.md` are updated to match; the playbook's
+Step 4 no longer instructs an operator to look for a
+`clerk_webhook_event` row that cannot exist.
+`scripts/soc2/export-session-log.test.ts` pins that the exporter reads
+both current tables and that the revocation slice anchors on a non-null
+`revokedAt`.
+
+Two corrections fell out of the same read and are included:
+
+- The inventory and the TSC mapping both cited a `user_session` table.
+  No such table exists in `prisma/schema.prisma`; the operator table is
+  `auth_session` and the portal table is `portal_session`. Both rows now
+  name the real tables.
+- The playbook asked the reviewer to confirm `User.status` flipped to
+  `INACTIVE`. `UserStatus` has no `INACTIVE` member — `DeactivateUser`
+  writes `SUSPENDED` or `TERMINATED`.
+
+**Still open — the schema half.** `ClerkWebhookEvent`,
+`ClerkWebhookEventStatus`, and the dormant `user.clerkUserId` column
+remain in `prisma/schema.prisma` with no retain-or-drop decision
+recorded, and `prisma/migrations/rls-exempt.txt` still lists
+`clerk_webhook_event`. That decision is unchanged by this branch and the
+finding stays Open until it is made. The access-review tooling that
+still reads `clerkUserId`
+(`apps/worker/src/compliance/access-review-job.ts`,
+`access-review-renderer.ts:182`,
+`packages/security/src/access-review/generate-access-review.ts`,
+`scripts/security/run-access-review.ts`,
+`scripts/soc2/export-user-roster.ts`) should be re-pointed in the same
+change, not before it: the renderer's checklist line asserts that system
+identities carry no `clerkUserId`, which is now vacuously true for every
+principal, and the fix is to choose a replacement identity assertion at
+the same moment the column's fate is settled.

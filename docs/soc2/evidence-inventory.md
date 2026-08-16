@@ -23,7 +23,8 @@ evidence/
 │   ├── audit-chain-summary.csv
 │   ├── user-roster.csv
 │   ├── access-grants.csv
-│   ├── clerk-session-log.csv           # retired — see EI-6
+│   ├── session-log.csv
+│   ├── session-revocations.csv
 │   ├── change-control-summary.csv
 │   ├── vendor-inventory.csv
 │   ├── incident-log.csv                # or "no-incidents.txt"
@@ -60,7 +61,8 @@ These are evidenced by query or by inspecting live configuration.
 | `event_outbox` table        | Database                                              | PI1.4-1                            | At-least-once delivery state.                                                                          |
 | `clerk_webhook_event` table | Database                                              | — (retired)                        | Historical only. No writer since ADR-0030 removed Clerk; do not cite it as current evidence. See EI-6. |
 | `login_attempt` table       | Database                                              | CC6.1-1, CC6.1-4                   | Sign-in outcomes including `MFA_REQUIRED` and lockout.                                                 |
-| `user_session` table        | Database                                              | CC6.1-1, CC6.5-1                   | Session issue and revocation, with revocation reason.                                                  |
+| `auth_session` table        | Database                                              | CC6.1-1, CC6.5-1                   | Operator session issue and revocation, with revocation reason.                                         |
+| `portal_session` table      | Database                                              | CC6.1-1, CC6.5-1                   | Provider-portal session issue and revocation. Disjoint from `auth_session` by design.                  |
 | `user_role` table           | Database                                              | CC6.1-2, CC6.2-1                   | Grant assignments per user.                                                                            |
 | `pg_policies` snapshot      | `SELECT * FROM pg_policies WHERE schemaname='public'` | CC6.1-3                            | RLS policy state.                                                                                      |
 | `workflow_policy` rows      | Database                                              | CC8.1-3                            | Versioned workflow policy with lifecycle.                                                              |
@@ -91,7 +93,8 @@ Produced by `scripts/soc2/run-quarterly-evidence-pack.ts` into
 | ----------------------------- | -------------------------------------------------------- | ---------------------------------------------------- | ------------------ | ------------------ |
 | User roster                   | `scripts/soc2/export-user-roster.ts`                     | `evidence/<YYYY-Q#>/user-roster.csv`                 | CC6.1-1, CC6.5-1   | Security Officer   |
 | Access grants                 | `scripts/soc2/export-access-grants.ts`                   | `evidence/<YYYY-Q#>/access-grants.csv`               | CC6.1-2, CC6.2-1   | Security Officer   |
-| Clerk session log             | `scripts/soc2/export-clerk-session-log.ts`               | `evidence/<YYYY-Q#>/clerk-session-log.csv`           | — (retired)        | Security Officer   |
+| Session log                   | `scripts/soc2/export-session-log.ts`                     | `evidence/<YYYY-Q#>/session-log.csv`                 | CC6.1-1            | Security Officer   |
+| Session revocations           | `scripts/soc2/export-session-log.ts`                     | `evidence/<YYYY-Q#>/session-revocations.csv`         | CC6.5-1            | Security Officer   |
 | Change control summary        | `scripts/soc2/export-change-control-summary.ts`          | `evidence/<YYYY-Q#>/change-control-summary.csv`      | CC8.1-1, CC8.1-2   | Engineering Lead   |
 | Vendor inventory              | `scripts/soc2/export-vendor-inventory.ts`                | `evidence/<YYYY-Q#>/vendor-inventory.csv`            | CC9.2-1, P6.1-1    | Compliance Officer |
 | Audit chain summary           | `scripts/soc2/export-audit-chain-summary.ts`             | `evidence/<YYYY-Q#>/audit-chain-summary.csv`         | CC7.2-2, PI1.4-2   | Security Officer   |

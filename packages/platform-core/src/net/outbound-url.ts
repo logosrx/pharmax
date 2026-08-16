@@ -47,8 +47,14 @@
 // A creation-time lexical check cannot see that and does not claim
 // to. Closing it needs a delivery-time control — resolve, validate
 // every resolved address, and pin the connection to the address that
-// was validated — or an egress allowlist / forward proxy. See the
-// PR that introduced this module for the follow-up.
+// was validated — or an egress allowlist / forward proxy.
+//
+// That delivery-time control now exists for ONE of the two callers:
+// `./pinned-resolution.ts` implements it and the webhook delivery
+// transport uses it. It reuses the address tables below through
+// `classifyOutboundAddress` rather than forking them. The carrier
+// clients still dial by hostname and remain bounded only by the
+// operator-only `baseUrl` permission.
 //
 // What bounds the residual differs by call site, so do not read one
 // caller's mitigations onto the other:
@@ -286,6 +292,57 @@ function classifyHostname(hostname: string): string | null {
     return "single-label hostname (resolves only via a local search domain)";
   }
   return null;
+}
+
+export interface OutboundAddressAccepted {
+  readonly ok: true;
+}
+
+export interface OutboundAddressRejected {
+  readonly ok: false;
+  /** Human-readable class that fired. Never contains the address. */
+  readonly detail: string;
+}
+
+export type OutboundAddressVerdict = OutboundAddressAccepted | OutboundAddressRejected;
+
+/**
+ * Judge a BARE IP literal — the form a resolver hands back, with no
+ * URL wrapped around it.
+ *
+ * This is the public entry point the delivery-time control in
+ * `./pinned-resolution.ts` uses to check every resolved address. It
+ * exists so that path shares the SAME tables as `classifyOutboundUrl`
+ * instead of forking a second copy: a block added above is enforced
+ * at both creation time and delivery time, or at neither.
+ *
+ * Fails CLOSED. Anything that is not a well-formed IPv4 or IPv6
+ * literal is refused rather than waved through, because the only
+ * callers are on a path where "we could not tell" must not mean
+ * "connect anyway".
+ */
+export function classifyOutboundAddress(address: string): OutboundAddressVerdict {
+  // A caller holding `url.hostname` for an IPv6 host has the
+  // bracketed form; accept it so both spellings reach the same table.
+  const bare = address.startsWith("[") && address.endsWith("]") ? address.slice(1, -1) : address;
+
+  if (bare === "") {
+    return Object.freeze({ ok: false as const, detail: "empty address" });
+  }
+
+  const label = bare.includes(":")
+    ? classifyIpv6(bare)
+    : IPV4_DOTTED_QUAD.test(bare)
+      ? classifyIpv4(bare)
+      : "not an IP literal";
+
+  if (label !== null) {
+    return Object.freeze({
+      ok: false as const,
+      detail: `Address is a non-public destination: ${label}.`,
+    });
+  }
+  return Object.freeze({ ok: true as const });
 }
 
 /**
