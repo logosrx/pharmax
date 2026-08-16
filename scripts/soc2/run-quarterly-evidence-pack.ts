@@ -168,7 +168,7 @@ function listArtifacts(dir: string): ReadonlyArray<ArtifactEntry> {
 const SCRIPTS_IN_ORDER: ReadonlyArray<string> = [
   "export-user-roster.ts",
   "export-access-grants.ts",
-  "export-clerk-session-log.ts",
+  "export-session-log.ts",
   "export-change-control-summary.ts",
   "export-vendor-inventory.ts",
   "export-audit-chain-summary.ts",

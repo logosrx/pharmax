@@ -138,9 +138,24 @@ locals {
     { name = "STRIPE_SECRET_KEY", arn = var.secret_arns["stripe-secret-key"] },
     { name = "STRIPE_WEBHOOK_SECRET", arn = var.secret_arns["stripe-webhook-secret"] },
     { name = "EASYPOST_WEBHOOK_SECRET", arn = var.secret_arns["easypost-webhook-secret"] },
-    { name = "CLERK_SECRET_KEY", arn = var.secret_arns["clerk-secret-key"] },
-    { name = "CLERK_WEBHOOK_SECRET", arn = var.secret_arns["clerk-webhook-secret"] },
-    { name = "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", arn = var.secret_arns["next-public-clerk-publishable-key"] },
+    # CLERK_SECRET_KEY / CLERK_WEBHOOK_SECRET /
+    # NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY were injected here until
+    # 2026-08-15. ADR-0030 retired Clerk and apps/web/src/server/env.ts
+    # no longer declares any of them, so the container never read the
+    # values — but every entry in this list is a BOOT dependency: the
+    # execution role resolves it before the container starts, and an
+    # empty secret fails the task with ResourceInitializationError and
+    # an ~11-minute circuit-breaker rollback that names neither the
+    # secret nor the cause (see the secret-value preflight in
+    # .github/workflows/deploy.yml, and the 2026-08-01 worker rollout).
+    # Since nobody repopulates a retired vendor's keys, these three were
+    # a latent web-tier outage waiting on the Clerk vendor-decom
+    # checklist. Dropping the reference is what removes that risk.
+    #
+    # The Secrets Manager entries themselves are deliberately LEFT in
+    # modules/secrets/main.tf. Destroying them is a separate, sequenced
+    # change: older task-definition revisions still reference them, and
+    # those are what ECS rolls back to.
     { name = "SENTRY_DSN", arn = var.secret_arns["sentry-dsn"] },
   ], local.reporting_secret_env)
 

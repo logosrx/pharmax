@@ -1,21 +1,25 @@
 // InviteUser — admin "invite a teammate" path.
 //
-// Creates a Pharmax `user` row in INVITED status, no clerkUserId
-// (they're linked when they sign in for the first time via
-// `resolveOperatorTenancyContext`'s email-based auto-link).
+// Creates a Pharmax `user` row in INVITED status and no credentials.
+// This command is only the first step; it deliberately does NOT mint
+// a token, send mail, or activate anyone. Identity is in-house per
+// ADR-0030 — there is no external provider to hand the operator off to.
 //
 // Workflow:
 //   1. Admin invites a teammate from /ops/admin/users (email +
 //      display name).
 //   2. This command writes a user row with status=INVITED.
-//   3. Admin shares the sign-up URL (Clerk handles the auth flow
-//      separately — magic link / email / OAuth, depending on the
-//      org's Clerk config).
-//   4. Teammate signs in via Clerk. resolveOperatorTenancyContext
-//      sees no Pharmax user with their clerkUserId, falls back to
-//      fetching their email from Clerk, finds the INVITED row
-//      with that email, and links clerkUserId + flips status to
-//      ACTIVE in a single transaction.
+//   3. Post-commit, the route
+//      (`apps/web/app/api/ops/admin/users/invite/route.ts`) dispatches
+//      `IssueInvite` (@pharmax/auth) to mint a single-use, hashed
+//      credential-setup token, and mails the accept-invite link.
+//      Best-effort: a delivery failure does not undo the invite, and
+//      the redundant-re-invite path below skips it.
+//   4. The teammate opens the link and `AcceptInvite` (@pharmax/auth)
+//      consumes the token, sets the initial password, and flips
+//      INVITED → ACTIVE. It does not mint a session.
+//   5. They then sign in through `SignIn`, which for a role on the MFA
+//      floor runs the enrollment step before access is granted.
 //
 // Idempotency:
 //   - Re-invitation of the same email returns the existing user

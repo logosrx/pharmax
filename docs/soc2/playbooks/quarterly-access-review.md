@@ -21,7 +21,9 @@ that no terminated user retains active access.
   tables.
 - `audit_log` rows for the quarter filtered to grant / revoke /
   break-glass / role-template-change events.
-- Clerk session log for the quarter (last login per user).
+- Session log for the quarter — `auth_session` (operator console) and
+  `portal_session` (provider portal), covering both session issue and
+  session revocation with reason.
 - Terminations from the People system for the quarter.
 
 ## Procedure
@@ -50,7 +52,7 @@ pnpm tsx scripts/soc2/export-user-roster.ts \
   --from=<quarter-start> --to=<quarter-end>
 pnpm tsx scripts/soc2/export-access-grants.ts \
   --from=<quarter-start> --to=<quarter-end>
-pnpm tsx scripts/soc2/export-clerk-session-log.ts \
+pnpm tsx scripts/soc2/export-session-log.ts \
   --from=<quarter-start> --to=<quarter-end>
 ```
 
@@ -78,13 +80,25 @@ Each finding is one of:
 
 ### Step 4 — Termination cross-check
 
+Deprovisioning is **admin-initiated only**. ADR-0030 removed the
+identity provider's automated `user.deleted` lane and nothing replaced
+it, which is why CC6.5-1 is carried as Partial in
+[`controls-inventory.md`](../controls-inventory.md). This step is
+therefore not a formality that confirms automation worked — it is the
+only control that detects an off-boarding nobody performed. Treat a
+missing row as a finding, not as a data-quality issue.
+
 For every termination in the quarter:
 
-- Confirm the corresponding `clerk_webhook_event` row exists with
-  `eventType = 'user.deleted'` (or `'user.updated'` flipping to
-  banned, depending on the off-boarding flow).
-- Confirm the Pharmax `User.status` flipped to `INACTIVE` within 24
-  hours of termination.
+- Confirm a `DeactivateUser` entry exists in `command_log` and
+  `audit_log` for that user.
+- Confirm `session-revocations.csv` has that user's sessions with
+  `revokedReason = USER_TERMINATED`. A user with no revocation row and
+  no active-session row at termination had no live session; note that
+  rather than treating the absence as evidence.
+- Confirm the Pharmax `User.status` is `SUSPENDED` or `TERMINATED`
+  within 24 hours of termination. (`UserStatus` has no `INACTIVE`
+  member — an earlier revision of this step asked for one.)
 - Confirm `user_role` rows for that user are removed (or remain only
   as historical records — the audit chain covers the revocation).
 
@@ -107,9 +121,11 @@ pack manifest.
 
 - **Reviewer unavailable.** The CTO is the alternate; the absence is
   noted in the sign-off.
-- **Discrepancy between Clerk and Pharmax user state.** Run the Clerk
-  webhook backfill (see [`docs/RUNBOOK.md`](../../RUNBOOK.md)
-  "Webhook backfill" section) and re-run the review for the affected
-  org.
+- **A terminated user has no `DeactivateUser` record.** There is no
+  backfill to run — identity is in-house and there is no upstream
+  provider to reconcile against. Off-board the user through
+  `DeactivateUser` now, record the gap between the termination date
+  and the deactivation as a finding, and file a corrective ticket.
+  This is the CC6.5-1 Partial status showing up in practice.
 - **Org with no users.** Document and skip; a no-user org is either
   pre-launch or post-decommission.
