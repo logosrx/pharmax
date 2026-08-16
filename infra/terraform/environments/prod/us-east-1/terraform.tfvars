@@ -76,6 +76,11 @@ waf_rate_limit_per_5min = 2000
 # `pnpm check:alarm-actions` fails the build if it is turned off here.
 enable_alerting = true
 
+# Outside-in heartbeat canary (modules/synthetics): hits ${app_url}/api/health
+# from outside the VPC every minute; failure pages via the critical topic. The
+# only monitor that can see DNS/cert/CloudFront/WAF failures.
+enable_synthetics = true
+
 # The legacy single-topic override stays empty: the per-severity topics above
 # supersede it. Setting it here would route every alarm — warning tier included
 # — to whatever topic it names.

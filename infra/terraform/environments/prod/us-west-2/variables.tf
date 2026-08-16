@@ -92,6 +92,10 @@ variable "enable_alerting" {
   type    = bool
   default = false
 }
+variable "enable_synthetics" {
+  type    = bool
+  default = false
+}
 variable "alerting_critical_email_subscriptions" {
   type    = list(string)
   default = []

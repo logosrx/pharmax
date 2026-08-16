@@ -414,7 +414,10 @@ export function formatViolations(violations: ReadonlyArray<Violation>): string {
 // ---- CLI entry point -----------------------------------------------
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ALARM_MODULE_FILES = [join("infra", "terraform", "modules", "cloudwatch", "main.tf")];
+const ALARM_MODULE_FILES = [
+  join("infra", "terraform", "modules", "cloudwatch", "main.tf"),
+  join("infra", "terraform", "modules", "synthetics", "main.tf"),
+];
 const ROOT_COMPOSITION_FILE = join("infra", "terraform", "main.tf");
 const PROD_ENVIRONMENTS_DIR = join("infra", "terraform", "environments", "prod");
 const PROD_TFVARS_FILENAMES = ["terraform.tfvars", "terraform.tfvars.example"];

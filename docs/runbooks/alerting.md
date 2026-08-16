@@ -24,6 +24,18 @@ than duplicating them.
 
 ---
 
+## Per-alarm runbooks
+
+Each alarm now has a dedicated runbook — the copy-pasteable "first 5
+minutes" (diagnostic commands, dashboards, ranked causes, safe
+mitigations) that the summary entries below deliberately do not carry.
+Start at the [per-alarm index](alarms/README.md); this document remains
+the reference for routing, tiers, the fire-drill procedure, and the
+"no alert arrived at all" checklist. New alarms require a runbook in the
+same PR — the rule and reviewer checklist live in the index.
+
+---
+
 ## Before you are paged
 
 Three properties of this deployment change what you can promise during

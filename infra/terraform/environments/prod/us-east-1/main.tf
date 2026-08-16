@@ -63,6 +63,7 @@ module "stack" {
   # Alerting: severity-split SNS topics. Endpoints come from TF_VAR_* at apply
   # time, never from tfvars.
   enable_alerting                       = var.enable_alerting
+  enable_synthetics                     = var.enable_synthetics
   alerting_critical_email_subscriptions = var.alerting_critical_email_subscriptions
   alerting_warning_email_subscriptions  = var.alerting_warning_email_subscriptions
   alerting_critical_https_subscriptions = var.alerting_critical_https_subscriptions

@@ -80,6 +80,7 @@ module "stack" {
   # Alerting: severity-split SNS topics. The DR region owns its own topics —
   # cross-region SNS subscriptions would depend on the region that just failed.
   enable_alerting                       = var.enable_alerting
+  enable_synthetics                     = var.enable_synthetics
   alerting_critical_email_subscriptions = var.alerting_critical_email_subscriptions
   alerting_warning_email_subscriptions  = var.alerting_warning_email_subscriptions
   alerting_critical_https_subscriptions = var.alerting_critical_https_subscriptions

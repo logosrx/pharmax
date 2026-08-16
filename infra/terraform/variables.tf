@@ -434,6 +434,21 @@ variable "alerting_warning_https_subscriptions" {
   default     = []
 }
 
+# ---- Synthetics ---------------------------------------------------------------
+
+variable "enable_synthetics" {
+  description = <<-EOT
+    Provision the outside-in heartbeat canary (modules/synthetics): a
+    CloudWatch Synthetics canary hitting `<app_url>/api/health` from outside
+    the VPC every minute, plus a critical-tier alarm on its failure. Requires
+    `app_url` to be set. Off by default so dev stacks do not pay for a canary;
+    production should turn it on — it is the only monitor that can see a
+    failure in front of the ALB (DNS, certificate, CloudFront, WAF).
+  EOT
+  type        = bool
+  default     = false
+}
+
 # ---- Secrets ----------------------------------------------------------------
 
 variable "secret_values" {

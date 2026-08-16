@@ -65,6 +65,7 @@ module "stack" {
   alarm_sns_topic_arn     = var.alarm_sns_topic_arn
 
   enable_alerting                       = var.enable_alerting
+  enable_synthetics                     = var.enable_synthetics
   alerting_critical_email_subscriptions = var.alerting_critical_email_subscriptions
   alerting_warning_email_subscriptions  = var.alerting_warning_email_subscriptions
   alerting_critical_https_subscriptions = var.alerting_critical_https_subscriptions

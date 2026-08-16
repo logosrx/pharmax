@@ -67,6 +67,7 @@ waf_rate_limit_per_5min = 2000
 # set `enable_alerting = true` and supply TF_VAR_alerting_* endpoints at apply
 # time (never in this file).
 enable_alerting     = false
+enable_synthetics   = false
 alarm_sns_topic_arn = ""
 
 # ---- Audit archive ----------------------------------------------------------

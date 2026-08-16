@@ -541,3 +541,29 @@ module "cloudwatch" {
 
   tags = local.common_tags
 }
+
+# -----------------------------------------------------------------------------
+# Synthetics — outside-in heartbeat canary. Everything in `module "cloudwatch"`
+# watches from inside AWS; the canary is the only monitor that sees the public
+# ingress path (DNS, TLS, CloudFront, WAF, ALB) the way a user does. See
+# modules/synthetics/README.md for scope and deliberate non-goals.
+# -----------------------------------------------------------------------------
+
+module "synthetics" {
+  count  = var.enable_synthetics ? 1 : 0
+  source = "./modules/synthetics"
+
+  name_prefix = local.name_prefix
+
+  # The module validates this is a full https:// URL, so enabling synthetics
+  # without app_url set fails at plan time with an actionable message.
+  heartbeat_url = "${var.app_url}/api/health"
+
+  # Same severity-topic contract (and the same empty-string fallback
+  # semantics) as `module "cloudwatch"` above.
+  critical_alarm_sns_topic_arn = try(module.alerting[0].critical_topic_arn, "")
+  warning_alarm_sns_topic_arn  = try(module.alerting[0].warning_topic_arn, "")
+  alarm_sns_topic_arn          = var.alarm_sns_topic_arn
+
+  tags = local.common_tags
+}
