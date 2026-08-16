@@ -40,6 +40,9 @@ import { BillingInvoiceVoidedV1 } from "./events/billing/invoice-voided-v1.js";
 import { BillingPaymentRecordedV1 } from "./events/billing/payment-recorded-v1.js";
 import { BillingPricingRuleUpsertedV1 } from "./events/billing/pricing-rule-upserted-v1.js";
 
+// ---- catalog (compound product definitions) ------------------------------
+import { CatalogCompoundProductCreatedV1 } from "./events/catalog/compound-product-created-v1.js";
+
 // ---- compliance (SOC 2 / HIPAA evidence) --------------------------------
 import { ComplianceAccessReviewSnapshotRecordedV1 } from "./events/compliance/access-review-snapshot-recorded-v1.js";
 import { ComplianceCheckExceptionAcceptedV1 } from "./events/compliance/check-exception-accepted-v1.js";
@@ -196,6 +199,8 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   BillingInvoiceVoidedV1,
   BillingPaymentRecordedV1,
   BillingPricingRuleUpsertedV1,
+  // catalog
+  CatalogCompoundProductCreatedV1,
   // compliance
   ComplianceAccessReviewSnapshotRecordedV1,
   ComplianceCheckExceptionAcceptedV1,

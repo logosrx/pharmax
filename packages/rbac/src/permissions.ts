@@ -86,6 +86,15 @@ export const PERMISSIONS = Object.freeze({
 
   // Inventory catalog: drug products + lots/batches.
   INVENTORY_READ: "inventory.read",
+  // Create an in-house compound product in the catalog: mints the
+  // org's next Pharmax Product ID (PXP series) and fixes the serial
+  // identity (drug initial + primary-drug mg) that every batch unit
+  // number of this product will carry. Creation only — there is
+  // deliberately no product-edit surface behind this grant, because
+  // an ndcKind flip or a serial-identity change on a live product is
+  // a screening-suppression / label-orphaning vector (see the
+  // WRITE-SURFACE REQUIREMENT note on `Product.ndcKind`).
+  CATALOG_COMPOUND_PRODUCT_CREATE: "catalog.compound_product.create",
   // Receive an inbound lot shipment (ADR-0035 slice 3): creates or
   // extends the Lot, credits the inventory ledger, and stores the
   // DSCSA transaction record.
@@ -375,6 +384,11 @@ export const PERMISSION_METADATA: Readonly<
   [PERMISSIONS.INVENTORY_READ]: {
     description:
       "View the drug product catalog and inventory lots/batches (NDC, name, lot number, expiration, status). Read-only; lot assignment stays behind fill.assign_lot.",
+    category: "Inventory",
+  },
+  [PERMISSIONS.CATALOG_COMPOUND_PRODUCT_CREATE]: {
+    description:
+      "Create an in-house compound product in the catalog: mints the org's next Pharmax Product ID (PXP series) and fixes the serial identity (primary-drug initial + mg) stamped on every batch unit number. Creation only — no edit surface, because ndcKind flips and serial-identity changes on live products are suppression/orphaning vectors.",
     category: "Inventory",
   },
   [PERMISSIONS.INVENTORY_RECEIVE]: {

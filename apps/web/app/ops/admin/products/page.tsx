@@ -1,11 +1,14 @@
-// /ops/admin/products — drug catalog directory.
+// /ops/admin/products — drug catalog directory (products & compounds).
 //
-// Read-only list of the org's Product rows (normalized NDC catalog).
-// Lot counts link into the batches tab filtered to that product.
-// Catalog mutation is not an operator-console surface yet — rows are
+// List of the org's Product rows: NATIONAL products keyed by
+// normalized NDC, and in-house compounds keyed by their minted
+// Pharmax Product ID. Lot counts link into the batches tab filtered
+// to that product. The one catalog mutation surface is "New
+// compound" (`CreateCompoundProduct`); NATIONAL rows are still
 // created by intake/typing flows and seeds.
 //
-// Permission gate: `inventory.read`.
+// Permission gate: `inventory.read` (list);
+// `catalog.compound_product.create` (New compound button).
 
 import Link from "next/link";
 
@@ -18,8 +21,9 @@ import {
 import { resolveOperatorTenancyContext } from "../../../../src/server/auth/resolve-tenancy.js";
 import { listProducts } from "../../../../src/server/ops/list-products.js";
 import { PageHeader, Section } from "../../../../src/components/ui/page.js";
+import { Badge } from "../../../../src/components/ui/badge.js";
 import { Table, THead, TH, TBody, TR, TD } from "../../../../src/components/ui/data.js";
-import { EmptyState, PermissionDenied } from "../../../../src/components/ui/feedback.js";
+import { Banner, EmptyState, PermissionDenied } from "../../../../src/components/ui/feedback.js";
 import { inputClass } from "../../../../src/components/ui/field.js";
 import { buttonClass } from "../../../../src/components/ui/button.js";
 import { Icon } from "../../../../src/components/ui/icon.js";
@@ -61,6 +65,11 @@ export default async function ProductAdminPage({
 
   const q = pluck(params, "q");
   const cursor = pluck(params, "cursor");
+  const flash = pluck(params, "flash");
+  const canCreateCompound = hasOperatorPermission(
+    permissions,
+    PERMISSIONS.CATALOG_COMPOUND_PRODUCT_CREATE
+  );
   const result = await listProducts({
     organizationId: session.tenancy.organizationId,
     ...(q !== undefined ? { q } : {}),
@@ -71,24 +80,34 @@ export default async function ProductAdminPage({
     <div className="space-y-6 animate-fade-in">
       <PageHeader
         eyebrow="Directory"
-        title="Products"
-        description="The org's drug catalog, keyed by normalized 11-digit NDC. NDC and drug name are plaintext by design — not PHI. Lot counts link into the batches tab."
+        title="Products & Compounds"
+        description="The org's drug catalog: manufactured products keyed by normalized 11-digit NDC, in-house compounds keyed by their minted Pharmax Product ID. Catalog identity is plaintext by design — not PHI. Lot counts link into the batches tab."
       />
 
-      <form method="GET" className="flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          name="q"
-          defaultValue={q ?? ""}
-          placeholder="Name or NDC prefix"
-          autoComplete="off"
-          className={inputClass("max-w-xs")}
-        />
-        <button type="submit" className={buttonClass({ variant: "primary" })}>
-          <Icon name="search" size={16} />
-          Search
-        </button>
-      </form>
+      {flash !== undefined ? <Banner tone="success">{flash}</Banner> : null}
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <form method="GET" className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            name="q"
+            defaultValue={q ?? ""}
+            placeholder="Name, NDC, or Pharmax ID prefix"
+            autoComplete="off"
+            className={inputClass("max-w-xs")}
+          />
+          <button type="submit" className={buttonClass({ variant: "primary" })}>
+            <Icon name="search" size={16} />
+            Search
+          </button>
+        </form>
+        {canCreateCompound ? (
+          <Link href="/ops/admin/products/new" className={buttonClass({ variant: "primary" })}>
+            <Icon name="plus" size={16} />
+            New compound
+          </Link>
+        ) : null}
+      </div>
 
       <Section title="Catalog" count={result.rows.length}>
         {result.rows.length === 0 ? (
@@ -109,7 +128,8 @@ export default async function ProductAdminPage({
         ) : (
           <Table>
             <THead>
-              <TH>NDC</TH>
+              <TH>Identifier</TH>
+              <TH>Kind</TH>
               <TH>Name</TH>
               <TH>Strength</TH>
               <TH>Form</TH>
@@ -118,7 +138,16 @@ export default async function ProductAdminPage({
             <TBody>
               {result.rows.map((row) => (
                 <TR key={row.productId}>
-                  <TD className="font-mono text-xs">{row.ndc}</TD>
+                  <TD className="font-mono text-xs">
+                    {row.isCompound ? (row.pharmaxProductId ?? row.ndc) : row.ndc}
+                  </TD>
+                  <TD>
+                    {row.isCompound ? (
+                      <Badge tone="violet">Compound</Badge>
+                    ) : (
+                      <Badge tone="neutral">NDC</Badge>
+                    )}
+                  </TD>
                   <TD className="font-medium">{row.name}</TD>
                   <TD>{row.strength ?? "—"}</TD>
                   <TD>{row.form ?? "—"}</TD>

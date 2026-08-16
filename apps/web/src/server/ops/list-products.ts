@@ -17,6 +17,10 @@ export interface ProductListRow {
   readonly name: string;
   readonly strength: string | null;
   readonly form: string | null;
+  /** True for in-house compounds (org-local identifier in `ndc`). */
+  readonly isCompound: boolean;
+  /** Minted catalog id ("PXP-000042"); null on NATIONAL products. */
+  readonly pharmaxProductId: string | null;
   /** Total lot rows referencing this product (all statuses). */
   readonly lotCount: number;
   readonly createdAt: Date;
@@ -58,6 +62,8 @@ export async function listProducts(options: ListProductsOptions): Promise<ListPr
         name: true,
         strength: true,
         form: true,
+        ndcKind: true,
+        pharmaxProductId: true,
         createdAt: true,
         _count: { select: { lots: true } },
       },
@@ -78,6 +84,8 @@ export async function listProducts(options: ListProductsOptions): Promise<ListPr
           name: r.name,
           strength: r.strength,
           form: r.form,
+          isCompound: r.ndcKind === "IN_HOUSE_COMPOUND",
+          pharmaxProductId: r.pharmaxProductId,
           lotCount: r._count.lots,
           createdAt: r.createdAt,
         })
