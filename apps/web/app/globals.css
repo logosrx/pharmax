@@ -270,6 +270,13 @@
     border-radius: var(--radius-xs);
   }
 
+  /* Keyboard queue selection (j / k in GlobalShortcuts) — same ring
+     as :focus-visible so "selected" reads as one visual language. */
+  [data-kbd-row][data-kbd-selected="true"] {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
   ::selection {
     background-color: color-mix(in oklab, var(--brand) 36%, transparent);
     color: var(--fg);

@@ -54,42 +54,49 @@ export function QueueRow({
   const age = formatAge(now.getTime() - receivedAt.getTime());
 
   return (
-    <Card accent={accent}>
-      <div className="space-y-3 p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 space-y-1.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <Link
-                href={`/ops/orders/${orderId}`}
-                // tone-brand (not brand): the hover color must hold
-                // 4.5:1 as text on the card surface in dark theme.
-                className="font-mono text-sm font-medium text-fg transition-colors hover:text-tone-brand"
-              >
-                {externalOrderNumber ?? orderId}
-              </Link>
-              <Badge tone={pm.tone}>{pm.label}</Badge>
-              <Badge tone={sm.tone}>{sm.label}</Badge>
-              <SlaBadge slaDeadlineAt={slaDeadlineAt} now={now} />
-            </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-subtle">
-              <span className="inline-flex items-center gap-1">
-                <Icon name="clock" size={12} />
-                aged {age}
-              </span>
-              {assigneeUserId ? (
-                <span>
-                  claimed by <code className="text-muted">{assigneeUserId}</code>
+    // data-kbd-* opts every queue row into the global j / k / Enter
+    // keyboard selection (GlobalShortcuts) — no per-page wiring needed.
+    // The selection outline lives in globals.css on [data-kbd-selected].
+    <div className="rounded-lg" data-kbd-row="true" data-kbd-href={`/ops/orders/${orderId}`}>
+      <Card accent={accent}>
+        <div className="space-y-3 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href={`/ops/orders/${orderId}`}
+                  // tone-brand (not brand): the hover color must hold
+                  // 4.5:1 as text on the card surface in dark theme.
+                  className="font-mono text-sm font-medium text-fg transition-colors hover:text-tone-brand"
+                >
+                  {externalOrderNumber ?? orderId}
+                </Link>
+                <Badge tone={pm.tone}>{pm.label}</Badge>
+                <Badge tone={sm.tone}>{sm.label}</Badge>
+                <SlaBadge slaDeadlineAt={slaDeadlineAt} now={now} />
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-subtle">
+                <span className="inline-flex items-center gap-1">
+                  <Icon name="clock" size={12} />
+                  aged {age}
                 </span>
-              ) : null}
+                {assigneeUserId ? (
+                  <span>
+                    claimed by <code className="text-muted">{assigneeUserId}</code>
+                  </span>
+                ) : null}
+              </div>
+              {note ? <div className="text-xs text-tone-warning/90">{note}</div> : null}
             </div>
-            {note ? <div className="text-xs text-tone-warning/90">{note}</div> : null}
+            {headerExtra ? <div className="flex items-center gap-2">{headerExtra}</div> : null}
           </div>
-          {headerExtra ? <div className="flex items-center gap-2">{headerExtra}</div> : null}
+          {children ? (
+            <div className="flex flex-wrap items-end gap-2 border-t border-line pt-3">
+              {children}
+            </div>
+          ) : null}
         </div>
-        {children ? (
-          <div className="flex flex-wrap items-end gap-2 border-t border-line pt-3">{children}</div>
-        ) : null}
-      </div>
-    </Card>
+      </Card>
+    </div>
   );
 }

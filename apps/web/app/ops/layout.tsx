@@ -33,6 +33,7 @@ import { getQueueCounts } from "../../src/server/ops/get-queue-counts.js";
 import { LiveQueueCountsProvider } from "../../src/components/shell/live-queue-counts.js";
 import { BrandMark } from "../../src/components/shell/brand.js";
 import { CommandPalette } from "../../src/components/shell/command-palette.js";
+import { GlobalShortcuts } from "../../src/components/shell/shortcuts.js";
 import { SidebarNav, type NavGroup, type NavLink } from "../../src/components/shell/sidebar-nav.js";
 import { OrderSearch } from "../../src/components/shell/order-search.js";
 import { ThemeToggle } from "../../src/components/shell/theme-toggle.js";
@@ -371,6 +372,7 @@ export default async function OpsLayout({ children }: Readonly<{ children: React
               </div>
               <OrderSearch />
               <CommandPalette groups={groups} />
+              <GlobalShortcuts groups={groups} />
               <div className="ml-auto flex items-center gap-3">
                 <Link
                   href="/ops/account/security"
