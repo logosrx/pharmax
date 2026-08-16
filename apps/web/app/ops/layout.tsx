@@ -153,7 +153,7 @@ const NAV: ReadonlyArray<GroupSpec> = [
     items: [
       {
         href: "/ops/admin/products",
-        label: "Products",
+        label: "Products & Compounds",
         icon: "products",
         requires: PERMISSIONS.INVENTORY_READ,
       },

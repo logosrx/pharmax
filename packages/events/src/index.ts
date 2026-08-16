@@ -147,6 +147,7 @@ export type {
   CompoundingPreparationRecordedV1Payload,
 } from "./events/compounding/index.js";
 export type { InventoryLotReceivedV1Payload } from "./events/inventory/index.js";
+export type { CatalogCompoundProductCreatedV1Payload } from "./events/catalog/index.js";
 
 export type { LabelsVialPrintRequestedV1Payload } from "./events/labels/vial-print-requested-v1.js";
 export type { LabelsVialPrintReprintRequestedV1Payload } from "./events/labels/vial-print-reprint-requested-v1.js";

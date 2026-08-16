@@ -126,6 +126,10 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // collision would surface as a unique-constraint failure at the far
   // end of a transcription rather than as an isolation error here.
   ["RxNumberSequence", { kind: "organizationId" }] as const,
+  // Pharmax Product ID allocator. Same reasoning as RxNumberSequence:
+  // no PHI, but an unscoped increment would mint one tenant's compound
+  // a catalog id out of another tenant's PXP series.
+  ["PharmaxProductIdSequence", { kind: "organizationId" }] as const,
   ["Order", { kind: "organizationId" }] as const,
   ["OrderLine", { kind: "organizationId" }] as const,
   // OrderCancellation carries `organizationId` and is per-order

@@ -109,6 +109,7 @@ export {
   ReportScheduleRunStatus,
   ReportScheduleStatus,
   ProductNdcKind,
+  ProductUnitKind,
   RoleScope,
   RxnormReleaseStatus,
   ScreeningPhase,
