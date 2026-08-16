@@ -190,3 +190,69 @@ describe("EasyPostClient", () => {
     expect((thrown as Error).cause).toBeInstanceOf(SyntaxError);
   });
 });
+
+describe("EasyPostClient redirect containment", () => {
+  // A `baseUrl` that PASSED the write-time host check can still
+  // answer 30x. EasyPost has no token exchange to gate the blast
+  // radius — the API key rides as Basic auth on EVERY request, so a
+  // single followed redirect hands it over.
+  const REDIRECT_TARGET = "https://169.254.169.254/latest/api/token";
+
+  const redirectResponse = (status: number): Response =>
+    new Response(null, { status, headers: { Location: REDIRECT_TARGET } });
+
+  it("tells the transport never to follow a redirect", async () => {
+    let capturedInit: RequestInit = {};
+    const fetchImpl = fakeFetch((_url, init) => {
+      capturedInit = init;
+      return jsonResponse({ id: "shp_1", rates: [] } satisfies EasyPostShipment);
+    });
+    const client = new EasyPostClient({ apiKey: API_KEY, fetch: fetchImpl });
+
+    await client.buyShipment("shp_1", { rate: { id: "rate_1" } });
+
+    expect(capturedInit.redirect).toBe("error");
+  });
+
+  it("refuses a 307 rather than re-sending the Basic-auth API key", async () => {
+    let calls = 0;
+    const fetchImpl = fakeFetch(() => {
+      calls += 1;
+      return redirectResponse(307);
+    });
+    const client = new EasyPostClient({ apiKey: API_KEY, fetch: fetchImpl });
+
+    await expect(client.buyShipment("shp_1", { rate: { id: "rate_1" } })).rejects.toMatchObject({
+      name: "EasyPostApiError",
+      code: "EASYPOST_UNEXPECTED_REDIRECT",
+      httpStatus: 307,
+    });
+    // Exactly one request: refused where it was received, not chased.
+    expect(calls).toBe(1);
+  });
+
+  it("refuses the whole 3xx range, not only the four redirect statuses", async () => {
+    for (const status of [300, 301, 302, 303, 304, 307, 308, 399]) {
+      const fetchImpl = fakeFetch(() => redirectResponse(status));
+      const client = new EasyPostClient({ apiKey: API_KEY, fetch: fetchImpl });
+      await expect(client.buyShipment("shp_1", { rate: { id: "rate_1" } })).rejects.toMatchObject({
+        code: "EASYPOST_UNEXPECTED_REDIRECT",
+        httpStatus: status,
+      });
+    }
+  });
+
+  it("does not echo the attacker-chosen Location into the error message", async () => {
+    const fetchImpl = fakeFetch(() => redirectResponse(302));
+    const client = new EasyPostClient({ apiKey: API_KEY, fetch: fetchImpl });
+
+    let thrown: unknown;
+    try {
+      await client.buyShipment("shp_1", { rate: { id: "rate_1" } });
+    } catch (caught) {
+      thrown = caught;
+    }
+    expect(thrown).toBeInstanceOf(EasyPostApiError);
+    expect((thrown as Error).message).not.toContain("169.254.169.254");
+  });
+});

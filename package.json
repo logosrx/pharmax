@@ -60,6 +60,7 @@
     "payments:backfill": "tsx scripts/operations/backfill-payment-ledger.ts",
     "rxnorm:ingest": "tsx scripts/operations/ingest-rxnorm-release.ts",
     "verify:kms": "tsx scripts/security/verify-kms-keys.ts",
+    "security:audit-carrier-urls": "tsx scripts/security/audit-carrier-base-urls.ts",
     "security:sign-merkle": "tsx scripts/security/sign-daily-merkle-root.ts",
     "security:verify-merkle": "tsx scripts/security/verify-merkle-manifest.ts",
     "security:verify-chain-all": "tsx scripts/security/verify-audit-chain-all-orgs.ts",

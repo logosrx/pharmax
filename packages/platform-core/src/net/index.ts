@@ -1,5 +1,7 @@
 export {
   classifyOutboundUrl,
+  redactUrlForReport,
+  UNREPORTABLE_URL,
   type OutboundUrlAccepted,
   type OutboundUrlRejected,
   type OutboundUrlRejection,
