@@ -8,7 +8,8 @@
 import { useState, type FormEvent } from "react";
 
 const inputClass =
-  "w-full rounded-md border border-line-strong bg-surface-2 px-3 py-2 text-sm text-fg outline-none focus:border-brand";
+  "w-full rounded-md border border-line-strong bg-surface-2 px-3 py-2 text-sm text-fg outline-none " +
+  "focus:border-brand focus:ring-2 focus:ring-ring/40";
 
 export function AcceptInviteForm({ token }: { readonly token: string }) {
   const [password, setPassword] = useState("");
@@ -88,7 +89,11 @@ export function AcceptInviteForm({ token }: { readonly token: string }) {
           className={inputClass}
         />
       </label>
-      {error ? <p className="text-sm text-danger">{error}</p> : null}
+      {error ? (
+        <p role="alert" className="text-sm text-tone-danger">
+          {error}
+        </p>
+      ) : null}
       <button
         type="submit"
         disabled={busy}

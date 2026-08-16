@@ -133,7 +133,13 @@ export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup
                       isActive ? "text-brand" : "text-subtle group-hover:text-fg"
                     )}
                   />
-                  {!collapsed ? <span className="flex-1 truncate">{item.label}</span> : null}
+                  {!collapsed ? (
+                    <span className="flex-1 truncate">{item.label}</span>
+                  ) : (
+                    // Icons are aria-hidden — keep the link's
+                    // accessible name when the rail is icons-only.
+                    <span className="sr-only">{item.label}</span>
+                  )}
                   {count !== undefined && count !== null && count > 0 ? (
                     <span
                       className={cx(
@@ -160,6 +166,7 @@ export function SidebarNav({ groups }: { readonly groups: ReadonlyArray<NavGroup
         onClick={toggle}
         className="flex h-11 items-center gap-2 border-t border-line px-4 text-xs text-subtle transition-colors hover:bg-surface-2 hover:text-fg"
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-expanded={!collapsed}
       >
         <Icon name={collapsed ? "chevronRight" : "chevronLeft"} size={16} />
         {!collapsed ? <span>Collapse</span> : null}

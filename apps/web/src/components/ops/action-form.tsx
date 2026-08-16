@@ -11,7 +11,14 @@
 // until the navigation completes. An optional `confirm` gate guards
 // destructive moves.
 
-import { createContext, useContext, useState, type FormEvent, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 
 import { buttonClass, type ButtonSize, type ButtonVariant } from "../ui/button.js";
 import { Icon, type IconName } from "../ui/icon.js";
@@ -35,7 +42,24 @@ export function ActionForm({
 }) {
   const [pending, setPending] = useState(false);
 
+  // A back/forward-cache restore resurrects the pre-navigation React
+  // state — without this, a form submitted and then returned to via
+  // the back button would sit disabled forever.
+  useEffect(() => {
+    function onPageShow(e: PageTransitionEvent) {
+      if (e.persisted) setPending(false);
+    }
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   function onSubmit(e: FormEvent<HTMLFormElement>) {
+    // Belt-and-braces double-submit guard: the submit buttons disable
+    // while pending, but Enter in a text control can still resubmit.
+    if (pending) {
+      e.preventDefault();
+      return;
+    }
     if (confirm !== undefined && !window.confirm(confirm)) {
       e.preventDefault();
       return;
@@ -44,7 +68,14 @@ export function ActionForm({
   }
 
   return (
-    <form action={action} method="POST" encType={encType} onSubmit={onSubmit} className={className}>
+    <form
+      action={action}
+      method="POST"
+      encType={encType}
+      onSubmit={onSubmit}
+      aria-busy={pending || undefined}
+      className={className}
+    >
       <PendingContext.Provider value={pending}>{children}</PendingContext.Provider>
     </form>
   );

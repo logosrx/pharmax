@@ -130,7 +130,10 @@ export function LinkCard({
   readonly children: ReactNode;
 }) {
   return (
-    <Link href={href} className="group block rounded-lg focus-visible:outline-none">
+    <Link
+      href={href}
+      className="group block rounded-lg outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+    >
       <Card interactive accent={accent} className={className}>
         <div className="flex items-center gap-3 px-4 py-3.5">
           {icon ? (

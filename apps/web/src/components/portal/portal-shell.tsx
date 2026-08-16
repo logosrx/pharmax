@@ -35,11 +35,12 @@ export function PortalShell({
           </div>
           <PortalSignOutButton />
         </div>
-        <nav className="mx-auto flex max-w-3xl gap-1 px-4">
+        <nav aria-label="Portal" className="mx-auto flex max-w-3xl gap-1 px-4">
           {NAV_ITEMS.map((item) => (
             <Link
               key={item.key}
               href={item.href}
+              aria-current={item.key === active ? "page" : undefined}
               className={
                 item.key === active
                   ? "border-b-2 border-brand px-3 py-2 text-sm font-medium text-fg"
