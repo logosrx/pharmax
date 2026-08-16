@@ -129,7 +129,16 @@ export default async function BatchAdminPage({
 
       <Section title="Lots" count={result.rows.length}>
         {result.rows.length === 0 ? (
-          <EmptyState icon="batches" title="No lots match this filter" />
+          <EmptyState
+            icon="batches"
+            title="No lots match this filter"
+            description="Adjust the filter above, or receive a new lot to start tracing inventory from the loading dock."
+            action={{
+              label: "Receive inventory",
+              href: "/ops/admin/batches/receive",
+              icon: "plus",
+            }}
+          />
         ) : (
           <Table>
             <THead>

@@ -1,14 +1,19 @@
-// Feedback primitives — Banner, EmptyState, PermissionDenied.
+// Feedback primitives — Banner, PermissionDenied.
 //
 // Banner replaces the ad-hoc flash/exception divs scattered across
-// pages (each had its own emerald/red box). EmptyState gives empty
-// queues a calm, intentional look instead of a bare sentence.
-// PermissionDenied is the one canonical "you lack grant X" surface.
+// pages (each had its own emerald/red box). PermissionDenied is the
+// one canonical "you lack grant X" surface. EmptyState lives in
+// `empty-state.tsx` (with its ErrorState sibling) and is re-exported
+// here so existing imports keep working.
 
 import type { ReactNode } from "react";
 
 import { cx } from "./cx.js";
+import { EmptyState } from "./empty-state.js";
 import { Icon, type IconName } from "./icon.js";
+
+export { EmptyState } from "./empty-state.js";
+export { ErrorState } from "./empty-state.js";
 
 export type BannerTone = "info" | "success" | "warning" | "danger" | "neutral";
 
@@ -68,39 +73,6 @@ export function Banner({
         {title ? <p className="font-semibold">{title}</p> : null}
         {children ? <div className="text-current/90 [&_code]:font-mono">{children}</div> : null}
       </div>
-    </div>
-  );
-}
-
-export function EmptyState({
-  icon = "check",
-  title,
-  description,
-  action,
-  className,
-}: {
-  readonly icon?: IconName;
-  readonly title: ReactNode;
-  readonly description?: ReactNode;
-  readonly action?: ReactNode;
-  readonly className?: string;
-}) {
-  return (
-    <div
-      className={cx(
-        "flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-line " +
-          "bg-surface/50 px-6 py-12 text-center",
-        className
-      )}
-    >
-      <div className="flex h-11 w-11 items-center justify-center rounded-full border border-line bg-surface-2 text-muted">
-        <Icon name={icon} size={20} />
-      </div>
-      <div className="space-y-1">
-        <p className="text-sm font-medium text-fg">{title}</p>
-        {description ? <p className="max-w-sm text-xs text-muted">{description}</p> : null}
-      </div>
-      {action ? <div className="mt-1">{action}</div> : null}
     </div>
   );
 }

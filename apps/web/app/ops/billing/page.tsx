@@ -93,7 +93,20 @@ export default async function BillingListPage({
       />
 
       {result.rows.length === 0 ? (
-        <EmptyState icon="billing" title="No invoices match this filter" />
+        status !== undefined ? (
+          <EmptyState
+            icon="billing"
+            title="No invoices in this status"
+            description="Try another status tab, or clear the filter to see every invoice for this organization."
+            action={{ label: "Show all invoices", href: "/ops/billing" }}
+          />
+        ) : (
+          <EmptyState
+            icon="billing"
+            title="No invoices yet"
+            description="Invoices are generated from operational truth — the first one appears once a shipped order produces billing events."
+          />
+        )
       ) : (
         <div className="space-y-2">
           {result.rows.map((row) => (

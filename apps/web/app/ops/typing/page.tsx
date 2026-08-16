@@ -203,8 +203,9 @@ export default async function TypingQueuePage({
         ) : inbox.rows.length === 0 ? (
           <EmptyState
             icon="typing"
-            title="Inbox is empty"
-            description="New orders arrive here for a typist to claim."
+            title="No orders waiting to be typed"
+            description="The intake inbox is clear — new prescriptions land here for a typist to claim."
+            hint="The queue refreshes live; new arrivals appear without a reload."
           />
         ) : (
           <ul className="space-y-3">
@@ -221,8 +222,8 @@ export default async function TypingQueuePage({
         {typingActive.length === 0 ? (
           <EmptyState
             icon="check"
-            title="Nothing in progress"
-            description="Claim an order from the inbox to start typing."
+            title="Nothing being typed right now"
+            description="Claim an order from the inbox above to start typing — it moves here while you work it."
           />
         ) : (
           <ul className="space-y-3">

@@ -138,7 +138,11 @@ export default async function LotChainOfCustodyPage({
 
       <Section title="DSCSA receipts" count={custody.receipts.length}>
         {custody.receipts.length === 0 ? (
-          <EmptyState icon="batches" title="No receipts recorded for this lot" />
+          <EmptyState
+            icon="batches"
+            title="No receipts recorded for this lot"
+            description="DSCSA receiving records appear here when the lot is received against a transaction document."
+          />
         ) : (
           <Table>
             <THead>
@@ -172,7 +176,11 @@ export default async function LotChainOfCustodyPage({
 
       <Section title="Inventory ledger" count={custody.ledger.length}>
         {custody.ledger.length === 0 ? (
-          <EmptyState icon="batches" title="No ledger movements" />
+          <EmptyState
+            icon="batches"
+            title="No ledger movements yet"
+            description="Every receipt, assignment, and adjustment posts a movement here — the trail starts with the first transaction."
+          />
         ) : (
           <Table>
             <THead>
@@ -203,7 +211,11 @@ export default async function LotChainOfCustodyPage({
 
       <Section title="Dispensed to order lines" count={custody.dispensed.length}>
         {custody.dispensed.length === 0 ? (
-          <EmptyState icon="batches" title="Never assigned to an order line" />
+          <EmptyState
+            icon="batches"
+            title="Never assigned to an order line"
+            description="Assignments appear here when the fill bench dispenses from this lot."
+          />
         ) : (
           <Table>
             <THead>
@@ -237,7 +249,11 @@ export default async function LotChainOfCustodyPage({
 
       <Section title="Consumed by compounded preparations" count={custody.compounded.length}>
         {custody.compounded.length === 0 ? (
-          <EmptyState icon="batches" title="Never consumed as a compounding ingredient" />
+          <EmptyState
+            icon="batches"
+            title="Never consumed as a compounding ingredient"
+            description="Usage appears here when a compounding formula draws on this lot during preparation."
+          />
         ) : (
           <Table>
             <THead>

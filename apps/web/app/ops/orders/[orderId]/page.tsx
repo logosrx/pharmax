@@ -391,7 +391,11 @@ export default async function OrderDetailPage({
 
       <Section title="Prescription lines" count={detail.lines.length}>
         {detail.lines.length === 0 ? (
-          <EmptyState icon="fill" title="No lines on this order" />
+          <EmptyState
+            icon="fill"
+            title="No lines on this order"
+            description="Typing adds prescription lines — an order can't advance to PV1 without at least one."
+          />
         ) : (
           <div className="space-y-3">
             {detail.lines.map((line, idx) => (
@@ -679,7 +683,11 @@ export default async function OrderDetailPage({
 
       <Section title="Recent events" count={detail.events.length}>
         {detail.events.length === 0 ? (
-          <EmptyState icon="history" title="No events recorded yet" />
+          <EmptyState
+            icon="history"
+            title="No events recorded yet"
+            description="Every workflow transition writes an event here — the trail starts the moment this order is claimed."
+          />
         ) : (
           <Table>
             <THead>

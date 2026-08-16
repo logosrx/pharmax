@@ -89,7 +89,8 @@ export default async function EmergencyQueuePage({
         <EmptyState
           icon="check"
           title="Nothing on fire"
-          description="No orders are currently escalated. SLA breaches and shipping exceptions surface here."
+          description="No orders are currently escalated — SLA breaches and shipping exceptions surface here the moment they trip."
+          hint="Keep this tab handy during peak hours; escalations appear without a reload."
         />
       ) : (
         <ul className="space-y-3">

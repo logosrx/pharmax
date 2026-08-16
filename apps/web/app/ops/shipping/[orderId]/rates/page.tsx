@@ -29,7 +29,11 @@ import {
 import { resolveOperatorTenancyContext } from "../../../../../src/server/auth/resolve-tenancy.js";
 import { quoteShippingRates } from "../../../../../src/server/ops/quote-shipping-rates.js";
 import { PageHeader, Section } from "../../../../../src/components/ui/page.js";
-import { Banner, EmptyState, PermissionDenied } from "../../../../../src/components/ui/feedback.js";
+import {
+  EmptyState,
+  ErrorState,
+  PermissionDenied,
+} from "../../../../../src/components/ui/feedback.js";
 import { buttonClass } from "../../../../../src/components/ui/button.js";
 import { Table, THead, TH, TBody, TR, TD } from "../../../../../src/components/ui/data.js";
 import { ActionForm, SubmitButton } from "../../../../../src/components/ops/action-form.js";
@@ -94,14 +98,22 @@ export default async function ShippingRatesPage({
       />
 
       {!result.ok ? (
-        <Banner tone="warning" title={result.code}>
-          {result.message}
-        </Banner>
+        <ErrorState
+          title="Rate quoting failed"
+          description={result.message}
+          detail={result.code}
+          retryHref={`/ops/shipping/${orderId}/rates?provider=${provider}${
+            signatureOption !== null ? `&signatureOption=${signatureOption}` : ""
+          }`}
+          retryLabel="Re-quote rates"
+        />
       ) : result.rates.length === 0 ? (
         <EmptyState
           icon="carriers"
           title="No services quoted for this lane"
-          description="The carrier returned no purchasable services for this origin/destination/parcel."
+          description="The carrier returned no purchasable services for this origin/destination/parcel — try another provider or re-quote later."
+          action={{ label: "Back to shipping queue", href: "/ops/shipping" }}
+          hint="Quoting costs nothing and mutates nothing; refreshing re-quotes."
         />
       ) : (
         <Section title="Available services" count={result.rates.length}>

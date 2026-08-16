@@ -82,7 +82,8 @@ export default async function FinalQueuePage({
         <EmptyState
           icon="final"
           title="No orders waiting for final verification"
-          description="Completed fills land here for the second signature."
+          description="Nothing awaits the second signature — completed fills land here for the final pharmacist check."
+          hint="The queue refreshes live; new arrivals appear without a reload."
         />
       ) : (
         <ul className="space-y-3">

@@ -174,7 +174,11 @@ export default async function InvoiceDetailPage({
 
       <Section title="Lines" count={invoice.lines.length}>
         {invoice.lines.length === 0 ? (
-          <EmptyState icon="billing" title="No lines yet" />
+          <EmptyState
+            icon="billing"
+            title="No lines on this invoice yet"
+            description="Lines post as billing events — dispense fees, shipping, adjustments — are invoiced for this clinic."
+          />
         ) : (
           <Table>
             <THead>
