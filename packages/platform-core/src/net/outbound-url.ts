@@ -62,12 +62,14 @@
 //   - Webhook delivery is POST-only (IMDSv2 needs a PUT to mint a
 //     token) and `deliver.ts` sets `redirect: "error"`, so a public
 //     endpoint cannot 302 the worker inward.
-//   - The carrier clients have NEITHER property: `FedExClient`
-//     issues a PUT for shipment cancellation, and none of the three
-//     clients set `redirect`, so they follow by default. Their
-//     bound is instead that `baseUrl` is settable only by an
-//     internal operator holding `ship.manage_carrier_credentials`,
-//     never by a partner.
+//   - The carrier clients now set `redirect: "error"` as well, and
+//     additionally refuse any 3xx handed back to them (their `fetch`
+//     is injectable, so they cannot assume the transport honors the
+//     flag). They are NOT method-bounded, though: `FedExClient`
+//     issues a PUT for shipment cancellation, which is the method
+//     IMDSv2 needs. Their other bound is that `baseUrl` is settable
+//     only by an internal operator holding
+//     `ship.manage_carrier_credentials`, never by a partner.
 //
 // Common to both: refusing any port but 443 means even a hostile DNS
 // answer reaches exactly one port instead of scanning.
@@ -414,4 +416,37 @@ export function classifyOutboundUrl(rawUrl: string): OutboundUrlVerdict {
   }
 
   return Object.freeze({ ok: true as const, url });
+}
+
+/** Emitted in place of a URL we will not tokenize. */
+export const UNREPORTABLE_URL = "<unparseable>";
+
+/**
+ * Reduce a URL to the least an operator needs in order to act on it:
+ * scheme plus host, including the port when one was given.
+ *
+ * Everything else is dropped, because a URL that FAILED the guard is
+ * the one most likely to carry a secret. `https://key:secret@host/`
+ * puts a credential in userinfo — the `embedded_credentials` verdict
+ * exists precisely because a row written before the guard can look
+ * like that — and a path or query can carry a bearer token. An audit
+ * line has to be safe to paste into a ticket, so none of that is
+ * echoed. The scheme and host are not secrets and are what an
+ * operator needs to recognize the row.
+ *
+ * An unparseable input is not tokenized at all: with no structure to
+ * trust there is no way to tell a host from a payload, so nothing is
+ * echoed.
+ */
+export function redactUrlForReport(rawUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return UNREPORTABLE_URL;
+  }
+  // Non-special schemes (`file:`, `javascript:`) parse with an empty
+  // host and carry their payload in the path. Never fall back to
+  // echoing that payload.
+  return url.host === "" ? `${url.protocol}<no-host>` : `${url.protocol}//${url.host}`;
 }

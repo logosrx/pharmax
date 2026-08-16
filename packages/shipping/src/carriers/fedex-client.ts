@@ -489,8 +489,21 @@ export class FedExClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     timeout.unref?.();
+    let response: Response;
     try {
-      return await this.fetchImpl(url, { ...init, signal: controller.signal });
+      // `redirect: "error"` sits AFTER the spread so no init can
+      // re-enable following. Following a 30x would defeat the
+      // write-time `baseUrl` host check outright: a screened public
+      // host can 307 us anywhere, and 307/308 PRESERVE method and
+      // body — so `getAccessToken`'s `client_id`/`client_secret`
+      // form body would be re-sent to the redirect target, and
+      // `cancelShipment`'s PUT would stay a PUT, which is exactly
+      // what IMDSv2 requires to mint a token.
+      response = await this.fetchImpl(url, {
+        ...init,
+        signal: controller.signal,
+        redirect: "error",
+      });
     } catch (cause) {
       if (cause instanceof Error && cause.name === "AbortError") {
         throw new FedExApiError({
@@ -511,6 +524,26 @@ export class FedExClient {
     } finally {
       clearTimeout(timeout);
     }
+
+    // `redirect: "error"` is enforced by the transport, and `fetch`
+    // is injectable — so this class cannot assume the transport
+    // honors it. Refuse the whole 300-399 range rather than the four
+    // redirect statuses: we never send a conditional or proxy-
+    // negotiated request, so no 3xx is legitimate here, and 300 also
+    // carries a Location. Checked before the body is read so a
+    // hostile 30x cannot smuggle its own `errors[].code` into our
+    // error via `extractFedExError`.
+    //
+    // `Location` is deliberately not echoed: it is attacker-chosen
+    // content and this message reaches logs.
+    if (response.status >= 300 && response.status < 400) {
+      throw new FedExApiError({
+        code: "FEDEX_UNEXPECTED_REDIRECT",
+        message: `FedEx ${init.method ?? "GET"} ${path} answered with a ${response.status} redirect; refusing to follow.`,
+        httpStatus: response.status,
+      });
+    }
+    return response;
   }
 
   private async parseJsonBody(response: Response, label: string): Promise<unknown> {

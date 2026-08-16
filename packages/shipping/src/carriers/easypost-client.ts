@@ -163,6 +163,12 @@ export class EasyPostClient {
         },
         signal: controller.signal,
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        // Last key so nothing above can re-enable following.
+        // Following a 30x would defeat the write-time `baseUrl` host
+        // check outright, and EasyPost has no token exchange to gate
+        // the blast radius: the API key rides as Basic auth on EVERY
+        // request, so a single followed redirect hands it over.
+        redirect: "error",
       });
     } catch (cause) {
       if (cause instanceof Error && cause.name === "AbortError") {
@@ -181,6 +187,25 @@ export class EasyPostClient {
       });
     } finally {
       clearTimeout(timeout);
+    }
+
+    // `redirect: "error"` is enforced by the transport, and `fetch`
+    // is injectable — so this class cannot assume the transport
+    // honors it. Refuse the whole 300-399 range rather than the four
+    // redirect statuses: we never send a conditional or proxy-
+    // negotiated request, so no 3xx is legitimate here, and 300 also
+    // carries a Location. Checked before the body is read so a
+    // hostile 30x cannot smuggle its own `error.code` into our error
+    // via `extractProviderError`.
+    //
+    // `Location` is deliberately not echoed: it is attacker-chosen
+    // content and this message reaches logs.
+    if (response.status >= 300 && response.status < 400) {
+      throw new EasyPostApiError({
+        code: "EASYPOST_UNEXPECTED_REDIRECT",
+        message: `EasyPost ${method} ${path} answered with a ${response.status} redirect; refusing to follow.`,
+        httpStatus: response.status,
+      });
     }
 
     const text = await response.text();

@@ -128,3 +128,77 @@ describe("UpsClient.trackShipmentBatch", () => {
     expect(batch.results[1]?.package?.trackingNumber).toBe("1Z999AA10123456784");
   });
 });
+
+describe("UpsClient redirect containment", () => {
+  // A `baseUrl` that PASSED the write-time host check can still
+  // answer 30x. The spec's cross-origin `Authorization` strip is not
+  // cover here: it does not apply to a same-origin hop, and it never
+  // covered `x-merchant-id` (the shipper number) that the token
+  // exchange sends alongside the Basic credential.
+  const REDIRECT_TARGET = "https://169.254.169.254/latest/api/token";
+
+  const redirectResponse = (status: number): Response =>
+    new Response(null, { status, headers: { Location: REDIRECT_TARGET } });
+
+  it("tells the transport never to follow a redirect", async () => {
+    const seen: RequestInit[] = [];
+    const client = buildClient((url, init) => {
+      seen.push(init);
+      if (url.endsWith("/security/v1/oauth/token")) return jsonResponse(TOKEN_RESPONSE);
+      return jsonResponse(buildTrackResponse());
+    });
+
+    await client.trackShipment("1Z999AA10123456784");
+
+    expect(seen).toHaveLength(2);
+    for (const init of seen) {
+      expect(init.redirect).toBe("error");
+    }
+  });
+
+  it("refuses a 307 on the token exchange rather than re-sending the Basic credential", async () => {
+    let calls = 0;
+    const client = buildClient((url) => {
+      calls += 1;
+      if (url.endsWith("/security/v1/oauth/token")) return redirectResponse(307);
+      throw new Error(`requested an unscreened host: ${url}`);
+    });
+
+    await expect(client.getAccessToken()).rejects.toMatchObject({
+      name: "UpsApiError",
+      code: "UPS_UNEXPECTED_REDIRECT",
+      httpStatus: 307,
+    });
+    // Exactly one request: refused where it was received, not chased.
+    expect(calls).toBe(1);
+  });
+
+  it("refuses the whole 3xx range on the tracking GET", async () => {
+    for (const status of [300, 301, 302, 303, 304, 307, 308, 399]) {
+      const client = buildClient((url) => {
+        if (url.endsWith("/security/v1/oauth/token")) return jsonResponse(TOKEN_RESPONSE);
+        return redirectResponse(status);
+      });
+      await expect(client.trackShipment("1Z999AA10123456784")).rejects.toMatchObject({
+        code: "UPS_UNEXPECTED_REDIRECT",
+        httpStatus: status,
+      });
+    }
+  });
+
+  it("does not echo the attacker-chosen Location into the error message", async () => {
+    const client = buildClient((url) => {
+      if (url.endsWith("/security/v1/oauth/token")) return redirectResponse(302);
+      throw new Error(`requested an unscreened host: ${url}`);
+    });
+
+    let thrown: unknown;
+    try {
+      await client.getAccessToken();
+    } catch (caught) {
+      thrown = caught;
+    }
+    expect(thrown).toBeInstanceOf(UpsApiError);
+    expect((thrown as Error).message).not.toContain("169.254.169.254");
+  });
+});

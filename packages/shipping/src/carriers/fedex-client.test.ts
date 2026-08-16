@@ -227,4 +227,96 @@ describe("FedExClient.trackShipmentBatch", () => {
   });
 });
 
+describe("FedExClient redirect containment", () => {
+  // A `baseUrl` that PASSED the write-time host check can still
+  // answer 30x, and 307/308 preserve method and body — so following
+  // one would re-send the `client_id`/`client_secret` form body to
+  // the redirect target and keep `cancelShipment`'s PUT a PUT, which
+  // is the method IMDSv2 requires to mint a token.
+  const REDIRECT_TARGET = "https://169.254.169.254/latest/api/token";
+
+  const redirectResponse = (status: number): Response =>
+    new Response(null, { status, headers: { Location: REDIRECT_TARGET } });
+
+  it("tells the transport never to follow a redirect", async () => {
+    const seen: RequestInit[] = [];
+    const client = buildClient((url, init) => {
+      seen.push(init);
+      if (url.endsWith("/oauth/token")) return jsonResponse(TOKEN_RESPONSE);
+      if (url.endsWith("/track/v1/trackingnumbers")) {
+        return jsonResponse({ output: { completeTrackResults: [] } });
+      }
+      throw new Error(`unexpected: ${url}`);
+    });
+
+    await client.trackShipment("794665654567");
+
+    expect(seen).toHaveLength(2);
+    for (const init of seen) {
+      expect(init.redirect).toBe("error");
+    }
+  });
+
+  it("refuses a 307 on the token exchange rather than re-sending client_secret", async () => {
+    let calls = 0;
+    const client = buildClient((url) => {
+      calls += 1;
+      if (url.endsWith("/oauth/token")) return redirectResponse(307);
+      throw new Error(`requested an unscreened host: ${url}`);
+    });
+
+    await expect(client.getAccessToken()).rejects.toMatchObject({
+      name: "FedExApiError",
+      code: "FEDEX_UNEXPECTED_REDIRECT",
+      httpStatus: 307,
+    });
+    // Exactly one request: refused where it was received, not chased.
+    expect(calls).toBe(1);
+  });
+
+  it("refuses a 307 on the cancel PUT", async () => {
+    const client = buildClient((url) => {
+      if (url.endsWith("/oauth/token")) return jsonResponse(TOKEN_RESPONSE);
+      if (url.endsWith("/ship/v1/shipments/cancel")) return redirectResponse(307);
+      throw new Error(`requested an unscreened host: ${url}`);
+    });
+
+    await expect(
+      client.cancelShipment({ accountNumber: { value: "1" }, trackingNumber: "794665654567" })
+    ).rejects.toMatchObject({ code: "FEDEX_UNEXPECTED_REDIRECT", httpStatus: 307 });
+  });
+
+  it("refuses the whole 3xx range, not only the four redirect statuses", async () => {
+    // 300 carries a Location too, and we never send a conditional or
+    // proxy-negotiated request — so a 304/305 from a host we do not
+    // trust is a protocol violation, not a cache hit.
+    for (const status of [300, 301, 302, 303, 304, 307, 308, 399]) {
+      const client = buildClient((url) => {
+        if (url.endsWith("/oauth/token")) return redirectResponse(status);
+        throw new Error(`requested an unscreened host: ${url}`);
+      });
+      await expect(client.getAccessToken()).rejects.toMatchObject({
+        code: "FEDEX_UNEXPECTED_REDIRECT",
+        httpStatus: status,
+      });
+    }
+  });
+
+  it("does not echo the attacker-chosen Location into the error message", async () => {
+    const client = buildClient((url) => {
+      if (url.endsWith("/oauth/token")) return redirectResponse(302);
+      throw new Error(`requested an unscreened host: ${url}`);
+    });
+
+    let thrown: unknown;
+    try {
+      await client.getAccessToken();
+    } catch (caught) {
+      thrown = caught;
+    }
+    expect(thrown).toBeInstanceOf(FedExApiError);
+    expect((thrown as Error).message).not.toContain("169.254.169.254");
+  });
+});
+
 void FedExApiError;

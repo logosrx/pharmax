@@ -12,7 +12,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { classifyOutboundAddress, classifyOutboundUrl } from "./outbound-url.js";
+import {
+  classifyOutboundAddress,
+  classifyOutboundUrl,
+  redactUrlForReport,
+  UNREPORTABLE_URL,
+} from "./outbound-url.js";
 
 const PUBLIC_ENDPOINT = "https://partner.example.com/hooks";
 
@@ -204,6 +209,52 @@ describe("classifyOutboundUrl — unparseable input", () => {
       reason: "unparseable",
     });
     expect(classifyOutboundUrl("not a url at all")).toMatchObject({ reason: "unparseable" });
+  });
+});
+
+describe("redactUrlForReport", () => {
+  // Every fixture is a synthetic RFC 2606 / reserved-block value and
+  // the placeholders below are deliberately not key-shaped. The point
+  // of these tests is the NEGATIVE: an audit line must be safe to
+  // paste into a ticket, so no secret-bearing component of the URL
+  // may survive redaction.
+  it("keeps scheme and host so an operator can recognize the row", () => {
+    expect(redactUrlForReport("https://carrier.example.com/oauth/token")).toBe(
+      "https://carrier.example.com"
+    );
+  });
+
+  it("keeps a non-default port — diagnostically necessary, not secret", () => {
+    expect(redactUrlForReport("http://10.0.0.5:8080/v2/shipments")).toBe("http://10.0.0.5:8080");
+  });
+
+  it("drops userinfo, which is where a pre-guard row hides a credential", () => {
+    const redacted = redactUrlForReport(
+      "https://placeholder-user:placeholder-pass@carrier.example.com/oauth/token"
+    );
+    expect(redacted).toBe("https://carrier.example.com");
+    expect(redacted).not.toContain("placeholder-user");
+    expect(redacted).not.toContain("placeholder-pass");
+  });
+
+  it("drops path, query, and fragment, which can carry a bearer token", () => {
+    const redacted = redactUrlForReport(
+      "https://carrier.example.com/collect?token=placeholder-token#fragment"
+    );
+    expect(redacted).toBe("https://carrier.example.com");
+    expect(redacted).not.toContain("placeholder-token");
+  });
+
+  it("never echoes the payload of a hostless scheme", () => {
+    // `file:` / `javascript:` parse with an empty host and carry
+    // everything in the path, so a naive fallback would print it.
+    expect(redactUrlForReport("file:///etc/passwd")).toBe("file:<no-host>");
+    expect(redactUrlForReport("javascript:fetch('/exfiltrate')")).toBe("javascript:<no-host>");
+  });
+
+  it("refuses to tokenize an unparseable string at all", () => {
+    expect(redactUrlForReport("not a url at all")).toBe(UNREPORTABLE_URL);
+    expect(redactUrlForReport("https://")).toBe(UNREPORTABLE_URL);
   });
 });
 
