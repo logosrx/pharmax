@@ -129,6 +129,13 @@ interface FakeOverrides {
   patientStatus?: PatientStatus | null;
   /** Row the in-flight `orderLine.findFirst` guard returns. */
   inFlightOrderId?: string | null;
+  /**
+   * Refills consumed by OTHER transactions while this one waited on
+   * the row lock: applied to the row when our guarded decrement
+   * lands, so post-decrement reads see the true counter, not the
+   * stale step-1 read.
+   */
+  refillsConsumedWhileWaiting?: number;
   /** If false, `pharmacySite.findFirst` returns null. */
   siteFound?: boolean;
   /** If false, `clinicSite.findFirst` returns null. */
@@ -154,6 +161,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
   const patientStatus =
     overrides.patientStatus === undefined ? PatientStatus.ACTIVE : overrides.patientStatus;
   const inFlightOrderId = overrides.inFlightOrderId ?? null;
+  const refillsConsumedWhileWaiting = overrides.refillsConsumedWhileWaiting ?? 0;
   const siteFound = overrides.siteFound ?? true;
   const clinicSiteLinked = overrides.clinicSiteLinked ?? true;
   const decrementCount = overrides.decrementCount ?? 1;
@@ -169,6 +177,13 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
       }),
       updateMany: vi.fn(async (args: unknown) => {
         calls.push({ table: "prescription", op: "updateMany", args });
+        // Behave like the DB: a successful guarded decrement mutates
+        // the row, so subsequent reads in the transaction see the
+        // post-decrement counter (plus whatever concurrent
+        // transactions consumed while we waited on the lock).
+        if (decrementCount === 1 && prescription !== null) {
+          prescription.refillsRemaining -= refillsConsumedWhileWaiting + 1;
+        }
         return { count: decrementCount };
       }),
     },
@@ -553,6 +568,80 @@ describe("DispenseRefill — happy path", () => {
     );
     expect(out.refillNumber).toBe(1);
     expect(out.refillsRemaining).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Concurrency ordering
+// ---------------------------------------------------------------------------
+//
+// Two concurrent DispenseRefills must serialize on the prescription
+// row lock BEFORE the in-flight-order guard runs; otherwise both pass
+// the guard while refillsRemaining > 1 and two unshipped fills for
+// the same Rx enter the building. Likewise the refill ordinal and the
+// remaining count must come from the row after the decrement, not
+// from the pre-lock read.
+
+describe("DispenseRefill — concurrency ordering", () => {
+  it("takes the row lock (guarded decrement) before the in-flight guard", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(DispenseRefill, validInput(), { idempotencyKey: "refill-order-1" })
+    );
+
+    const decrementIdx = fake.calls.findIndex(
+      (c) => c.table === "prescription" && c.op === "updateMany"
+    );
+    const inFlightGuardIdx = fake.calls.findIndex(
+      (c) => c.table === "orderLine" && c.op === "findFirst"
+    );
+    expect(decrementIdx).toBeGreaterThanOrEqual(0);
+    expect(inFlightGuardIdx).toBeGreaterThanOrEqual(0);
+    expect(decrementIdx).toBeLessThan(inFlightGuardIdx);
+  });
+
+  it("in-flight guard fires under the lock and the refusal leaves no order footprint", async () => {
+    const existing = "00000000-0000-4000-8000-0000000000cc";
+    const fake = buildPrismaFake({ inFlightOrderId: existing });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(DispenseRefill, validInput(), { idempotencyKey: "k" })
+      ).rejects.toMatchObject({
+        code: "REFILL_ORDER_ALREADY_IN_FLIGHT",
+        metadata: { existingOrderId: existing },
+      });
+    });
+
+    // The decrement ran first (that is what acquires the lock); the
+    // thrown refusal rolls the whole transaction back, decrement
+    // included.
+    expect(callsOf(fake.calls, "prescription", "updateMany")).toHaveLength(1);
+    expectNoWriteFootprint(fake.calls);
+  });
+
+  it("derives refillNumber and refillsRemaining from the post-decrement row, not the stale pre-lock read", async () => {
+    // We read the row at refillsRemaining = 3, then waited on the
+    // lock while another transaction consumed one refill (its order
+    // has since left the in-flight window). Our decrement lands on 2,
+    // leaving 1 — so THIS dispensing is refill 4 of 5, not 3.
+    const fake = buildPrismaFake({ refillsConsumedWhileWaiting: 1 });
+    configureBus(fake.client);
+
+    const out = await withTenancyContext(ctxFor(), () =>
+      executeCommand(DispenseRefill, validInput(), { idempotencyKey: "refill-stale-1" })
+    );
+
+    expect(out.refillNumber).toBe(4);
+    expect(out.refillsRemaining).toBe(1);
+
+    const auditCall = callsOf(fake.calls, "auditLog", "create")[0];
+    const metadata = (auditCall!.args as { data: { metadata: Record<string, unknown> } }).data
+      .metadata;
+    expect(metadata).toMatchObject({ refillNumber: 4, refillsRemaining: 1 });
   });
 });
 

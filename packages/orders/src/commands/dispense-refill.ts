@@ -24,6 +24,15 @@
 // impossible even if they did not. `count === 0` after validation
 // passed means the state changed underneath us — refuse, never guess.
 //
+// ORDERING MATTERS: every check that can be invalidated by a
+// concurrent DispenseRefill runs AFTER the decrement, i.e. while the
+// row lock is held. The in-flight-order guard in particular must sit
+// behind the lock: run before it, two concurrent calls (with two or
+// more refills left) would both see "no order in flight" and both
+// succeed. The refill ordinal and the remaining count are likewise
+// re-read from the row after the decrement — the pre-lock read may be
+// stale by the time the lock is acquired.
+//
 // Controlled substances, division of labour:
 //   - HERE (refill initiation): Schedule II refills are refused
 //     outright (21 CFR 1306.12(a)); the CIII/IV six-month horizon is
@@ -280,11 +289,44 @@ export const DispenseRefill = defineCommand<DispenseRefillInput, DispenseRefillO
       });
     }
 
-    // ---- Step 7: no second order while one is in flight ----
+    // ---- Step 7: the guarded atomic decrement — takes the row lock ----
+    // The WHERE re-asserts every fact the decrement depends on, so
+    // the validations above cannot be raced stale: if another
+    // transaction consumed the last refill or retired the
+    // prescription between step 1 and here, the count is 0 and we
+    // refuse. On success Postgres holds the row lock to commit —
+    // every statement after this line runs with the prescription
+    // pinned. This MUST happen before the in-flight-order guard
+    // (step 8): a concurrent DispenseRefill blocks here until we
+    // commit, and only then runs its own guard, which sees our order.
+    const decremented = await tx.prescription.updateMany({
+      where: {
+        id: prescription.id,
+        organizationId: orgId,
+        status: PrescriptionStatus.ACTIVE,
+        refillsRemaining: { gt: 0 },
+      },
+      data: { refillsRemaining: { decrement: 1 } },
+    });
+    if (decremented.count !== 1) {
+      throw new errors.ConflictError({
+        code: REFILL_STATE_CHANGED_CONCURRENTLY,
+        message:
+          "The prescription changed while this refill was being dispensed. Re-check and retry.",
+        metadata: { prescriptionId: prescription.id },
+      });
+    }
+
+    // ---- Step 8: no second order while one is in flight ----
     // An unshipped, uncancelled order already carries this
     // prescription — dispensing another refill now would put two
-    // fills for the same Rx in the building at once. The blocker is
-    // named in the error so the operator can find and resolve it.
+    // fills for the same Rx in the building at once. Runs under the
+    // row lock taken in step 7: a concurrent DispenseRefill that beat
+    // us to the lock has already committed its order by the time our
+    // decrement returned, so this read (fresh snapshot under READ
+    // COMMITTED) sees it. Throwing here rolls back the decrement.
+    // The blocker is named in the error so the operator can find and
+    // resolve it.
     const inFlight = await tx.orderLine.findFirst({
       where: {
         organizationId: orgId,
@@ -304,7 +346,27 @@ export const DispenseRefill = defineCommand<DispenseRefillInput, DispenseRefillO
       });
     }
 
-    // ---- Step 8: site scope + clinic↔site link ----
+    // ---- Step 9: re-read the counters under the lock ----
+    // The step-1 read may be stale if we waited on the row lock, so
+    // the ordinal and the remaining count are derived from the row as
+    // it stands AFTER our decrement — the values the audit row and
+    // the caller must see.
+    const counters = await tx.prescription.findFirst({
+      where: { id: prescription.id, organizationId: orgId },
+      select: { refillsAuthorized: true, refillsRemaining: true },
+    });
+    if (counters === null) {
+      // Unreachable: we hold the row lock and just updated the row.
+      throw new errors.InternalError({
+        code: "DISPENSE_REFILL_ROW_VANISHED",
+        message: "Prescription row disappeared after the guarded decrement.",
+        metadata: { prescriptionId: prescription.id },
+      });
+    }
+    const refillsRemainingAfter = counters.refillsRemaining;
+    const refillNumber = counters.refillsAuthorized - counters.refillsRemaining;
+
+    // ---- Step 10: site scope + clinic↔site link ----
     // Same checks and same stable error codes as CreateOrder; the
     // clinic comes from the prescription row rather than the caller.
     const site = await tx.pharmacySite.findFirst({
@@ -331,36 +393,7 @@ export const DispenseRefill = defineCommand<DispenseRefillInput, DispenseRefillO
       });
     }
 
-    // ---- Step 9: the guarded atomic decrement ----
-    // The WHERE re-asserts every fact the decrement depends on, so
-    // the validations above cannot be raced stale: if another
-    // transaction consumed the last refill or retired the
-    // prescription between step 1 and here, the count is 0 and we
-    // refuse. On success Postgres holds the row lock to commit —
-    // every statement after this line runs with the prescription
-    // pinned.
-    const decremented = await tx.prescription.updateMany({
-      where: {
-        id: prescription.id,
-        organizationId: orgId,
-        status: PrescriptionStatus.ACTIVE,
-        refillsRemaining: { gt: 0 },
-      },
-      data: { refillsRemaining: { decrement: 1 } },
-    });
-    if (decremented.count !== 1) {
-      throw new errors.ConflictError({
-        code: REFILL_STATE_CHANGED_CONCURRENTLY,
-        message:
-          "The prescription changed while this refill was being dispensed. Re-check and retry.",
-        metadata: { prescriptionId: prescription.id },
-      });
-    }
-
-    const refillNumber = prescription.refillsAuthorized - prescription.refillsRemaining + 1;
-    const refillsRemainingAfter = prescription.refillsRemaining - 1;
-
-    // ---- Step 10: resolve intake bucket ----
+    // ---- Step 11: resolve intake bucket ----
     const intakeBucketCode = BUCKET_CODE_FOR_STATUS.RECEIVED;
     const intakeBucket = await tx.bucket.findFirst({
       where: { organizationId: orgId, siteId: input.siteId, code: intakeBucketCode },
@@ -374,10 +407,10 @@ export const DispenseRefill = defineCommand<DispenseRefillInput, DispenseRefillO
       });
     }
 
-    // ---- Step 11: insert the refill order + its single line ----
+    // ---- Step 12: insert the refill order + its single line ----
     // `intakeSourceRefId` carries the prescription id so reporting
     // can distinguish refill orders from originals without a schema
-    // change; the audit row (step 12) is the authoritative record.
+    // change; the audit row (step 13) is the authoritative record.
     const slaDeadlineAt = computeOrderSlaDeadline({ receivedAt: now, priority: input.priority });
     const order = await tx.order.create({
       data: {
@@ -421,7 +454,7 @@ export const DispenseRefill = defineCommand<DispenseRefillInput, DispenseRefillO
       commandLogId,
     });
 
-    // ---- Step 12: audit + events ----
+    // ---- Step 13: audit + events ----
     return {
       output: {
         orderId: order.id,
