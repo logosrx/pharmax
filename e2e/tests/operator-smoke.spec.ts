@@ -98,11 +98,16 @@ test.describe("operator console", () => {
   test("order search routes an unknown order to a graceful not-found", async ({ page }) => {
     await signIn(page);
 
+    // Retried: OrderSearch is a client component whose onSubmit is
+    // wired after hydration. A pre-hydration Enter triggers a native
+    // form submit (no `action`) instead of `router.push`, so the URL
+    // never becomes /ops/orders/... under slow first paint.
     const search = page.getByLabel("Search or scan an order");
-    await search.fill("E2E-UNKNOWN-ORDER");
-    await search.press("Enter");
-
-    await page.waitForURL("**/ops/orders/E2E-UNKNOWN-ORDER");
+    await expect(async () => {
+      await search.fill("E2E-UNKNOWN-ORDER");
+      await search.press("Enter");
+      await page.waitForURL("**/ops/orders/E2E-UNKNOWN-ORDER", { timeout: 5_000 });
+    }).toPass({ timeout: 30_000 });
     await expect(page.getByRole("heading", { name: "Order not found" })).toBeVisible();
   });
 });
