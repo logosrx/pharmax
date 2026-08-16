@@ -993,6 +993,9 @@ model Organization {
   productAiGuardrails ProductAiGuardrail[]
   aiAssistPolicies    AiAssistPolicy[]
 
+  typingSuggestionRuns TypingSuggestionRun[]
+  typingSuggestions    TypingSuggestion[]
+
   @@map("organization")
 }
 
@@ -1296,6 +1299,8 @@ model User {
   // this and a person approved it" is only an answer if the person
   // cannot later be deleted out of the record.
   complianceAiDraftsRequested  ComplianceAiDraft[]        @relation("ComplianceAiDraftRequestedBy")
+  typingSuggestionRunsRequested TypingSuggestionRun[]     @relation("TypingSuggestionRunRequestedBy")
+  typingSuggestionsResolved     TypingSuggestion[]        @relation("TypingSuggestionResolvedBy")
   complianceAiDraftsReviewed   ComplianceAiDraft[]        @relation("ComplianceAiDraftReviewedBy")
 
   patientAllergiesRecorded        PatientAllergy[]                 @relation("PatientAllergyRecordedBy")
@@ -3491,6 +3496,8 @@ model Prescription {
 
   orderLines                     OrderLine[]
   controlledSubstanceDispensings ControlledSubstanceDispensing[]
+  typingSuggestionRuns           TypingSuggestionRun[]
+  typingSuggestions              TypingSuggestion[]
 
   @@unique([organizationId, clinicId, rxNumber])
   @@index([organizationId, patientId])
@@ -3634,6 +3641,8 @@ model Order {
   // asc. Postgres can serve this from one btree.
   compoundingRecords             CompoundingRecord[]
   controlledSubstanceDispensings ControlledSubstanceDispensing[]
+  typingSuggestionRuns           TypingSuggestionRun[]
+  typingSuggestions              TypingSuggestion[]
 
   @@index([organizationId, currentBucketId, currentStatus, priority, slaDeadlineAt, receivedAt])
   // "What is this user currently working on?"
@@ -4819,6 +4828,167 @@ model PharmaxProductIdSequence {
   updatedAt DateTime @updatedAt
 
   @@map("pharmax_product_id_sequence")
+}
+
+// ---------------------------------------------------------------------------
+// AI typing-assist suggestions (typing-assist phase 2).
+//
+// A "run" is one technician-initiated evaluation of one prescription
+// while its order sits in TYPING_IN_PROGRESS. The run persists the
+// exact policy/guardrail revisions that governed it, whether the model
+// stage was permitted, and — once the worker finishes — the model
+// call's identity (provider, model id, prompt version, input digest)
+// and cost (tokens, latency). A suggestion is one field-level proposal
+// hanging off a run: deterministic ones are written synchronously by
+// RequestTypingSuggestions; model ones are written by the worker after
+// the Bedrock call. A model may propose; only AcceptTypingSuggestion —
+// a human-dispatched, order-locked command — may touch the
+// prescription row.
+//
+// PHI: suggestion fields are restricted to the prescription's
+// STRUCTURED, non-PHI columns (quantities, day counts, refills, DAW,
+// dates, schedule, structured dose fields, catalog strength/form).
+// Free-text sig / notes are never suggestion targets and never stored
+// here. Model rationale text is PHI-tripwire-screened before persist.
+// ---------------------------------------------------------------------------
+
+enum TypingSuggestionRunStatus {
+  // Deterministic stage persisted; outbox event queued for the worker.
+  PENDING_MODEL
+  // Model stage finished (suggestions may still number zero).
+  COMPLETED
+  // Model stage failed; `failureCode` says why. Never silent.
+  FAILED
+  // Model stage intentionally not attempted; `modelSkipReasonCode`
+  // says why (policy off, guardrail kill switch, CS not opted in).
+  MODEL_SKIPPED
+}
+
+enum TypingSuggestionSource {
+  DETERMINISTIC
+  MODEL
+}
+
+enum TypingSuggestionStatus {
+  PROPOSED
+  ACCEPTED
+  DISMISSED
+  // A sibling suggestion for the same field was accepted, or a newer
+  // run replaced this one — no longer actionable, kept for the record.
+  SUPERSEDED
+}
+
+model TypingSuggestionRun {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  orderId        String       @db.Uuid
+  order          Order        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  prescriptionId String       @db.Uuid
+  prescription   Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Restrict)
+
+  requestedByUserId String @db.Uuid
+  requestedByUser   User   @relation("TypingSuggestionRunRequestedBy", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+
+  status TypingSuggestionRunStatus
+
+  // Verdict of the phase-1 gate at request time, plus why when false.
+  modelSuggestionsPermitted Boolean
+  modelSkipReasonCode       String?
+
+  // Revision pinning (workflow_policy_id/version pattern): the exact
+  // ai_assist_policy / product_ai_guardrail versions that governed
+  // this run. Null = the org/product had never authored a row.
+  policyVersion        Int?
+  guardrailVersion     Int?
+  minConfidencePercent Int?
+
+  deterministicFindingCount Int
+
+  // Model-call identity + cost. Null until the worker completes.
+  provider          String?
+  modelId           String?
+  promptVersion     Int?
+  inputDigestSha256 String? @db.Char(64)
+  inputTokens       Int?
+  outputTokens      Int?
+  latencyMs         Int?
+
+  // True when the PHI tripwire fired on the decrypted sig text and
+  // the prompt was sent WITHOUT it (structured fields only).
+  sigOmittedByPhiTripwire Boolean @default(false)
+
+  failureCode String?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  suggestions TypingSuggestion[]
+
+  @@index([organizationId, orderId, createdAt(sort: Desc)])
+  @@index([organizationId, status, createdAt])
+  @@map("typing_suggestion_run")
+}
+
+model TypingSuggestion {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  runId String              @db.Uuid
+  run   TypingSuggestionRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+
+  orderId        String       @db.Uuid
+  order          Order        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  prescriptionId String       @db.Uuid
+  prescription   Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Restrict)
+
+  source TypingSuggestionSource
+
+  // Deterministic suggestions carry the finding code they fix
+  // (TA_* vocabulary from @pharmax/typing-assist); model suggestions
+  // carry null.
+  findingCode String?
+
+  // One of TYPING_SUGGESTION_FIELDS (@pharmax/typing-assist) — the
+  // structured prescription column this proposal targets. Enforced as
+  // an app-layer vocabulary rather than a DB enum so adding a field is
+  // a package change, not a migration.
+  field String
+
+  // JSON-encoded scalar values. `currentValue` is the prescription's
+  // value at proposal time (stale-checked again at accept);
+  // `suggestedValue` null means "clear the field".
+  currentValue   Json?
+  suggestedValue Json?
+
+  // PHI-free by construction for deterministic suggestions;
+  // tripwire-screened before persist for model suggestions.
+  rationale String
+
+  confidencePercent Int?
+
+  status TypingSuggestionStatus @default(PROPOSED)
+
+  resolvedByUserId String?   @db.Uuid
+  resolvedByUser   User?     @relation("TypingSuggestionResolvedBy", fields: [resolvedByUserId], references: [id], onDelete: Restrict)
+  resolvedAt       DateTime?
+
+  // Required on DISMISSED (every rejection carries a reason code).
+  dismissReasonCode String?
+
+  // command_log id of the AcceptTypingSuggestion dispatch that
+  // applied this proposal — the audit thread from proposal to write.
+  appliedCommandLogId String? @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, orderId, status])
+  @@index([organizationId, runId])
+  @@map("typing_suggestion")
 }
 
 // Inventory lot at a pharmacy site. Expired lots are rejected at

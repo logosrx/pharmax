@@ -54,6 +54,7 @@ import {
 } from "@pharmax/telemetry";
 import Stripe from "stripe";
 
+import { createBedrockTypingModelPort } from "./ai/bedrock-typing-model.js";
 import { createInvoiceAutoFinalizeLoop } from "./billing/invoice-auto-finalize-loop.js";
 import { createPaymentLedgerReconciliationLoop } from "./billing/payment-ledger-reconciliation-loop.js";
 import { createStripeInvoiceAdapter } from "./billing/stripe-invoice-adapter.js";
@@ -521,6 +522,24 @@ async function main(): Promise<void> {
     stripeRefundPort: stripeSdk !== null ? createStripeRefundAdapter({ stripe: stripeSdk }) : null,
   });
 
+  // Typing-suggestion model port (Bedrock). Wired only when a model
+  // id AND region are configured; a null port still settles runs —
+  // as FAILED("MODEL_NOT_CONFIGURED") — so nothing sticks in
+  // PENDING_MODEL. A model id without a region is a half-configured
+  // environment; warn loudly at boot rather than at first run.
+  const typingModelPort =
+    env.BEDROCK_TYPING_MODEL_ID !== undefined && env.AWS_REGION !== undefined
+      ? createBedrockTypingModelPort({
+          region: env.AWS_REGION,
+          modelId: env.BEDROCK_TYPING_MODEL_ID,
+        })
+      : null;
+  if (env.BEDROCK_TYPING_MODEL_ID !== undefined && env.AWS_REGION === undefined) {
+    logger.warn(
+      "BEDROCK_TYPING_MODEL_ID is set but AWS_REGION is not — typing-suggestion runs will fail with MODEL_NOT_CONFIGURED until AWS_REGION is configured."
+    );
+  }
+
   const outboxDrainer = createOutboxDrainer(
     {
       client: prisma,
@@ -531,6 +550,7 @@ async function main(): Promise<void> {
         prisma,
         stripePort,
         opsConsoleBaseUrl: env.OPS_CONSOLE_BASE_URL,
+        typingModelPort,
       }),
       // Partner webhook fan-out (ADR-0032): runs after every row's
       // domain handler and self-filters to phi-safe registry events.

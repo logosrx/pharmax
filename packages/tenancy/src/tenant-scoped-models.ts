@@ -196,6 +196,12 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // orders — the exact failure the off-by-default posture exists to
   // prevent.
   ["AiAssistPolicy", { kind: "organizationId" }] as const,
+  // Typing-assist phase 2: suggestion runs + field-level proposals.
+  // Both carry prescription references and tenant-authored review
+  // decisions; an unscoped read would surface one tenant's typing
+  // corrections (and their model telemetry) to another.
+  ["TypingSuggestionRun", { kind: "organizationId" }] as const,
+  ["TypingSuggestion", { kind: "organizationId" }] as const,
   ["Lot", { kind: "organizationId" }] as const,
   ["LotAssignment", { kind: "organizationId" }] as const,
   ["InventoryTransaction", { kind: "organizationId" }] as const,

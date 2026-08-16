@@ -139,6 +139,13 @@ export const PERMISSIONS = Object.freeze({
   TYPING_START: "typing.start",
   TYPING_COMPLETE: "typing.complete",
   TYPING_MARK_MISSING_INFO: "typing.mark_missing_info",
+  // AI typing-assist suggestions: request a run, accept a proposal
+  // into the prescription, or dismiss it with a reason. One grant for
+  // all three because they are one review loop performed by the same
+  // person — the typist. Accepting is bounded by the same guardrail +
+  // policy gates the run itself is; org-level enablement stays with
+  // AI_ASSIST_POLICY_MANAGE.
+  AI_TYPING_SUGGESTIONS_USE: "ai.typing_suggestions.use",
 
   // PV1 (first pharmacist verification).
   PV1_START: "pv1.start",
@@ -465,6 +472,11 @@ export const PERMISSION_METADATA: Readonly<
   [PERMISSIONS.TYPING_START]: { description: "Start typing on an order.", category: "Typing" },
   [PERMISSIONS.TYPING_COMPLETE]: {
     description: "Complete typing review.",
+    category: "Typing",
+  },
+  [PERMISSIONS.AI_TYPING_SUGGESTIONS_USE]: {
+    description:
+      "Use the AI typing-assist review loop on an order in typing: request a suggestion run, accept a field-level proposal into the prescription (order-locked, audited, stale-checked), or dismiss it with a reason code. Model suggestions only exist where the org policy and product guardrail permit them; this grant never overrides either gate.",
     category: "Typing",
   },
   [PERMISSIONS.TYPING_MARK_MISSING_INFO]: {

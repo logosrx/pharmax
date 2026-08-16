@@ -101,6 +101,11 @@ import { OrderTypingMissingInfoV1 } from "./events/order/typing-missing-info-v1.
 import { OrderTypingResumedV1 } from "./events/order/typing-resumed-v1.js";
 import { OrderTypingStartedV1 } from "./events/order/typing-started-v1.js";
 
+// ---- typing-assist (AI suggestion engine) --------------------------------
+import { AiTypingSuggestionAcceptedV1 } from "./events/typing-assist/typing-suggestion-accepted-v1.js";
+import { AiTypingSuggestionDismissedV1 } from "./events/typing-assist/typing-suggestion-dismissed-v1.js";
+import { AiTypingSuggestionRunRequestedV1 } from "./events/typing-assist/typing-suggestion-run-requested-v1.js";
+
 // ---- org (tenant administration) ----------------------------------------
 import { AiAssistPolicySetV1 } from "./events/org/ai-assist-policy-set-v1.js";
 import { OrgBucketCreatedV1 } from "./events/org/bucket-created-v1.js";
@@ -222,6 +227,10 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   FillLotAssignedV1,
   // ai typing assist (org policy)
   AiAssistPolicySetV1,
+  // ai typing assist (suggestion engine)
+  AiTypingSuggestionRunRequestedV1,
+  AiTypingSuggestionAcceptedV1,
+  AiTypingSuggestionDismissedV1,
   // labels
   LabelsVialPrintCompletedV1,
   LabelsVialPrintFailedV1,

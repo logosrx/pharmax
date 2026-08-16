@@ -42,6 +42,8 @@ const INVOICE_LINE = "00000000-0000-4000-8000-00000000000a";
 const PRINTER = "00000000-0000-4000-8000-00000000000b";
 const PRINT_JOB = "00000000-0000-4000-8000-00000000000c";
 const VIAL_LABEL = "00000000-0000-4000-8000-00000000000d";
+const PRESCRIPTION = "00000000-0000-4000-8000-00000000000e";
+const SUGGESTION_RUN = "00000000-0000-4000-8000-000000000010";
 const NOW = "2026-05-25T10:00:00.000Z";
 
 // One synthetic payload per routed event. These mirror what the
@@ -152,6 +154,16 @@ const PAYLOADS: Readonly<Record<string, Record<string, unknown>>> = Object.freez
     breachedAt: NOW,
     previousBucketId: BUCKET,
     newBucketId: BUCKET,
+    occurredAt: NOW,
+  },
+  "ai.typing_suggestion_run.requested.v1": {
+    runId: SUGGESTION_RUN,
+    organizationId: ORG,
+    orderId: ORDER,
+    prescriptionId: PRESCRIPTION,
+    requestedByUserId: USER,
+    policyVersion: 1,
+    guardrailVersion: 1,
     occurredAt: NOW,
   },
 });

@@ -28,6 +28,7 @@ import { fanOutWebhookDeliveries, WEBHOOK_ELIGIBLE_EVENT_TYPES } from "@pharmax/
 import type { logger as loggerContract } from "@pharmax/platform-core";
 
 import type { StripeInvoicePort } from "@pharmax/billing";
+import type { TypingModelPort } from "@pharmax/typing-assist";
 
 import {
   dispatchVialPrintJob,
@@ -36,6 +37,7 @@ import {
   type VialPrintDeliveryPort,
 } from "./dispatch-vial-print-job.js";
 import { createEscalateOnShipmentExceptionHandler } from "./escalate-on-shipment-exception.js";
+import { createGenerateTypingSuggestionsHandler } from "./generate-typing-suggestions.js";
 import { createMaterializeBillingOnOrderShippedHandler } from "./materialize-billing-on-order-shipped.js";
 import { createNotifyOnOrderEscalatedHandler } from "./notify-on-order-escalated.js";
 import { createNotifyProviderOnOrderShippedHandler } from "./notify-provider-on-order-shipped.js";
@@ -79,6 +81,10 @@ export const REQUIRED_HANDLER_EVENT_TYPES: ReadonlySet<string> = new Set([
   "reporting.run.completed.v1",
   "order.escalated_to_emergency.v1",
   "order.sla_breach_escalated.v1",
+  // A typing-suggestion run is created PENDING_MODEL and only this
+  // handler settles it — with no consumer, runs would sit pending
+  // forever and the technician's panel would silently show nothing.
+  "ai.typing_suggestion_run.requested.v1",
 ]);
 
 type OutboxHandlerDeps = {
@@ -112,6 +118,13 @@ type OutboxHandlerDeps = {
    * `OPS_CONSOLE_BASE_URL` in production.
    */
   readonly opsConsoleBaseUrl?: string;
+  /**
+   * Bedrock port for the typing-suggestion model stage. When `null`
+   * (no BEDROCK_TYPING_MODEL_ID configured), the handler still
+   * settles each run — as FAILED("MODEL_NOT_CONFIGURED") — so the
+   * gap is visible on the run row rather than a stuck PENDING_MODEL.
+   */
+  readonly typingModelPort?: TypingModelPort | null;
 };
 
 /**
@@ -255,6 +268,10 @@ export function createOutboxHandlers(deps: OutboxHandlerDeps): OutboxHandlerMap 
   const providerShipNotifyHandler = createNotifyProviderOnOrderShippedHandler({
     client: deps.prisma,
   });
+  const typingSuggestionsHandler = createGenerateTypingSuggestionsHandler({
+    client: deps.prisma,
+    modelPort: deps.typingModelPort ?? null,
+  });
   return {
     "organization.created.v1": handleOrganizationCreatedV1,
     "labels.vial_print.requested.v1": vialPrintHandler,
@@ -273,5 +290,6 @@ export function createOutboxHandlers(deps: OutboxHandlerDeps): OutboxHandlerMap 
     // with NO consumer, so escalations never notified anyone.
     "order.escalated_to_emergency.v1": escalationNotifyHandler,
     "order.sla_breach_escalated.v1": escalationNotifyHandler,
+    "ai.typing_suggestion_run.requested.v1": typingSuggestionsHandler,
   };
 }

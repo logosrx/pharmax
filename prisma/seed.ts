@@ -190,6 +190,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     description:
       "Pause typing on an order with a structured missing-info reason; parks the order in TYPING_PENDING_MISSING_INFO until ResumeTyping is dispatched",
   },
+  {
+    code: "ai.typing_suggestions.use",
+    description:
+      "Use the AI typing-assist review loop during typing: request a suggestion run, accept a field-level proposal into the prescription, or dismiss it with a reason code; never overrides the org policy or product guardrail gates",
+  },
   { code: "pv1.start", description: "Start PV1 verification" },
   { code: "pv1.approve", description: "Approve PV1" },
   { code: "pv1.reject", description: "Reject PV1" },
