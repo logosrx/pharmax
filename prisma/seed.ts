@@ -147,6 +147,21 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
       "Set the org-level AI typing-assist policy (model master switch, minimum confidence threshold, controlled-substance opt-in); OrgAdmin only by default",
   },
   {
+    code: "inventory.batch.create",
+    description:
+      "Record a finished compound production run: mints the batch number and a serial number for every unit; batch starts in COMPOUNDED",
+  },
+  {
+    code: "inventory.batch.transition",
+    description:
+      "Operational compound-batch moves: send a batch to the testing lab; point dispensing at a released batch (demoting the incumbent)",
+  },
+  {
+    code: "inventory.batch.release",
+    description:
+      "Record the lab's verdict on a testing compound batch: release for dispensing, or reject with a reason code (terminal); pharmacist-level quality decision",
+  },
+  {
     code: "compounding.read",
     description:
       "View compound formulas (Master Formulation Records): codes, versions, ingredients, BUD policy, hazard flags. Recipe/catalog data only — no PHI",

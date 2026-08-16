@@ -116,6 +116,21 @@ export const PERMISSIONS = Object.freeze({
   // restricted to OrgAdmin by default.
   AI_ASSIST_POLICY_MANAGE: "ai.assist_policy.manage",
 
+  // Compound batch lifecycle (Products/Compounds PR 2). Three grants
+  // split along "who may do this on the floor":
+  //
+  //   CREATE      — record a finished production run: mints the batch
+  //                 number and EVERY unit serial up front. Compounding-
+  //                 floor work (tech-level).
+  //   TRANSITION  — operational moves: send a batch to the lab, point
+  //                 dispensing at a released batch. Tech-level.
+  //   RELEASE     — the quality decision: accept or reject the lab
+  //                 result. Releasing a failed batch dispenses it to
+  //                 patients — pharmacist-level only.
+  INVENTORY_BATCH_CREATE: "inventory.batch.create",
+  INVENTORY_BATCH_TRANSITION: "inventory.batch.transition",
+  INVENTORY_BATCH_RELEASE: "inventory.batch.release",
+
   // Compounding (ADR-0035): Master Formulation Records. MANAGE covers
   // the whole formula lifecycle (author/publish/retire) — pharmacist-
   // level authority; READ lets preparers work from ACTIVE formulas.
@@ -421,6 +436,21 @@ export const PERMISSION_METADATA: Readonly<
     description:
       "Set the org-level AI typing-assist policy: master switch for model-backed suggestions, minimum confidence threshold, and the controlled-substance opt-in. Enabling the model org-wide is a high-blast-radius decision — OrgAdmin only by default.",
     category: "Administration",
+  },
+  [PERMISSIONS.INVENTORY_BATCH_CREATE]: {
+    description:
+      "Record a finished compound production run (CreateCompoundBatch): mints the batch number (site code + serial identity + batch-of-day + date) and a serial number for every unit, and starts the batch in COMPOUNDED. Catalog/inventory data only — no PHI.",
+    category: "Inventory",
+  },
+  [PERMISSIONS.INVENTORY_BATCH_TRANSITION]: {
+    description:
+      "Operational compound-batch moves: send a COMPOUNDED batch to the testing lab, and point dispensing at a RELEASED batch (demoting the incumbent). Does NOT cover accepting/rejecting lab results — that is inventory.batch.release.",
+    category: "Inventory",
+  },
+  [PERMISSIONS.INVENTORY_BATCH_RELEASE]: {
+    description:
+      "Record the lab's verdict on a TESTING compound batch: release it for dispensing, or reject it with a reason code (terminal). A quality decision with direct patient exposure — pharmacist-level.",
+    category: "Inventory",
   },
   [PERMISSIONS.COMPOUNDING_READ]: {
     description:

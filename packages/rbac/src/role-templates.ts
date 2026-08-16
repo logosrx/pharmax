@@ -70,6 +70,12 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       // minted Pharmax Product ID and serial identity are frozen at
       // creation and stamped on every batch label thereafter.
       PERMISSIONS.CATALOG_COMPOUND_PRODUCT_CREATE,
+      // Full batch-lifecycle authority. RELEASE sits here and NOT with
+      // technicians: accepting or rejecting a lab result on a batch is
+      // a quality decision with direct patient exposure.
+      PERMISSIONS.INVENTORY_BATCH_CREATE,
+      PERMISSIONS.INVENTORY_BATCH_TRANSITION,
+      PERMISSIONS.INVENTORY_BATCH_RELEASE,
       // Compounding formula authority (ADR-0035): the Master
       // Formulation Record is a pharmacist-owned document per
       // USP <795>/<797> — authoring/publish/retire sits here, not
@@ -117,6 +123,11 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       // Techs receive inbound stock (DSCSA receipt is data entry with
       // hard statutory gates enforced by the command).
       PERMISSIONS.INVENTORY_RECEIVE,
+      // Techs record finished batches and move them operationally
+      // (to the lab; pointing dispensing at a released batch). The
+      // release/reject quality decision is pharmacist-only.
+      PERMISSIONS.INVENTORY_BATCH_CREATE,
+      PERMISSIONS.INVENTORY_BATCH_TRANSITION,
       // Techs prepare from ACTIVE formulas; they do not author them.
       PERMISSIONS.COMPOUNDING_READ,
       PERMISSIONS.COMPOUNDING_PREPARE,

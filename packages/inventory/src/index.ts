@@ -26,7 +26,32 @@ export {
   type SetProductAiGuardrailInput,
   type SetProductAiGuardrailOutput,
 } from "./commands/set-product-ai-guardrail.js";
+export {
+  CreateCompoundBatch,
+  type CreateCompoundBatchInput,
+  type CreateCompoundBatchOutput,
+} from "./commands/create-compound-batch.js";
+export {
+  SendCompoundBatchToTesting,
+  type SendCompoundBatchToTestingInput,
+  ReleaseCompoundBatch,
+  type ReleaseCompoundBatchInput,
+  RejectCompoundBatch,
+  type RejectCompoundBatchInput,
+  StartDispensingCompoundBatch,
+  type StartDispensingCompoundBatchInput,
+  type CompoundBatchTransitionOutput,
+} from "./commands/compound-batch-transitions.js";
 export { getLotChainOfCustody, type LotChainOfCustody } from "./queries/lot-chain-of-custody.js";
+
+export {
+  buildBatchBarcodeValue,
+  buildBatchNumber,
+  buildUnitSerial,
+  COMPOUND_BATCH_BARCODE_PREFIX,
+  formatCompoundedOnCode,
+  normalizeSiteSerialCode,
+} from "./compound-batch-serial.js";
 
 export {
   allocatePharmaxProductId,
@@ -37,8 +62,19 @@ export {
 } from "./pharmax-product-id.js";
 
 export {
+  BATCH_BUD_NOT_AFTER_COMPOUNDING,
+  BATCH_CREATE_CONFLICT,
+  BATCH_DISPENSING_CONFLICT,
+  BATCH_INVALID_TRANSITION,
+  BATCH_NOT_FOUND,
+  BATCH_PAST_BUD,
+  BATCH_PRODUCT_NOT_COMPOUND,
+  BATCH_PRODUCT_SERIAL_IDENTITY_MISSING,
+  BATCH_SITE_CODE_UNUSABLE,
   CATALOG_DUPLICATE_COMPOUND_PRODUCT,
   CATALOG_PRODUCT_CREATE_CONFLICT,
+  COMPOUND_BATCH_REJECTION_REASONS,
+  type CompoundBatchRejectionReason,
   INVENTORY_EXPIRATION_MISMATCH,
   INVENTORY_GUARDRAIL_CONFLICT,
   INVENTORY_LOT_EXPIRED_AT_RECEIPT,

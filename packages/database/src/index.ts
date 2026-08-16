@@ -85,6 +85,7 @@ export {
   AllergySubstanceCodeSystem,
   AllergyVerificationStatus,
   PaymentKind,
+  CompoundBatchStatus,
   CompoundBudBasis,
   CompoundFormulaRetireReason,
   CompoundFormulaStatus,
