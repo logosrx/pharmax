@@ -106,6 +106,36 @@ export const DEFAULT_SIGN_IN_RATE_LIMIT: SignInRateLimitPolicy = Object.freeze({
   perEmail: Object.freeze({ limit: 10, windowMs: 60 * 1000 }),
 });
 
+/**
+ * Burst limit for the PUBLIC credential-setting entry points
+ * (`acceptInvite`, `resetPassword`) — see `../credential-setup-limit.ts`.
+ *
+ * `perIp` only, and that is a constraint rather than an omission: a
+ * token-consuming route has no identity to key on until the token
+ * resolves, and resolving it first is what would turn the limiter into
+ * an existence oracle. There is deliberately no per-account dimension
+ * and no durable lockout ledger here.
+ */
+export interface CredentialSetupRateLimitPolicy {
+  /** Burst cap per client IP, across all credential-setup entry points. */
+  readonly perIp: RateLimitRule;
+}
+
+/**
+ * Default credential-setup burst limit: 20 requests/min per IP.
+ *
+ * Matched to `DEFAULT_SIGN_IN_RATE_LIMIT.perIp` rather than to the
+ * tighter portal-setup route rule, because these endpoints share the
+ * same shared-egress problem sign-in has: a pharmacy behind one NAT
+ * gateway onboards a whole shift from a single address, and every
+ * refusal here reads to the operator as "your setup link is broken".
+ * 20/min still caps a single host at 20 breach-corpus lookups a minute,
+ * which is the amplification this limit exists to bound (R-026).
+ */
+export const DEFAULT_CREDENTIAL_SETUP_RATE_LIMIT: CredentialSetupRateLimitPolicy = Object.freeze({
+  perIp: Object.freeze({ limit: 20, windowMs: 60 * 1000 }),
+});
+
 /** WebAuthn ceremony defaults: 5-minute challenge TTL. */
 export const DEFAULT_WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
@@ -119,6 +149,8 @@ export interface AuthConfiguration {
   readonly lockout: LockoutPolicy;
   /** Sign-in burst limits (in front of the durable DB lockout). */
   readonly signInRateLimit: SignInRateLimitPolicy;
+  /** Burst limit for the public credential-setting entry points. */
+  readonly credentialSetupRateLimit: CredentialSetupRateLimitPolicy;
   /** Distributed rate limiter. Defaults to an in-process limiter. */
   readonly rateLimiter: RateLimiter;
   /** How long a password-reset token is valid. */
@@ -164,6 +196,7 @@ export function buildAuthConfiguration(input: {
   readonly resetTokenTtlMs?: number;
   readonly passwordResetMailer?: PasswordResetMailer;
   readonly signInRateLimit?: Partial<SignInRateLimitPolicy>;
+  readonly credentialSetupRateLimit?: Partial<CredentialSetupRateLimitPolicy>;
   readonly rateLimiter?: RateLimiter;
 }): AuthConfiguration {
   return Object.freeze({
@@ -179,6 +212,10 @@ export function buildAuthConfiguration(input: {
     }),
     lockout: Object.freeze({ ...DEFAULT_LOCKOUT_POLICY, ...input.lockout }),
     signInRateLimit: Object.freeze({ ...DEFAULT_SIGN_IN_RATE_LIMIT, ...input.signInRateLimit }),
+    credentialSetupRateLimit: Object.freeze({
+      ...DEFAULT_CREDENTIAL_SETUP_RATE_LIMIT,
+      ...input.credentialSetupRateLimit,
+    }),
     rateLimiter: input.rateLimiter ?? new InMemoryRateLimiter(),
     resetTokenTtlMs: input.resetTokenTtlMs ?? DEFAULT_RESET_TOKEN_TTL_MS,
     passwordResetMailer: input.passwordResetMailer ?? NOOP_PASSWORD_RESET_MAILER,
