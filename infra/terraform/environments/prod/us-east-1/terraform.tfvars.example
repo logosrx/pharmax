@@ -67,6 +67,9 @@ waf_rate_limit_per_5min = 2000
 # Provision the severity-split alerting topics (critical → page, warning →
 # ticket) and route alarms to them. Required in production.
 enable_alerting = true
+# Outside-in heartbeat canary (modules/synthetics). On in production: it is
+# the only monitor that can see DNS/cert/CloudFront/WAF failures.
+enable_synthetics = true
 # Legacy single-topic override. Leave empty unless you are pointing at an
 # externally-managed topic; it routes EVERY severity to one place.
 alarm_sns_topic_arn = ""

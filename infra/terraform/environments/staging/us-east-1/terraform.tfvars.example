@@ -65,6 +65,7 @@ waf_rate_limit_per_5min = 2000
 # Set true and supply TF_VAR_alerting_* endpoints if this staging stack is
 # used for on-call rehearsal.
 enable_alerting     = false
+enable_synthetics   = false
 alarm_sns_topic_arn = ""
 
 # ---- Audit archive ----------------------------------------------------------

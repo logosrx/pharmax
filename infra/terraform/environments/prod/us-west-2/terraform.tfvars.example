@@ -89,6 +89,9 @@ waf_rate_limit_per_5min = 2000
 # us-east-1's topics: a regional failure would take out the notification path
 # at exactly the moment it matters.
 enable_alerting = true
+# Heartbeat canary: enable once this region serves traffic (the canary watches
+# app_url, which resolves to the active region's ingress).
+enable_synthetics = true
 # Legacy single-topic override. Leave empty.
 alarm_sns_topic_arn = ""
 # Subscription endpoints are supplied at apply time as TF_VAR_alerting_*.
