@@ -87,6 +87,16 @@ async function main(): Promise<void> {
       where: { userId: user.id, roleId: role.id, siteId: { not: null } },
     });
 
+    // Clear the durable login-attempt ledger for this synthetic email.
+    // The `pharmax_e2e` database is reused across local runs; the
+    // wrong-password smoke writes INVALID_CREDENTIALS rows against this
+    // same email, so without a reset the ledger accumulates toward the
+    // distributed lockout threshold (packages/auth login-attempt.ts:
+    // 10 failures per email in 15 minutes) and later authenticated
+    // smokes fail as if the password were wrong. Lowercased to match
+    // how recordLoginAttempt normalizes emailAttempted before writing.
+    await prisma.loginAttempt.deleteMany({ where: { emailAttempted: email.toLowerCase() } });
+
     console.log(`✓ E2E operator ready: ${email} (Pharmacist, org-wide)`);
   });
 }
