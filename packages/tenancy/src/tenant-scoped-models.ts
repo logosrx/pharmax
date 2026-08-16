@@ -197,6 +197,8 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   // prevent.
   ["AiAssistPolicy", { kind: "organizationId" }] as const,
   ["Lot", { kind: "organizationId" }] as const,
+  ["CompoundBatch", { kind: "organizationId" }] as const,
+  ["CompoundBatchUnit", { kind: "organizationId" }] as const,
   ["LotAssignment", { kind: "organizationId" }] as const,
   ["InventoryTransaction", { kind: "organizationId" }] as const,
   ["LabelPrinter", { kind: "organizationId" }] as const,

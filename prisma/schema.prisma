@@ -937,6 +937,8 @@ model Organization {
   products                         Product[]
   pharmaxProductIdSequence         PharmaxProductIdSequence?
   lots                             Lot[]
+  compoundBatches                  CompoundBatch[]
+  compoundBatchUnits               CompoundBatchUnit[]
   lotAssignments                   LotAssignment[]
   inventoryTransactions            InventoryTransaction[]
   labelPrinters                    LabelPrinter[]
@@ -1031,6 +1033,7 @@ model PharmacySite {
   clinicLinks              ClinicSite[]
   orders                   Order[]
   lots                     Lot[]
+  compoundBatches          CompoundBatch[]
   labelPrinters            LabelPrinter[]
   shipments                Shipment[]
   orderStageIntervals      OrderStageInterval[]
@@ -1278,6 +1281,7 @@ model User {
   compoundFormulasAuthored    CompoundFormula[]   @relation("CompoundFormulaAuthor")
   compoundingRecordsPrepared  CompoundingRecord[] @relation("CompoundingRecordPreparer")
   dscsaTransactionsReceived   DscsaTransaction[]  @relation("DscsaTransactionReceiver")
+  compoundBatchesCreated      CompoundBatch[]     @relation("CompoundBatchCreator")
 
   controlledSubstancesDispensed ControlledSubstanceDispensing[]
 
@@ -1923,6 +1927,7 @@ model CommandLog {
   breakGlassActions                BreakGlassAction[]
   compoundingRecords               CompoundingRecord[]
   dscsaTransactions                DscsaTransaction[]
+  compoundBatches                  CompoundBatch[]
 
   controlledSubstanceDispensings ControlledSubstanceDispensing[]
 
@@ -4691,6 +4696,7 @@ model Product {
   updatedAt DateTime @updatedAt
 
   lots                       Lot[]
+  compoundBatches            CompoundBatch[]
   pricingRules               PricingRule[]
   compoundFormulaIngredients CompoundFormulaIngredient[]
   compoundFormulas           CompoundFormula[]           @relation("CompoundFormulaProduct")
@@ -4848,6 +4854,126 @@ model Lot {
   @@unique([organizationId, siteId, productId, lotNumber])
   @@index([organizationId, siteId, status, expirationDate])
   @@map("lot")
+}
+
+// Quality lifecycle of an in-house compounded batch. Linear happy
+// path with one terminal failure exit:
+//
+//   COMPOUNDED → TESTING → RELEASED ⇄ DISPENSING
+//                    ↓
+//                REJECTED (terminal; requires a reason code)
+//
+// RELEASED ⇄ DISPENSING is a two-way edge because "the batch we
+// dispense from" is a pointer, not a ratchet: promoting batch B to
+// DISPENSING demotes the current DISPENSING batch A back to RELEASED
+// in the same transaction (see StartDispensingCompoundBatch). A
+// partial unique index in the migration guarantees at most one
+// DISPENSING batch per (org, site, product) even under races.
+enum CompoundBatchStatus {
+  COMPOUNDED
+  TESTING
+  RELEASED
+  DISPENSING
+  REJECTED
+}
+
+// One production run of an in-house compound at a site. Created by
+// the compounding team the moment the batch physically exists
+// (CreateCompoundBatch), which also mints every unit's serial number
+// up front — a vial that exists without a serial is untraceable by
+// definition, so the serials are born with the batch, not printed
+// later on demand.
+//
+// `batchNumber` is the human/scannable batch identity, e.g.
+// "PHX-T30-1-081626": site code, frozen product serial identity
+// (drug initial + mg per container), batch-of-the-day counter, and
+// compounding date (MMDDYY). Unit serials append "-<unitNumber>".
+model CompoundBatch {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  siteId         String       @db.Uuid
+  site           PharmacySite @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  productId      String       @db.Uuid
+  product        Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  batchNumber String
+
+  // Nth batch of THIS product at THIS site on `compoundedOn` (1-based).
+  // Allocated as COUNT+1 inside the creating transaction; the unique
+  // (org, site, product, compoundedOn, daySequence) below turns the
+  // COUNT+1 race between two concurrent creations into a retryable
+  // conflict instead of two batches sharing a serial prefix.
+  daySequence  Int
+  compoundedOn DateTime @db.Date
+
+  // Beyond-Use Date (USP <797>): the batch must not be dispensed after
+  // this date regardless of status.
+  beyondUseDate DateTime @db.Date
+
+  status CompoundBatchStatus @default(COMPOUNDED)
+  // When `status` last changed — the SLA clock for "how long has this
+  // batch been stuck at the lab".
+  statusChangedAt DateTime @default(now())
+
+  // Reason code when status = REJECTED (lab failure). CHECK-enforced
+  // in the migration: REJECTED requires a reason, non-REJECTED forbids
+  // one — "every rejection requires a reason code".
+  rejectionReasonCode String?
+
+  // How many units (vials/tablets/…, per product.unitKind) this run
+  // produced. Fixed at creation: one CompoundBatchUnit row exists per
+  // unit, so this is a denormalized count of that relation.
+  unitCount Int
+
+  // Value encoded in the batch barcode on labels: carries both the
+  // Pharmax Product ID and the batch number so one scan resolves the
+  // product AND the batch, e.g. "PXB:PXP-000042:PHX-T30-1-081626".
+  barcodeValue String
+
+  createdByUserId String @db.Uuid
+  createdByUser   User   @relation("CompoundBatchCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  commandLogId String     @db.Uuid
+  commandLog   CommandLog @relation(fields: [commandLogId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  units CompoundBatchUnit[]
+
+  @@unique([organizationId, batchNumber])
+  @@unique([organizationId, barcodeValue])
+  // Explicitly named: the generated name would exceed Postgres's
+  // 63-character identifier limit and be truncated server-side,
+  // permanently diverging from what Prisma expects.
+  @@unique([organizationId, siteId, productId, compoundedOn, daySequence], map: "compound_batch_day_sequence_key")
+  @@index([organizationId, siteId, status])
+  @@index([organizationId, productId, status])
+  @@map("compound_batch")
+}
+
+// One physical unit (vial/tablet/…) of a compound batch, carrying the
+// serial number printed on its label: `<batchNumber>-<unitNumber>`,
+// e.g. "PHX-T30-1-081626-11". Rows are minted with the batch and are
+// immutable identity records — dispense/waste state will attach here
+// in the scan-traceability slice, not by rewriting the serial.
+model CompoundBatchUnit {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  batchId        String        @db.Uuid
+  batch          CompoundBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+
+  // 1-based position within the batch (the trailing "-11").
+  unitNumber   Int
+  serialNumber String
+
+  createdAt DateTime @default(now())
+
+  @@unique([batchId, unitNumber])
+  @@unique([organizationId, serialNumber])
+  @@map("compound_batch_unit")
 }
 
 // DSCSA transaction record for an inbound lot receipt (ADR-0035

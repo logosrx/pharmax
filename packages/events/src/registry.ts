@@ -53,6 +53,8 @@ import { CompoundingFormulaCreatedV1 } from "./events/compounding/formula-create
 import { CompoundingFormulaPublishedV1 } from "./events/compounding/formula-published-v1.js";
 import { CompoundingFormulaRetiredV1 } from "./events/compounding/formula-retired-v1.js";
 import { CompoundingPreparationRecordedV1 } from "./events/compounding/preparation-recorded-v1.js";
+import { InventoryCompoundBatchCreatedV1 } from "./events/inventory/compound-batch-created-v1.js";
+import { InventoryCompoundBatchStatusChangedV1 } from "./events/inventory/compound-batch-status-changed-v1.js";
 import { InventoryLotReceivedV1 } from "./events/inventory/lot-received-v1.js";
 import { InventoryProductAiGuardrailSetV1 } from "./events/inventory/product-ai-guardrail-set-v1.js";
 import { InventoryProductCreatedV1 } from "./events/inventory/product-created-v1.js";
@@ -214,6 +216,8 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   CompoundingFormulaPublishedV1,
   CompoundingFormulaRetiredV1,
   CompoundingPreparationRecordedV1,
+  InventoryCompoundBatchCreatedV1,
+  InventoryCompoundBatchStatusChangedV1,
   InventoryLotReceivedV1,
   InventoryProductAiGuardrailSetV1,
   InventoryProductCreatedV1,
