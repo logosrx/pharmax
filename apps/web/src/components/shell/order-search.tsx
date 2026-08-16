@@ -7,13 +7,17 @@
 // external order number or id, and fails gracefully if unknown). This
 // is the console's fast path: hands-on-scanner, eyes-on-queue.
 //
-// "/" focuses the field from anywhere (unless already typing).
+// "/" focuses the field from anywhere. The keydown itself lives in
+// the GlobalShortcuts registry (which owns suppression rules — typing
+// context, open dialogs); it asks for focus over a custom event so the
+// two components stay decoupled.
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Icon } from "../ui/icon.js";
 import { Kbd } from "../ui/badge.js";
+import { FOCUS_ORDER_SEARCH_EVENT } from "./shortcuts-model.js";
 
 export function OrderSearch() {
   const router = useRouter();
@@ -21,19 +25,12 @@ export function OrderSearch() {
   const [value, setValue] = useState("");
 
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key !== "/") return;
-      const el = document.activeElement;
-      const typing =
-        el instanceof HTMLInputElement ||
-        el instanceof HTMLTextAreaElement ||
-        (el instanceof HTMLElement && el.isContentEditable);
-      if (typing) return;
-      e.preventDefault();
+    function onFocusRequest() {
       inputRef.current?.focus();
+      inputRef.current?.select();
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener(FOCUS_ORDER_SEARCH_EVENT, onFocusRequest);
+    return () => window.removeEventListener(FOCUS_ORDER_SEARCH_EVENT, onFocusRequest);
   }, []);
 
   function onSubmit(e: FormEvent) {
