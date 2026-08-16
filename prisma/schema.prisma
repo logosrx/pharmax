@@ -988,6 +988,10 @@ model Organization {
   patientAllergies                PatientAllergy[]
   patientAllergyHistoryAssertions PatientAllergyHistoryAssertion[]
 
+  // AI typing assist (tenant guardrails + org policy).
+  productAiGuardrails ProductAiGuardrail[]
+  aiAssistPolicies    AiAssistPolicy[]
+
   @@map("organization")
 }
 
@@ -4649,10 +4653,105 @@ model Product {
   pricingRules               PricingRule[]
   compoundFormulaIngredients CompoundFormulaIngredient[]
   compoundFormulas           CompoundFormula[]           @relation("CompoundFormulaProduct")
+  aiGuardrail                ProductAiGuardrail?
 
   @@unique([organizationId, ndc])
   @@index([organizationId, name])
   @@map("product")
+}
+
+// Tenant-authored safety envelope for the AI typing assistant, keyed
+// 1:1 to a catalog product. The guardrail is the pharmacy's OWN
+// statement of what a plausible fill of this product looks like —
+// authored at product-creation time by the same permission that
+// manages the catalog (`inventory.products.manage`).
+//
+// Two consumers, by design:
+//
+//   1. The deterministic typing validators (`@pharmax/typing-assist`)
+//      compare a typed prescription against these ceilings and emit
+//      findings the tech sees in the typing screen. This works with
+//      no model in the loop.
+//   2. The (later-phase) model-suggestion pipeline must operate
+//      INSIDE the envelope: a suggestion that violates the guardrail
+//      is discarded before a human ever sees it, and
+//      `aiSuggestionsEnabled = false` removes this product from the
+//      suggestion surface entirely.
+//
+// All ceilings are optional — NULL means "no tenant-authored bound on
+// this axis" and the axis is simply not validated. `version` bumps on
+// every SetProductAiGuardrail so downstream suggestion records can pin
+// the exact guardrail revision they were screened against (same
+// pinning pattern as workflow_policy_id/version on verification
+// records).
+//
+// No PHI: product-level configuration only.
+model ProductAiGuardrail {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  productId String  @unique @db.Uuid
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  // Per-product kill switch for model-generated suggestions.
+  // Deterministic validation still runs when false — turning the
+  // model off must never turn safety checks off.
+  aiSuggestionsEnabled Boolean @default(true)
+
+  // Ceilings a typed prescription is validated against. NULL = axis
+  // not bounded by the tenant.
+  maxQuantityPerFill   Decimal? @db.Decimal(18, 4)
+  maxDaysSupplyPerFill Int?
+  maxRefillsAuthorized Int?
+
+  version Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, productId])
+  @@map("product_ai_guardrail")
+}
+
+// Org-level policy for the AI typing assistant — the tenant's master
+// switch and thresholds, one row per organization (upserted by
+// SetAiAssistPolicy). Typing assist is OFF by default: an org that
+// never touches this table gets deterministic validation only, and no
+// model ever runs against its data.
+//
+// `version` bumps on every change so suggestion batches can record
+// which policy revision governed them — an auditor asking "was the
+// model allowed to run on this order?" gets an answer pinned to a
+// revision, not to whatever the row says today.
+//
+// No PHI: configuration only.
+model AiAssistPolicy {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // Master switch for model-backed typing suggestions in this org.
+  typingAssistEnabled Boolean @default(false)
+
+  // Minimum model confidence (0–100) for a suggestion to be surfaced
+  // to a technician. Below-threshold suggestions are recorded for
+  // evaluation but never shown.
+  minConfidencePercent Int @default(90)
+
+  // Controlled substances are excluded from model suggestions unless
+  // the tenant explicitly opts in. Conservative default: the cost of
+  // a wrong suggestion is highest exactly where regulation is
+  // tightest.
+  allowControlledSubstanceSuggestions Boolean @default(false)
+
+  version Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId])
+  @@map("ai_assist_policy")
 }
 
 // Inventory lot at a pharmacy site. Expired lots are rejected at

@@ -132,6 +132,16 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
       "Receive an inbound lot shipment (ADR-0035 slice 3): creates or extends the Lot, credits the inventory ledger, and stores the DSCSA transaction record (TI snapshot + Transaction Statement gate)",
   },
   {
+    code: "inventory.products.manage",
+    description:
+      "Create and edit catalog products and their AI typing-assist guardrails; gates ndcKind and controlled-substance-schedule changes with audit-logged before/after values",
+  },
+  {
+    code: "ai.assist_policy.manage",
+    description:
+      "Set the org-level AI typing-assist policy (model master switch, minimum confidence threshold, controlled-substance opt-in); OrgAdmin only by default",
+  },
+  {
     code: "compounding.read",
     description:
       "View compound formulas (Master Formulation Records): codes, versions, ingredients, BUD policy, hazard flags. Recipe/catalog data only — no PHI",
