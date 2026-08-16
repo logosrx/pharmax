@@ -409,6 +409,47 @@ paths:
                     Directions for use. PHI — encrypted on arrival,
                     redacted from our command log, and never returned
                     by any v1 read.
+                sigStructureKind:
+                  type: string
+                  enum: [FIXED, PRN, RANGE, TAPER]
+                  description: |
+                    Optional structured-sig summary of `sig`, used by
+                    the pharmacist dose-range screen. All four
+                    structured-sig fields are optional; the free-text
+                    `sig` remains the authoritative instruction.
+                doseAmount:
+                  type: string
+                  pattern: '^\d{1,8}(\.\d{1,4})?$'
+                  description: |
+                    Dose per administration. Decimal STRING (up to
+                    four fractional digits), same IEEE-754 rationale
+                    as `quantityAuthorized`. Must be greater than 0.
+                doseUnit:
+                  type: string
+                  enum:
+                    [
+                      MG,
+                      MCG,
+                      G,
+                      MEQ,
+                      ML,
+                      UNIT,
+                      TABLET,
+                      CAPSULE,
+                      DROP,
+                      PUFF,
+                      SPRAY,
+                      PATCH,
+                      APPLICATION,
+                    ]
+                  description: Coded unit `doseAmount` is denominated in.
+                dosesPerDay:
+                  type: string
+                  pattern: '^\d{1,2}(\.\d{1,4})?$'
+                  description: |
+                    Administrations per day. Decimal STRING — e.g.
+                    every-other-day is "0.5". Must be greater than 0
+                    and at most 24.
                 noteToPharmacist:
                   type: string
                   minLength: 1
@@ -585,7 +626,10 @@ paths:
                 reason: { type: string, maxLength: 500 }
       responses:
         "200":
-          description: Subscription disabled.
+          description: |
+            Subscription disabled. Unlike the other mutations, a
+            replay of the same `Idempotency-Key` returns this same
+            200 body WITHOUT a `meta.idempotentReplay` marker.
           content:
             application/json:
               schema:
@@ -595,7 +639,8 @@ paths:
                     type: object
                     properties:
                       subscriptionId: { type: string, format: uuid }
-                      status: { type: string, enum: [DISABLED] }
+                      url: { type: string, format: uri }
+                      disabledAt: { type: string, format: date-time }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/ScopeDenied" }
@@ -639,28 +684,47 @@ paths:
         "200":
           description: |
             Secret rotated (`secret` shown once) — or an idempotent
-            replay (`secret: null`).
+            replay (`secret: null`). Both outcomes are a 200; the
+            replay is distinguished by `meta.idempotentReplay` (the
+            first rotation carries NO `meta` object).
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  data:
+                oneOf:
+                  - title: First rotation
                     type: object
                     properties:
-                      subscriptionId: { type: string, format: uuid }
-                      url: { type: string, format: uri }
-                      rotatedAt: { type: string, format: date-time }
-                      secret:
-                        type: [string, "null"]
-                        description: |
-                          The new `pxw_` signing secret. Present only
-                          on the first response for a given
-                          `Idempotency-Key`; `null` on replays.
-                  meta:
+                      data:
+                        type: object
+                        properties:
+                          subscriptionId: { type: string, format: uuid }
+                          url: { type: string, format: uri }
+                          rotatedAt: { type: string, format: date-time }
+                          secret:
+                            type: string
+                            description: |
+                              The new `pxw_` signing secret. Present
+                              only on this first response for a given
+                              `Idempotency-Key`.
+                  - title: Idempotent replay
                     type: object
                     properties:
-                      idempotentReplay: { type: boolean, enum: [true] }
+                      data:
+                        type: object
+                        properties:
+                          subscriptionId: { type: string, format: uuid }
+                          url: { type: string, format: uri }
+                          rotatedAt: { type: string, format: date-time }
+                          secret:
+                            type: "null"
+                            description: |
+                              Never re-disclosed on a replay — the
+                              secret stored by the original attempt
+                              remains active.
+                      meta:
+                        type: object
+                        properties:
+                          idempotentReplay: { type: boolean, enum: [true] }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/ScopeDenied" }
