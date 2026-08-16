@@ -13,6 +13,7 @@
 import "server-only";
 
 import { readInOrgScope, type CompoundBatchStatus } from "@pharmax/database";
+import { isPastBeyondUseDate } from "@pharmax/inventory";
 
 export interface CompoundBatchListRow {
   readonly batchId: string;
@@ -88,7 +89,7 @@ export async function listCompoundBatches(
           status: r.status,
           compoundedOn: r.compoundedOn,
           beyondUseDate: r.beyondUseDate,
-          pastBud: r.beyondUseDate < now,
+          pastBud: isPastBeyondUseDate(r.beyondUseDate, now),
           unitCount: r.unitCount,
           productId: r.product.id,
           productName: r.product.name,

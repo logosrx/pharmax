@@ -418,6 +418,26 @@ describe("ReleaseCompoundBatch", () => {
     expect(callsOf(fake.calls, "compoundBatch", "updateMany")).toHaveLength(0);
   });
 
+  it("refuses a lab reference carrying PHI-shaped text, before any read", async () => {
+    const fake = buildFakePrisma({ batches: [batchRow({ status: "TESTING" })] });
+    wireBusAndRbac(fake.client, releaseGrants);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          ReleaseCompoundBatch,
+          { batchId: BATCH_ID, labReference: "CoA for patient: J. Doe" },
+          { idempotencyKey: "r-phi" }
+        )
+      )
+    ).rejects.toMatchObject({ code: "BATCH_TEXT_REJECTED" });
+
+    // Nothing read, nothing written — and the refusal message must not
+    // echo the text it just refused to persist.
+    expect(callsOf(fake.calls, "compoundBatch", "findFirst")).toHaveLength(0);
+    expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(0);
+  });
+
   it("denies a technician holding only the transition grant — release is a quality decision", async () => {
     const fake = buildFakePrisma({ batches: [batchRow({ status: "TESTING" })] });
     wireBusAndRbac(fake.client, transitionGrants);
@@ -480,6 +500,52 @@ describe("RejectCompoundBatch", () => {
     ).rejects.toMatchObject({ code: "COMMAND_INPUT_INVALID" });
 
     expect(callsOf(fake.calls, "compoundBatch", "updateMany")).toHaveLength(0);
+  });
+
+  it("refuses a note carrying PHI-shaped text without leaking it into the error", async () => {
+    const fake = buildFakePrisma({ batches: [batchRow({ status: "TESTING" })] });
+    wireBusAndRbac(fake.client, releaseGrants);
+
+    const note = "failed for patient: Jane Doe, DOB: 1962-07-04";
+    let caught: unknown;
+    try {
+      await withTenancyContext(ctx(), () =>
+        executeCommand(
+          RejectCompoundBatch,
+          { batchId: BATCH_ID, reasonCode: "CONTAMINATION", note },
+          { idempotencyKey: "x-phi" }
+        )
+      );
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toMatchObject({ code: "BATCH_TEXT_REJECTED" });
+    // Names the rules that fired, never the matched text — the message
+    // reaches logs.
+    const message = (caught as { message: string }).message;
+    expect(message).toContain("patient_label");
+    expect(message).toContain("date_of_birth_label");
+    expect(message).not.toContain("Jane Doe");
+    expect(message).not.toContain("1962-07-04");
+
+    expect(callsOf(fake.calls, "compoundBatch", "updateMany")).toHaveLength(0);
+    expect(callsOf(fake.calls, "auditLog", "create")).toHaveLength(0);
+  });
+
+  it("accepts an ordinary operational note", async () => {
+    const fake = buildFakePrisma({ batches: [batchRow({ status: "TESTING" })] });
+    wireBusAndRbac(fake.client, releaseGrants);
+
+    const out = await withTenancyContext(ctx(), () =>
+      executeCommand(
+        RejectCompoundBatch,
+        { batchId: BATCH_ID, reasonCode: "STERILITY_FAILURE", note: "growth on day 7 of 14" },
+        { idempotencyKey: "x-clean-note" }
+      )
+    );
+
+    expect(out.toStatus).toBe("REJECTED");
   });
 
   it("refuses to reject an already-REJECTED batch (terminal)", async () => {

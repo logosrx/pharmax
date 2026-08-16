@@ -29,6 +29,7 @@ export const BATCH_NOT_FOUND = "BATCH_NOT_FOUND";
 export const BATCH_INVALID_TRANSITION = "BATCH_INVALID_TRANSITION";
 export const BATCH_DISPENSING_CONFLICT = "BATCH_DISPENSING_CONFLICT";
 export const BATCH_PAST_BUD = "BATCH_PAST_BUD";
+export const BATCH_TEXT_REJECTED = "BATCH_TEXT_REJECTED";
 
 // ---------------------------------------------------------------------
 // Compound batch rejection reasons

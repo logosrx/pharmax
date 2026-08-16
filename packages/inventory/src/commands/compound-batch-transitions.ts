@@ -29,15 +29,17 @@
 import type { Command, HandlerResult } from "@pharmax/command-bus";
 import type { PrismaTxClient } from "@pharmax/command-bus";
 import { CompoundBatchStatus, Prisma } from "@pharmax/database";
-import { errors } from "@pharmax/platform-core";
+import { errors, phi } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
 
+import { isPastBeyondUseDate } from "../compound-batch-bud.js";
 import {
   BATCH_DISPENSING_CONFLICT,
   BATCH_INVALID_TRANSITION,
   BATCH_NOT_FOUND,
   BATCH_PAST_BUD,
+  BATCH_TEXT_REJECTED,
   COMPOUND_BATCH_REJECTION_REASONS,
 } from "../shared.js";
 
@@ -46,6 +48,39 @@ import {
 // ---------------------------------------------------------------------
 
 const batchIdSchema = z.object({ batchId: z.uuid() }).strict();
+
+/**
+ * Gate between operator free text and the audit ledger.
+ *
+ * `labReference` and `note` are the only human-typed strings in this
+ * module, and both land in `audit_log.metadata` — append-only,
+ * hash-chained, retained for years. PHI pasted there is an
+ * irremediable disclosure: crypto-shredding cannot reach it and
+ * editing the row would falsify the chain. Same reasoning and same
+ * posture as the break-glass ledger gate (`@pharmax/security`): the
+ * text is typed BEFORE the write, so a tripwire hit REFUSES the
+ * write. The author is present and can reword; nothing is lost.
+ *
+ * The message names the rules that fired but never echoes the text —
+ * it reaches logs, and logging what we just refused to persist would
+ * defeat the gate.
+ */
+function assertBatchTextPhiSafe(text: string, field: string): void {
+  const hits = phi.scanForPhi(text);
+  if (hits.length === 0) return;
+  throw new errors.ValidationError({
+    code: BATCH_TEXT_REJECTED,
+    message:
+      `The batch ${field} looks like it carries patient data ` +
+      `(matched: ${hits.map((h) => h.rule).join(", ")}). ` +
+      `${hits.map((h) => h.explanation).join(" ")} ` +
+      `This text is written to an append-only, hash-chained audit record and can never be ` +
+      `deleted. A batch is a production record with no patient attached — describe the lot or ` +
+      `the test result, and refer to any affected order by its id. If this is a false positive, ` +
+      `reword rather than widening the rule.`,
+    issues: [{ path: [field], message: "must not carry PHI-shaped text" }],
+  });
+}
 
 interface LoadedBatch {
   readonly id: string;
@@ -259,6 +294,10 @@ export const ReleaseCompoundBatch: Command<
 
   async handle({ input, ctx, tx, commandLogId, clock }) {
     const now = clock.now();
+    // Screen before any read: a refusal should cost nothing.
+    if (input.labReference !== undefined) {
+      assertBatchTextPhiSafe(input.labReference, "lab reference");
+    }
     const batch = await loadBatch(tx, ctx.organizationId, input.batchId);
     if (batch.status !== CompoundBatchStatus.TESTING) {
       invalidTransition(batch, CompoundBatchStatus.TESTING, "releasing");
@@ -312,6 +351,10 @@ export const RejectCompoundBatch: Command<RejectCompoundBatchInput, CompoundBatc
 
     async handle({ input, ctx, tx, commandLogId, clock }) {
       const now = clock.now();
+      // Screen before any read: a refusal should cost nothing.
+      if (input.note !== undefined) {
+        assertBatchTextPhiSafe(input.note, "rejection note");
+      }
       const batch = await loadBatch(tx, ctx.organizationId, input.batchId);
       if (batch.status !== CompoundBatchStatus.TESTING) {
         invalidTransition(batch, CompoundBatchStatus.TESTING, "rejecting");
@@ -364,9 +407,9 @@ export const StartDispensingCompoundBatch: Command<
 
     // The BUD analogue of "no expired lot assignment": a batch past
     // its Beyond-Use Date must never become the dispensing batch,
-    // released or not.
-    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    if (batch.beyondUseDate < today) {
+    // released or not. Shared predicate so the console's PAST BUD
+    // badge and this refusal cannot drift apart.
+    if (isPastBeyondUseDate(batch.beyondUseDate, now)) {
       throw new errors.ValidationError({
         code: BATCH_PAST_BUD,
         message: "This batch is past its Beyond-Use Date and cannot be dispensed from.",

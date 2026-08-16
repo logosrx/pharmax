@@ -52,6 +52,7 @@ export {
   formatCompoundedOnCode,
   normalizeSiteSerialCode,
 } from "./compound-batch-serial.js";
+export { isPastBeyondUseDate } from "./compound-batch-bud.js";
 
 export {
   allocatePharmaxProductId,
@@ -71,6 +72,7 @@ export {
   BATCH_PRODUCT_NOT_COMPOUND,
   BATCH_PRODUCT_SERIAL_IDENTITY_MISSING,
   BATCH_SITE_CODE_UNUSABLE,
+  BATCH_TEXT_REJECTED,
   CATALOG_DUPLICATE_COMPOUND_PRODUCT,
   CATALOG_PRODUCT_CREATE_CONFLICT,
   COMPOUND_BATCH_REJECTION_REASONS,
