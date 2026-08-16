@@ -109,11 +109,16 @@ export {
 
 export {
   attemptWebhookDelivery,
+  createPinnedWebhookDispatcher,
   webhookSecretBinding,
   WEBHOOK_DELIVERY_TIMEOUT_MS,
+  WEBHOOK_DESTINATION_REFUSED_PREFIX,
+  WEBHOOK_DESTINATION_UNRESOLVABLE_PREFIX,
   WEBHOOK_USER_AGENT,
   type AttemptWebhookDeliveryInput,
   type AttemptWebhookDeliveryResult,
+  type WebhookFetch,
+  type WebhookFetchInit,
 } from "./webhooks/deliver.js";
 
 import * as createApiKeyModule from "./commands/create-api-key.js";
