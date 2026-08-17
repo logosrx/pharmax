@@ -164,6 +164,12 @@ const NAV: ReadonlyArray<GroupSpec> = [
         requires: PERMISSIONS.INVENTORY_READ,
       },
       {
+        href: "/ops/admin/compound-batches",
+        label: "Compound Batches",
+        icon: "batches",
+        requires: PERMISSIONS.INVENTORY_READ,
+      },
+      {
         href: "/ops/admin/practices",
         label: "Practices",
         icon: "practices",

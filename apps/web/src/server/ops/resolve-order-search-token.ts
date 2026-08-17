@@ -18,6 +18,13 @@
 // typing an external order number (the advertised fast path) landed
 // on "Order not found".
 //
+// A fourth shape reaches the same route and is NOT an order: a
+// compound stock label identifies a production run that may never have
+// been dispensed. It is classified and gated in `scan-destination.ts`
+// and never arrives here, because its destination is an inventory page
+// gated on `inventory.read` — resolving it as an order would put it
+// behind the order/PHI grants the caller checks before calling this.
+//
 // Tenancy: every lookup carries the explicit organizationId
 // predicate on top of the RLS scope.
 

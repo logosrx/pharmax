@@ -53,6 +53,8 @@ import { CompoundingFormulaCreatedV1 } from "./events/compounding/formula-create
 import { CompoundingFormulaPublishedV1 } from "./events/compounding/formula-published-v1.js";
 import { CompoundingFormulaRetiredV1 } from "./events/compounding/formula-retired-v1.js";
 import { CompoundingPreparationRecordedV1 } from "./events/compounding/preparation-recorded-v1.js";
+import { InventoryCompoundBatchCreatedV1 } from "./events/inventory/compound-batch-created-v1.js";
+import { InventoryCompoundBatchStatusChangedV1 } from "./events/inventory/compound-batch-status-changed-v1.js";
 import { InventoryLotReceivedV1 } from "./events/inventory/lot-received-v1.js";
 import { InventoryProductAiGuardrailSetV1 } from "./events/inventory/product-ai-guardrail-set-v1.js";
 import { InventoryProductCreatedV1 } from "./events/inventory/product-created-v1.js";
@@ -62,6 +64,11 @@ import { InventoryProductUpdatedV1 } from "./events/inventory/product-updated-v1
 import { FillLotAssignedV1 } from "./events/fill/lot-assigned-v1.js";
 
 // ---- labels --------------------------------------------------------------
+import {
+  LabelsCompoundLabelCompletedV1,
+  LabelsCompoundLabelFailedV1,
+} from "./events/labels/compound-label-outcome-v1.js";
+import { LabelsCompoundLabelRequestedV1 } from "./events/labels/compound-label-requested-v1.js";
 import { LabelsVialPrintCompletedV1 } from "./events/labels/vial-print-completed-v1.js";
 import { LabelsVialPrintFailedV1 } from "./events/labels/vial-print-failed-v1.js";
 import { LabelsVialPrintReprintRequestedV1 } from "./events/labels/vial-print-reprint-requested-v1.js";
@@ -219,6 +226,8 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   CompoundingFormulaPublishedV1,
   CompoundingFormulaRetiredV1,
   CompoundingPreparationRecordedV1,
+  InventoryCompoundBatchCreatedV1,
+  InventoryCompoundBatchStatusChangedV1,
   InventoryLotReceivedV1,
   InventoryProductAiGuardrailSetV1,
   InventoryProductCreatedV1,
@@ -232,6 +241,9 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   AiTypingSuggestionAcceptedV1,
   AiTypingSuggestionDismissedV1,
   // labels
+  LabelsCompoundLabelCompletedV1,
+  LabelsCompoundLabelFailedV1,
+  LabelsCompoundLabelRequestedV1,
   LabelsVialPrintCompletedV1,
   LabelsVialPrintFailedV1,
   LabelsVialPrintReprintRequestedV1,

@@ -105,7 +105,15 @@ Open http://localhost:3001/dashboards.
 
 ---
 
-## Production wiring (out of scope, for reference)
+## Production wiring (partially landed)
+
+> **Update.** The transport half of this section is no longer a follow-up:
+> production export to **Grafana Cloud** (direct app → OTLP gateway, no
+> collector sidecar) is wired in Terraform behind the `otel_backend_enabled`
+> tfvar. Flip procedure:
+> [`docs/observability/grafana-cloud-otel-backend.md`](../docs/observability/grafana-cloud-otel-backend.md).
+> The collector-sidecar fan-out below remains the reference design if/when a
+> second sink or the PHI-scrub processor is needed in production.
 
 When Terraform lands, the production pipeline is:
 

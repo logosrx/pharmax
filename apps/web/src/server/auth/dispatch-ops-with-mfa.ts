@@ -16,8 +16,8 @@
 import "server-only";
 
 import { errors } from "@pharmax/platform-core";
-import { NextResponse } from "next/server";
 
+import { seeOther } from "../http/redirect.js";
 import { dispatchOpsCommand, type DispatchOpsCommandInput } from "../ops/dispatch-from-route.js";
 import { logger } from "../logger.js";
 
@@ -33,9 +33,7 @@ export async function dispatchOpsCommandWithMfa<TIn, TOut>(
   // Step 1 — Resolve operator session.
   const session = await resolveOperatorTenancyContext();
   if (!session.ok) {
-    return NextResponse.redirect(new URL("/sign-in", "http://internal").toString(), {
-      status: 303,
-    });
+    return seeOther("/sign-in");
   }
 
   // Step 2 — Load role codes for the MFA floor check (one indexed JOIN).
@@ -67,13 +65,9 @@ export async function dispatchOpsCommandWithMfa<TIn, TOut>(
         typeof input.failureRedirect === "function"
           ? input.failureRedirect()
           : input.failureRedirect;
-      return NextResponse.redirect(
-        new URL(
-          `${failureRedirect}?error=${encodeURIComponent(`${cause.code}: ${message}`)}`,
-          "http://internal"
-        ).toString(),
-        { status: 303 }
-      );
+      // `error` is SET rather than templated on: a failure target that
+      // already carries a query string used to produce `?a=1?error=…`.
+      return seeOther(failureRedirect, { error: `${cause.code}: ${message}` });
     }
     throw cause;
   }

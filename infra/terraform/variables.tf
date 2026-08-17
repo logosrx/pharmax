@@ -449,6 +449,37 @@ variable "enable_synthetics" {
   default     = false
 }
 
+# ---- OpenTelemetry backend (Grafana Cloud) -----------------------------------
+
+variable "otel_backend_enabled" {
+  description = <<-EOT
+    Wire the web + worker tasks to export OpenTelemetry traces + metrics to
+    the Grafana Cloud OTLP gateway: injects OTEL_EXPORTER_OTLP_ENDPOINT
+    (plain env, from `otel_exporter_otlp_endpoint`) and
+    OTEL_EXPORTER_OTLP_HEADERS (from the `grafana-cloud-otlp-headers`
+    secret). Off by default — flip it only AFTER the Grafana Cloud stack
+    exists and the secret holds a real token, in that order; the full
+    procedure is docs/observability/grafana-cloud-otel-backend.md. Until
+    then the apps keep their no-backend localhost default.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "otel_exporter_otlp_endpoint" {
+  description = <<-EOT
+    Grafana Cloud OTLP gateway base URL (OTLP/HTTP), injected as
+    OTEL_EXPORTER_OTLP_ENDPOINT when `otel_backend_enabled` is true. The
+    default is the us-central production gateway as a sensible shape, but
+    the gateway is REGION-SPECIFIC to your Grafana Cloud stack — you MUST
+    set this to the exact `https://otlp-gateway-<region>.grafana.net/otlp`
+    URL shown on your stack's "OpenTelemetry → Configure" page, or every
+    export batch fails auth (tokens are stack-scoped).
+  EOT
+  type        = string
+  default     = "https://otlp-gateway-prod-us-central-0.grafana.net/otlp"
+}
+
 # ---- Secrets ----------------------------------------------------------------
 
 variable "secret_values" {

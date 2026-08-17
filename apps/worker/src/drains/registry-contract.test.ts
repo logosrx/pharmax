@@ -81,6 +81,23 @@ const PAYLOADS: Readonly<Record<string, Record<string, unknown>>> = Object.freez
     workstationId: null,
     occurredAt: NOW,
   },
+  "labels.compound_label.requested.v1": {
+    organizationId: ORG,
+    printJobId: PRINT_JOB,
+    targetKind: "COMPOUND_UNIT",
+    compoundBatchId: VIAL_LABEL, // reusing a uuid placeholder; shape only
+    compoundBatchUnitId: ORDER,
+    batchNumber: "PHX-T30-1-040327",
+    serialNumber: "PHX-T30-1-040327-11",
+    printerId: PRINTER,
+    workstationId: null,
+    templateCode: "compound.unit.standard",
+    templateVersion: 1,
+    contentHashHex: "a".repeat(64),
+    isReprint: false,
+    requestedByUserId: USER,
+    occurredAt: NOW,
+  },
   "shipment.tracking.recorded.v1": {
     organizationId: ORG,
     shipmentId: SHIPMENT,

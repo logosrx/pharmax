@@ -20,8 +20,8 @@ import { executeCommand, fingerprintRequest } from "@pharmax/command-bus";
 import { errors, ids } from "@pharmax/platform-core";
 import type { Command } from "@pharmax/command-bus";
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
-import { NextResponse } from "next/server";
 
+import { seeOther } from "../http/redirect.js";
 import { logger } from "../logger.js";
 import { withSentryOpsScope } from "../observability/ops-scope.js";
 import { resolveOperatorTenancyContext } from "../auth/resolve-tenancy.js";
@@ -108,9 +108,7 @@ export async function dispatchOpsCommand<TIn, TOut>(
 ): Promise<Response> {
   const session = await resolveOperatorTenancyContext();
   if (!session.ok) {
-    return NextResponse.redirect(new URL("/sign-in", "http://internal").toString(), {
-      status: 303,
-    });
+    return seeOther("/sign-in");
   }
 
   const resolveFailureRedirect = (): string =>
@@ -121,11 +119,8 @@ export async function dispatchOpsCommand<TIn, TOut>(
   // PV1 approve route uses that to name the order that was refused,
   // which is how the queue links the pharmacist to the findings that
   // blocked it instead of showing a code with no destination.
-  const failureRedirect = (payload: string): Response => {
-    const url = new URL(resolveFailureRedirect(), "http://internal");
-    url.searchParams.set("error", payload);
-    return NextResponse.redirect(url.toString(), { status: 303 });
-  };
+  const failureRedirect = (payload: string): Response =>
+    seeOther(resolveFailureRedirect(), { error: payload });
 
   // Guarded parse: a body that is neither form nor JSON (text/plain,
   // no content type, truncated multipart) is a clean flash redirect,
@@ -247,10 +242,7 @@ export async function dispatchOpsCommand<TIn, TOut>(
             });
           }
         }
-        return NextResponse.redirect(
-          new URL(input.successRedirect(output), "http://internal").toString(),
-          { status: 303 }
-        );
+        return seeOther(input.successRedirect(output));
       } catch (cause) {
         const code = cause instanceof errors.PharmaxError ? cause.code : "OPS_DISPATCH_FAILED";
         const message = cause instanceof errors.PharmaxError ? cause.message : "Unable to apply.";

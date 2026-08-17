@@ -33,6 +33,7 @@
     "@pharmax/reporting": "workspace:*",
     "@aws-sdk/client-s3": "^3.1105.0",
     "@pharmax/rbac": "workspace:*",
+    "@pharmax/scan": "workspace:*",
     "@pharmax/shipping": "workspace:*",
     "@pharmax/sla": "workspace:*",
     "@pharmax/telemetry": "workspace:*",
