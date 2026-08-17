@@ -19,6 +19,7 @@ import Link from "next/link";
 
 import { CompoundBatchStatus } from "@pharmax/database";
 import { COMPOUND_BATCH_REJECTION_REASONS } from "@pharmax/inventory";
+import { VIAL_LABEL_REPRINT_REASONS } from "@pharmax/labels";
 import { PERMISSIONS } from "@pharmax/rbac";
 
 import {
@@ -27,6 +28,7 @@ import {
 } from "../../../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../../../src/server/auth/resolve-tenancy.js";
 import { getCompoundBatch } from "../../../../../src/server/ops/get-compound-batch.js";
+import { getCompoundLabelPrintOptions } from "../../../../../src/server/ops/get-compound-label-print-options.js";
 import { PageHeader, Section } from "../../../../../src/components/ui/page.js";
 import { Card, CardContent } from "../../../../../src/components/ui/card.js";
 import { Badge, type Tone } from "../../../../../src/components/ui/badge.js";
@@ -124,6 +126,20 @@ export default async function CompoundBatchDetailPage({
   const flashError = typeof sp["error"] === "string" ? sp["error"] : null;
   const canTransition = hasOperatorPermission(permissions, PERMISSIONS.INVENTORY_BATCH_TRANSITION);
   const canRelease = hasOperatorPermission(permissions, PERMISSIONS.INVENTORY_BATCH_RELEASE);
+  const canPrintLabels = hasOperatorPermission(
+    permissions,
+    PERMISSIONS.INVENTORY_BATCH_LABEL_PRINT
+  );
+
+  // A rejected batch is quarantine stock — the command refuses to label
+  // it, so the controls are not offered either.
+  const labelsPrintable = canPrintLabels && batch.status !== CompoundBatchStatus.REJECTED;
+  const printOptions = labelsPrintable
+    ? await getCompoundLabelPrintOptions({
+        organizationId: session.tenancy.organizationId,
+        siteId: batch.siteId,
+      })
+    : null;
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -202,6 +218,155 @@ export default async function CompoundBatchDetailPage({
           </CardContent>
         </Card>
       </Section>
+
+      {printOptions !== null ? (
+        <Section title="Labels">
+          {printOptions.workstations.length === 0 ? (
+            <Card>
+              <CardContent>
+                <p className="text-sm text-muted">
+                  No active workstation at <span className="font-mono">{batch.siteCode}</span>.
+                  Printing records the workstation in the label&rsquo;s audit trail, so one must be
+                  registered before labels can be sent.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <Card>
+                <CardContent>
+                  <p className="mb-3 text-sm text-muted">
+                    Batch record label — barcode, Pharmax Product ID, and batch number. A second
+                    print requires a reason so a duplicate on a shelf is explainable.
+                  </p>
+                  {printOptions.batchPrinters.length === 0 ? (
+                    <p className="text-sm text-tone-danger">
+                      No active BATCH_2X1 printer at this site.
+                    </p>
+                  ) : (
+                    <ActionForm
+                      action="/api/ops/inventory/print-compound-label"
+                      className="space-y-3"
+                    >
+                      <input type="hidden" name="kind" value="batch" />
+                      <input type="hidden" name="batchId" value={batch.batchId} />
+                      <Field label="Printer">
+                        <Select name="printerId" required>
+                          {printOptions.batchPrinters.map((p) => (
+                            <option key={p.printerId} value={p.printerId}>
+                              {p.code} — {p.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="Workstation">
+                        <Select name="workstationId" required>
+                          {printOptions.workstations.map((w) => (
+                            <option key={w.workstationId} value={w.workstationId}>
+                              {w.code} — {w.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field
+                        label="Reprint reason"
+                        help="Required only if this label has been printed before"
+                      >
+                        <Select name="reprintReasonCode" defaultValue="">
+                          <option value="">— first print —</option>
+                          {VIAL_LABEL_REPRINT_REASONS.map((reason) => (
+                            <option key={reason} value={reason}>
+                              {reason.replace(/_/g, " ").toLowerCase()}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <SubmitButton variant="secondary" icon="print">
+                        Print batch label
+                      </SubmitButton>
+                    </ActionForm>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent>
+                  <p className="mb-3 text-sm text-muted">
+                    Unit labels — one per vial, each carrying its own serial. Leave both range
+                    fields blank to print all {batch.unitCount}, or fill in both to print a slice;
+                    runs are capped so a large batch prints in passes.
+                  </p>
+                  {printOptions.unitPrinters.length === 0 ? (
+                    <p className="text-sm text-tone-danger">No active VIAL printer at this site.</p>
+                  ) : (
+                    <ActionForm
+                      action="/api/ops/inventory/print-compound-label"
+                      className="space-y-3"
+                    >
+                      <input type="hidden" name="kind" value="units" />
+                      <input type="hidden" name="batchId" value={batch.batchId} />
+                      <Field label="Printer">
+                        <Select name="printerId" required>
+                          {printOptions.unitPrinters.map((p) => (
+                            <option key={p.printerId} value={p.printerId}>
+                              {p.code} — {p.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="Workstation">
+                        <Select name="workstationId" required>
+                          {printOptions.workstations.map((w) => (
+                            <option key={w.workstationId} value={w.workstationId}>
+                              {w.code} — {w.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <div className="grid grid-cols-2 gap-3">
+                        <Field label="From unit">
+                          <Input
+                            name="fromUnitNumber"
+                            type="number"
+                            min="1"
+                            max={String(batch.unitCount)}
+                            className="font-mono"
+                          />
+                        </Field>
+                        <Field label="To unit">
+                          <Input
+                            name="toUnitNumber"
+                            type="number"
+                            min="1"
+                            max={String(batch.unitCount)}
+                            className="font-mono"
+                          />
+                        </Field>
+                      </div>
+                      <Field
+                        label="Reprint reason"
+                        help="Required if any unit in the range was printed before"
+                      >
+                        <Select name="reprintReasonCode" defaultValue="">
+                          <option value="">— first print —</option>
+                          {VIAL_LABEL_REPRINT_REASONS.map((reason) => (
+                            <option key={reason} value={reason}>
+                              {reason.replace(/_/g, " ").toLowerCase()}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <SubmitButton variant="secondary" icon="print">
+                        Print unit labels
+                      </SubmitButton>
+                    </ActionForm>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </Section>
+      ) : null}
 
       {batch.status === CompoundBatchStatus.COMPOUNDED && canTransition ? (
         <Section title="Send to testing">

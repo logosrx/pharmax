@@ -438,6 +438,40 @@ describe("CreateCompoundBatch — product eligibility", () => {
       )
     ).rejects.toMatchObject({ code: "INVENTORY_SITE_NOT_FOUND" });
   });
+
+  // Site codes are operator-configured and unbounded, and the batch
+  // number is printed beside the barcode that embeds it. Minting one
+  // the label could only print in part is what would let the printed
+  // identity and the scanned identity disagree.
+  it("refuses a site code long enough to make the batch number unprintable, before any write", async () => {
+    const fake = buildFakePrisma({
+      site: { id: SITE_ID, code: "PHARMACY-COMPOUNDING-NORTH" },
+    });
+    wireBusAndRbac(fake.client);
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(CreateCompoundBatch, validInput(), { idempotencyKey: "batch-long-site" })
+      )
+    ).rejects.toMatchObject({ code: "BATCH_NUMBER_TOO_LONG_TO_PRINT" });
+
+    // No batch, and no 40 serial rows, for stock that could not be labelled.
+    expect(callsOf(fake.calls, "compoundBatch", "create")).toHaveLength(0);
+    expect(callsOf(fake.calls, "compoundBatchUnit", "createMany")).toHaveLength(0);
+  });
+
+  it("accepts a site code that leaves the batch number exactly at the printable limit", async () => {
+    // PHARMACYNORTH-T30-1-040327 → 26 characters, inside the 28 the
+    // batch label's printed field can carry.
+    const fake = buildFakePrisma({ site: { id: SITE_ID, code: "PHARMACYNORTH" } });
+    wireBusAndRbac(fake.client);
+
+    const out = await withTenancyContext(ctx(), () =>
+      executeCommand(CreateCompoundBatch, validInput(), { idempotencyKey: "batch-limit-site" })
+    );
+
+    expect(out.batchNumber).toBe("PHARMACYNORTH-T30-1-040327");
+  });
 });
 
 // ---------------------------------------------------------------------

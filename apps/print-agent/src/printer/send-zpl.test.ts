@@ -179,17 +179,46 @@ describe("parseHostStatus", () => {
     expect(parseHostStatus(raw).faults).toEqual(["ribbon out"]);
   });
 
-  // KNOWN GAP (real-bug candidate, headline in PR): the module header
-  // promises "anything unparseable is reported as a fault", but a
-  // response with two well-FRAMED strings whose comma fields are
-  // missing (e.g. a device echoing empty frames) parses as READY —
-  // the flag lookups all miss via optional chaining and the empty
-  // fault list reads as all-clear. A truncated-but-framed response
-  // therefore silently passes verification. Fix would be to require
-  // the minimum field counts per string before trusting the frame.
-  it.skip("treats framed strings with missing fields as a fault (currently returns ready)", () => {
+  // Fail-closed on framed-but-fieldless strings: the module header
+  // promises "anything unparseable is reported as a fault". The flags
+  // live at fixed comma positions (string 1 index 2 = pause, string 2
+  // index 3 = ribbon out), so each status string must carry at least
+  // that many fields (3 and 4 respectively) before the frame can be
+  // trusted; anything shorter is a truncated response, never READY.
+  it("treats framed strings with missing fields as a fault, never ready", () => {
     const status = parseHostStatus(`${frame("014")}${frame("000")}`);
     expect(status.ready).toBe(false);
+  });
+
+  it("parses normally at exactly the minimum field counts (3 and 4) with flags raised", () => {
+    // string 1 minimum: aaa,b,c — pause at index 2; string 2 minimum:
+    // mmm,n,o,p — ribbon out at index 3.
+    const status = parseHostStatus(`${frame("014,0,1")}${frame("000,0,0,1")}`);
+    expect(status.ready).toBe(false);
+    expect(status.faults).toEqual(["paused", "ribbon out"]);
+  });
+
+  it("reports ready at exactly the minimum field counts when all flags are clear", () => {
+    const status = parseHostStatus(`${frame("014,0,0")}${frame("000,0,0,0")}`);
+    expect(status).toEqual({ ready: true, faults: [] });
+  });
+
+  it("treats status string 1 one field under minimum as a fault", () => {
+    const status = parseHostStatus(`${frame("014,0")}${frame(hsString2())}`);
+    expect(status.ready).toBe(false);
+    expect(status.faults[0]).toMatch(/unparseable/);
+  });
+
+  it("treats status string 2 one field under minimum as a fault", () => {
+    const status = parseHostStatus(`${frame(hsString1())}${frame("000,0,0")}`);
+    expect(status.ready).toBe(false);
+    expect(status.faults[0]).toMatch(/unparseable/);
+  });
+
+  it("treats empty framed strings (<STX><ETX>) as a fault", () => {
+    const status = parseHostStatus(`${frame("")}${frame("")}`);
+    expect(status.ready).toBe(false);
+    expect(status.faults[0]).toMatch(/unparseable/);
   });
 });
 

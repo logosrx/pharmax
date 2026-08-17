@@ -70,6 +70,12 @@ enable_alerting = true
 # Outside-in heartbeat canary (modules/synthetics). On in production: it is
 # the only monitor that can see DNS/cert/CloudFront/WAF failures.
 enable_synthetics = true
+# Grafana Cloud OTLP export (web + worker). Flip to true only after the
+# Grafana Cloud stack exists, the `grafana-cloud-otlp-headers` secret is
+# populated, and the endpoint below matches your stack's region-specific
+# gateway. See docs/observability/grafana-cloud-otel-backend.md.
+otel_backend_enabled = false
+# otel_exporter_otlp_endpoint = "https://otlp-gateway-<region>.grafana.net/otlp"
 # Legacy single-topic override. Leave empty unless you are pointing at an
 # externally-managed topic; it routes EVERY severity to one place.
 alarm_sns_topic_arn = ""

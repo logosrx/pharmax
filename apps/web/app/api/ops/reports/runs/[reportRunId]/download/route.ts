@@ -27,12 +27,11 @@ import {
   REPORT_RUN_ARCHIVE_INTEGRITY_VIOLATION,
   REPORT_RUN_ARCHIVE_NOT_FOUND,
 } from "@pharmax/reporting";
-import { NextResponse } from "next/server";
-
 import {
   hasOperatorPermission,
   loadOperatorPermissions,
 } from "../../../../../../../src/server/auth/operator-permissions.js";
+import { seeOther } from "../../../../../../../src/server/http/redirect.js";
 import { resolveOperatorTenancyContext } from "../../../../../../../src/server/auth/resolve-tenancy.js";
 import { logger } from "../../../../../../../src/server/logger.js";
 import { withSentryOpsScope } from "../../../../../../../src/server/observability/ops-scope.js";
@@ -41,11 +40,8 @@ import { PERMISSIONS } from "@pharmax/rbac";
 
 export const dynamic = "force-dynamic";
 
-function redirectWithError(message: string): NextResponse {
-  return NextResponse.redirect(
-    new URL(`/ops/reports/runs?error=${encodeURIComponent(message)}`, "http://internal").toString(),
-    { status: 303 }
-  );
+function redirectWithError(message: string): Response {
+  return seeOther("/ops/reports/runs", { error: message });
 }
 
 export async function GET(
@@ -56,9 +52,7 @@ export async function GET(
 
   const session = await resolveOperatorTenancyContext();
   if (!session.ok) {
-    return NextResponse.redirect(new URL("/sign-in", "http://internal").toString(), {
-      status: 303,
-    });
+    return seeOther("/sign-in");
   }
 
   const permissions = await loadOperatorPermissions(session.tenancy);

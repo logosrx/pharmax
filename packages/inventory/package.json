@@ -11,8 +11,10 @@
   "dependencies": {
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/database": "workspace:*",
+    "@pharmax/labels": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",
+    "@pharmax/telemetry": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
     "zod": "^4.4.3"
   },

@@ -159,6 +159,14 @@ env:
   # PR-level change (not a dispatch-input change), so the two-person
   # review happens at code-review time too.
   PROTECTED_DESTROY_TYPES: "aws_kms_key aws_rds_cluster aws_rds_cluster_instance aws_s3_bucket aws_iam_role aws_dynamodb_table"
+  # `data.archive_file` in modules/synthetics packages the canary
+  # script into this directory at PLAN time, and the canary resource
+  # records only the resulting PATH (see the module's "Canary package"
+  # comment). The apply job is a different runner with a fresh
+  # checkout, and the directory is gitignored, so the bundle must
+  # travel with the plan or apply dies reading a file that was only
+  # ever written on the plan runner.
+  CANARY_BUNDLE_DIR: "infra/terraform/modules/synthetics/.build"
 
 jobs:
   # ---------------------------------------------------------------------
@@ -298,6 +306,12 @@ jobs:
     # NOTE: no `environment:` key here. The plan is gated only by
     # the workflow_dispatch trigger + preflight validation. The
     # approval gate fires at the apply job.
+    outputs:
+      # Whether this plan produced a canary bundle, i.e. whether the
+      # target env-region has `enable_synthetics = true`. The apply
+      # job keys its download on this so a synthetics-disabled region
+      # does not try to fetch an artifact that was never uploaded.
+      canary_bundle: ${{ steps.canary_bundle.outputs.present }}
     env:
       WORK_DIR: ${{ needs.preflight.outputs.work_dir }}
       AWS_REGION: ${{ needs.preflight.outputs.aws_region }}
@@ -475,6 +489,45 @@ jobs:
 
           echo "No destroys of protected resource types (ok)."
 
+      # The plan resolved `data.archive_file.heartbeat`, which WROTE the
+      # canary zip onto this runner. `aws_synthetics_canary.zip_file`
+      # holds that path, and the apply reads the bytes at apply time,
+      # so the file has to reach the apply runner. Absent for
+      # env-regions with `enable_synthetics = false` (the module's
+      # count is 0, so the data source never evaluates) — that is a
+      # legitimate state, not a failure, hence the flag rather than an
+      # unconditional upload.
+      - name: Detect canary bundle
+        id: canary_bundle
+        run: |
+          if [ -n "$(find "$CANARY_BUNDLE_DIR" -maxdepth 1 -name '*.zip' -print -quit 2>/dev/null)" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "Canary bundle present; it will travel with the plan."
+            find "$CANARY_BUNDLE_DIR" -maxdepth 1 -name '*.zip'
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "No canary bundle (expected when enable_synthetics = false)."
+          fi
+
+      - name: Upload canary bundle
+        if: steps.canary_bundle.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tf-build-${{ inputs.env_region }}-${{ github.run_id }}
+          path: ${{ env.CANARY_BUNDLE_DIR }}/*.zip
+          # REQUIRED, and the reason the first attempt at this hand-off
+          # shipped nothing: upload-artifact treats "files within folders
+          # beginning with ." as hidden and prunes them by default, and
+          # every canary zip lives under `.build/`. Paired with
+          # `if-no-files-found: error` so a silent empty artifact — which
+          # fails the apply later, at the resource, looking like the
+          # original bug — cannot happen again.
+          include-hidden-files: true
+          # Matches the tfplan artifact's retention: the two are one
+          # unit of apply input and expire together.
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Upload tfplan binary
         uses: actions/upload-artifact@v4
         with:
@@ -591,11 +644,31 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gh-actions-apply-${{ inputs.env_region }}-${{ github.run_id }}
 
+      # Restore the plan-time module build outputs (synthetics canary
+      # zip) at the exact paths the saved plan references. The artifact
+      # only exists when the plan produced build outputs, so tolerate
+      # absence — if the plan truly needs a zip that is missing, the
+      # apply below fails loudly on the exact resource.
       - name: Download tfplan binary
         uses: actions/download-artifact@v8
         with:
           name: tfplan-${{ inputs.env_region }}-${{ github.run_id }}
           path: ${{ env.WORK_DIR }}
+
+      # Restores the canary zip to the exact path recorded in the plan.
+      # These are the same bytes the reviewer's plan referenced —
+      # repackaging here instead would apply a file nobody approved.
+      #
+      # Deliberately NOT `continue-on-error`: if the plan produced a
+      # bundle and it cannot be restored, the apply must stop here with
+      # a clear reason, not proceed and die later inside terraform on a
+      # missing file.
+      - name: Download canary bundle
+        if: needs.plan.outputs.canary_bundle == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: tf-build-${{ inputs.env_region }}-${{ github.run_id }}
+          path: ${{ env.CANARY_BUNDLE_DIR }}
 
       - name: terraform init
         working-directory: ${{ env.WORK_DIR }}

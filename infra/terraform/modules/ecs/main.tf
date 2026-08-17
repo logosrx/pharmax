@@ -130,6 +130,22 @@ locals {
     { name = "REPORTING_DATABASE_URL", arn = var.secret_arns["reporting-database-url"] },
   ] : []
 
+  # Grafana Cloud OTLP export (opt-in; web + worker only — the print-agent
+  # runs at desired_count 0 until a physical site exists, and adding a boot
+  # dependency to a service nobody exercises buys nothing). The endpoint is
+  # not secret (plain env var); the headers value carries the gateway auth
+  # token, so it rides the `secrets` block like every other credential.
+  # `@pharmax/telemetry` reads both names verbatim — see
+  # packages/telemetry/src/resolve-config.ts. OTEL_ENABLED needs no wiring:
+  # it defaults to true when NODE_ENV=production.
+  otel_env = var.otel_backend_enabled ? [
+    { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = var.otel_exporter_otlp_endpoint },
+  ] : []
+
+  otel_secret_env = var.otel_backend_enabled ? [
+    { name = "OTEL_EXPORTER_OTLP_HEADERS", arn = var.secret_arns["grafana-cloud-otlp-headers"] },
+  ] : []
+
   web_secret_env = concat([
     { name = "DATABASE_URL", arn = var.secret_arns["database-url"] },
     { name = "DIRECT_URL", arn = var.secret_arns["direct-url"] },
@@ -157,7 +173,7 @@ locals {
     # change: older task-definition revisions still reference them, and
     # those are what ECS rolls back to.
     { name = "SENTRY_DSN", arn = var.secret_arns["sentry-dsn"] },
-  ], local.reporting_secret_env)
+  ], local.reporting_secret_env, local.otel_secret_env)
 
   worker_secret_env = concat([
     { name = "DATABASE_URL", arn = var.secret_arns["database-url-system"] },
@@ -171,7 +187,7 @@ locals {
     { name = "UPS_CLIENT_ID", arn = var.secret_arns["ups-client-id"] },
     { name = "UPS_CLIENT_SECRET", arn = var.secret_arns["ups-client-secret"] },
     { name = "SENTRY_DSN", arn = var.secret_arns["sentry-dsn"] },
-  ], local.reporting_secret_env)
+  ], local.reporting_secret_env, local.otel_secret_env)
 
   print_agent_secret_env = [
     { name = "DATABASE_URL", arn = var.secret_arns["database-url-system"] },
@@ -256,6 +272,7 @@ resource "aws_ecs_task_definition" "web" {
         ],
         var.web_support_email != "" ? [{ name = "SUPPORT_EMAIL", value = var.web_support_email }] : [],
         var.web_app_url != "" ? [{ name = "APP_URL", value = var.web_app_url }] : [],
+        local.otel_env,
       )
 
       secrets = [for s in local.web_secret_env : {
@@ -375,7 +392,7 @@ resource "aws_ecs_task_definition" "worker" {
       image     = "${var.ecr_worker_repository_url}:${var.ecr_worker_image_tag}"
       essential = true
 
-      environment = [
+      environment = concat([
         { name = "NODE_ENV", value = "production" },
         { name = "PHARMAX_REGION", value = var.aws_region },
         { name = "AWS_REGION", value = var.aws_region },
@@ -400,7 +417,7 @@ resource "aws_ecs_task_definition" "worker" {
         # org/*/photo/upload/* and deletes objects with no backing
         # package_photo row). MUST match the web tier's bucket.
         { name = "S3_PACKAGE_PHOTOS_BUCKET", value = var.package_photos_bucket_name },
-      ]
+      ], local.otel_env)
 
       secrets = [for s in local.worker_secret_env : {
         name      = s.name

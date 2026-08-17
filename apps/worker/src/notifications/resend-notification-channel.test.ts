@@ -423,57 +423,17 @@ describe("ResendNotificationChannel — renderer routing per template", () => {
   });
 });
 
-describe("ResendNotificationChannel — templates with no renderer fail LOUDLY", () => {
-  // Both emergency-escalation templates are email-capable in the
-  // registry and are sent by the notify-on-order-escalated outbox
-  // handler, but `renderTemplate` has no case for them. The channel
-  // must surface that as a loud wiring error rather than send a
-  // blank email — these tests pin the loud failure.
-  it.each([
-    {
-      template: "ORDER_SLA_BREACH_ESCALATED_V1" as const,
-      context: {
-        orderExternalNumber: "RX-1001",
-        slaDeadlineAtIso: "2026-08-01T10:00:00.000Z",
-        breachedAtIso: "2026-08-01T10:05:00.000Z",
-      },
-    },
-    {
-      template: "SHIPMENT_ESCALATED_V1" as const,
-      context: {
-        orderExternalNumber: "RX-1001",
-        escalationReason: "DELIVERY_EXCEPTION",
-        lastTrackingStatus: "RETURNED",
-      },
-    },
-  ])("$template → NOTIFICATION_RENDERER_MISSING, no transport call", async (input) => {
-    const fake = buildFakeApi();
-    const channel = buildChannel(fake.api);
-    await expect(
-      channel.send({
-        to: { kind: "email", address: "ops@acme.test" },
-        template: input.template,
-        context: input.context,
-        idempotencyKey: `esc-${input.template}`,
-      })
-    ).rejects.toMatchObject({
-      code: "NOTIFICATION_RENDERER_MISSING",
-      metadata: expect.objectContaining({ templateId: input.template }),
-    });
-    expect(fake.sends).toHaveLength(0);
-  });
-
-  // BUG (found while backfilling coverage — see PR description):
-  // production wires ResendNotificationChannel as THE channel behind
-  // getNotificationChannel(), and notify-on-order-escalated sends
-  // ORDER_SLA_BREACH_ESCALATED_V1 / SHIPMENT_ESCALATED_V1 through it.
-  // With no renderer for either template, EVERY emergency-escalation
-  // email throws NOTIFICATION_RENDERER_MISSING for every recipient,
-  // the handler throws, and the outbox row retries until DEAD —
-  // emergency escalation emails can never be delivered in a
-  // Resend-configured environment. Un-skip once renderers for both
-  // escalation templates exist.
-  it.skip("delivers an ORDER_SLA_BREACH_ESCALATED_V1 email (requires an escalation renderer)", async () => {
+describe("ResendNotificationChannel — emergency escalation templates deliver", () => {
+  // REGRESSION (the bug this suite originally pinned): both
+  // emergency-escalation templates were email-capable in the
+  // registry and sent by the notify-on-order-escalated outbox
+  // handler, but `renderTemplate` had no case for them — every
+  // escalation email threw NOTIFICATION_RENDERER_MISSING for every
+  // recipient, the handler threw, and the outbox row retried until
+  // DEAD. Escalation email delivery was impossible in a
+  // Resend-configured environment. These tests pin the fix: both
+  // templates render and reach the transport.
+  it("delivers an ORDER_SLA_BREACH_ESCALATED_V1 email", async () => {
     const fake = buildFakeApi();
     const channel = buildChannel(fake.api);
     const result = await channel.send({
@@ -488,6 +448,63 @@ describe("ResendNotificationChannel — templates with no renderer fail LOUDLY",
     });
     expect(result.status).toBe("delivered");
     expect(fake.sends).toHaveLength(1);
+    const call = fake.sends[0] as { subject: string; text: string; html: string };
+    expect(call.subject).toContain("RX-1001");
+    expect(call.text).toContain("2026-08-01T10:00:00.000Z");
+    expect(call.text).toContain("2026-08-01T10:05:00.000Z");
+    expect(call.html).toContain("SLA BREACH");
+  });
+
+  it("delivers a SHIPMENT_ESCALATED_V1 email", async () => {
+    const fake = buildFakeApi();
+    const channel = buildChannel(fake.api);
+    const result = await channel.send({
+      to: { kind: "email", address: "ops@acme.test" },
+      template: "SHIPMENT_ESCALATED_V1",
+      context: {
+        orderExternalNumber: "RX-1001",
+        escalationReason: "DELIVERY_EXCEPTION",
+        lastTrackingStatus: "RETURNED",
+      },
+      idempotencyKey: "esc-shipment-deliverable",
+    });
+    expect(result.status).toBe("delivered");
+    expect(fake.sends).toHaveLength(1);
+    const call = fake.sends[0] as { subject: string; text: string; html: string };
+    expect(call.subject).toContain("RX-1001");
+    expect(call.text).toContain("DELIVERY_EXCEPTION");
+    expect(call.text).toContain("RETURNED");
+    expect(call.html).toContain("SHIPMENT EXCEPTION");
+  });
+});
+
+describe("ResendNotificationChannel — templates with no renderer fail LOUDLY", () => {
+  // INVOICE_FINALIZED_V1 is email-capable in the registry but is on
+  // the channel's documented KnownUnrenderedEmailTemplateId list —
+  // no worker path dispatches it through email yet. Should a
+  // dispatch path ship before its renderer, the channel must
+  // surface that as a loud wiring error rather than send a blank
+  // email — this test pins the loud default branch.
+  it("INVOICE_FINALIZED_V1 → NOTIFICATION_RENDERER_MISSING, no transport call", async () => {
+    const fake = buildFakeApi();
+    const channel = buildChannel(fake.api);
+    await expect(
+      channel.send({
+        to: { kind: "email", address: "billing@acme.test" },
+        template: "INVOICE_FINALIZED_V1",
+        context: {
+          invoiceNumber: "INV-2026-0042",
+          totalCents: 125_00,
+          dueDate: "2026-09-01",
+          hostedInvoiceUrl: "https://invoice.stripe.test/i/inv_42",
+        },
+        idempotencyKey: "invoice-unrendered",
+      })
+    ).rejects.toMatchObject({
+      code: "NOTIFICATION_RENDERER_MISSING",
+      metadata: expect.objectContaining({ templateId: "INVOICE_FINALIZED_V1" }),
+    });
+    expect(fake.sends).toHaveLength(0);
   });
 });
 

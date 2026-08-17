@@ -102,6 +102,7 @@ export {
   PrescriptionStatus,
   PricingRuleStatus,
   PrintJobStatus,
+  PrintJobTargetKind,
   ProviderOnboardingProofingOutcome,
   ProviderOnboardingStatus,
   ProviderStatus,

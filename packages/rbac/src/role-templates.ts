@@ -76,6 +76,7 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       PERMISSIONS.INVENTORY_BATCH_CREATE,
       PERMISSIONS.INVENTORY_BATCH_TRANSITION,
       PERMISSIONS.INVENTORY_BATCH_RELEASE,
+      PERMISSIONS.INVENTORY_BATCH_LABEL_PRINT,
       // Compounding formula authority (ADR-0035): the Master
       // Formulation Record is a pharmacist-owned document per
       // USP <795>/<797> — authoring/publish/retire sits here, not
@@ -128,6 +129,10 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       // release/reject quality decision is pharmacist-only.
       PERMISSIONS.INVENTORY_BATCH_CREATE,
       PERMISSIONS.INVENTORY_BATCH_TRANSITION,
+      // Labelling finished stock is bench work, and the reprint reason
+      // requirement is enforced by the command rather than by
+      // withholding the grant.
+      PERMISSIONS.INVENTORY_BATCH_LABEL_PRINT,
       // Techs prepare from ACTIVE formulas; they do not author them.
       PERMISSIONS.COMPOUNDING_READ,
       PERMISSIONS.COMPOUNDING_PREPARE,

@@ -32,9 +32,8 @@ import {
 } from "@pharmax/package-capture";
 import { errors, ids } from "@pharmax/platform-core";
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
-import { NextResponse } from "next/server";
-
 import { resolveOperatorTenancyContext } from "../../../../../../src/server/auth/resolve-tenancy.js";
+import { seeOther } from "../../../../../../src/server/http/redirect.js";
 import { logger } from "../../../../../../src/server/logger.js";
 
 export const runtime = "nodejs";
@@ -56,14 +55,14 @@ function isArchiveReason(value: string): value is PackagePhotoArchiveReason {
 export async function POST(request: Request): Promise<Response> {
   const session = await resolveOperatorTenancyContext();
   if (!session.ok) {
-    return redirect("/sign-in");
+    return seeOther("/sign-in");
   }
 
   let form: FormData;
   try {
     form = await request.formData();
   } catch {
-    return redirectFlash(TRIAGE_PATH, {
+    return seeOther(TRIAGE_PATH, {
       error: "ARCHIVE_FORM_INVALID:Could not read the form submission.",
     });
   }
@@ -72,12 +71,12 @@ export async function POST(request: Request): Promise<Response> {
   const reasonRaw = readFormString(form, "reason");
 
   if (photoId === null) {
-    return redirectFlash(TRIAGE_PATH, {
+    return seeOther(TRIAGE_PATH, {
       error: "ARCHIVE_PHOTO_ID_MISSING:Missing photo id on the archive submission.",
     });
   }
   if (reasonRaw === null || !isArchiveReason(reasonRaw)) {
-    return redirectFlash(TRIAGE_PATH, {
+    return seeOther(TRIAGE_PATH, {
       error: "ARCHIVE_REASON_INVALID:Pick a valid archive reason.",
       photoId,
     });
@@ -103,7 +102,7 @@ export async function POST(request: Request): Promise<Response> {
       wasMatched: out.wasMatched,
       alreadyArchived: out.alreadyArchived,
     });
-    return redirectFlash(TRIAGE_PATH, {
+    return seeOther(TRIAGE_PATH, {
       flash: out.alreadyArchived ? "archived_noop" : "archived",
       photoId: out.photoId,
       reason: out.reason,
@@ -119,7 +118,7 @@ export async function POST(request: Request): Promise<Response> {
       organizationId: session.tenancy.organizationId,
       code,
     });
-    return redirectFlash(TRIAGE_PATH, { error: `${code}:${message}`, photoId });
+    return seeOther(TRIAGE_PATH, { error: `${code}:${message}`, photoId });
   }
 }
 
@@ -128,19 +127,4 @@ function readFormString(form: FormData, key: string): string | null {
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function redirect(path: string): Response {
-  return NextResponse.redirect(new URL(path, "http://internal").toString(), { status: 303 });
-}
-
-function redirectFlash(path: string, params: Record<string, string>): Response {
-  const search = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v.length === 0) continue;
-    search.set(k, v);
-  }
-  const qs = search.toString();
-  const target = qs.length > 0 ? `${path}?${qs}` : path;
-  return NextResponse.redirect(new URL(target, "http://internal").toString(), { status: 303 });
 }

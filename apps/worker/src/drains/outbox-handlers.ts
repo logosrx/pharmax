@@ -73,6 +73,11 @@ export type OutboxHandlerMap = Readonly<Partial<Record<string, OutboxEventHandle
 export const REQUIRED_HANDLER_EVENT_TYPES: ReadonlySet<string> = new Set([
   "labels.vial_print.requested.v1",
   "labels.vial_print.reprint_requested.v1",
+  // Compound stock labels ride the same handoff. Without a registered
+  // handler the job would sit PENDING forever and the print agent —
+  // which only claims SENT — would never see it: a label that silently
+  // never prints, which is the hole this set exists to close.
+  "labels.compound_label.requested.v1",
   "shipment.tracking.recorded.v1",
   "order.shipped.v1",
   "billing.invoice.finalized.v1",
@@ -259,6 +264,9 @@ export function createOutboxHandlers(deps: OutboxHandlerDeps): OutboxHandlerMap 
     "organization.created.v1": handleOrganizationCreatedV1,
     "labels.vial_print.requested.v1": vialPrintHandler,
     "labels.vial_print.reprint_requested.v1": vialPrintHandler,
+    // Same PENDING → SENT handoff: the dispatcher keys off the print
+    // job row, which already knows what it is labelling.
+    "labels.compound_label.requested.v1": vialPrintHandler,
     "shipment.tracking.recorded.v1": escalationHandler,
     // Billing materialization first (financial truth), then the
     // prescriber portal notification — composed because both are

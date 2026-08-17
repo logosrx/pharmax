@@ -24,9 +24,8 @@ import {
   toPdf,
 } from "@pharmax/reporting";
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
-import { NextResponse } from "next/server";
-
 import { resolveOperatorTenancyContext } from "../../../../../../src/server/auth/resolve-tenancy.js";
+import { seeOther } from "../../../../../../src/server/http/redirect.js";
 import { logger } from "../../../../../../src/server/logger.js";
 import { withSentryOpsScope } from "../../../../../../src/server/observability/ops-scope.js";
 import { parseOpsRequestBody } from "../../../../../../src/server/ops/parse-request-body.js";
@@ -36,11 +35,7 @@ interface RouteParams {
 }
 
 function redirectWithError(reportId: string, message: string): Response {
-  const url = new URL(
-    `/ops/reports/${reportId}?error=${encodeURIComponent(message)}`,
-    "http://internal"
-  );
-  return NextResponse.redirect(url.toString(), { status: 303 });
+  return seeOther(`/ops/reports/${reportId}`, { error: message });
 }
 
 export async function POST(request: Request, context: RouteParams): Promise<Response> {
@@ -48,9 +43,7 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
 
   const session = await resolveOperatorTenancyContext();
   if (!session.ok) {
-    return NextResponse.redirect(new URL("/sign-in", "http://internal").toString(), {
-      status: 303,
-    });
+    return seeOther("/sign-in");
   }
 
   // Resolve the report's declarative field descriptor (fallback
