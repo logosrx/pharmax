@@ -312,6 +312,9 @@ importers:
       '@pharmax/reporting':
         specifier: workspace:*
         version: link:../../packages/reporting
+      '@pharmax/scan':
+        specifier: workspace:*
+        version: link:../../packages/scan
       '@pharmax/shipping':
         specifier: workspace:*
         version: link:../../packages/shipping

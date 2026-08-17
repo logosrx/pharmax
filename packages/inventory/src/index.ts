@@ -52,6 +52,16 @@ export {
   type PrintCompoundUnitLabelsOutput,
 } from "./commands/print-compound-labels.js";
 export { getLotChainOfCustody, type LotChainOfCustody } from "./queries/lot-chain-of-custody.js";
+export {
+  COMPOUND_SCAN_BLOCKERS,
+  type CompoundScanBlocker,
+  resolveCompoundScan,
+  type ResolveCompoundScanArgs,
+  type ResolvedCompoundScan,
+  SCAN_BLOCKER_BATCH_NOT_RELEASED,
+  SCAN_BLOCKER_BATCH_REJECTED,
+  SCAN_BLOCKER_PAST_BUD,
+} from "./queries/resolve-compound-scan.js";
 
 export {
   buildBatchBarcodeValue,

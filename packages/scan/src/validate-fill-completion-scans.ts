@@ -13,6 +13,7 @@ export const FILL_SCAN_LOT_MISMATCH = "FILL_SCAN_LOT_MISMATCH";
 export const FILL_SCAN_LOT_NUMBER_REQUIRED = "FILL_SCAN_LOT_NUMBER_REQUIRED";
 export const FILL_SCAN_LOT_SCAN_REQUIRED = "FILL_SCAN_LOT_SCAN_REQUIRED";
 export const FILL_SCAN_COMPOUND_LOT_UNEXPECTED = "FILL_SCAN_COMPOUND_LOT_UNEXPECTED";
+export const FILL_SCAN_COMPOUND_LABEL_IN_LOT_FIELD = "FILL_SCAN_COMPOUND_LABEL_IN_LOT_FIELD";
 export const FILL_SCAN_NDC_MISMATCH = "FILL_SCAN_NDC_MISMATCH";
 export const FILL_SCAN_VIAL_LABEL_MISMATCH = "FILL_SCAN_VIAL_LABEL_MISMATCH";
 
@@ -193,6 +194,23 @@ export function validateFillCompletionScans(input: {
         code: FILL_SCAN_LOT_SCAN_REQUIRED,
         message: "This line dispenses from an assigned lot; scan the physical lot barcode.",
         metadata: { orderLineId: scan.orderLineId },
+      };
+    }
+
+    // Name the specific mistake before falling back to "unparseable".
+    // A compound batch or unit label in the lot field is a recognizable
+    // wrong-barcode error, and until the parser learned those shapes it
+    // surfaced as a lot MISMATCH — which reads as "wrong lot on the
+    // bench" and sends the tech hunting for a lot problem that does not
+    // exist.
+    const lotScanKind = parseScannedValue(scan.lotScan).kind;
+    if (lotScanKind === "COMPOUND_BATCH" || lotScanKind === "COMPOUND_UNIT") {
+      return {
+        result: "HARD_STOP",
+        code: FILL_SCAN_COMPOUND_LABEL_IN_LOT_FIELD,
+        message:
+          "That is a compound stock label, not a manufactured lot barcode. This line dispenses from an assigned lot — scan the GS1 DataMatrix or lot barcode on the stock bottle.",
+        metadata: { orderLineId: scan.orderLineId, scannedKind: lotScanKind },
       };
     }
 
