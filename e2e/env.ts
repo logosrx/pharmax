@@ -43,6 +43,66 @@ export const E2E_OPERATOR_EMAIL = "e2e-pharmacist@acme.test";
 export const E2E_OPERATOR_PASSWORD = "pharmax-e2e-smoke-Password-1!";
 
 /**
+ * Additional synthetic operators for the full-dispense suite. The
+ * Separation-of-Duties registry (packages/rbac separation-of-duties.ts)
+ * forbids the same actor from: completing typing AND approving PV1,
+ * approving PV1 AND approving final, completing fill AND approving
+ * final. Walking intake → ship therefore needs four pairs of hands:
+ *
+ *   - tech (PharmacyTechnician): transcription, typing, fill
+ *   - E2E_OPERATOR (Pharmacist): PV1 approve/reject
+ *   - pharmacist 2 (Pharmacist): final verification
+ *   - shipping clerk (ShippingClerk): release / create / confirm shipment
+ *
+ * All four roles sit BELOW the platform MFA floor (OrgAdmin /
+ * BillingManager), so every sign-in is the real password-only path.
+ */
+export const E2E_TECH_EMAIL = "e2e-tech@acme.test";
+export const E2E_TECH_PASSWORD = "pharmax-e2e-tech-Password-1!";
+/**
+ * Second technician, used ONLY by the patient-search coverage test.
+ * It must be a different user from E2E_TECH: auditPatientView's
+ * minute-bucketed idempotency key is per (operator, patient) but its
+ * payload includes the surface, so one operator searching
+ * (PATIENT_SEARCH_RESULT) and transcribing (PATIENT_ADMIN_PAGE)
+ * against the same patient within a minute trips
+ * COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH (known product bug — see
+ * full-dispense.spec.ts).
+ */
+export const E2E_TECH2_EMAIL = "e2e-tech-2@acme.test";
+export const E2E_TECH2_PASSWORD = "pharmax-e2e-tech2-Password-1!";
+export const E2E_PHARMACIST2_EMAIL = "e2e-pharmacist-2@acme.test";
+export const E2E_PHARMACIST2_PASSWORD = "pharmax-e2e-rph2-Password-1!";
+export const E2E_SHIPPING_EMAIL = "e2e-shipping@acme.test";
+export const E2E_SHIPPING_PASSWORD = "pharmax-e2e-ship-Password-1!";
+
+/**
+ * Fixed partner API key for order intake (POST /api/v1/orders). There
+ * is deliberately no ops-console surface for creating an order — the
+ * v1 partner API is the production intake path — so the suite calls
+ * it directly. The token is a synthetic constant (valid `pxk_` + 43
+ * base64url chars shape) so the seed can mint it idempotently by
+ * hash; it authenticates nothing outside the throwaway e2e database.
+ */
+export const E2E_API_KEY_TOKEN = "pxk_e2e-full-dispense-synthetic-Token-000000001";
+
+/**
+ * Tenant ids the specs need (clinic/site/patient/provider) that only
+ * exist after seeding. scripts/e2e-seed.ts writes them here; the
+ * specs and scripts/e2e-dispatch.ts read them. Gitignored.
+ */
+export const E2E_STATE_FILE = new URL("./.e2e-state.json", import.meta.url).pathname;
+
+export interface E2ESeedState {
+  readonly organizationId: string;
+  readonly clinicId: string;
+  readonly siteId: string;
+  readonly patientId: string;
+  readonly patientLastName: string;
+  readonly providerId: string;
+}
+
+/**
  * Environment for `next build` / `next start` of apps/web.
  *
  * NODE_ENV is intentionally ABSENT here: the webServer runs
