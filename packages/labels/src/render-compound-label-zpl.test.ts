@@ -9,6 +9,10 @@
 //   - the unit label's printed serial and its barcode payload are the
 //     SAME string — a disagreement there is the one failure
 //     traceability cannot absorb;
+//   - the batch label carries that same equality for its batch number,
+//     which the batch barcode embeds verbatim: an identifier that does
+//     not fit its printed field fails the render rather than printing
+//     an abbreviated identity next to the full encoded one;
 //   - ZPL-active characters in field data are neutralized, and in a
 //     barcode payload are a hard error.
 
@@ -19,6 +23,8 @@ import {
   DEFAULT_COMPOUND_UNIT_ZPL_TEMPLATE,
 } from "./compound-label-templates.js";
 import {
+  COMPOUND_BATCH_NUMBER_PRINT_MAX,
+  COMPOUND_LABEL_IDENTITY_TOO_LONG,
   renderCompoundBatchLabelZpl,
   renderCompoundUnitLabelZpl,
 } from "./render-compound-label-zpl.js";
@@ -115,6 +121,35 @@ describe("renderCompoundBatchLabelZpl", () => {
       renderCompoundBatchLabelZpl("^XA^FD{{notAField}}^FS^XZ", batchInput())
     ).toThrowError(/compound batch label template placeholder: notAField/);
   });
+
+  it("prints a batch number at the length limit in full, matching its barcode", () => {
+    const batchNumber = "PHARMACYNORTHXX-T30-1-040327";
+    expect(batchNumber).toHaveLength(COMPOUND_BATCH_NUMBER_PRINT_MAX);
+
+    const zpl = renderCompoundBatchLabelZpl(
+      DEFAULT_COMPOUND_BATCH_ZPL_TEMPLATE,
+      batchInput({ batchNumber, batchBarcodeValue: `PXB:PXP-000042:${batchNumber}` })
+    );
+
+    // Twice: once inside the barcode payload, once as printed text.
+    expect(zpl.split(batchNumber)).toHaveLength(3);
+    expect(zpl).not.toContain("…");
+  });
+
+  it("refuses an over-long batch number rather than printing an abbreviated identity", () => {
+    // A long site code produces this. Truncating the printed copy
+    // would leave the label reading PHARMACYCOMPOUNDINGNORTH-T30-1-04…
+    // beside a barcode encoding the whole thing — a human and a
+    // scanner disagreeing about which batch is in the tote.
+    const batchNumber = "PHARMACYCOMPOUNDINGNORTH-T30-1-040327";
+
+    expect(() =>
+      renderCompoundBatchLabelZpl(
+        DEFAULT_COMPOUND_BATCH_ZPL_TEMPLATE,
+        batchInput({ batchNumber, batchBarcodeValue: `PXB:PXP-000042:${batchNumber}` })
+      )
+    ).toThrowError(expect.objectContaining({ code: COMPOUND_LABEL_IDENTITY_TOO_LONG }));
+  });
 });
 
 describe("renderCompoundUnitLabelZpl", () => {
@@ -155,6 +190,32 @@ describe("renderCompoundUnitLabelZpl", () => {
     );
     expect(zpl.split(serial).length - 1).toBe(2);
     expect(zpl).not.toContain("…");
+  });
+
+  it("prints the widest serial a printable batch number can produce", () => {
+    // Worst case reachable through CreateCompoundBatch: a batch number
+    // at its own limit, on the last unit of the largest allowed batch.
+    // The unit label has to carry that without truncating.
+    const batchNumber = "PHARMACYNORTHXX-T30-1-040327";
+    expect(batchNumber).toHaveLength(COMPOUND_BATCH_NUMBER_PRINT_MAX);
+    const serial = `${batchNumber}-5000`;
+
+    const zpl = renderCompoundUnitLabelZpl(
+      DEFAULT_COMPOUND_UNIT_ZPL_TEMPLATE,
+      unitInput({ serialNumber: serial, unitNumber: 5000, unitCount: 5000 })
+    );
+
+    expect(zpl.split(serial)).toHaveLength(3);
+    expect(zpl).not.toContain("…");
+  });
+
+  it("refuses a serial too long for its printed field rather than abbreviating it", () => {
+    expect(() =>
+      renderCompoundUnitLabelZpl(
+        DEFAULT_COMPOUND_UNIT_ZPL_TEMPLATE,
+        unitInput({ serialNumber: `${"SITECODE".repeat(6)}-T30-12-040327-4000` })
+      )
+    ).toThrowError(expect.objectContaining({ code: COMPOUND_LABEL_IDENTITY_TOO_LONG }));
   });
 
   it("refuses a serial carrying ZPL control characters", () => {

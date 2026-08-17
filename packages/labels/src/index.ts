@@ -15,7 +15,9 @@ export {
   DEFAULT_COMPOUND_UNIT_ZPL_TEMPLATE,
 } from "./compound-label-templates.js";
 export {
+  COMPOUND_BATCH_NUMBER_PRINT_MAX,
   COMPOUND_LABEL_BARCODE_INVALID,
+  COMPOUND_LABEL_IDENTITY_TOO_LONG,
   renderCompoundBatchLabelZpl,
   renderCompoundUnitLabelZpl,
 } from "./render-compound-label-zpl.js";

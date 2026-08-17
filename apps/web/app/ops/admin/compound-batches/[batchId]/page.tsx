@@ -292,9 +292,9 @@ export default async function CompoundBatchDetailPage({
               <Card>
                 <CardContent>
                   <p className="mb-3 text-sm text-muted">
-                    Unit labels — one per vial, each carrying its own serial. Leave the range blank
-                    to print all {batch.unitCount}; runs are capped so a large batch prints in
-                    passes.
+                    Unit labels — one per vial, each carrying its own serial. Leave both range
+                    fields blank to print all {batch.unitCount}, or fill in both to print a slice;
+                    runs are capped so a large batch prints in passes.
                   </p>
                   {printOptions.unitPrinters.length === 0 ? (
                     <p className="text-sm text-tone-danger">No active VIAL printer at this site.</p>

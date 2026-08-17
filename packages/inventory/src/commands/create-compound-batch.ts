@@ -30,6 +30,7 @@ import { randomUUID } from "node:crypto";
 
 import type { Command, HandlerResult } from "@pharmax/command-bus";
 import { Prisma, ProductNdcKind } from "@pharmax/database";
+import { COMPOUND_BATCH_NUMBER_PRINT_MAX } from "@pharmax/labels";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
@@ -43,6 +44,7 @@ import {
 import {
   BATCH_BUD_NOT_AFTER_COMPOUNDING,
   BATCH_CREATE_CONFLICT,
+  BATCH_NUMBER_TOO_LONG_TO_PRINT,
   BATCH_PRODUCT_NOT_COMPOUND,
   BATCH_PRODUCT_SERIAL_IDENTITY_MISSING,
   BATCH_SITE_CODE_UNUSABLE,
@@ -195,6 +197,30 @@ export const CreateCompoundBatch: Command<CreateCompoundBatchInput, CreateCompou
       compoundedOn: input.compoundedOn,
     });
     const barcodeValue = buildBatchBarcodeValue(product.pharmaxProductId, batchNumber);
+
+    // The batch number is printed on the batch label AND embedded in
+    // that label's barcode, so it has to fit the printed field: a
+    // batch number the label can only print in part would leave the
+    // human-readable identity disagreeing with the scan. Site codes
+    // are operator-configured and unbounded, so this is where an
+    // over-long one has to surface — refusing now costs a rename,
+    // whereas refusing at print time would strand physical stock whose
+    // serials are already minted and unchangeable.
+    if (batchNumber.length > COMPOUND_BATCH_NUMBER_PRINT_MAX) {
+      throw new errors.ValidationError({
+        code: BATCH_NUMBER_TOO_LONG_TO_PRINT,
+        message:
+          `This batch's number would be "${batchNumber}" (${batchNumber.length} characters), ` +
+          `which does not fit the ${COMPOUND_BATCH_NUMBER_PRINT_MAX}-character batch number ` +
+          `field on the batch label. Shorten this site's code, then create the batch.`,
+        metadata: {
+          siteId: input.siteId,
+          siteCode,
+          batchNumberLength: batchNumber.length,
+          max: COMPOUND_BATCH_NUMBER_PRINT_MAX,
+        },
+      });
+    }
 
     const batchId = randomUUID();
     try {

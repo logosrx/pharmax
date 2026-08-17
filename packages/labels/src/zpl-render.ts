@@ -27,6 +27,25 @@
 // traceability. All barcode payloads here are machine-generated, so a
 // ZPL-active character in one means an upstream bug, not bad operator
 // input — it should be loud.
+//
+// That gives three kinds of value, not two:
+//
+//   barcode   validated verbatim; never escaped, never truncated.
+//   identity  printed text that is ALSO carried verbatim inside a
+//             barcode on the same label. Escaped, but never
+//             truncated — an ellipsis here would leave the label
+//             claiming a different identity than its own barcode
+//             encodes, which is precisely the disagreement
+//             traceability cannot absorb. Over-long is a loud error.
+//   text      everything else. Escaped and truncated to fit; a
+//             clipped drug name is a legibility problem, not an
+//             identity one.
+//
+// A field maximum is a property of the CANVAS, so raising one to
+// accommodate a long identity is not a fix: it trades a truncated
+// identity for one that overruns the label edge, which reads as
+// plausible-but-wrong. Identity values must instead be bounded
+// upstream, where they are minted.
 
 import { errors } from "@pharmax/platform-core";
 
@@ -70,7 +89,7 @@ export function assertBarcodeSafe(value: string, errorCode: string): string {
   return value;
 }
 
-export interface RenderZplTemplateArgs {
+interface RenderZplTemplateBaseArgs {
   readonly templateBody: string;
   /** Placeholder name → text value. Escaped and length-bounded. */
   readonly values: Readonly<Record<string, string>>;
@@ -83,8 +102,54 @@ export interface RenderZplTemplateArgs {
   readonly fieldMaxLength: Readonly<Record<string, number>>;
   /** Error code raised when a barcode payload is unsafe. */
   readonly barcodeErrorCode: string;
-  /** Label kind, used only in the missing-placeholder message. */
+  /** Label kind, named in placeholder and identity failures. */
   readonly labelKind: string;
+}
+
+/**
+ * Identity fields are optional, but an error code is not optional
+ * once they are supplied — the pairing is expressed as a union so a
+ * caller cannot declare one without the other.
+ */
+type IdentityFieldArgs =
+  | {
+      /**
+       * Placeholder name → text that is also carried verbatim inside
+       * one of this label's barcodes. Escaped, never truncated.
+       */
+      readonly identityValues: Readonly<Record<string, string>>;
+      /** Error code raised when an identity value cannot fit its field. */
+      readonly identityErrorCode: string;
+    }
+  | { readonly identityValues?: undefined; readonly identityErrorCode?: undefined };
+
+export type RenderZplTemplateArgs = RenderZplTemplateBaseArgs & IdentityFieldArgs;
+
+/**
+ * Return an identity value unchanged, or refuse to render at all.
+ *
+ * Truncating here is not an option: the same string is encoded in a
+ * barcode on this label, so a shortened printed copy would make the
+ * human-readable identity disagree with the scan. A label that does
+ * not print beats a label that lies about what is in the vial.
+ */
+function assertIdentityFits(args: {
+  readonly value: string;
+  readonly field: string;
+  readonly max: number | undefined;
+  readonly labelKind: string;
+  readonly errorCode: string;
+}): string {
+  if (args.max === undefined || args.value.length <= args.max) return args.value;
+  throw new errors.ValidationError({
+    code: args.errorCode,
+    message:
+      `The ${args.labelKind}'s ${args.field} is ${args.value.length} characters, but only ` +
+      `${args.max} fit this label. It is also encoded in the label's barcode, so shortening ` +
+      `it would leave the printed identity disagreeing with what a scanner reads.`,
+    issues: [{ path: [args.field], message: `exceeds the ${args.max}-character label field` }],
+    metadata: { field: args.field, length: args.value.length, max: args.max },
+  });
 }
 
 /**
@@ -100,9 +165,27 @@ export function renderZplTemplate(args: RenderZplTemplateArgs): string {
     safeBarcodes.set(key, assertBarcodeSafe(raw, args.barcodeErrorCode));
   }
 
+  // Narrowed once, outside the callback, so the values and their error
+  // code travel together.
+  const identity =
+    args.identityValues === undefined
+      ? null
+      : { values: args.identityValues, errorCode: args.identityErrorCode };
+
   return args.templateBody.replace(PLACEHOLDER_RE, (_match, key: string) => {
     const barcode = safeBarcodes.get(key);
     if (barcode !== undefined) return barcode;
+
+    const identityValue = identity?.values[key];
+    if (identity !== null && identityValue !== undefined) {
+      return assertIdentityFits({
+        value: escapeZplFieldData(identityValue),
+        field: key,
+        max: args.fieldMaxLength[key],
+        labelKind: args.labelKind,
+        errorCode: identity.errorCode,
+      });
+    }
 
     const value = args.values[key];
     if (value === undefined) {

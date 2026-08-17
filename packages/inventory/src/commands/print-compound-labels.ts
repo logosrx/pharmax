@@ -426,7 +426,8 @@ const unitLabelInputSchema = z
   .object({
     batchId: z.uuid(),
     printerId: z.uuid(),
-    /** 1-based inclusive range. Omit both to print the whole batch. */
+    /** 1-based inclusive range. Supply both, or omit both to print the
+     *  whole batch — one bound alone is rejected. */
     fromUnitNumber: z.int().positive().optional(),
     toUnitNumber: z.int().positive().optional(),
     templateCode: z.string().min(1).max(64).default(DEFAULT_COMPOUND_UNIT_TEMPLATE_CODE),
@@ -458,6 +459,28 @@ export const PrintCompoundUnitLabels = defineCommand<
 
   async exec({ tx, ctx, input, clock, commandLogId }) {
     const batch = await loadBatchForLabeling(tx, ctx.organizationId, input.batchId);
+
+    // Both bounds or neither. Defaulting each side independently
+    // reads as convenience but is a label-waster: a lone "5" in From
+    // means "unit 5 through the end of the batch", so one distracted
+    // entry on a 200-vial batch prints 196 labels the operator did not
+    // ask for. "Print the whole batch" stays available — it is what
+    // both fields blank means.
+    if ((input.fromUnitNumber === undefined) !== (input.toUnitNumber === undefined)) {
+      const missing = input.fromUnitNumber === undefined ? "fromUnitNumber" : "toUnitNumber";
+      throw new errors.ValidationError({
+        code: BATCH_LABEL_UNIT_RANGE_INVALID,
+        message:
+          "Give both a From and a To unit number, or leave both blank to print the whole batch.",
+        issues: [{ path: [missing], message: "required when the other bound is given" }],
+        metadata: {
+          batchId: batch.batchId,
+          unitCount: batch.unitCount,
+          fromUnitNumber: input.fromUnitNumber ?? null,
+          toUnitNumber: input.toUnitNumber ?? null,
+        },
+      });
+    }
 
     const from = input.fromUnitNumber ?? 1;
     const to = input.toUnitNumber ?? batch.unitCount;

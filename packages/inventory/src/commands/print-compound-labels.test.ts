@@ -500,6 +500,60 @@ describe("PrintCompoundUnitLabels", () => {
     expect(outboxPayloads(fake.calls)).toHaveLength(2);
   });
 
+  it("prints the whole batch when both bounds are omitted", async () => {
+    const fake = buildFakePrisma({
+      batch: defaultBatch({ unitCount: 2 }),
+      printer: unitPrinter,
+      template: unitTemplate,
+    });
+    wire(fake.client);
+
+    const out = await withTenancyContext(ctx(), () =>
+      executeCommand(
+        PrintCompoundUnitLabels,
+        { batchId: BATCH_ID, printerId: PRINTER_ID },
+        { idempotencyKey: "ul-whole-batch" }
+      )
+    );
+
+    expect(out.fromUnitNumber).toBe(1);
+    expect(out.toUnitNumber).toBe(2);
+    expect(out.printJobIds).toHaveLength(2);
+  });
+
+  it("refuses one bound without the other instead of expanding to the batch edge", async () => {
+    const fake = buildFakePrisma({ printer: unitPrinter, template: unitTemplate });
+    wire(fake.client);
+
+    // A lone From used to mean "unit 5 through the end of the batch",
+    // so one distracted entry printed 36 labels nobody asked for.
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          PrintCompoundUnitLabels,
+          { batchId: BATCH_ID, printerId: PRINTER_ID, fromUnitNumber: 5 },
+          { idempotencyKey: "ul-from-only" }
+        )
+      )
+    ).rejects.toMatchObject({ code: "BATCH_LABEL_UNIT_RANGE_INVALID" });
+
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          PrintCompoundUnitLabels,
+          { batchId: BATCH_ID, printerId: PRINTER_ID, toUnitNumber: 5 },
+          { idempotencyKey: "ul-to-only" }
+        )
+      )
+    ).rejects.toMatchObject({ code: "BATCH_LABEL_UNIT_RANGE_INVALID" });
+
+    // Rejected on the range itself, before any unit is looked up. This
+    // is what separates the fix from the old behaviour, which happily
+    // resolved 5–40 and only tripped later, on whatever it found.
+    expect(callsOf(fake.calls, "compoundBatchUnit", "findMany")).toHaveLength(0);
+    expect(callsOf(fake.calls, "printJob", "create")).toHaveLength(0);
+  });
+
   it("refuses a range that does not fit inside the batch", async () => {
     const fake = buildFakePrisma({ printer: unitPrinter, template: unitTemplate });
     wire(fake.client);
