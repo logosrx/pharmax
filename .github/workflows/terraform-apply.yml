@@ -511,7 +511,7 @@ jobs:
 
       - name: Upload canary bundle
         if: steps.canary_bundle.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tf-build-${{ inputs.env_region }}-${{ github.run_id }}
           path: ${{ env.CANARY_BUNDLE_DIR }}/*.zip
@@ -529,7 +529,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload tfplan binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tfplan-${{ inputs.env_region }}-${{ github.run_id }}
           path: ${{ env.WORK_DIR }}/tfplan
@@ -543,7 +543,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload plan-output.txt
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: plan-output-${{ inputs.env_region }}-${{ github.run_id }}
           path: ${{ env.WORK_DIR }}/plan-output.txt
@@ -698,7 +698,7 @@ jobs:
 
       - name: Upload apply-output.txt
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: apply-output-${{ inputs.env_region }}-${{ github.run_id }}
           path: ${{ env.WORK_DIR }}/apply-output.txt

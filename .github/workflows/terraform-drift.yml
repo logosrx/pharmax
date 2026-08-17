@@ -168,7 +168,7 @@ jobs:
 
       - name: Upload full plan output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: drift-plan-prod-ue1-${{ github.run_id }}
           path: infra/terraform/environments/prod/us-east-1/plan-output.txt
@@ -296,7 +296,7 @@ jobs:
 
       - name: Upload full plan output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: drift-plan-prod-uw2-${{ github.run_id }}
           path: infra/terraform/environments/prod/us-west-2/plan-output.txt
