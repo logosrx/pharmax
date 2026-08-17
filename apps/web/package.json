@@ -38,6 +38,7 @@
     "@pharmax/sla": "workspace:*",
     "@pharmax/telemetry": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
+    "@pharmax/typing-assist": "workspace:*",
     "@pharmax/verification": "workspace:*",
     "@sentry/core": "^10.69.0",
     "@sentry/nextjs": "^10.69.0",

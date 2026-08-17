@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1105.0",
     "@aws-sdk/client-cloudwatch": "^3.1105.0",
     "@aws-sdk/client-s3": "^3.1105.0",
     "@pharmax/billing": "workspace:*",
@@ -29,6 +30,7 @@
     "@pharmax/sla": "workspace:*",
     "@pharmax/telemetry": "workspace:*",
     "@pharmax/tenancy": "workspace:*",
+    "@pharmax/typing-assist": "workspace:*",
     "@pharmax/workflow": "workspace:*",
     "@sentry/node": "^10.69.0",
     "resend": "^4.0.0",
