@@ -37,6 +37,11 @@
 //        env-region from racing on the state lock.
 //     7. `permissions:` declares `id-token: write` + `contents:
 //        read` and nothing the workflow doesn't need.
+//     8. Anything a `data "archive_file"` writes during PLAN travels
+//        to the apply runner. Apply reads those bytes off disk, and
+//        the plan records only their path, so a plan-time archive
+//        that is not carried across jobs fails the apply halfway
+//        through — leaving production partly applied.
 //
 // None of these are caught by `terraform-ci.yml` (which only
 // validates the HCL tree) or by GitHub's own yaml linter (which
@@ -64,6 +69,7 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOW_PATH = resolve(REPO_ROOT, ".github/workflows/terraform-apply.yml");
 const ENVIRONMENTS_ROOT = resolve(REPO_ROOT, "infra/terraform/environments");
+const MODULES_ROOT = resolve(REPO_ROOT, "infra/terraform/modules");
 
 const REQUIRED_INPUTS = ["env_region", "reason", "expected_changes"] as const;
 const FORBIDDEN_TRIGGERS = [
@@ -470,9 +476,164 @@ function checkPermissions(text: string): ReadonlyArray<string> {
   return violations;
 }
 
+/**
+ * Reads the top-level `env:` map so a step's `path:` written as
+ * `${{ env.FOO }}/x` can be compared against a real directory.
+ */
+function readWorkflowEnv(text: string): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  const envSection = extractTopLevelSection(text, "env");
+  for (const line of envSection.split("\n")) {
+    const match = line.match(/^ {2}([A-Z_][A-Z0-9_]*):\s*(.+?)\s*$/);
+    if (!match) continue;
+    out.set(match[1]!, match[2]!.replace(/^["']|["']$/g, ""));
+  }
+  return out;
+}
+
+interface ArtifactStep {
+  readonly path: string;
+  readonly includesHiddenFiles: boolean;
+}
+
+/** Every artifact step in a job body, with `${{ env.X }}` expanded. */
+function artifactSteps(
+  jobBody: string,
+  action: "upload-artifact" | "download-artifact",
+  env: ReadonlyMap<string, string>
+): ReadonlyArray<ArtifactStep> {
+  const out: Array<ArtifactStep> = [];
+  const lines = jobBody.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!new RegExp(`uses:\\s*actions/${action}@`).test(lines[i] ?? "")) continue;
+    // Scan this step's `with:` block — up to the next step (`- name:`
+    // / `- uses:` at the step indent) or the end of the job.
+    let path: string | undefined;
+    let includesHiddenFiles = false;
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const line = lines[j] ?? "";
+      if (/^\s+- (name|uses):/.test(line)) break;
+      if (/^\s+include-hidden-files:\s*true\b/.test(line)) includesHiddenFiles = true;
+      const pathMatch = line.match(/^\s+path:\s*(.+?)\s*$/);
+      if (!pathMatch) continue;
+      let value = pathMatch[1]!.replace(/^["']|["']$/g, "");
+      for (const [key, expansion] of env) {
+        value = value.replaceAll(`\${{ env.${key} }}`, expansion);
+      }
+      path = value;
+    }
+    if (path !== undefined) out.push({ path, includesHiddenFiles });
+  }
+  return out;
+}
+
+/** True when any segment of a repo-relative path starts with a dot. */
+function isHiddenPath(relPath: string): boolean {
+  return relPath.split("/").some((segment) => segment.startsWith("."));
+}
+
+/**
+ * Reads the terraform tree for `data "archive_file"` blocks and
+ * returns the repo-relative directories they write into at plan time.
+ */
+export function readPlanTimeArtifactDirs(modulesRoot: string): ReadonlyArray<string> {
+  const dirs = new Set<string>();
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.name.endsWith(".tf")) {
+        collectArchiveFileDirs(readFileSync(full, "utf8"), dirname(full), dirs);
+      }
+    }
+  };
+  walk(modulesRoot);
+  return [...dirs].sort();
+}
+
+function collectArchiveFileDirs(tf: string, moduleDir: string, into: Set<string>): void {
+  // `output_path = "${path.module}/<subdir>/<file>"` — the interesting
+  // part is <subdir>, which is where the plan writes the archive.
+  const pattern = /data\s+"archive_file"[\s\S]*?output_path\s*=\s*"\$\{path\.module\}\/([^"]+)"/g;
+  for (const match of tf.matchAll(pattern)) {
+    const rest = match[1]!;
+    const subdir = rest.includes("/") ? rest.slice(0, rest.lastIndexOf("/")) : "";
+    if (subdir === "") continue; // written directly into the module dir, which the checkout already has
+    const abs = resolve(moduleDir, subdir);
+    into.add(abs);
+  }
+}
+
+/**
+ * Invariant 9: every directory a `data "archive_file"` writes into at
+ * plan time is carried from the plan job to the apply job.
+ *
+ * `archive_file` runs during PLAN and writes a real file onto the plan
+ * runner; the consuming resource (`aws_synthetics_canary.zip_file`)
+ * stores only the PATH. Apply then reads those bytes from disk — on a
+ * different runner, from a fresh checkout, where the gitignored build
+ * directory does not exist. Without the artifact round-trip the apply
+ * dies mid-run with `open ...: no such file or directory`, which is
+ * exactly how prod-ue1 half-applied on 2026-08-17: the synthetics
+ * bucket and IAM role were created and the canary was not.
+ */
+function checkPlanArtifactsReachApply(
+  text: string,
+  planTimeArtifactDirs: ReadonlyArray<string>,
+  repoRoot: string
+): ReadonlyArray<string> {
+  const violations: Array<string> = [];
+  if (planTimeArtifactDirs.length === 0) return violations;
+
+  const env = readWorkflowEnv(text);
+  const planJob = extractJobBody(text, "plan");
+  const applyJob = extractJobBody(text, "apply");
+  if (planJob === "" || applyJob === "") {
+    violations.push("[plan-artifacts] job `plan` or `apply` not found");
+    return violations;
+  }
+  const uploads = artifactSteps(planJob, "upload-artifact", env);
+  const downloads = artifactSteps(applyJob, "download-artifact", env);
+
+  for (const absDir of planTimeArtifactDirs) {
+    const relDir = absDir.startsWith(repoRoot) ? absDir.slice(repoRoot.length + 1) : absDir;
+    const upload = uploads.find((step) => step.path.startsWith(relDir));
+    if (!upload) {
+      violations.push(
+        `[plan-artifacts] plan job never uploads \`${relDir}\`, which a \`data "archive_file"\` ` +
+          `writes at plan time. The apply job reads those bytes from disk on a different runner, ` +
+          `so an un-uploaded archive fails apply with "no such file or directory".`
+      );
+    } else if (isHiddenPath(relDir) && !upload.includesHiddenFiles) {
+      // The failure mode this catches is the nastiest of the set: the
+      // step exists, the workflow is green, and the artifact is EMPTY,
+      // because upload-artifact counts "files within folders beginning
+      // with ." as hidden and prunes them by default. The apply then
+      // fails exactly as if the hand-off had never been written.
+      violations.push(
+        `[plan-artifacts] plan job uploads \`${relDir}\` but does not set ` +
+          `\`include-hidden-files: true\`. A path segment beginning with "." makes every file ` +
+          `under it hidden, and upload-artifact prunes hidden files by default — the artifact ` +
+          `uploads EMPTY and the apply fails on the missing file as though nothing was carried.`
+      );
+    }
+    if (!downloads.some((step) => step.path === relDir || step.path.startsWith(`${relDir}/`))) {
+      violations.push(
+        `[plan-artifacts] apply job never downloads into \`${relDir}\`, which a ` +
+          `\`data "archive_file"\` writes at plan time. Restore it to the exact path the plan ` +
+          `recorded, before \`terraform apply tfplan\`.`
+      );
+    }
+  }
+  return violations;
+}
+
 export function checkTerraformApplyWorkflow(input: {
   readonly workflowText: string;
   readonly envRegionsOnDisk: ReadonlyArray<string>;
+  readonly planTimeArtifactDirs?: ReadonlyArray<string>;
+  readonly repoRoot?: string;
 }): CheckResult {
   const violations: Array<string> = [];
   violations.push(...checkTriggers(input.workflowText));
@@ -483,6 +644,13 @@ export function checkTerraformApplyWorkflow(input: {
   violations.push(...checkApplyNeedsPlan(input.workflowText));
   violations.push(...checkConcurrencyGroup(input.workflowText));
   violations.push(...checkPermissions(input.workflowText));
+  violations.push(
+    ...checkPlanArtifactsReachApply(
+      input.workflowText,
+      input.planTimeArtifactDirs ?? [],
+      input.repoRoot ?? REPO_ROOT
+    )
+  );
   return { ok: violations.length === 0, violations };
 }
 
@@ -508,7 +676,23 @@ function main(): void {
     process.exit(1);
   }
 
-  const result = checkTerraformApplyWorkflow({ workflowText, envRegionsOnDisk });
+  let planTimeArtifactDirs: ReadonlyArray<string> = [];
+  try {
+    statSync(MODULES_ROOT);
+    planTimeArtifactDirs = readPlanTimeArtifactDirs(MODULES_ROOT);
+  } catch (err) {
+    console.error(
+      `[check-terraform-apply-workflow] FAIL: cannot scan ${MODULES_ROOT}: ${String(err)}`
+    );
+    process.exit(1);
+  }
+
+  const result = checkTerraformApplyWorkflow({
+    workflowText,
+    envRegionsOnDisk,
+    planTimeArtifactDirs,
+    repoRoot: REPO_ROOT,
+  });
 
   if (!result.ok) {
     console.error("[check-terraform-apply-workflow] FAIL — apply-workflow invariants violated:");
@@ -526,7 +710,8 @@ function main(): void {
   }
 
   console.log(
-    `[check-terraform-apply-workflow] ok — 8 invariants pass; ${envRegionsOnDisk.length} env-region(s) match.`
+    `[check-terraform-apply-workflow] ok — 9 invariants pass; ${envRegionsOnDisk.length} env-region(s) match; ` +
+      `${planTimeArtifactDirs.length} plan-time archive dir(s) carried to apply.`
   );
 }
 

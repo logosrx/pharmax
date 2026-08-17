@@ -19,11 +19,13 @@ import { describe, expect, it } from "vitest";
 import {
   checkTerraformApplyWorkflow,
   readEnvRegionsOnDisk,
+  readPlanTimeArtifactDirs,
 } from "./check-terraform-apply-workflow";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REAL_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/terraform-apply.yml");
 const REAL_ENV_ROOT = resolve(REPO_ROOT, "infra/terraform/environments");
+const REAL_MODULES_ROOT = resolve(REPO_ROOT, "infra/terraform/modules");
 
 // -----------------------------------------------------------------
 // Baseline: a minimal valid workflow text that passes every check.
@@ -504,14 +506,122 @@ describe("readEnvRegionsOnDisk", () => {
 // -----------------------------------------------------------------
 
 describe("real workflow", () => {
-  it("passes all 8 invariants against the real .github/workflows/terraform-apply.yml", () => {
+  it("passes all 9 invariants against the real .github/workflows/terraform-apply.yml", () => {
     const workflowText = readFileSync(REAL_WORKFLOW, "utf8");
     const envRegionsOnDisk = readEnvRegionsOnDisk(REAL_ENV_ROOT);
-    const result = checkTerraformApplyWorkflow({ workflowText, envRegionsOnDisk });
+    const result = checkTerraformApplyWorkflow({
+      workflowText,
+      envRegionsOnDisk,
+      planTimeArtifactDirs: readPlanTimeArtifactDirs(REAL_MODULES_ROOT),
+      repoRoot: REPO_ROOT,
+    });
     if (!result.ok) {
       console.error("Real workflow violations:", result.violations);
     }
     expect(result.violations).toEqual([]);
     expect(result.ok).toBe(true);
+  });
+});
+
+// -----------------------------------------------------------------
+// Invariant 9: plan-time archives reach the apply runner.
+//
+// This is the invariant with a production incident behind it: the
+// 2026-08-17 prod-ue1 apply created the synthetics bucket and IAM role
+// and then died on `open ...heartbeat-<md5>.zip: no such file or
+// directory`, because the archive existed only on the plan runner.
+// -----------------------------------------------------------------
+
+describe("invariant 9: plan-time archives reach apply", () => {
+  const ARCHIVE_DIR = resolve(REPO_ROOT, "infra/terraform/modules/synthetics/.build");
+
+  /** Baseline + the artifact round-trip the real workflow performs. */
+  function withArtifactCarry(options: {
+    readonly upload: boolean;
+    readonly download: boolean;
+    readonly includeHiddenFiles?: boolean;
+  }): string {
+    const hidden =
+      options.includeHiddenFiles === false ? "" : "\n          include-hidden-files: true";
+    const upload = options.upload
+      ? `
+      - name: Upload canary bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-bundle
+          path: \${{ env.CANARY_BUNDLE_DIR }}/*.zip${hidden}`
+      : "";
+    const download = options.download
+      ? `
+      - name: Download canary bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: canary-bundle
+          path: \${{ env.CANARY_BUNDLE_DIR }}`
+      : "";
+    return buildBaselineWorkflow()
+      .replace(
+        "concurrency:",
+        `env:
+  CANARY_BUNDLE_DIR: "infra/terraform/modules/synthetics/.build"
+
+concurrency:`
+      )
+      .replace(
+        "      - run: terraform plan -out=tfplan",
+        `      - run: terraform plan -out=tfplan${upload}`
+      )
+      .replace(
+        "      - name: terraform apply tfplan",
+        `${download}
+      - name: terraform apply tfplan`
+      );
+  }
+
+  function check(workflowText: string) {
+    return checkTerraformApplyWorkflow({
+      workflowText,
+      envRegionsOnDisk: VALID_ENV_REGIONS,
+      planTimeArtifactDirs: [ARCHIVE_DIR],
+      repoRoot: REPO_ROOT,
+    });
+  }
+
+  it("passes when the plan uploads the archive and the apply downloads it", () => {
+    const result = check(withArtifactCarry({ upload: true, download: true }));
+    expect(result.violations).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("flags an archive the plan never uploads", () => {
+    const result = check(withArtifactCarry({ upload: false, download: true }));
+    expect(result.violations).toContainEqual(expect.stringMatching(/plan job never uploads/));
+    expect(result.ok).toBe(false);
+  });
+
+  it("flags an archive the apply never downloads", () => {
+    const result = check(withArtifactCarry({ upload: true, download: false }));
+    expect(result.violations).toContainEqual(expect.stringMatching(/apply job never downloads/));
+    expect(result.ok).toBe(false);
+  });
+
+  it("flags a workflow that carries nothing at all (the 2026-08-17 shape)", () => {
+    const result = check(withArtifactCarry({ upload: false, download: false }));
+    expect(result.violations).toHaveLength(2);
+    expect(result.ok).toBe(false);
+  });
+
+  // The shape merged as #181: both steps present, workflow green, and
+  // the artifact silently EMPTY because `.build` is a dot-directory.
+  it("flags a hidden archive dir uploaded without include-hidden-files", () => {
+    const result = check(
+      withArtifactCarry({ upload: true, download: true, includeHiddenFiles: false })
+    );
+    expect(result.violations).toContainEqual(expect.stringMatching(/include-hidden-files: true/));
+    expect(result.ok).toBe(false);
+  });
+
+  it("discovers the synthetics canary bundle dir in the real terraform tree", () => {
+    expect(readPlanTimeArtifactDirs(REAL_MODULES_ROOT)).toContain(ARCHIVE_DIR);
   });
 });
