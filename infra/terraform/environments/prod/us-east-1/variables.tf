@@ -103,6 +103,22 @@ variable "enable_synthetics" {
   type    = bool
   default = false
 }
+
+# ---- OpenTelemetry backend (Grafana Cloud) -----------------------------------
+#
+# Opt-in wiring of OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_EXPORTER_OTLP_HEADERS
+# into the web + worker tasks. Flip AFTER the Grafana Cloud stack exists and
+# the `grafana-cloud-otlp-headers` secret is populated — see
+# docs/observability/grafana-cloud-otel-backend.md.
+
+variable "otel_backend_enabled" {
+  type    = bool
+  default = false
+}
+variable "otel_exporter_otlp_endpoint" {
+  type    = string
+  default = "https://otlp-gateway-prod-us-central-0.grafana.net/otlp"
+}
 variable "alerting_critical_email_subscriptions" {
   type    = list(string)
   default = []

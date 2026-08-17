@@ -283,6 +283,12 @@ module "ecs" {
   # instance exists; otherwise reports read the primary writer.
   enable_reporting_replica = local.reporting_replica_enabled
 
+  # Grafana Cloud OTLP export (opt-in; off until the operator has created the
+  # Grafana Cloud stack and populated the `grafana-cloud-otlp-headers` secret
+  # — see docs/observability/grafana-cloud-otel-backend.md).
+  otel_backend_enabled        = var.otel_backend_enabled
+  otel_exporter_otlp_endpoint = var.otel_exporter_otlp_endpoint
+
   web_cpu           = var.ecs_web_cpu
   web_memory        = var.ecs_web_memory
   web_desired_count = var.ecs_web_desired_count

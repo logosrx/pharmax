@@ -64,6 +64,8 @@ module "stack" {
   # time, never from tfvars.
   enable_alerting                       = var.enable_alerting
   enable_synthetics                     = var.enable_synthetics
+  otel_backend_enabled                  = var.otel_backend_enabled
+  otel_exporter_otlp_endpoint           = var.otel_exporter_otlp_endpoint
   alerting_critical_email_subscriptions = var.alerting_critical_email_subscriptions
   alerting_warning_email_subscriptions  = var.alerting_warning_email_subscriptions
   alerting_critical_https_subscriptions = var.alerting_critical_https_subscriptions

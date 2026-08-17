@@ -112,6 +112,42 @@ variable "enable_reporting_replica" {
   default     = false
 }
 
+variable "otel_backend_enabled" {
+  description = <<-EOT
+    When true, inject OTEL_EXPORTER_OTLP_ENDPOINT (plain env var) and
+    OTEL_EXPORTER_OTLP_HEADERS (from the `grafana-cloud-otlp-headers`
+    secret) into the web and worker tasks so `@pharmax/telemetry` exports
+    traces + metrics directly to the Grafana Cloud OTLP gateway. Only
+    enable AFTER the secret holds a real
+    `Authorization=Basic <base64(instanceId:token)>` value — the shipped
+    placeholder merely 401s at the gateway (exporter logs + retries; the
+    app keeps serving), but there is no reason to burn export batches on
+    a stack that does not exist yet. When false, nothing is injected and
+    telemetry keeps its localhost:4318 default (no backend; exporter
+    no-ops against a closed port). Setup runbook:
+    docs/observability/grafana-cloud-otel-backend.md.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "otel_exporter_otlp_endpoint" {
+  description = <<-EOT
+    OTLP/HTTP base URL injected as OTEL_EXPORTER_OTLP_ENDPOINT into web +
+    worker when `otel_backend_enabled` is true. For Grafana Cloud this is
+    the stack's REGION-SPECIFIC gateway,
+    `https://otlp-gateway-<region>.grafana.net/otlp` — copy the exact URL
+    from the stack's "OpenTelemetry → Configure" page; a wrong-region URL
+    fails auth because tokens are stack-scoped.
+  EOT
+  type        = string
+
+  validation {
+    condition     = can(regex("^https://", var.otel_exporter_otlp_endpoint))
+    error_message = "otel_exporter_otlp_endpoint must be a full https:// URL (the Grafana Cloud OTLP gateway base, ending in /otlp)."
+  }
+}
+
 variable "data_kms_key_alias" {
   description = "Alias of the data CMK (PHI envelope encryption). Injected as AWS_KMS_DATA_KEY_ID + legacy AWS_KMS_APP_KEY_ID into every service container."
   type        = string
