@@ -45,9 +45,8 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
       }
       return { orderId, suggestionId, expectedOrderVersion };
     },
-    successRedirect: (output) =>
-      `/ops/typing?flash=suggestion_accepted&orderId=${orderId}&field=${output.field}`,
-    failureRedirect: `/ops/typing`,
+    successRedirect: () => `/ops/typing/${orderId}?flash=suggestion_accepted`,
+    failureRedirect: `/ops/typing/${orderId}`,
     successLogEvent: "ops.typing.suggestions.accept.applied",
     failureLogEvent: "ops.typing.suggestions.accept.failed",
   });

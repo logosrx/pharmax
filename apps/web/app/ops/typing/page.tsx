@@ -11,6 +11,8 @@
 // whole day. PHI: the queue surface is non-PHI; the order-detail page
 // is where the typist reads patient + Rx data.
 
+import Link from "next/link";
+
 import { ReopenReason } from "@pharmax/database";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { MISSING_INFO_REASONS } from "@pharmax/verification";
@@ -27,6 +29,8 @@ import {
 import { PageHeader, Section } from "../../../src/components/ui/page.js";
 import { EmptyState, PermissionDenied, Banner } from "../../../src/components/ui/feedback.js";
 import { Field, Select } from "../../../src/components/ui/field.js";
+import { buttonClass } from "../../../src/components/ui/button.js";
+import { Icon } from "../../../src/components/ui/icon.js";
 import { QueueFlash } from "../../../src/components/ops/flash.js";
 import { QueueLiveRefresher } from "../../../src/components/ops/queue-live-refresher.js";
 import { QueueRow } from "../../../src/components/ops/queue-row.js";
@@ -83,6 +87,17 @@ function TypingRow({
           : isPending
             ? "Pending missing info. Resolve the gap (patient, prescriber, or sig) and resume typing."
             : undefined
+      }
+      headerExtra={
+        isInProgress ? (
+          <Link
+            href={`/ops/typing/${row.orderId}`}
+            className={buttonClass({ variant: isMine ? "primary" : "secondary", size: "sm" })}
+          >
+            <Icon name="typing" size={14} />
+            {isMine ? "Open workbench" : "View workbench"}
+          </Link>
+        ) : null
       }
     >
       {isReady && canStart ? (
