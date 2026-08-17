@@ -110,6 +110,34 @@ const SIGN_IN_RETRY_BUDGET_MS = IS_CI ? 180_000 : 45_000;
 const SIGN_IN_LANDING_TIMEOUT_MS = IS_CI ? 60_000 : 20_000;
 
 /**
+ * Whole-test budgets. These are `test.setTimeout` values, which OVERRIDE
+ * `timeout` in playwright.config.ts — so they, not the config, are what
+ * actually bound these tests, and a CI-aware config alone silently does
+ * nothing.
+ *
+ * The golden path walks every workflow stage, so it pays a cold compile
+ * per stage plus four sign-ins: ~90s locally, and it has been measured
+ * over 7m on a runner once a dev-server restart forced everything to
+ * recompile mid-test.
+ */
+const WORKFLOW_TEST_TIMEOUT_MS = IS_CI ? 900_000 : 420_000;
+const EXCEPTION_TEST_TIMEOUT_MS = IS_CI ? 600_000 : 240_000;
+
+/**
+ * A dropped connection rather than an answer.
+ *
+ * `next dev`'s memory-threshold restart kills in-flight sockets, and the
+ * two Playwright APIs used here surface that differently: navigations
+ * fail with `net::ERR_CONNECTION_RESET`/`_REFUSED`, while
+ * `APIRequestContext` reports `socket hang up`. Neither is product
+ * signal — a real failure carries a status code.
+ */
+function isTransportError(cause: unknown): boolean {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return /net::ERR_|socket hang up|ECONNRESET|ECONNREFUSED|EPIPE/.test(message);
+}
+
+/**
  * Retry a navigation that failed at the transport level.
  *
  * `next dev` restarts itself when used heap passes 80% of the V8 ceiling,
@@ -132,8 +160,7 @@ function hardenNavigation(page: Page): void {
       try {
         return await goto(url, options);
       } catch (cause) {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        if (attempt >= ATTEMPTS || !message.includes("net::ERR_")) throw cause;
+        if (attempt >= ATTEMPTS || !isTransportError(cause)) throw cause;
         // Give the restarted server a moment to bind again.
         await page.waitForTimeout(2_000 * attempt);
       }
@@ -197,12 +224,26 @@ async function warmActionRoute(page: Page, actionPathSuffix: string): Promise<vo
   const path = actionPathSuffix.startsWith("/api/")
     ? actionPathSuffix
     : `/api/ops${actionPathSuffix}`;
-  const response = await page.request.fetch(new URL(path, E2E_ORG_BASE_URL).toString(), {
-    method: "GET",
-    timeout: ROUTE_WARM_TIMEOUT_MS,
-    failOnStatusCode: false,
-    maxRedirects: 0,
-  });
+  const url = new URL(path, E2E_ORG_BASE_URL).toString();
+  const ATTEMPTS = 3;
+  let response;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      response = await page.request.fetch(url, {
+        method: "GET",
+        timeout: ROUTE_WARM_TIMEOUT_MS,
+        failOnStatusCode: false,
+        maxRedirects: 0,
+      });
+      break;
+    } catch (cause) {
+      // A compile is exactly when the server is most likely to cross its
+      // memory threshold and restart, so this request is the most likely
+      // one in the suite to be cut off mid-flight.
+      if (attempt >= ATTEMPTS || !isTransportError(cause)) throw cause;
+      await page.waitForTimeout(2_000 * attempt);
+    }
+  }
   // 405 is the proof the request reached the compiled route module. A
   // redirect would mean proxy.ts intercepted it and nothing compiled; a
   // 404 would mean this path no longer maps to a route. Either way the
@@ -548,7 +589,7 @@ test.describe("full dispense", () => {
     browser,
     request,
   }) => {
-    test.setTimeout(420_000);
+    test.setTimeout(WORKFLOW_TEST_TIMEOUT_MS);
     const state = seedState();
 
     const techPage = await newOperatorPage(browser, E2E_TECH_EMAIL, E2E_TECH_PASSWORD);
@@ -688,7 +729,7 @@ test.describe("full dispense", () => {
     browser,
     request,
   }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(EXCEPTION_TEST_TIMEOUT_MS);
     const state = seedState();
 
     const techPage = await newOperatorPage(browser, E2E_TECH_EMAIL, E2E_TECH_PASSWORD);
@@ -716,7 +757,7 @@ test.describe("full dispense", () => {
     browser,
     request,
   }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(EXCEPTION_TEST_TIMEOUT_MS);
     const state = seedState();
 
     const techPage = await newOperatorPage(browser, E2E_TECH_EMAIL, E2E_TECH_PASSWORD);
@@ -744,7 +785,7 @@ test.describe("full dispense", () => {
     browser,
     request,
   }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(EXCEPTION_TEST_TIMEOUT_MS);
     const state = seedState();
 
     const techPage = await newOperatorPage(browser, E2E_TECH_EMAIL, E2E_TECH_PASSWORD);
