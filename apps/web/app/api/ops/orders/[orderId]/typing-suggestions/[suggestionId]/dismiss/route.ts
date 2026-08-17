@@ -51,8 +51,8 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
         dismissReasonCode: dismissReasonCode as TypingSuggestionDismissReason,
       };
     },
-    successRedirect: () => `/ops/typing?flash=suggestion_dismissed&orderId=${orderId}`,
-    failureRedirect: `/ops/typing`,
+    successRedirect: () => `/ops/typing/${orderId}?flash=suggestion_dismissed`,
+    failureRedirect: `/ops/typing/${orderId}`,
     successLogEvent: "ops.typing.suggestions.dismiss.applied",
     failureLogEvent: "ops.typing.suggestions.dismiss.failed",
   });

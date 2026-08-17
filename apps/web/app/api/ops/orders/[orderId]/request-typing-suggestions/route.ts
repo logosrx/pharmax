@@ -37,11 +37,11 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
       if (prescriptionId === null) return { error: "prescriptionId is required." };
       return { orderId, prescriptionId };
     },
-    // The run id is the technician's handle on this review — the
-    // panel polls it while the model stage settles.
-    successRedirect: (output) =>
-      `/ops/typing?flash=review_requested&orderId=${orderId}&runId=${output.runId}`,
-    failureRedirect: `/ops/typing`,
+    // Back to the workbench, which is where the proposals render. The
+    // deterministic ones are already there; the model stage settles in
+    // the background and appears on the next load.
+    successRedirect: () => `/ops/typing/${orderId}?flash=review_requested`,
+    failureRedirect: `/ops/typing/${orderId}`,
     successLogEvent: "ops.typing.suggestions.request.applied",
     failureLogEvent: "ops.typing.suggestions.request.failed",
   });
