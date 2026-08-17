@@ -475,6 +475,29 @@ jobs:
 
           echo "No destroys of protected resource types (ok)."
 
+      # The synthetics module packages its canary script with
+      # `data "archive_file"` at PLAN time, writing a content-addressed
+      # zip under modules/synthetics/.build/. The saved plan binary
+      # references that zip by PATH, and the gated apply job runs on a
+      # fresh runner — without this hand-off the apply fails with
+      # "open .../.build/heartbeat-<md5>.zip: no such file or directory"
+      # (exactly how apply run #13 died). Ship the build dir alongside
+      # the plan binary, same retention posture.
+      - name: Upload plan-time build artifacts (synthetics canary zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tf-build-${{ inputs.env_region }}-${{ github.run_id }}
+          # Pinned to the one module that builds at plan time today.
+          # (upload-artifact roots the archive at the least common
+          # ancestor of matched files, so a multi-module glob would
+          # restore at an unpredictable depth — add explicit paths if
+          # another module ever grows a .build step.)
+          path: infra/terraform/modules/synthetics/.build/
+          retention-days: 7
+          # Env-regions with enable_synthetics = false produce no zip;
+          # the matching download step below is guarded the same way.
+          if-no-files-found: ignore
+
       - name: Upload tfplan binary
         uses: actions/upload-artifact@v4
         with:
@@ -590,6 +613,18 @@ jobs:
           role-to-assume: ${{ steps.role.outputs.role_arn }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gh-actions-apply-${{ inputs.env_region }}-${{ github.run_id }}
+
+      # Restore the plan-time module build outputs (synthetics canary
+      # zip) at the exact paths the saved plan references. The artifact
+      # only exists when the plan produced build outputs, so tolerate
+      # absence — if the plan truly needs a zip that is missing, the
+      # apply below fails loudly on the exact resource.
+      - name: Download plan-time build artifacts
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: tf-build-${{ inputs.env_region }}-${{ github.run_id }}
+          path: infra/terraform/modules/synthetics/.build/
 
       - name: Download tfplan binary
         uses: actions/download-artifact@v8
