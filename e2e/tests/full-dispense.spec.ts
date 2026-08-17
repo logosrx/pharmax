@@ -105,6 +105,42 @@ const ACTION_POST_TIMEOUT_MS = IS_CI ? 120_000 : 60_000;
  */
 const ROUTE_WARM_TIMEOUT_MS = IS_CI ? 180_000 : 60_000;
 
+/** Sign-in as a unit: navigate, fill, submit, land on the dashboard. */
+const SIGN_IN_RETRY_BUDGET_MS = IS_CI ? 180_000 : 45_000;
+const SIGN_IN_LANDING_TIMEOUT_MS = IS_CI ? 60_000 : 20_000;
+
+/**
+ * Retry a navigation that failed at the transport level.
+ *
+ * `next dev` restarts itself when used heap passes 80% of the V8 ceiling,
+ * and compiling this app's ops surface gets there on a CI runner. The
+ * restart kills in-flight sockets, so a navigation can fail with
+ * `net::ERR_CONNECTION_RESET`/`_REFUSED` before any HTTP response exists.
+ * That is infrastructure, not product signal — a real failure answers
+ * with a status code or an error page, and both still fail the caller's
+ * assertions. Anything that is not a `net::` error rethrows untouched.
+ *
+ * Installed by wrapping `goto` once per page rather than editing all 27
+ * call sites: the wrapper cannot be forgotten at a new call site, and it
+ * keeps the navigation lines in the tests about what they are fetching.
+ */
+function hardenNavigation(page: Page): void {
+  const goto = page.goto.bind(page);
+  page.goto = async (url, options) => {
+    const ATTEMPTS = 3;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await goto(url, options);
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        if (attempt >= ATTEMPTS || !message.includes("net::ERR_")) throw cause;
+        // Give the restarted server a moment to bind again.
+        await page.waitForTimeout(2_000 * attempt);
+      }
+    }
+  };
+}
+
 const APP_ORIGIN = new URL(E2E_ORG_BASE_URL).origin;
 
 /**
@@ -276,13 +312,14 @@ async function signIn(page: Page, email: string, password: string): Promise<void
     await page.getByLabel("Email").fill(email);
     await page.getByLabel("Password").fill(password);
     await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL("**/ops", { timeout: 20_000 });
-  }).toPass({ timeout: 45_000 });
+    await page.waitForURL("**/ops", { timeout: SIGN_IN_LANDING_TIMEOUT_MS });
+  }).toPass({ timeout: SIGN_IN_RETRY_BUDGET_MS });
 }
 
 async function newOperatorPage(browser: Browser, email: string, password: string): Promise<Page> {
   const context = await browser.newContext({ baseURL: E2E_ORG_BASE_URL });
   const page = await context.newPage();
+  hardenNavigation(page);
   await signIn(page, email, password);
   return page;
 }
@@ -479,6 +516,12 @@ async function acknowledgeFindingsAndApprovePv1(
 }
 
 test.describe("full dispense", () => {
+  // Pages built by `newOperatorPage` are hardened on creation; the
+  // fixture-provided one has to be caught here.
+  test.beforeEach(({ page }) => {
+    hardenNavigation(page);
+  });
+
   test("intake step 1: blind-index patient search finds the synthetic fixture", async ({
     browser,
   }) => {

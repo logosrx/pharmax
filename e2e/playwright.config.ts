@@ -53,7 +53,12 @@ export default defineConfig({
   // mid-suite (dropping sockets, abandoning Postgres transactions, and
   // discarding every compile). Lazy-and-patient is what this app's dev
   // server can actually sustain, so the budget has to cover it.
-  timeout: process.env["CI"] !== undefined ? 420_000 : 90_000,
+  // Measured, not guessed: the golden path runs in ~90s locally and took
+  // 4m on a CI runner, then overran a 7m budget on the retry that
+  // followed a dev-server restart (every route recompiles after one).
+  // 15m is headroom over that worst observed case. It buys nothing for a
+  // product bug — a refusal returns an `error=` code immediately.
+  timeout: process.env["CI"] !== undefined ? 900_000 : 90_000,
   forbidOnly: process.env["CI"] !== undefined,
   retries: process.env["CI"] !== undefined ? 1 : 0,
   reporter: [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
