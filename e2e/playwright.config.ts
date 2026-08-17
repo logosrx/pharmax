@@ -41,9 +41,19 @@ export default defineConfig({
   outputDir: "./test-results",
   fullyParallel: false,
   workers: 1,
-  // Dev-mode route compiles are lazy; the first hit on a heavy page can
-  // exceed Playwright's 30s default.
-  timeout: 90_000,
+  // Dev-mode route compiles are lazy, so the first request to any route
+  // pays for compiling it, and a test that walks the whole dispense
+  // workflow pays that once per stage. On a two-vCPU CI runner sharing
+  // those cores with Chromium, a single cold ops route can take over a
+  // minute, and the golden path crosses fifteen of them.
+  //
+  // Compiling them up front instead was tried and reverted: eagerly
+  // holding the whole ops surface in the dev server's module graph
+  // exhausts its heap, and `next dev` responds by restarting itself
+  // mid-suite (dropping sockets, abandoning Postgres transactions, and
+  // discarding every compile). Lazy-and-patient is what this app's dev
+  // server can actually sustain, so the budget has to cover it.
+  timeout: process.env["CI"] !== undefined ? 420_000 : 90_000,
   forbidOnly: process.env["CI"] !== undefined,
   retries: process.env["CI"] !== undefined ? 1 : 0,
   reporter: [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
@@ -51,20 +61,7 @@ export default defineConfig({
     baseURL: E2E_BASE_URL,
     trace: "on-first-retry",
   },
-  projects: [
-    // Compiles every ops route the suites touch before any assertion
-    // runs — see warmup.setup.ts. Without it, `next dev`'s lazy
-    // first-request compile is billed to whichever test gets there
-    // first, which is why CI (always a cold `.next`) failed where a
-    // warm local worktree passed.
-    { name: "warmup", testMatch: /warmup\.setup\.ts$/ },
-    {
-      name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
-      testIgnore: /warmup\.setup\.ts$/,
-      dependencies: ["warmup"],
-    },
-  ],
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
     // Same flags as the apps/web `dev` script, on the dedicated port.
     command: `pnpm exec next dev --webpack --port ${E2E_PORT}`,

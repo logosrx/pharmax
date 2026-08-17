@@ -85,8 +85,25 @@ function seedState(): E2ESeedState {
   return JSON.parse(readFileSync(E2E_STATE_FILE, "utf8")) as E2ESeedState;
 }
 
-/** See the note in `submitActionForm` — sized for a cold dev compile. */
-const ACTION_POST_TIMEOUT_MS = 60_000;
+const IS_CI = process.env["CI"] !== undefined;
+
+/**
+ * See the note in `submitActionForm` — sized for a cold dev compile.
+ *
+ * Doubled on CI, where two vCPUs are shared between webpack, Chromium
+ * and the tests: a cold ops route measured over a minute there against
+ * a few seconds locally. This is infrastructure latency, not slack for
+ * product bugs — a real refusal answers immediately with an `error=`
+ * code, and a real hang exhausts any budget we would plausibly set.
+ */
+const ACTION_POST_TIMEOUT_MS = IS_CI ? 120_000 : 60_000;
+
+/**
+ * Budget for compiling one ops route (see `warmActionRoute`). Separate
+ * from the POST budget so the two costs are legible apart: this one is
+ * webpack, that one is the command.
+ */
+const ROUTE_WARM_TIMEOUT_MS = IS_CI ? 180_000 : 60_000;
 
 const APP_ORIGIN = new URL(E2E_ORG_BASE_URL).origin;
 
@@ -105,6 +122,58 @@ function isOnAppOrigin(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Compile an ops action route before the assertion that measures it.
+ *
+ * `next dev` compiles a route on its first request, and CI always starts
+ * from a cold `.next`. Billed to the POST, that compile is the single
+ * biggest source of noise in this suite: the budget went 20s → 60s
+ * chasing it, and the runs that appeared to "hang" were the cold ones —
+ * a fresh worktree, or any CI runner. A warm local checkout never
+ * reproduced it, which is how it stayed misfiled as an environment
+ * artefact for so long.
+ *
+ * Deliberately just-in-time, one route at a time. Compiling the whole
+ * ops surface up front works locally and does not survive CI: holding
+ * every route's module graph at once exhausts the dev server's heap, and
+ * `next dev` reacts by restarting itself mid-suite — dropping sockets,
+ * abandoning open Postgres transactions and discarding every compile.
+ * (With that restart disabled the server OOMs outright instead.) Warming
+ * exactly the route about to be posted keeps the memory profile
+ * identical to plain lazy compilation while still moving the cost off
+ * the assertion's clock.
+ *
+ * Harmless by construction: a GET against a POST-only route makes Next
+ * load the module to discover its exported methods, then answer 405
+ * without running a line of the handler. No command can run down this
+ * path however the caller is authenticated.
+ *
+ * Sent through the page's own context so it carries the signed-in
+ * operator's cookie. That matters: `proxy.ts` redirects operator routes
+ * when no session cookie is present, and it does so before Next resolves
+ * the route — an anonymous warm request compiles nothing at all, which
+ * is exactly how an earlier version of this warmed 33 routes in 6.3s and
+ * left every one of them cold.
+ */
+async function warmActionRoute(page: Page, actionPathSuffix: string): Promise<void> {
+  const path = actionPathSuffix.startsWith("/api/")
+    ? actionPathSuffix
+    : `/api/ops${actionPathSuffix}`;
+  const response = await page.request.fetch(new URL(path, E2E_ORG_BASE_URL).toString(), {
+    method: "GET",
+    timeout: ROUTE_WARM_TIMEOUT_MS,
+    failOnStatusCode: false,
+    maxRedirects: 0,
+  });
+  // 405 is the proof the request reached the compiled route module. A
+  // redirect would mean proxy.ts intercepted it and nothing compiled; a
+  // 404 would mean this path no longer maps to a route. Either way the
+  // warm-up would be silently doing nothing, which is worse than not
+  // having one — the cost quietly returns to the assertion and the next
+  // person re-debugs a timeout that looks like a product hang.
+  expect(response.status(), `warm ${path} should reach the route module`).toBe(405);
 }
 
 /**
@@ -130,17 +199,12 @@ async function submitActionForm(
   actionPathSuffix: string,
   click: () => Promise<void>
 ): Promise<URL> {
+  await warmActionRoute(page, actionPathSuffix);
   const before = page.url();
   const [response] = await Promise.all([
     page.waitForResponse(
       (r) =>
         r.request().method() === "POST" && new URL(r.url()).pathname.endsWith(actionPathSuffix),
-      // Generous because the webServer runs `next dev`: each ops action
-      // route is compiled lazily on its FIRST post, and that compile is
-      // on the clock here. A tighter bound fails whichever stage the
-      // golden path reaches first with a cold route — it was 20s, and
-      // start-final (the first stage no earlier test posts to) timed
-      // out on a cold compile while the flow itself was correct.
       { timeout: ACTION_POST_TIMEOUT_MS }
     ),
     click(),
