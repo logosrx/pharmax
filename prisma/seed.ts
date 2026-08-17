@@ -33,6 +33,12 @@ import {
   prisma,
 } from "@pharmax/database";
 import {
+  DEFAULT_COMPOUND_BATCH_TEMPLATE_CODE,
+  DEFAULT_COMPOUND_BATCH_TEMPLATE_VERSION,
+  DEFAULT_COMPOUND_BATCH_ZPL_TEMPLATE,
+  DEFAULT_COMPOUND_UNIT_TEMPLATE_CODE,
+  DEFAULT_COMPOUND_UNIT_TEMPLATE_VERSION,
+  DEFAULT_COMPOUND_UNIT_ZPL_TEMPLATE,
   DEFAULT_VIAL_TEMPLATE_CODE,
   DEFAULT_VIAL_TEMPLATE_VERSION,
   DEFAULT_VIAL_ZPL_TEMPLATE,
@@ -160,6 +166,11 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
     code: "inventory.batch.release",
     description:
       "Record the lab's verdict on a testing compound batch: release for dispensing, or reject with a reason code (terminal); pharmacist-level quality decision",
+  },
+  {
+    code: "inventory.batch.label_print",
+    description:
+      "Print and reprint compound stock labels (batch record label and per-unit vial labels); reprints require a reason code and rejected batches cannot be labelled",
   },
   {
     code: "compounding.read",
@@ -425,6 +436,72 @@ async function seedFillDemoStack(input: {
       labelStock: LabelStockKind.VIAL,
       zplBody: DEFAULT_VIAL_ZPL_TEMPLATE,
       isActive: true,
+    },
+  });
+
+  // Compound stock templates. The unit label shares VIAL stock (it goes
+  // on a vial); the batch record label has its own BATCH_2X1 stock so a
+  // site can dedicate a stock-room printer to it.
+  await prisma.printTemplate.upsert({
+    where: {
+      organizationId_code_version: {
+        organizationId: input.organizationId,
+        code: DEFAULT_COMPOUND_BATCH_TEMPLATE_CODE,
+        version: DEFAULT_COMPOUND_BATCH_TEMPLATE_VERSION,
+      },
+    },
+    update: { zplBody: DEFAULT_COMPOUND_BATCH_ZPL_TEMPLATE, isActive: true },
+    create: {
+      organizationId: input.organizationId,
+      code: DEFAULT_COMPOUND_BATCH_TEMPLATE_CODE,
+      version: DEFAULT_COMPOUND_BATCH_TEMPLATE_VERSION,
+      labelStock: LabelStockKind.BATCH_2X1,
+      zplBody: DEFAULT_COMPOUND_BATCH_ZPL_TEMPLATE,
+      isActive: true,
+    },
+  });
+
+  await prisma.printTemplate.upsert({
+    where: {
+      organizationId_code_version: {
+        organizationId: input.organizationId,
+        code: DEFAULT_COMPOUND_UNIT_TEMPLATE_CODE,
+        version: DEFAULT_COMPOUND_UNIT_TEMPLATE_VERSION,
+      },
+    },
+    update: { zplBody: DEFAULT_COMPOUND_UNIT_ZPL_TEMPLATE, isActive: true },
+    create: {
+      organizationId: input.organizationId,
+      code: DEFAULT_COMPOUND_UNIT_TEMPLATE_CODE,
+      version: DEFAULT_COMPOUND_UNIT_TEMPLATE_VERSION,
+      labelStock: LabelStockKind.VIAL,
+      zplBody: DEFAULT_COMPOUND_UNIT_ZPL_TEMPLATE,
+      isActive: true,
+    },
+  });
+
+  await prisma.labelPrinter.upsert({
+    where: {
+      organizationId_siteId_code: {
+        organizationId: input.organizationId,
+        siteId: input.siteId,
+        code: "BATCH-ZPL-01",
+      },
+    },
+    update: {
+      name: "Zebra Batch Label Printer (DEMO)",
+      status: LabelPrinterStatus.ACTIVE,
+    },
+    create: {
+      organizationId: input.organizationId,
+      siteId: input.siteId,
+      code: "BATCH-ZPL-01",
+      name: "Zebra Batch Label Printer (DEMO)",
+      vendor: LabelPrinterVendor.ZEBRA,
+      protocol: LabelPrinterProtocol.ZPL,
+      connection: LabelPrinterConnection.WORKSTATION_AGENT,
+      labelStock: LabelStockKind.BATCH_2X1,
+      status: LabelPrinterStatus.ACTIVE,
     },
   });
 

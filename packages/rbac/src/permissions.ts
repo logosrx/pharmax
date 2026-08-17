@@ -130,6 +130,13 @@ export const PERMISSIONS = Object.freeze({
   INVENTORY_BATCH_CREATE: "inventory.batch.create",
   INVENTORY_BATCH_TRANSITION: "inventory.batch.transition",
   INVENTORY_BATCH_RELEASE: "inventory.batch.release",
+  // Print (and reprint) compound stock labels: the batch record label
+  // and the per-unit vial labels. One grant covers both first print and
+  // reprint because the command derives "this is a reprint" from print
+  // history and demands a reason code then — a separate reprint grant
+  // would imply a separate endpoint, which is the thing that lets a
+  // duplicate label reach a shelf with no reason recorded.
+  INVENTORY_BATCH_LABEL_PRINT: "inventory.batch.label_print",
 
   // Compounding (ADR-0035): Master Formulation Records. MANAGE covers
   // the whole formula lifecycle (author/publish/retire) — pharmacist-
@@ -450,6 +457,11 @@ export const PERMISSION_METADATA: Readonly<
   [PERMISSIONS.INVENTORY_BATCH_RELEASE]: {
     description:
       "Record the lab's verdict on a TESTING compound batch: release it for dispensing, or reject it with a reason code (terminal). A quality decision with direct patient exposure — pharmacist-level.",
+    category: "Inventory",
+  },
+  [PERMISSIONS.INVENTORY_BATCH_LABEL_PRINT]: {
+    description:
+      "Print and reprint in-house compound stock labels: the batch record label (barcode + Pharmax Product ID + batch number) and per-unit vial labels carrying each unit's serial. Reprints require a reason code, derived from print history rather than a separate grant. Refuses printing for a lab-rejected batch. No PHI — a batch has no patient.",
     category: "Inventory",
   },
   [PERMISSIONS.COMPOUNDING_READ]: {

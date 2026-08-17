@@ -1028,12 +1028,18 @@ importers:
       '@pharmax/database':
         specifier: workspace:*
         version: link:../database
+      '@pharmax/labels':
+        specifier: workspace:*
+        version: link:../labels
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../platform-core
       '@pharmax/rbac':
         specifier: workspace:*
         version: link:../rbac
+      '@pharmax/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
       '@pharmax/tenancy':
         specifier: workspace:*
         version: link:../tenancy
