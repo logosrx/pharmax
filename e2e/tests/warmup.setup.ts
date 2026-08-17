@@ -65,16 +65,47 @@ const ORDER_ACTIONS_DIR = fileURLToPath(
 );
 
 /**
- * Read the order action routes off disk rather than listing them.
- * A hand-maintained list silently goes stale the moment someone adds
- * an action, and a stale warm-up fails as a mystery timeout in an
- * unrelated test months later.
+ * The order actions the dispense suites POST to, in workflow order.
+ *
+ * Listed rather than globbed from the directory: every warmed route
+ * stays resident in the dev server's module graph, and `next dev`
+ * restarts itself once used heap passes 80% of the ceiling — so the six
+ * actions no suite touches cost memory toward that restart and buy
+ * nothing. `assertActionsExist` below keeps the list honest, so a
+ * renamed route fails here instead of degrading into a mystery timeout
+ * somewhere downstream.
  */
+const ORDER_ACTIONS: ReadonlyArray<string> = [
+  "start-typing",
+  "complete-typing-review",
+  "start-pv1",
+  "acknowledge-pv1-screening-finding",
+  "approve-pv1",
+  "reject-pv1",
+  "start-fill",
+  "assign-lot",
+  "print-vial-label",
+  "complete-fill",
+  "start-final",
+  "approve-final",
+  "release-to-ship",
+  "create-shipment",
+  "confirm-shipment",
+];
+
+/** Fail loudly if a listed action no longer exists on disk. */
+function assertActionsExist(): void {
+  const onDisk = new Set(
+    readdirSync(ORDER_ACTIONS_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+  );
+  const missing = ORDER_ACTIONS.filter((action) => !onDisk.has(action));
+  expect(missing, "warm-up lists order actions that no longer exist on disk").toEqual([]);
+}
+
 function orderActionPaths(): ReadonlyArray<string> {
-  return readdirSync(ORDER_ACTIONS_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => `/api/ops/orders/${PLACEHOLDER_ID}/${entry.name}`)
-    .sort();
+  return ORDER_ACTIONS.map((action) => `/api/ops/orders/${PLACEHOLDER_ID}/${action}`);
 }
 
 /** Surfaces the suites navigate to, and the one non-order action. */
@@ -96,11 +127,8 @@ const OTHER_PATHS: ReadonlyArray<string> = [
 test("warm the ops routes the dispense suites touch", async ({ request }) => {
   test.setTimeout(WARMUP_TIMEOUT_MS);
 
+  assertActionsExist();
   const actionPaths = orderActionPaths();
-  expect(
-    actionPaths.length,
-    "no order action routes found — did the route tree move?"
-  ).toBeGreaterThan(0);
 
   const timings: Array<{ path: string; ms: number }> = [];
 
