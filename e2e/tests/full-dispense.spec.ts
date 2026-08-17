@@ -29,8 +29,14 @@
 // writes the vial label + a PENDING print job for the workstation
 // agent to pick up; the workbench renders that status and the barcode.
 // The test asserts the label record, the PENDING job status, and the
-// barcode value — and then uses that barcode for the completion scan,
-// so a silently-failed print could not pass.
+// barcode value. CompleteFill then refuses while the print job is not
+// COMPLETED (FILL_LABEL_PRINT_NOT_COMPLETE — a real no-silent-failure
+// control), and in production the print-agent daemon confirms the job
+// after the Zebra prints. No agent runs in CI, so the suite dispatches
+// the same ConfirmVialLabelPrint command out-of-band (e2e-dispatch.ts,
+// as the fill tech at workstation WS-01), re-asserts COMPLETED in the
+// workbench, and completes fill with the printed barcode — so a
+// silently-failed print could not pass.
 //
 // Shipping: the manual path (CreateShipment with an operator-entered
 // tracking number, then ConfirmShipment) — no carrier account, no
@@ -81,6 +87,25 @@ function seedState(): E2ESeedState {
 
 /** See the note in `submitActionForm` — sized for a cold dev compile. */
 const ACTION_POST_TIMEOUT_MS = 60_000;
+
+const APP_ORIGIN = new URL(E2E_ORG_BASE_URL).origin;
+
+/**
+ * Whether the browser has committed a real page on the app's own
+ * origin. Compared as a parsed origin, not a string prefix: a host
+ * like `acme.localhost.example.com` shares the prefix but is a
+ * different site, which is the js/incomplete-url-substring-sanitization
+ * pattern CodeQL rejects. Non-http commits (`chrome-error://`,
+ * `about:blank`) parse but never match, and unparseable values are
+ * simply "not on our origin".
+ */
+function isOnAppOrigin(url: string): boolean {
+  try {
+    return new URL(url).origin === APP_ORIGIN;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Click a native ActionForm submit and capture the ops route's 303
@@ -139,7 +164,7 @@ async function submitActionForm(
     for (;;) {
       const now = page.url();
       if (now.startsWith("chrome-error://")) break;
-      if (now !== before && now.startsWith("http://acme.localhost")) {
+      if (now !== before && isOnAppOrigin(now)) {
         await page.waitForLoadState("load", { timeout: 5_000 });
         break;
       }
@@ -162,14 +187,32 @@ function expectApplied(location: URL): void {
  * Sign in as a seeded operator. Retried as a unit: the first paint can
  * precede React hydration, and a pre-hydration click submits the form
  * natively instead of invoking the JS handler (see operator-smoke).
+ *
+ * The navigation is INSIDE the retry on purpose. With it outside, an
+ * attempt whose click did land left the page mid-navigation away from
+ * /sign-in, so every subsequent attempt failed looking for an Email
+ * field that was no longer on screen — the retry could report only the
+ * first attempt's failure, never recover from it. That is the flake
+ * this helper was written to absorb, so it has to survive its own
+ * first attempt.
  */
 async function signIn(page: Page, email: string, password: string): Promise<void> {
-  await page.goto("/sign-in");
+  const alreadyOnDashboard = (): boolean => {
+    try {
+      return new URL(page.url()).pathname === "/ops";
+    } catch {
+      return false;
+    }
+  };
+
   await expect(async () => {
+    // A previous attempt may have succeeded just past its own deadline.
+    if (alreadyOnDashboard()) return;
+    await page.goto("/sign-in");
     await page.getByLabel("Email").fill(email);
     await page.getByLabel("Password").fill(password);
     await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL("**/ops", { timeout: 10_000 });
+    await page.waitForURL("**/ops", { timeout: 20_000 });
   }).toPass({ timeout: 45_000 });
 }
 

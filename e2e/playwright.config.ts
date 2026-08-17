@@ -51,7 +51,20 @@ export default defineConfig({
     baseURL: E2E_BASE_URL,
     trace: "on-first-retry",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    // Compiles every ops route the suites touch before any assertion
+    // runs — see warmup.setup.ts. Without it, `next dev`'s lazy
+    // first-request compile is billed to whichever test gets there
+    // first, which is why CI (always a cold `.next`) failed where a
+    // warm local worktree passed.
+    { name: "warmup", testMatch: /warmup\.setup\.ts$/ },
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testIgnore: /warmup\.setup\.ts$/,
+      dependencies: ["warmup"],
+    },
+  ],
   webServer: {
     // Same flags as the apps/web `dev` script, on the dedicated port.
     command: `pnpm exec next dev --webpack --port ${E2E_PORT}`,
