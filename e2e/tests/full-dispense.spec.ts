@@ -121,7 +121,12 @@ async function submitActionForm(
     click(),
   ]);
   expect(response.status(), `POST ${actionPathSuffix}`).toBe(303);
-  const location = new URL(response.headers()["location"] ?? "about:blank");
+  // Resolved against the page rather than parsed bare: an ops route
+  // may answer with an absolute Location (today) or a relative one
+  // (once the http://internal placeholder is fixed — see the note
+  // above). `new URL(relative)` throws TypeError: Invalid URL, so
+  // parsing bare couples this suite to whichever form ships first.
+  const location = new URL(response.headers()["location"] ?? "about:blank", page.url());
   // Let the (currently doomed) redirect navigation fully settle
   // before the caller's next goto — otherwise the error-page commit
   // lands mid-goto and Playwright reports "interrupted by another
