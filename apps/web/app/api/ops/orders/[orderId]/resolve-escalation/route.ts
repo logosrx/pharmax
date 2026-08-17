@@ -36,9 +36,8 @@ import {
 import { errors, ids } from "@pharmax/platform-core";
 import { executeCommand } from "@pharmax/command-bus";
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
-import { NextResponse } from "next/server";
-
 import { resolveOperatorTenancyContext } from "../../../../../../src/server/auth/resolve-tenancy.js";
+import { seeOther } from "../../../../../../src/server/http/redirect.js";
 import { logger } from "../../../../../../src/server/logger.js";
 import { parseOpsRequestBody } from "../../../../../../src/server/ops/parse-request-body.js";
 
@@ -53,11 +52,8 @@ function parseDisposition(value: unknown): EscalationDisposition | null {
     : null;
 }
 
-function redirectBack(searchParams: string): NextResponse {
-  return NextResponse.redirect(
-    new URL(`/ops/emergency?${searchParams}`, "http://internal").toString(),
-    { status: 303 }
-  );
+function redirectBack(searchParams: string): Response {
+  return seeOther(`/ops/emergency?${searchParams}`);
 }
 
 export async function POST(request: Request, context: RouteParams): Promise<Response> {
@@ -65,9 +61,7 @@ export async function POST(request: Request, context: RouteParams): Promise<Resp
 
   const session = await resolveOperatorTenancyContext();
   if (!session.ok) {
-    return NextResponse.redirect(new URL("/sign-in", "http://internal").toString(), {
-      status: 303,
-    });
+    return seeOther("/sign-in");
   }
 
   // Accept either form-encoded body (the on-page form) or JSON

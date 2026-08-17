@@ -1,5 +1,15 @@
+// Print-job completion callback from the workstation print agent.
+//
+// NAME NOTE: this command confirms EVERY label print job, not only
+// patient vial labels — compound batch and unit labels flow through the
+// same print agent, and it has exactly one callback. The name predates
+// compound labels and is retained because the agent, its tests, and the
+// command-log history all reference it; the permission behind it
+// (`labels.confirm_print`) was always kind-agnostic. What varies by
+// target is the event emitted, below.
+
 import { defineCommand } from "@pharmax/command-bus";
-import { PrintJobStatus } from "@pharmax/database";
+import { PrintJobStatus, PrintJobTargetKind } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
@@ -56,8 +66,11 @@ export const ConfirmVialLabelPrint = defineCommand<
       select: {
         id: true,
         status: true,
+        targetKind: true,
         orderId: true,
         orderLineId: true,
+        compoundBatchId: true,
+        compoundBatchUnitId: true,
         workstationId: true,
       },
     });
@@ -107,28 +120,42 @@ export const ConfirmVialLabelPrint = defineCommand<
       },
     });
 
-    return {
-      output: { printJobId: printJob.id, status: input.status },
-      targetOrderId: printJob.orderId,
-      audit: {
-        action: "labels.vial_print.confirmed",
-        resourceType: "PrintJob",
-        resourceId: printJob.id,
-        metadata: {
-          printJobId: printJob.id,
-          orderId: printJob.orderId,
-          orderLineId: printJob.orderLineId,
-          status: input.status,
-          workstationId: ctx.workstationId ?? null,
-          hasFailureReason: input.failureReason !== undefined,
-        },
-      },
-      emits: [
-        {
-          eventType:
-            input.status === PrintJobStatus.COMPLETED
-              ? "labels.vial_print.completed.v1"
-              : "labels.vial_print.failed.v1",
+    const completed = input.status === PrintJobStatus.COMPLETED;
+    // Tested positively rather than as `!== ORDER_LINE` so an
+    // unrecognized or absent target falls back to the order-scoped
+    // branch — the long-standing path — instead of being reported as a
+    // compound label it is not.
+    const isCompoundLabel =
+      printJob.targetKind === PrintJobTargetKind.COMPOUND_BATCH ||
+      printJob.targetKind === PrintJobTargetKind.COMPOUND_UNIT;
+
+    // Two event families, not one widened family. The vial events
+    // declare orderId/orderLineId as required UUIDs and the patient
+    // path depends on that; a compound batch has neither, and an event
+    // carrying `orderId: null` would be a worse description of a batch
+    // label than one carrying `compoundBatchId`.
+    const emit = isCompoundLabel
+      ? {
+          eventType: completed
+            ? "labels.compound_label.completed.v1"
+            : "labels.compound_label.failed.v1",
+          aggregateType: "PrintJob",
+          aggregateId: printJob.id,
+          payload: {
+            printJobId: printJob.id,
+            organizationId: ctx.organizationId,
+            targetKind: printJob.targetKind,
+            compoundBatchId: printJob.compoundBatchId,
+            ...(printJob.compoundBatchUnitId === null
+              ? {}
+              : { compoundBatchUnitId: printJob.compoundBatchUnitId }),
+            status: input.status,
+            workstationId: ctx.workstationId ?? null,
+            occurredAt: now.toISOString(),
+          },
+        }
+      : {
+          eventType: completed ? "labels.vial_print.completed.v1" : "labels.vial_print.failed.v1",
           aggregateType: "PrintJob",
           aggregateId: printJob.id,
           payload: {
@@ -140,8 +167,29 @@ export const ConfirmVialLabelPrint = defineCommand<
             workstationId: ctx.workstationId ?? null,
             occurredAt: now.toISOString(),
           },
+        };
+
+    return {
+      output: { printJobId: printJob.id, status: input.status },
+      // Only an order-scoped job has an order timeline to append to.
+      ...(printJob.orderId === null ? {} : { targetOrderId: printJob.orderId }),
+      audit: {
+        action: isCompoundLabel ? "labels.compound_label.confirmed" : "labels.vial_print.confirmed",
+        resourceType: "PrintJob",
+        resourceId: printJob.id,
+        metadata: {
+          printJobId: printJob.id,
+          targetKind: printJob.targetKind,
+          orderId: printJob.orderId,
+          orderLineId: printJob.orderLineId,
+          compoundBatchId: printJob.compoundBatchId,
+          compoundBatchUnitId: printJob.compoundBatchUnitId,
+          status: input.status,
+          workstationId: ctx.workstationId ?? null,
+          hasFailureReason: input.failureReason !== undefined,
         },
-      ],
+      },
+      emits: [emit],
     };
   },
 });

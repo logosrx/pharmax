@@ -44,9 +44,8 @@ import {
 } from "@pharmax/package-capture";
 import { errors, ids } from "@pharmax/platform-core";
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
-import { NextResponse } from "next/server";
-
 import { resolveOperatorTenancyContext } from "../../../../../../src/server/auth/resolve-tenancy.js";
+import { seeOther } from "../../../../../../src/server/http/redirect.js";
 import { logger } from "../../../../../../src/server/logger.js";
 
 export const runtime = "nodejs";
@@ -57,14 +56,14 @@ const TRIAGE_PATH = "/ops/shipping/unmatched";
 export async function POST(request: Request): Promise<Response> {
   const session = await resolveOperatorTenancyContext();
   if (!session.ok) {
-    return redirect("/sign-in");
+    return seeOther("/sign-in");
   }
 
   let form: FormData;
   try {
     form = await request.formData();
   } catch {
-    return redirectFlash(TRIAGE_PATH, {
+    return seeOther(TRIAGE_PATH, {
       error: "RESOLVE_FORM_INVALID:Could not read the form submission.",
     });
   }
@@ -73,12 +72,12 @@ export async function POST(request: Request): Promise<Response> {
   const targetOrderId = readFormString(form, "targetOrderId");
 
   if (photoId === null) {
-    return redirectFlash(TRIAGE_PATH, {
+    return seeOther(TRIAGE_PATH, {
       error: "RESOLVE_PHOTO_ID_MISSING:Missing photo id on the resolve submission.",
     });
   }
   if (targetOrderId === null) {
-    return redirectFlash(TRIAGE_PATH, {
+    return seeOther(TRIAGE_PATH, {
       // Keep the operator on the photo they were working so the
       // picker re-opens with their context intact.
       error: "RESOLVE_TARGET_ORDER_ID_MISSING:Pick an order before confirming the match.",
@@ -107,7 +106,7 @@ export async function POST(request: Request): Promise<Response> {
       clinicBackfilled: out.clinicBackfilled,
       trackingBackfilled: out.trackingBackfilled,
     });
-    return redirectFlash(TRIAGE_PATH, {
+    return seeOther(TRIAGE_PATH, {
       flash: "resolved",
       photoId: out.photoId,
       matchedOrderId: out.matchedOrderId,
@@ -141,7 +140,7 @@ function mapCommandErrorToFlash(
       organizationId,
       error: cause,
     });
-    return redirectFlash(TRIAGE_PATH, {
+    return seeOther(TRIAGE_PATH, {
       error: "RESOLVE_UNKNOWN:Unexpected error resolving the match. Try again or escalate.",
       photoId,
     });
@@ -159,30 +158,15 @@ function mapCommandErrorToFlash(
   if (code === "PACKAGE_PHOTO_ALREADY_MATCHED") {
     const existing = cause.metadata["existingMatchedOrderId"];
     const existingMatchedOrderId = typeof existing === "string" ? existing : "";
-    return redirectFlash(TRIAGE_PATH, {
+    return seeOther(TRIAGE_PATH, {
       error: `${code}:This photo was already matched by someone else. No change was made.`,
       photoId,
       matchedOrderId: existingMatchedOrderId,
     });
   }
 
-  return redirectFlash(TRIAGE_PATH, {
+  return seeOther(TRIAGE_PATH, {
     error: `${code}:${cause.message}`,
     photoId,
   });
-}
-
-function redirect(path: string): Response {
-  return NextResponse.redirect(new URL(path, "http://internal").toString(), { status: 303 });
-}
-
-function redirectFlash(path: string, params: Record<string, string>): Response {
-  const search = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v.length === 0) continue;
-    search.set(k, v);
-  }
-  const qs = search.toString();
-  const target = qs.length > 0 ? `${path}?${qs}` : path;
-  return NextResponse.redirect(new URL(target, "http://internal").toString(), { status: 303 });
 }

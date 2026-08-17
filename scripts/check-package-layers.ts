@@ -125,6 +125,10 @@ const DOMAIN_PACKAGES: ReadonlySet<string> = new Set([
 const ALLOWED_DOMAIN_EDGES: ReadonlySet<string> = new Set([
   // fill prints vial labels as part of the FILL stage.
   "@pharmax/fill -> @pharmax/labels",
+  // inventory prints compound STOCK labels (batch record + per-unit
+  // vials). Those labels belong to a batch, which exists before any
+  // order, so they cannot live behind fill's order-scoped commands.
+  "@pharmax/inventory -> @pharmax/labels",
   // fill validates barcode scans (drug/lot) during filling.
   "@pharmax/fill -> @pharmax/scan",
   // scan validates a scanned barcode against the label's encoded content.

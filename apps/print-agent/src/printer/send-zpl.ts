@@ -58,6 +58,15 @@ export class FileZplTransport implements ZplTransport {
 const STX = "\x02";
 const ETX = "\x03";
 
+// Minimum comma-separated fields per status string, per the ZPL II
+// format documented above: string 1 must reach the pause flag
+// (aaa,b,c → index 2) and string 2 the ribbon-out flag
+// (mmm,n,o,p → index 3). A framed string shorter than that is a
+// truncated response, not an all-clear one — without this check the
+// flag lookups all miss and the empty fault list reads as READY.
+const MIN_STRING1_FIELDS = 3;
+const MIN_STRING2_FIELDS = 4;
+
 /** Parse the three-string `~HS` response into a fault list. */
 export function parseHostStatus(raw: string): PrinterStatus {
   const frames: string[] = [];
@@ -80,6 +89,16 @@ export function parseHostStatus(raw: string): PrinterStatus {
 
   const string1 = frames[0]!.split(",");
   const string2 = frames[1]!.split(",");
+
+  if (string1.length < MIN_STRING1_FIELDS || string2.length < MIN_STRING2_FIELDS) {
+    return Object.freeze({
+      ready: false,
+      faults: [
+        `unparseable ~HS response (status string 1 has ${string1.length}/${MIN_STRING1_FIELDS} required field(s), string 2 has ${string2.length}/${MIN_STRING2_FIELDS})`,
+      ],
+    });
+  }
+
   const faults: string[] = [];
 
   if (string1[1]?.trim() === "1") faults.push("paper out");

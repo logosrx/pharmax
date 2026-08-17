@@ -270,6 +270,11 @@ function renderSmsBody(
       const tracking = String(context["lastTrackingStatus"]);
       return `Pharmax: order ${order} escalated to the emergency bucket (${reason}). Last tracking status: ${tracking}. Open the ops console to claim it.`;
     }
+    case "ORDER_SLA_BREACH_ESCALATED_V1": {
+      const order = String(context["orderExternalNumber"]);
+      const deadline = String(context["slaDeadlineAtIso"]);
+      return `Pharmax: order ${order} breached its stage SLA (deadline ${deadline}) and escalated to the emergency bucket. Open the ops console to claim it.`;
+    }
     default:
       // Defensive: the channel guards already proved the template
       // lists "sms" in its channelKinds, so a template that reaches

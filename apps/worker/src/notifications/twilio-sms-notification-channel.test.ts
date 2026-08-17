@@ -66,6 +66,30 @@ describe("TwilioSmsNotificationChannel — happy path", () => {
     expect(call.body).toContain("SLA_BREACH");
   });
 
+  it("renders the SLA-breach escalation body (the registry marks it sms-capable)", async () => {
+    const fake = buildFakeApi();
+    const channel = buildChannel(fake.api);
+
+    const result = await channel.send({
+      to: { kind: "sms", address: "+15555550123" },
+      template: "ORDER_SLA_BREACH_ESCALATED_V1",
+      context: {
+        orderExternalNumber: "RX-100311",
+        slaDeadlineAtIso: "2026-08-16T14:00:00.000Z",
+        breachedAtIso: "2026-08-16T14:12:41.000Z",
+      },
+      idempotencyKey: "sla-escalation:abc",
+    });
+
+    expect(result.status).toBe("queued");
+    expect(fake.sends).toHaveLength(1);
+    const call = fake.sends[0] as { body: string };
+    // Body carries the internal order number + deadline, never PHI.
+    expect(call.body).toContain("RX-100311");
+    expect(call.body).toContain("2026-08-16T14:00:00.000Z");
+    expect(call.body).toContain("emergency bucket");
+  });
+
   it("maps a `delivered` status to delivered", async () => {
     const fake = buildFakeApi({
       sid: "SM-2",

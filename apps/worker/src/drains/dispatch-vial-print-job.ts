@@ -16,8 +16,9 @@ type Logger = loggerContract.Logger;
 export interface VialPrintDeliveryInput {
   readonly printJobId: string;
   readonly organizationId: string;
-  readonly orderId: string;
-  readonly orderLineId: string;
+  /** Null for compound stock labels, which have no order. */
+  readonly orderId: string | null;
+  readonly orderLineId: string | null;
   readonly workstationId: string | null;
   readonly printerId: string;
   readonly printerConnection: LabelPrinterConnection;
@@ -102,8 +103,8 @@ function selectPrintJobFields() {
 type LoadedPrintJob = {
   readonly id: string;
   readonly organizationId: string;
-  readonly orderId: string;
-  readonly orderLineId: string;
+  readonly orderId: string | null;
+  readonly orderLineId: string | null;
   readonly printerId: string;
   readonly workstationId: string | null;
   readonly status: PrintJobStatus;

@@ -36,11 +36,13 @@ import {
   assertTemplateAllowsRecipient,
   getTemplate,
   NOTIFICATION_TRANSPORT_ERROR,
+  type NOTIFICATION_TEMPLATES,
   type NotificationChannel,
   type NotificationChannelMetadata,
   type NotificationRecipientKind,
   type NotificationSendInput,
   type NotificationSendResult,
+  type NotificationTemplateId,
 } from "@pharmax/notifications";
 import { Resend } from "resend";
 
@@ -48,6 +50,12 @@ import {
   renderComplianceNoticeEmail,
   type ComplianceNoticeRenderInput,
 } from "./render-compliance-notice-email.js";
+import {
+  renderOrderSlaBreachEscalatedEmail,
+  renderShipmentEscalatedEmail,
+  type OrderSlaBreachEscalatedRenderInput,
+  type ShipmentEscalatedRenderInput,
+} from "./render-order-escalated-email.js";
 import {
   renderPortalOrderShippedEmail,
   type PortalOrderShippedRenderInput,
@@ -204,10 +212,50 @@ function buildDefaultSendApi(apiKey: string): ResendSendApi {
 }
 
 /**
- * Render the right template for the input id. Today there's one
- * template the worker fires; adding another is one more case here
- * and one more renderer file. We narrow context at the renderer
- * boundary (each renderer asserts its own required-keys shape).
+ * Every template id whose registry `channelKinds` includes "email",
+ * derived from the registry itself so this type can never drift
+ * from `NOTIFICATION_TEMPLATES`.
+ */
+type EmailCapableTemplateId = {
+  [
+    K in NotificationTemplateId
+  ]: "email" extends (typeof NOTIFICATION_TEMPLATES)[K]["channelKinds"][number] ? K : never;
+}[NotificationTemplateId];
+
+/** Template ids whose registry `channelKinds` does NOT include
+ *  "email" — they can never legitimately reach this channel (the
+ *  `assertTemplateAllowsRecipient` gate rejects them first). */
+type NonEmailCapableTemplateId = Exclude<NotificationTemplateId, EmailCapableTemplateId>;
+
+/**
+ * Email-capable templates that deliberately have NO Resend renderer
+ * yet. Nothing in the worker dispatches these through the email
+ * channel today — they were registered ahead of their dispatch
+ * paths. Wiring a dispatch path for one of them REQUIRES adding a
+ * renderer case in `renderTemplate` and removing the id from this
+ * list; until then a send would fail loudly with
+ * NOTIFICATION_RENDERER_MISSING (pinned by test).
+ */
+type KnownUnrenderedEmailTemplateId =
+  | "INVOICE_PAYMENT_FAILED_V1"
+  | "INVOICE_FINALIZED_V1"
+  | "INVOICE_REFUND_ISSUED_V1"
+  | "ORDER_HOLD_EXPIRY_REMINDER_V1";
+
+/**
+ * Render the right template for the input id. Adding a template is
+ * one more case here and one more renderer file. We narrow context
+ * at the renderer boundary (each renderer asserts its own
+ * required-keys shape).
+ *
+ * Exhaustiveness (typescript-exhaustive-switch): the `default`
+ * branch only compiles while every template id that can fall
+ * through is either non-email-capable or on the documented
+ * `KnownUnrenderedEmailTemplateId` list. Registering a new
+ * email-capable template (or deleting a case) without accounting
+ * for it here is a COMPILE error, not a runtime
+ * NOTIFICATION_RENDERER_MISSING surprise — the bug class that let
+ * both escalation templates ship email-capable but unrenderable.
  */
 function renderTemplate(
   templateId: NotificationSendInput["template"],
@@ -230,17 +278,31 @@ function renderTemplate(
       const narrowed = coercePortalOrderShippedContext(context);
       return renderPortalOrderShippedEmail(narrowed);
     }
-    default:
-      // Defensive: the channel guards have already validated that
-      // the recipient kind matches the template's channelKinds,
-      // but a template the registry says is `email`-capable
-      // without a renderer here is a wiring bug — surface it
-      // loudly rather than send a blank email.
+    case "ORDER_SLA_BREACH_ESCALATED_V1": {
+      const narrowed = coerceOrderSlaBreachEscalatedContext(context);
+      return renderOrderSlaBreachEscalatedEmail(narrowed);
+    }
+    case "SHIPMENT_ESCALATED_V1": {
+      const narrowed = coerceShipmentEscalatedContext(context);
+      return renderShipmentEscalatedEmail(narrowed);
+    }
+    default: {
+      // Compile-time exhaustiveness guard: after the cases above,
+      // TypeScript narrows `templateId` to the remaining ids. This
+      // assignment fails to compile the moment an email-capable
+      // template exists that is neither rendered above nor on the
+      // documented known-gap list.
+      const unrendered: KnownUnrenderedEmailTemplateId | NonEmailCapableTemplateId = templateId;
+      // Runtime backstop stays: a known-gap template reaching this
+      // channel (or a non-email template slipping past the guards)
+      // is a wiring bug — surface it loudly rather than send a
+      // blank email.
       throw new errors.InternalError({
         code: "NOTIFICATION_RENDERER_MISSING",
-        message: `ResendNotificationChannel has no renderer for template "${templateId}".`,
-        metadata: { templateId },
+        message: `ResendNotificationChannel has no renderer for template "${unrendered}".`,
+        metadata: { templateId: unrendered },
       });
+    }
   }
 }
 
@@ -339,6 +401,40 @@ function coercePortalOrderShippedContext(
     rxNumbers: String(ctx["rxNumbers"]),
     shippedAtIso: String(ctx["shippedAtIso"]),
     ...(typeof ctx["trackingNumber"] === "string" ? { trackingNumber: ctx["trackingNumber"] } : {}),
+  };
+}
+
+/**
+ * Narrow the raw notification context into the typed renderer input
+ * for ORDER_SLA_BREACH_ESCALATED_V1. Required keys are already
+ * confirmed present by the channel gate; the escalation drain
+ * stringifies every field (missing payload timestamps arrive as ""),
+ * and the renderer tolerates unparseable timestamps by omitting the
+ * computed breach-delta row.
+ */
+function coerceOrderSlaBreachEscalatedContext(
+  ctx: Readonly<Record<string, unknown>>
+): OrderSlaBreachEscalatedRenderInput {
+  return {
+    orderExternalNumber: String(ctx["orderExternalNumber"]),
+    slaDeadlineAtIso: String(ctx["slaDeadlineAtIso"]),
+    breachedAtIso: String(ctx["breachedAtIso"]),
+  };
+}
+
+/**
+ * Narrow the raw notification context into the typed renderer input
+ * for SHIPMENT_ESCALATED_V1. Required keys are already confirmed
+ * present by the channel gate; the drain defaults missing payload
+ * fields to "UNKNOWN".
+ */
+function coerceShipmentEscalatedContext(
+  ctx: Readonly<Record<string, unknown>>
+): ShipmentEscalatedRenderInput {
+  return {
+    orderExternalNumber: String(ctx["orderExternalNumber"]),
+    escalationReason: String(ctx["escalationReason"]),
+    lastTrackingStatus: String(ctx["lastTrackingStatus"]),
   };
 }
 
