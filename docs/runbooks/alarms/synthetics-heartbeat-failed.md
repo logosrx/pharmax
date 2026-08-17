@@ -115,6 +115,31 @@ provider + on-call mailbox.
 - **A stopped canary** (maintenance, cost-saving, someone testing) fires
   via the missing-data path. If stopping it was intentional, disable the
   alarm's actions for the window and say so — do not let it sit in ALARM.
+- **The apply that creates the canary pages once.** The canary and this
+  alarm are created by the same apply, seconds apart, and the alarm's first
+  evaluation lands before the canary has published a single
+  `SuccessPercent` datapoint — so missing data breaches exactly as designed
+  and the page goes out. The first successful run clears it about a minute
+  later. The tell is the transition itself: `INSUFFICIENT_DATA -> ALARM`
+  rather than `OK -> ALARM`, because a real outage always arrives from OK.
+
+  ```bash
+  aws cloudwatch describe-alarm-history \
+    --alarm-name pharmax-prod-ue1-synthetics-heartbeat-failed \
+    --history-item-type StateUpdate \
+    --query 'reverse(sort_by(AlarmHistoryItems,&Timestamp))[].[Timestamp,HistorySummary]' \
+    --output text
+
+  aws synthetics get-canary --name pharmax-prod-ue1-hb \
+    --query 'Canary.Timeline.Created'
+  ```
+
+  A `Created` timestamp within a minute of the ALARM, plus zero non-`PASSED`
+  runs in `get-canary-runs`, settles it — and CloudTrail's `CreateCanary`
+  event names the apply run that did it. This happened on 2026-08-17 when
+  the canary first reached production; it cannot recur unless the canary is
+  destroyed and recreated.
+
 - **Synthetics-fleet or single-run flakes:** a lone failed run inside one
   5-minute window can dip `SuccessPercent` below 100 for that period; the
   2-period requirement filters one-offs. If flakes recur without any real
