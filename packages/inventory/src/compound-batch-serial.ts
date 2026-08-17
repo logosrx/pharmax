@@ -19,6 +19,12 @@
 // serial uniqueness are settled by the unique constraints on
 // `compound_batch` / `compound_batch_unit` inside the creating
 // transaction.
+//
+// FORMAT CONTRACT: `parse-scanned-value.ts` in `@pharmax/scan`
+// recognizes these shapes coming back off a scanner and restates the
+// patterns rather than importing them (that package is deliberately
+// dependency-free). Changing a format here without changing it there
+// makes every printed label unscannable, so change both.
 
 // Machine prefix for the batch barcode payload. "PXB" = Pharmax
 // Batch; the colon-separated payload keeps the two human identifiers

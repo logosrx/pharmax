@@ -6,6 +6,8 @@ export { normalizeNdc, NDC_INVALID } from "@pharmax/drug-identity";
 export { parseGs1, GS1_PARSE_FAILED, type ParsedGs1, type ParsedGs1Fields } from "./parse-gs1.js";
 export {
   parseScannedValue,
+  type ParsedCompoundBatchScan,
+  type ParsedCompoundUnitScan,
   type ParsedScannedValue,
   type ScannedValueKind,
 } from "./parse-scanned-value.js";
@@ -18,6 +20,7 @@ export {
   FILL_SCAN_LOT_MISMATCH,
   FILL_SCAN_LOT_NUMBER_REQUIRED,
   FILL_SCAN_LOT_SCAN_REQUIRED,
+  FILL_SCAN_COMPOUND_LABEL_IN_LOT_FIELD,
   FILL_SCAN_COMPOUND_LOT_UNEXPECTED,
   FILL_SCAN_NDC_MISMATCH,
   FILL_SCAN_VIAL_LABEL_MISMATCH,

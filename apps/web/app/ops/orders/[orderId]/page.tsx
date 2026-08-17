@@ -206,6 +206,13 @@ export default async function OrderDetailPage({
   if (resolved.kind === "order-id" && resolved.orderId !== orderId) {
     redirect(`/ops/orders/${resolved.orderId}`);
   }
+  // A compound stock label is not an order. Scanning a vial off the
+  // shelf lands here because the topbar routes everything through this
+  // page; send it to the batch it identifies rather than reporting the
+  // order missing.
+  if (resolved.kind === "compound-batch") {
+    redirect(`/ops/admin/compound-batches/${resolved.batchId}`);
+  }
 
   const detail =
     resolved.kind === "not-found"
