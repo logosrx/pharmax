@@ -37,6 +37,25 @@ export interface AnomalyDetectionThresholds {
   readonly auditActionSpecificThresholds?: Readonly<Record<string, number>>;
 }
 
+/**
+ * Audit action written by `ViewPatient` for every PHI read.
+ *
+ * This threshold table is keyed by action NAME, and a key that
+ * matches no real action is not a misconfiguration that anyone
+ * notices — the lookup simply never fires and the control reports
+ * clean forever. That is exactly what happened here: the PHI-read
+ * ceiling was keyed on `"patient.view"` while the command has always
+ * written `"patient.viewed"`, so the §164.308(a)(1)(ii)(D) review
+ * silently had no PHI-access signal in it.
+ *
+ * `ViewPatient` emits the audit row and `patient.viewed.v1` in the
+ * same transaction, so the event registry is an independent witness
+ * for this string. The test pins the two together; if the action is
+ * ever renamed, the registry check fails rather than the alarm going
+ * quiet.
+ */
+export const PATIENT_VIEW_AUDIT_ACTION = "patient.viewed";
+
 export const DEFAULT_THRESHOLDS: AnomalyDetectionThresholds = Object.freeze({
   highCommandVolumePerActor: 50,
   commandSpecificThresholds: Object.freeze({
@@ -56,7 +75,7 @@ export const DEFAULT_THRESHOLDS: AnomalyDetectionThresholds = Object.freeze({
   auditActionSpecificThresholds: Object.freeze({
     // PHI reads, by aggregate count, are a sensitive signal even
     // though we don't see the rows themselves.
-    "patient.view": 200,
+    [PATIENT_VIEW_AUDIT_ACTION]: 200,
     // Break-glass opens — any single actor opening multiple in a
     // quarter is unusual.
     BREAK_GLASS_SESSION_OPENED: 3,

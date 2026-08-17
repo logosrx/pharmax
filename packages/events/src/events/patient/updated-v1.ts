@@ -3,11 +3,18 @@
 // Producer: `UpdatePatient` (`@pharmax/patients`).
 // Consumers: future patient-summary projection; access-pattern audit.
 //
-// PHI invariant: this payload is PHI-FREE by construction. It
-// carries ONLY the LIST of field NAMES that changed — never the
-// new values. The plaintext lives in the encrypted columns;
-// consumers that need it must decrypt via `@pharmax/crypto`
-// under proper tenancy.
+// PHI classification: PHI-BEARING (`phiSafe: false`). The payload
+// still carries ONLY the LIST of field NAMES that changed, never the
+// new values — that part of the construction holds, and the plaintext
+// stays in the encrypted columns for consumers to decrypt via
+// `@pharmax/crypto` under proper tenancy.
+//
+// It is nonetheless PHI. The field names are drawn from
+// `PATIENT_PHI_FIELD_NAMES` and are reported against a `patientId`,
+// an identifier under 45 CFR §164.514(b)(2)(i)(R). A subscriber
+// learns that a specific individual is a patient here and which of
+// their identifiers just changed — enough to track a person across
+// updates. Not partner-webhook eligible.
 
 import { z } from "zod";
 
@@ -63,7 +70,7 @@ export const PatientUpdatedV1 = defineEvent({
   aggregateIdFrom: (p) => p.patientId,
   owner: "patients",
   retention: "7y",
-  phiSafe: true,
+  phiSafe: false,
   routingKey: "patient.roster",
   description:
     "Emitted by UpdatePatient after the encrypted columns are mutated. Carries only field-name lists — never plaintext PHI.",

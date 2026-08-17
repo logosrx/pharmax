@@ -21,10 +21,18 @@
 // why were they prompted again in May?" needs the token the March
 // coverage was standing on.
 //
-// PHI: none. The token is a SHA-256 over record ids and coded
-// statuses — it names no substance and carries no narrative. The
-// patientId is the same opaque identifier the patient-allergy events
-// already carry.
+// PHI classification: PHI-BEARING (`phiSafe: false`). The token is a
+// SHA-256 over record ids and coded statuses — it names no substance
+// and carries no narrative, and that stays true.
+//
+// The rest of the payload does not clear the bar. `findingCode`,
+// `severity` and `certainty` describe a clinical screening result,
+// recorded against a `patientId` and the pharmacist who acknowledged
+// it. That is a health determination about an identifiable
+// individual: §164.514(b)(2)(i)(R) makes the id an identifier, so
+// "opaque" is not "de-identified" — it is opaque only to someone
+// without the mapping, and every consumer of the patient events has
+// it. Not partner-webhook eligible.
 
 import { z } from "zod";
 
@@ -58,7 +66,7 @@ export const OrderPv1ScreeningAcknowledgedForPatientV1 = defineEvent({
   aggregateIdFrom: (p) => p.orderId,
   owner: "verification",
   retention: "7y",
-  phiSafe: true,
+  phiSafe: false,
   routingKey: "order.lifecycle",
   description:
     "Emitted by AcknowledgePV1ScreeningFinding when a pharmacist records their judgement on a patient-record screening gap. The acknowledgement covers this pharmacist across the patient's orders while the patient's record state still hashes to recordStateToken; a change to the record re-arms the prompt.",

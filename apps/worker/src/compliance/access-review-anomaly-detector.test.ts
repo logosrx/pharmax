@@ -1,10 +1,15 @@
 // Unit tests for the access-review anomaly detector. Pure
 // functions; the input is a fixture aggregate.
 
+import { getEventDefinition } from "@pharmax/events";
 import { describe, expect, it } from "vitest";
 
 import type { AccessActivityAggregate } from "./access-activity-aggregator.js";
-import { DEFAULT_THRESHOLDS, detectAccessAnomalies } from "./access-review-anomaly-detector.js";
+import {
+  DEFAULT_THRESHOLDS,
+  detectAccessAnomalies,
+  PATIENT_VIEW_AUDIT_ACTION,
+} from "./access-review-anomaly-detector.js";
 
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const ACTOR_A = "00000000-0000-4000-8000-0000000000aa";
@@ -21,6 +26,36 @@ function fixtureAggregate(partial?: Partial<AccessActivityAggregate>): AccessAct
     ...partial,
   };
 }
+
+// A threshold keyed on an action nobody writes fails silently: the
+// lookup misses, no anomaly is ever raised, and the access review
+// reports clean. These two tests are the reason that cannot recur.
+describe("PHI-read threshold wiring", () => {
+  it("keys the PHI-read ceiling on an action the event registry knows", () => {
+    // `ViewPatient` writes the audit row and emits `patient.viewed.v1`
+    // in one transaction, so a registered event is independent
+    // evidence that the action name is real — not just a string this
+    // module agrees with itself about.
+    expect(getEventDefinition(`${PATIENT_VIEW_AUDIT_ACTION}.v1`)).toBeDefined();
+  });
+
+  it("actually fires on PHI-read volume above the ceiling", () => {
+    const ceiling = DEFAULT_THRESHOLDS.auditActionSpecificThresholds?.[PATIENT_VIEW_AUDIT_ACTION];
+    expect(ceiling).toBeDefined();
+
+    const anomalies = detectAccessAnomalies({
+      aggregate: fixtureAggregate({
+        auditCounts: [
+          { actorUserId: ACTOR_A, action: PATIENT_VIEW_AUDIT_ACTION, count: (ceiling ?? 0) + 1 },
+        ],
+      }),
+    });
+
+    expect(anomalies).toHaveLength(1);
+    expect(anomalies[0]?.kind).toBe("high-audit-action-volume");
+    expect(anomalies[0]?.label).toBe(PATIENT_VIEW_AUDIT_ACTION);
+  });
+});
 
 describe("detectAccessAnomalies", () => {
   it("returns empty list on empty aggregate", () => {

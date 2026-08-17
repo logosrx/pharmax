@@ -22,6 +22,7 @@ const V1 = defineEvent({
     .strict(),
   aggregateIdFrom: (p) => p.orderId,
   description: "v1",
+  phiSafe: true,
 });
 
 function makeV2(schema: z.ZodObject) {
@@ -32,6 +33,7 @@ function makeV2(schema: z.ZodObject) {
     schema,
     aggregateIdFrom: (p) => p["orderId"] as string,
     description: "v2",
+    phiSafe: true,
   });
 }
 
@@ -201,6 +203,7 @@ describe("diffEventSchemas", () => {
       schema: V1.schema,
       aggregateIdFrom: (p) => p["orderId"] as string,
       description: "v2",
+      phiSafe: true,
     });
     expect(diffEventSchemas(V1, v1Again)).toEqual([]);
   });

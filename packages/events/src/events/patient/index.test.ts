@@ -1,10 +1,20 @@
 // Domain-level test for patient.* event definitions.
 //
-// PHI invariant: every patient.* event MUST be flagged PHI-safe.
-// Patient PHI lives in encrypted columns; events carry only ids
-// and structural metadata. If a future event needs to carry PHI
-// (it shouldn't), the flag flip is an explicit, reviewed change
-// and this test guards it.
+// PHI invariant: every patient.* event MUST be flagged PHI-BEARING.
+//
+// The decrypted attributes really do stay in the encrypted columns —
+// these payloads carry ids and structural metadata only. That is not
+// enough to make them PHI-safe. Every event in this domain is keyed
+// on a `patientId`, which is an identifier under 45 CFR
+// §164.514(b)(2)(i)(R), and each one asserts something about that
+// individual: that they are a patient, that their record was viewed,
+// that their allergy profile changed. Ids plus a health fact is PHI.
+//
+// The invariant is therefore inverted from what it once was, and it
+// is domain-wide rather than per-event: nothing in `patient.*` can be
+// PHI-safe, because the aggregate itself is the patient. `phiSafe`
+// gates partner-webhook egress, so a flip in either direction here is
+// a disclosure decision, not a metadata edit.
 
 import { describe, expect, it } from "vitest";
 
@@ -23,9 +33,9 @@ describe("patient domain barrel", () => {
     }
   });
 
-  it("every patient.* event is PHI-free", () => {
+  it("every patient.* event is PHI-bearing, and so webhook-ineligible", () => {
     for (const def of ALL) {
-      expect(def.phiSafe, `${def.fullName} phiSafe`).toBe(true);
+      expect(def.phiSafe, `${def.fullName} phiSafe`).toBe(false);
     }
   });
 

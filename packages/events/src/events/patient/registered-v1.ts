@@ -4,12 +4,21 @@
 // Consumers: none yet (downstream notifications and intake-status
 //   counters will subscribe).
 //
-// PHI invariant: this payload is PHI-FREE. Patient names, DOB,
-// addresses, etc. live ONLY in the encrypted columns on the
-// patient row. The payload carries ids and a timestamp so
-// downstream consumers can correlate to the patient row via a
-// tenancy-scoped read; consumers that need PHI are responsible
-// for decrypting via `@pharmax/crypto`.
+// PHI classification: PHI-BEARING (`phiSafe: false`).
+//
+// Names, DOB and addresses are absent — they live only in the
+// encrypted columns on the patient row, and that part of the design
+// is unchanged. What makes this payload PHI is what remains: a
+// persistent `patientId` bound to a `clinicId`. "This individual is
+// a patient of this clinic" is the provision of health care to an
+// individual under 45 CFR §160.103, and the id is an identifier
+// under §164.514(b)(2)(i)(R) — so stripping the name does not
+// de-identify the record, it only makes it look de-identified.
+//
+// Consequence: this event is not partner-webhook eligible. A
+// consumer that needs it reads the patient row under tenancy, which
+// leaves an audit entry. Delivering it to an external subscriber
+// requires an executed BAA and a disclosure record first.
 
 import { z } from "zod";
 
@@ -32,10 +41,10 @@ export const PatientRegisteredV1 = defineEvent({
   aggregateIdFrom: (p) => p.patientId,
   owner: "patients",
   retention: "7y",
-  phiSafe: true,
+  phiSafe: false,
   routingKey: "patient.roster",
   description:
-    "Emitted by RegisterPatient after the encrypted patient row + blind-index columns are persisted. Carries only ids — never PHI.",
+    "Emitted by RegisterPatient after the encrypted patient row + blind-index columns are persisted. Carries ids only — no names, DOB or addresses — but the patient/clinic pairing is itself PHI, so the event is PHI-bearing and not webhook-eligible.",
 });
 
 export type PatientRegisteredV1Payload = z.infer<typeof payloadSchema>;

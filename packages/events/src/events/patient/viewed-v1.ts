@@ -7,9 +7,17 @@
 // Consumers: PHI access-audit projections; future "who viewed
 //   my record?" patient-portal feed.
 //
-// PHI invariant: this payload is PHI-FREE. It records the FACT
-// that a view occurred (patient id + actor + surface + decrypt
-// error count), but never any decrypted patient attribute.
+// PHI classification: PHI-BEARING (`phiSafe: false`). It records the
+// FACT that a view occurred — patient id, actor, surface, decrypt
+// error count — and never a decrypted patient attribute.
+//
+// The fact is the PHI. This is the §164.312(b) access log: it states
+// that a `patientId` exists, that they are a patient, and who looked
+// at their record and when. An access log over PHI is PHI, and it is
+// also the last record that should leave the platform — a subscriber
+// receiving these could reconstruct the full patient roster and the
+// staff-to-patient graph without ever reading a chart. Not
+// partner-webhook eligible.
 
 import { z } from "zod";
 
@@ -67,7 +75,7 @@ export const PatientViewedV1 = defineEvent({
   aggregateIdFrom: (p) => p.patientId,
   owner: "patients",
   retention: "7y",
-  phiSafe: true,
+  phiSafe: false,
   routingKey: "patient.access",
   description:
     "Emitted by ViewPatient before any server-rendered page shows decrypted PHI. The HIPAA-required access-log signal — drives the PHI access-audit projection.",
