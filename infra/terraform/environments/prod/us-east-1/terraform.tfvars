@@ -81,6 +81,18 @@ enable_alerting = true
 # only monitor that can see DNS/cert/CloudFront/WAF failures.
 enable_synthetics = true
 
+# ---- OpenTelemetry backend (Grafana Cloud) ------------------------------------
+# OFF until the Grafana Cloud stack exists. Flip to true only after (in order):
+#   1. the Grafana Cloud stack is created,
+#   2. the `pharmax-prod-ue1/grafana-cloud-otlp-headers` secret holds the real
+#      `Authorization=Basic <base64(instanceId:token)>` value, and
+#   3. `otel_exporter_otlp_endpoint` below matches the stack's region-specific
+#      OTLP gateway URL (the committed default is us-central; copy the exact
+#      URL from the stack's "OpenTelemetry → Configure" page).
+# Full procedure: docs/observability/grafana-cloud-otel-backend.md.
+otel_backend_enabled = false
+# otel_exporter_otlp_endpoint = "https://otlp-gateway-prod-us-east-0.grafana.net/otlp"
+
 # The legacy single-topic override stays empty: the per-severity topics above
 # supersede it. Setting it here would route every alarm — warning tier included
 # — to whatever topic it names.

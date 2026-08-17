@@ -72,6 +72,18 @@ locals {
     "fedex-client-secret",
     "ups-client-id",
     "ups-client-secret",
+    # OTEL_EXPORTER_OTLP_HEADERS for the Grafana Cloud OTLP gateway
+    # (web + worker, injected only when `otel_backend_enabled` is true —
+    # see modules/ecs). Value shape:
+    #   Authorization=Basic <base64(instanceId:token)>
+    # Unlike the rest of this list it is seeded with a PLACEHOLDER
+    # version below, not left empty: an empty secret referenced by a
+    # task definition is a boot dependency that fails the task with
+    # ResourceInitializationError (see the Clerk decom note in
+    # modules/ecs/main.tf). A placeholder merely 401s at the gateway —
+    # the exporter logs and retries, the app keeps serving. Populate the
+    # real value per docs/observability/grafana-cloud-otel-backend.md.
+    "grafana-cloud-otlp-headers",
   ]
 
   # Secrets that have an automatic-rotation candidate. Either a vendor-
@@ -89,6 +101,7 @@ locals {
     "easypost-api-key",
     "fedex-client-secret",
     "ups-client-secret",
+    "grafana-cloud-otlp-headers",
   ]
 }
 
@@ -125,6 +138,25 @@ resource "aws_secretsmanager_secret_version" "this" {
 
   # Once an operator rotates a secret out-of-band, do not let Terraform
   # overwrite their rotation on the next apply.
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+# The Grafana Cloud OTLP-headers secret ships with a placeholder version
+# (rationale in the `logical_secrets` comment above). The operator overwrites
+# it out-of-band with the real
+#   Authorization=Basic <base64(instanceId:token)>
+# value — `ignore_changes` below guarantees the next apply does not revert
+# that overwrite back to the placeholder. Skipped when the operator passed a
+# real initial value via `var.initial_values`, which would otherwise race
+# this resource for the same secret's version.
+resource "aws_secretsmanager_secret_version" "grafana_cloud_otlp_headers_placeholder" {
+  count = contains(nonsensitive(keys(var.initial_values)), "grafana-cloud-otlp-headers") ? 0 : 1
+
+  secret_id     = aws_secretsmanager_secret.this["grafana-cloud-otlp-headers"].id
+  secret_string = "Authorization=Basic REPLACE-WITH-BASE64-OF-INSTANCEID-COLON-TOKEN"
+
   lifecycle {
     ignore_changes = [secret_string]
   }
