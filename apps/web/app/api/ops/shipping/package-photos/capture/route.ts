@@ -74,9 +74,8 @@ import { CapturePackagePhoto, getPackagePhotoStorage } from "@pharmax/package-ca
 import { errors, ids } from "@pharmax/platform-core";
 import { PERMISSIONS, requirePermission } from "@pharmax/rbac";
 import { buildTenancyContext, withTenancyContext } from "@pharmax/tenancy";
-import { NextResponse } from "next/server";
-
 import { resolveOperatorTenancyContext } from "../../../../../../src/server/auth/resolve-tenancy.js";
+import { seeOther } from "../../../../../../src/server/http/redirect.js";
 import { logger } from "../../../../../../src/server/logger.js";
 import { parsePackagePhotoUpload } from "../../../../../../src/server/ops/parse-package-photo-upload.js";
 
@@ -92,7 +91,7 @@ export async function POST(request: Request): Promise<Response> {
     // bounce to sign-in. Clerk middleware would catch this
     // earlier in production, but keep the explicit branch for
     // local-dev + test runs where middleware can be relaxed.
-    return redirect("/sign-in");
+    return seeOther("/sign-in");
   }
 
   // Read the form body OUTSIDE the tenancy frame because Next's
@@ -102,7 +101,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     form = await request.formData();
   } catch {
-    return redirectFlash(DOCK_PATH, {
+    return seeOther(DOCK_PATH, {
       error: "DOCK_CAPTURE_MULTIPART_INVALID:Could not read the form upload.",
     });
   }
@@ -128,7 +127,7 @@ export async function POST(request: Request): Promise<Response> {
         organizationId: session.tenancy.organizationId,
         code,
       });
-      return redirectFlash(DOCK_PATH, {
+      return seeOther(DOCK_PATH, {
         error: `${code}:You do not have permission to capture package photos.`,
       });
     }
@@ -146,7 +145,7 @@ export async function POST(request: Request): Promise<Response> {
         organizationId: session.tenancy.organizationId,
         code: parsed.code,
       });
-      return redirectFlash(DOCK_PATH, { error: `${parsed.code}:${parsed.message}` });
+      return seeOther(DOCK_PATH, { error: `${parsed.code}:${parsed.message}` });
     }
 
     // -------------------------------------------------------------
@@ -159,7 +158,7 @@ export async function POST(request: Request): Promise<Response> {
     // -------------------------------------------------------------
     const externalOrderNumber = readFormString(form, "pharmacyExternalOrderNumber");
     if (externalOrderNumber === null) {
-      return redirectFlash(DOCK_PATH, {
+      return seeOther(DOCK_PATH, {
         error: "DOCK_CAPTURE_EXTERNAL_ORDER_REQUIRED:Type the order number on the package label.",
       });
     }
@@ -185,7 +184,7 @@ export async function POST(request: Request): Promise<Response> {
         organizationId: session.tenancy.organizationId,
         error: cause,
       });
-      return redirectFlash(DOCK_PATH, {
+      return seeOther(DOCK_PATH, {
         error: "DOCK_CAPTURE_STORAGE_FAILED:Could not save the photo bytes. Try again.",
       });
     }
@@ -232,7 +231,7 @@ export async function POST(request: Request): Promise<Response> {
         photoId: out.photoId,
       };
       if (out.matchedOrderId !== null) flashParams["matchedOrderId"] = out.matchedOrderId;
-      return redirectFlash(DOCK_PATH, flashParams);
+      return seeOther(DOCK_PATH, flashParams);
     } catch (cause) {
       return mapCommandErrorToFlash(cause, session.operator.userId, tenancy.organizationId);
     }
@@ -257,7 +256,7 @@ function mapCommandErrorToFlash(
       organizationId,
       error: cause,
     });
-    return redirectFlash(DOCK_PATH, {
+    return seeOther(DOCK_PATH, {
       error: "DOCK_CAPTURE_UNKNOWN:Unexpected error. Try again or escalate.",
     });
   }
@@ -276,28 +275,13 @@ function mapCommandErrorToFlash(
   if (code === "PACKAGE_PHOTO_DUPLICATE_BYTES") {
     const existing = cause.metadata["existingPhotoId"];
     const existingPhotoId = typeof existing === "string" ? existing : "";
-    return redirectFlash(DOCK_PATH, {
+    return seeOther(DOCK_PATH, {
       flash: "duplicate",
       photoId: existingPhotoId,
     });
   }
 
-  return redirectFlash(DOCK_PATH, {
+  return seeOther(DOCK_PATH, {
     error: `${code}:${cause.message}`,
   });
-}
-
-function redirect(path: string): Response {
-  return NextResponse.redirect(new URL(path, "http://internal").toString(), { status: 303 });
-}
-
-function redirectFlash(path: string, params: Record<string, string>): Response {
-  const search = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v.length === 0) continue;
-    search.set(k, v);
-  }
-  const qs = search.toString();
-  const target = qs.length > 0 ? `${path}?${qs}` : path;
-  return NextResponse.redirect(new URL(target, "http://internal").toString(), { status: 303 });
 }
