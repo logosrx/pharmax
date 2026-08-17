@@ -79,6 +79,9 @@ function seedState(): E2ESeedState {
   return JSON.parse(readFileSync(E2E_STATE_FILE, "utf8")) as E2ESeedState;
 }
 
+/** See the note in `submitActionForm` — sized for a cold dev compile. */
+const ACTION_POST_TIMEOUT_MS = 60_000;
+
 /**
  * Click a native ActionForm submit and capture the ops route's 303
  * redirect target — which is where the command's outcome (success
@@ -107,7 +110,13 @@ async function submitActionForm(
     page.waitForResponse(
       (r) =>
         r.request().method() === "POST" && new URL(r.url()).pathname.endsWith(actionPathSuffix),
-      { timeout: 20_000 }
+      // Generous because the webServer runs `next dev`: each ops action
+      // route is compiled lazily on its FIRST post, and that compile is
+      // on the clock here. A tighter bound fails whichever stage the
+      // golden path reaches first with a cold route — it was 20s, and
+      // start-final (the first stage no earlier test posts to) timed
+      // out on a cold compile while the flow itself was correct.
+      { timeout: ACTION_POST_TIMEOUT_MS }
     ),
     click(),
   ]);
