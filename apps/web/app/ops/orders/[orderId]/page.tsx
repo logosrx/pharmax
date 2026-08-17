@@ -11,6 +11,12 @@
 // PHI rendering rule: every decrypted value renders inside a <dd>,
 // "—" for null fields.
 //
+// This page is also the topbar's scan dispatcher, and not everything
+// the scan bar sends here is an order: a compound stock label resolves
+// to an inventory page gated on `inventory.read` alone. Those grants
+// are therefore applied per destination in `scan-destination.ts`, NOT
+// as a blanket order/PHI gate on the route.
+//
 // This is also the PV1 clinical-screening review surface. The findings
 // panel sits directly under the prescription lines, because a finding
 // is a claim about a drug ("no drug knowledge is available for
@@ -31,11 +37,13 @@ import {
 } from "../../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../../src/server/auth/resolve-tenancy.js";
 import { auditPatientView } from "../../../../src/server/ops/audit-patient-view.js";
+import { findCompoundBatchIdByNumber } from "../../../../src/server/ops/find-compound-batch-by-number.js";
 import { getOrderDetail } from "../../../../src/server/ops/get-order-detail.js";
 import { getOrderScreening } from "../../../../src/server/ops/get-order-screening.js";
 import { getPatientAllergies } from "../../../../src/server/ops/get-patient-allergies.js";
 import { PatientAllergyPanel } from "../../../../src/components/ops/patient-allergy-panel.js";
 import { resolveOrderSearchToken } from "../../../../src/server/ops/resolve-order-search-token.js";
+import { scanDestination } from "../../../../src/server/ops/scan-destination.js";
 import { PageHeader, Section } from "../../../../src/components/ui/page.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../../src/components/ui/card.js";
 import { Badge } from "../../../../src/components/ui/badge.js";
@@ -172,6 +180,64 @@ function GuardPage({ grant }: { readonly grant: string }) {
   );
 }
 
+/**
+ * Refusal for a scanned COMPOUND label. Separate copy from
+ * `GuardPage` because the surface being refused is different: no PHI,
+ * no order, and a different grant to ask for.
+ */
+function CompoundStockGuardPage({ grant }: { readonly grant: string }) {
+  return (
+    <div className="space-y-6">
+      <PageHeader eyebrow="Scan" title="Compound batch" />
+      <EmptyState
+        icon="shield"
+        title="You don't have access to compound batches"
+        description={
+          <>
+            That label identifies compound stock, not an order. The batch page holds
+            catalog/inventory data with no PHI on it — ask your admin for the{" "}
+            <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-2xs text-fg">
+              {grant}
+            </code>{" "}
+            grant.
+          </>
+        }
+      />
+    </div>
+  );
+}
+
+/** A well-formed compound label that matches no batch in this org. */
+function UnknownStockLabelPage({ batchNumber }: { readonly batchNumber: string }) {
+  return (
+    <div className="space-y-6">
+      <PageHeader eyebrow="Scan" title="Batch not found" />
+      <EmptyState
+        icon="batches"
+        title="No compound batch matches that label"
+        description={
+          <>
+            Scanned batch{" "}
+            <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-2xs text-fg">
+              {batchNumber}
+            </code>
+            , which doesn&apos;t exist in your organization. Check the label against the batch list,
+            or re-scan.
+          </>
+        }
+        action={
+          <Link
+            href="/ops/admin/compound-batches"
+            className={buttonClass({ variant: "secondary", size: "sm" })}
+          >
+            Back to compound batches
+          </Link>
+        }
+      />
+    </div>
+  );
+}
+
 export default async function OrderDetailPage({
   params,
   searchParams,
@@ -185,13 +251,35 @@ export default async function OrderDetailPage({
   if (!session.ok) return null;
 
   const permissions = await loadOperatorPermissions(session.tenancy);
-  if (!hasOperatorPermission(permissions, PERMISSIONS.ORDERS_READ)) {
-    return <GuardPage grant="orders.read" />;
+
+  // The topbar routes every scan and every typed query through this
+  // page, so it dispatches to two surfaces with different gates. Which
+  // gate applies follows the DESTINATION, not this route — see
+  // `scan-destination.ts`; a compound stock label must not be refused
+  // at the order/PHI grants when the page it opens asks only for
+  // `inventory.read`.
+  const destination = scanDestination({ token: orderId, permissions });
+
+  if (destination.kind === "denied") {
+    return destination.surface === "compound-stock" ? (
+      <CompoundStockGuardPage grant={destination.grant} />
+    ) : (
+      <GuardPage grant={destination.grant} />
+    );
   }
-  // Order detail is a PHI-decrypting surface; without `patients.read`
-  // we refuse the whole page rather than render a half-populated view.
-  if (!hasOperatorPermission(permissions, PERMISSIONS.PATIENTS_READ)) {
-    return <GuardPage grant="patients.read" />;
+
+  // A compound stock label is not an order — stock that has never been
+  // dispensed has no order to find. Send it to the batch it identifies
+  // rather than reporting the order missing.
+  if (destination.kind === "compound-stock") {
+    const batchId = await findCompoundBatchIdByNumber({
+      organizationId: session.tenancy.organizationId,
+      batchNumber: destination.batchNumber,
+    });
+    if (batchId !== null) {
+      redirect(`/ops/admin/compound-batches/${batchId}`);
+    }
+    return <UnknownStockLabelPage batchNumber={destination.batchNumber} />;
   }
 
   // The route param may be an internal UUID, an external order
@@ -205,13 +293,6 @@ export default async function OrderDetailPage({
   });
   if (resolved.kind === "order-id" && resolved.orderId !== orderId) {
     redirect(`/ops/orders/${resolved.orderId}`);
-  }
-  // A compound stock label is not an order. Scanning a vial off the
-  // shelf lands here because the topbar routes everything through this
-  // page; send it to the batch it identifies rather than reporting the
-  // order missing.
-  if (resolved.kind === "compound-batch") {
-    redirect(`/ops/admin/compound-batches/${resolved.batchId}`);
   }
 
   const detail =
