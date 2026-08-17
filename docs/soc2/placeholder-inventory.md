@@ -91,6 +91,20 @@ labelled "THIS IS A STUB" and are not authoritative documents. Adopting
 a stub would assert a control that has no text behind it, which is the
 one failure mode worse than an unadopted policy.
 
+> **Recount owed.** The totals above are as of the pass that wrote them
+> and have since drifted. The customer BAA pair adds **8 markers across 2
+> documents** (recorded under §Governance documents below but not folded
+> into these figures), and a direct census of the tree disagrees with
+> several category counts in both directions — so the drift is not only
+> the 8. Resolving this needs the original counting methodology, which
+> the categories imply but do not state: notably whether stub-README
+> syntax tokens and blockquote instructions are inside or outside the
+> headline number. Recount and restate the methodology at the next
+> review rather than patching individual cells, and consider a script so
+> the figure cannot drift silently again — the reason this document
+> exists is that an unpriced checklist item never closes, and an
+> unverifiable total is the same failure one level up.
+
 ## Blocking analysis
 
 A Type I opinion covers **design** of controls at a point in time. The
@@ -172,6 +186,8 @@ Owner: CTO. Gate: `AT-T1`.
 | Document                           | Markers                                             | Owner            | Gate     |
 | ---------------------------------- | --------------------------------------------------- | ---------------- | -------- |
 | `baa-tracker.md`                   | 3 front matter + 8 status + 8 effective + 11 review | CTO; vendors     | `PRE-T1` |
+| `customer-baa-template.md`         | 3 front matter + 1 governing law + 1 state addendum | Legal counsel    | `PRE-T1` |
+| `customer-baa-register.md`         | 3 front matter                                      | CTO              | `PRE-T1` |
 | `vendor-inventory.md`              | 3 front matter + 17 contract URL + 18 last-reviewed | CTO              | `PRE-T2` |
 | `risk-register.md`                 | 3 front matter + 23 per-risk next-review            | Security Officer | `PRE-T2` |
 | `access-review-procedure.md`       | 3 front matter                                      | Security Officer | `AT-T1`  |

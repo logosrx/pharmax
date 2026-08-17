@@ -12,6 +12,15 @@
 
 This document tracks the Business Associate Agreement status for every vendor in the [vendor inventory](./vendor-inventory.md) that requires one. It is the standing record an auditor or customer security reviewer asks for first.
 
+BAAs run in **two directions**, and this file covers only one of them:
+
+| Direction      | Who assures whom                                                    | Recorded in                                            |
+| -------------- | ------------------------------------------------------------------- | ------------------------------------------------------ |
+| **Upstream**   | Pharmax obtains assurances from its vendors (AWS, EasyPost, Sentry) | **This file.**                                         |
+| **Downstream** | Pharmax gives assurances to its pharmacy customers as their BA      | [customer-baa-register.md](./customer-baa-register.md) |
+
+The two are coupled and the coupling is one-way: **§ 164.502(e)(1)(ii)** requires a business associate to obtain the same assurances from its subcontractors that its own BAA imposes on it. Pharmax cannot truthfully promise a customer that its subcontractors are bound until the rows below say `executed`. Every `[BAA status: TBD]` in the table is therefore also a blocker on signing the first customer agreement, not only an internal vendor-management item.
+
 BAA status vocabulary (controlled):
 
 - **`not requested`** — engagement is current but a BAA has not been initiated yet. Engineering switch (integration enable-flag) for any PHI flow must be **off**.
@@ -68,4 +77,6 @@ During each quarterly access review ([`access-review-procedure.md`](./access-rev
 
 - [Vendor Management Policy](../policies/vendor-management-policy.md) — the procedural parent.
 - [vendor-inventory.md](./vendor-inventory.md) — the full vendor list and data-flow notes.
-- HIPAA 45 CFR § 164.308(b), § 164.314(a), § 164.504(e), § 164.410.
+- [customer-baa-template.md](./customer-baa-template.md) — the downstream agreement Pharmax signs as Business Associate.
+- [customer-baa-register.md](./customer-baa-register.md) — executed customer BAAs; gates tenant provisioning.
+- HIPAA 45 CFR § 164.308(b), § 164.314(a), § 164.502(e), § 164.504(e), § 164.410.
