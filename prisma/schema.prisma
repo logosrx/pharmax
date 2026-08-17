@@ -713,6 +713,20 @@ enum LabelPrinterConnection {
 enum LabelStockKind {
   VIAL
   SHIP_4X6
+  // Compound batch record label. Its own stock kind rather than reusing
+  // VIAL so a site can dedicate a printer to batch labels: the batch
+  // label is a stock-room artifact and its printer is not the one at
+  // the fill bench loading patient vials.
+  BATCH_2X1
+}
+
+// Which aggregate a print job labels. Discriminates the polymorphic
+// target columns on `print_job`; the `print_job_exactly_one_target`
+// CHECK ties each value to the columns it is allowed to populate.
+enum PrintJobTargetKind {
+  ORDER_LINE
+  COMPOUND_BATCH
+  COMPOUND_UNIT
 }
 
 enum LabelPrinterStatus {
@@ -4940,7 +4954,8 @@ model CompoundBatch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  units CompoundBatchUnit[]
+  units     CompoundBatchUnit[]
+  printJobs PrintJob[]
 
   @@unique([organizationId, batchNumber])
   @@unique([organizationId, barcodeValue])
@@ -4968,6 +4983,8 @@ model CompoundBatchUnit {
   // 1-based position within the batch (the trailing "-11").
   unitNumber   Int
   serialNumber String
+
+  printJobs PrintJob[]
 
   createdAt DateTime @default(now())
 
@@ -5148,10 +5165,35 @@ model PrintJob {
   organizationId String       @db.Uuid
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
 
-  orderId     String    @db.Uuid
-  order       Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  orderLineId String    @db.Uuid
-  orderLine   OrderLine @relation(fields: [orderLineId], references: [id], onDelete: Restrict)
+  // ----- Print target (exactly one kind, DB-enforced) ------------------
+  //
+  // A print job used to belong to an order line, full stop. Compound
+  // stock labels broke that: a batch is made BEFORE any patient order
+  // exists, so a batch or unit label has no order to hang off.
+  //
+  // Rather than duplicate the delivery pipeline for stock labels — the
+  // lease/claim query, the raw-TCP send, and the `~HS` fail-closed
+  // status check that implement "no silent printer failures" — the
+  // target became polymorphic. Two copies of fail-closed logic is how
+  // one copy quietly stops being fail-closed.
+  //
+  // The `print_job_exactly_one_target` CHECK in
+  // 20260819000000_compound_batch_labels enforces the discipline the
+  // nullable columns give up: an ORDER_LINE job carries
+  // (orderId, orderLineId) and no batch columns; a COMPOUND_BATCH job
+  // carries compoundBatchId and no order columns; a COMPOUND_UNIT job
+  // carries both batch and unit. Nothing else is storable.
+  targetKind PrintJobTargetKind @default(ORDER_LINE)
+
+  orderId     String?    @db.Uuid
+  order       Order?     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderLineId String?    @db.Uuid
+  orderLine   OrderLine? @relation(fields: [orderLineId], references: [id], onDelete: Restrict)
+
+  compoundBatchId     String?            @db.Uuid
+  compoundBatch       CompoundBatch?     @relation(fields: [compoundBatchId], references: [id], onDelete: Restrict)
+  compoundBatchUnitId String?            @db.Uuid
+  compoundBatchUnit   CompoundBatchUnit? @relation(fields: [compoundBatchUnitId], references: [id], onDelete: Restrict)
 
   printerId String       @db.Uuid
   printer   LabelPrinter @relation(fields: [printerId], references: [id], onDelete: Restrict)
@@ -5202,6 +5244,12 @@ model PrintJob {
   @@index([organizationId, orderId, status, requestedAt])
   @@index([organizationId, orderLineId, status, requestedAt])
   @@index([organizationId, printerId, status])
+  // Explicitly named: the generated names run past Postgres's
+  // 63-character identifier limit and get truncated server-side,
+  // permanently diverging from what Prisma expects (same trap as
+  // compound_batch_day_sequence_key).
+  @@index([organizationId, compoundBatchId, status, requestedAt], map: "print_job_compound_batch_status_idx")
+  @@index([organizationId, compoundBatchUnitId, status, requestedAt], map: "print_job_compound_unit_status_idx")
   @@map("print_job")
 }
 

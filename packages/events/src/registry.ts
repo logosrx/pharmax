@@ -64,6 +64,11 @@ import { InventoryProductUpdatedV1 } from "./events/inventory/product-updated-v1
 import { FillLotAssignedV1 } from "./events/fill/lot-assigned-v1.js";
 
 // ---- labels --------------------------------------------------------------
+import {
+  LabelsCompoundLabelCompletedV1,
+  LabelsCompoundLabelFailedV1,
+} from "./events/labels/compound-label-outcome-v1.js";
+import { LabelsCompoundLabelRequestedV1 } from "./events/labels/compound-label-requested-v1.js";
 import { LabelsVialPrintCompletedV1 } from "./events/labels/vial-print-completed-v1.js";
 import { LabelsVialPrintFailedV1 } from "./events/labels/vial-print-failed-v1.js";
 import { LabelsVialPrintReprintRequestedV1 } from "./events/labels/vial-print-reprint-requested-v1.js";
@@ -227,6 +232,9 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   // ai typing assist (org policy)
   AiAssistPolicySetV1,
   // labels
+  LabelsCompoundLabelCompletedV1,
+  LabelsCompoundLabelFailedV1,
+  LabelsCompoundLabelRequestedV1,
   LabelsVialPrintCompletedV1,
   LabelsVialPrintFailedV1,
   LabelsVialPrintReprintRequestedV1,
