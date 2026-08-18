@@ -73,6 +73,7 @@ import {
   E2E_TECH_PASSWORD,
   type E2ESeedState,
 } from "../env";
+import { completeSecondFactor } from "../mfa";
 
 test.use({ baseURL: E2E_ORG_BASE_URL });
 
@@ -353,6 +354,11 @@ async function signIn(page: Page, email: string, password: string): Promise<void
     await page.getByLabel("Email").fill(email);
     await page.getByLabel("Password").fill(password);
     await page.getByRole("button", { name: "Sign in" }).click();
+    // The pharmacists are on the MFA floor and stop at a code prompt
+    // here; the tech and shipping clerk are not, and this is a no-op for
+    // them. Inside the retry because a TOTP expires every 30 seconds —
+    // minting once outside it would give a slow attempt a stale code.
+    await completeSecondFactor(page, email);
     await page.waitForURL("**/ops", { timeout: SIGN_IN_LANDING_TIMEOUT_MS });
   }).toPass({ timeout: SIGN_IN_RETRY_BUDGET_MS });
 }
