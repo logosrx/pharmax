@@ -127,6 +127,32 @@ compliance_task
 # the person cannot be deleted out of the record.
 compliance_ai_draft
 
+# Incident log / breach register (schema.prisma §11). Same plane and
+# the same reasoning as compliance_check_run, with one addition that
+# makes the exemption load-bearing rather than incidental.
+#
+# The record belongs to Pharmax-the-operator: it evidences OUR
+# determination under 45 CFR §164.402 and OUR discharge of the
+# §164.408 and §164.410 obligations. A tenant is the SUBJECT of an
+# incident, never its owner, and `subject_organization_id` is an
+# unlinked uuid for exactly the reason the compliance plane uses one —
+# an organization that offboards after a breach does not get to take
+# the evidence of that breach with it. §164.414 puts the burden of
+# proof on us for six years; a row that could vanish with a tenant
+# would be a burden we could not discharge.
+#
+# Scoping it per-tenant would also be wrong on the merits: the
+# §164.408 annual filing is "every sub-500 breach discovered in
+# calendar year N" across the whole platform, and an incident can span
+# several tenants or none.
+#
+# The table holds NO PHI — counts, coded categories, state
+# distributions and references only — so the read boundary RLS would
+# provide is protecting nothing. Identified material lives in the
+# §164.414 evidence file behind `evidence_path`, classified Restricted
+# and controlled separately.
+incident_log
+
 # RxNorm drug-knowledge reference tables (global, deliberately not
 # tenant-scoped — same posture as `permission`). Drug nomenclature is
 # not tenant data: every organization screens against the same public

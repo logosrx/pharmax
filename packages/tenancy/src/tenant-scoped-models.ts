@@ -407,6 +407,19 @@ export const TENANT_EXCLUDED_MODELS: ReadonlySet<string> = new Set([
   // Same plane: a model-drafted proposal about the platform's own
   // control program has no tenant to belong to either.
   "ComplianceAiDraft",
+  // Incident log / breach register. The record evidences Pharmax's own
+  // determination under 45 CFR §164.402 and its discharge of the
+  // §164.408 and §164.410 obligations — a tenant is the SUBJECT of an
+  // incident, never its owner. Three consequences follow the same
+  // pattern as the compliance plane above: `subjectOrganizationId` is
+  // an unlinked uuid so evidence survives offboarding (§164.414 puts
+  // the burden of proof on us for six years, which a row that could
+  // vanish with a tenant cannot discharge); the §164.408 annual filing
+  // is platform-wide by definition; and an incident can span several
+  // tenants or none. The table holds no PHI — counts, coded categories
+  // and references only — so the read boundary tenant scoping would
+  // add is protecting nothing.
+  "IncidentLog",
   // RxNorm drug-knowledge reference tables — the platform's first
   // GLOBAL reference data, deliberately not tenant-scoped (same
   // posture as Permission). Drug nomenclature is not tenant data:
