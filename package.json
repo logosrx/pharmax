@@ -82,7 +82,7 @@
   "//prisma": "Prisma CLI config (schema/migrations/seed/datasource) lives in prisma.config.ts as of Prisma 7.",
   "devDependencies": {
     "@aws-sdk/client-kms": "^3.1111.0",
-    "@aws-sdk/client-rds": "^3.1106.0",
+    "@aws-sdk/client-rds": "^3.1111.0",
     "@aws-sdk/client-s3": "^3.1111.0",
     "@eslint/js": "^10.0.1",
     "@pharmax/audit": "workspace:*",
@@ -136,9 +136,9 @@
     "pg": "^8.23.0",
     "prettier": "^3.9.6",
     "prisma": "^7.9.1",
-    "tsx": "^4.23.11",
+    "tsx": "^4.23.12",
     "typescript": "^5.6.3",
-    "typescript-eslint": "^8.66.0",
+    "typescript-eslint": "^8.67.0",
     "vitest": "^3.2.7",
     "yaml": "^2.9.0"
   }
