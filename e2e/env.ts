@@ -120,29 +120,49 @@ export const E2E_WEB_ENV: Readonly<Record<string, string>> = Object.freeze({
   APP_URL: E2E_BASE_URL,
   LOG_LEVEL: "warn",
 
-  // Command transaction budget, raised well above the production
-  // default for this harness only.
+  // ---- Database and transaction budgets, raised for this harness ----
   //
   // The suite runs `next dev --webpack` (see playwright.config.ts for
   // why a production build cannot reach the plaintext docker Postgres).
-  // In dev mode a route is compiled on first request, and that compile
-  // can land INSIDE an open command transaction — so the transaction is
-  // held for however long webpack takes. On a cold, contended CI runner
-  // that exceeded the 5 s default and Prisma refused the commit:
+  // Dev mode compiles a route on first request, so a cold, contended CI
+  // runner is several times slower than a developer laptop, and the
+  // 2026-08-17 `full-dispense` failure was the result. It failed in two
+  // stages, and both are represented here because fixing only the first
+  // is what made the second visible:
   //
-  //   Transaction API error: A commit cannot be executed on an expired
-  //   transaction. The timeout for this transaction was 5000 ms,
-  //   however 10406 ms passed since the start of the transaction.
+  //   1. Transaction API error: A commit cannot be executed on an
+  //      expired transaction. The timeout for this transaction was
+  //      5000 ms, however 10406 ms passed…
+  //   2. Transaction API error: Unable to start a transaction in the
+  //      given time.
   //
-  // That surfaced as a flaky `full-dispense` golden path, which is the
-  // dangerous kind of failure: retry it once and it goes green, so the
-  // signal gets discarded. Raising the budget here removes the
-  // compile-time confound WITHOUT touching production, where a
-  // prebuilt server does no lazy compilation and the tight default is
-  // wanted — it bounds how long a command holds its order row lock.
+  // (1) is the transaction's own duration and is fixed by
+  // COMMAND_TX_TIMEOUT_MS. (2) is *acquiring a connection at all*, and
+  // it is governed by the smaller of Prisma's `maxWait` and the pg
+  // pool's acquisition timeout — raising `maxWait` alone did nothing,
+  // because pg still gave up at its own 5 s. So the pool timeout is
+  // raised to match, and the pool itself is widened: a single command
+  // request serially takes connections in resolve-org-from-host,
+  // resolve-tenancy, the session service, and three more inside the
+  // command bus, which leaves little of a 10-connection pool for
+  // anything concurrent.
   //
-  // If the golden path ever exceeds THIS budget, that is a real
-  // finding about the command path rather than a dev-mode artifact.
-  COMMAND_TX_TIMEOUT_MS: "60000",
-  COMMAND_TX_MAX_WAIT_MS: "30000",
+  // INVARIANT: COMMAND_TX_MAX_WAIT_MS <= DATABASE_POOL_ACQUIRE_TIMEOUT_MS.
+  // Above that, the extra wait is unreachable and the configuration
+  // lies about itself. `assertTransactionWaitWithinPoolTimeout` checks
+  // this at boot; e2e/setup.ts asserts it here too so a bad edit fails
+  // before a 15-minute suite does.
+  //
+  // None of this touches production, which runs a prebuilt server with
+  // no lazy compilation. If the golden path ever exceeds THESE numbers,
+  // that is a real finding about the command path rather than a
+  // dev-mode artifact.
+  //
+  // Overridable from the shell so the pool can be squeezed deliberately
+  // to reproduce contention locally, e.g.
+  //   DATABASE_POOL_MAX=3 pnpm test:e2e
+  COMMAND_TX_TIMEOUT_MS: process.env["COMMAND_TX_TIMEOUT_MS"] ?? "60000",
+  COMMAND_TX_MAX_WAIT_MS: process.env["COMMAND_TX_MAX_WAIT_MS"] ?? "20000",
+  DATABASE_POOL_MAX: process.env["DATABASE_POOL_MAX"] ?? "25",
+  DATABASE_POOL_ACQUIRE_TIMEOUT_MS: process.env["DATABASE_POOL_ACQUIRE_TIMEOUT_MS"] ?? "20000",
 });

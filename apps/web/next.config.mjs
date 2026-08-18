@@ -81,9 +81,50 @@ const nextConfig = {
     // import of @node-rs/argon2 still gets bundled — and webpack cannot
     // parse its native .node binary. Externalize it explicitly for the
     // server compilation; file tracing still copies it into standalone.
+    //
+    // The same gap applies to OpenTelemetry, and it is expensive rather
+    // than merely noisy. `@pharmax/telemetry` is transpiled workspace
+    // source, so listing the OTel packages in `serverExternalPackages`
+    // above does NOT externalize telemetry's imports of them — webpack
+    // bundles the whole auto-instrumentation graph instead. Because
+    // `@pharmax/command-bus` imports `@pharmax/telemetry` at module
+    // scope for `getMeter`, that graph is dragged into the compile of
+    // EVERY route that dispatches a command:
+    //
+    //   instrumentation-winston → auto-instrumentations-node
+    //     → @pharmax/telemetry → @pharmax/command-bus → app/**/route.ts
+    //
+    // In `next build` that is a slow build. In `next dev`, which the
+    // E2E suite must use, routes compile on demand — so on a 2-core CI
+    // runner the first POST to a command route waited on that graph and
+    // blew a 120 s action timeout. The 2026-08-17 `full-dispense`
+    // failures were that, reported as a database error because the
+    // requests queued behind the compile timed out acquiring
+    // connections. Externalizing here is what removes the cost; the
+    // pool and transaction budgets shipped alongside it only stopped
+    // the symptom being misattributed.
     if (isServer) {
       config.externals = config.externals ?? [];
-      config.externals.push({ "@node-rs/argon2": "commonjs @node-rs/argon2" });
+      // Only the two packages `@pharmax/telemetry` depends on directly,
+      // and deliberately NOT `instrumentation-winston`,
+      // `exporter-jaeger` or `winston-transport`. Those three are
+      // transitive or optional and are not resolvable from
+      // `packages/telemetry` — declaring them external converts a
+      // harmless webpack "can't resolve" warning into a runtime
+      // MODULE_NOT_FOUND that kills the server on boot. Verified the
+      // hard way: doing so failed the golden path in 17 s with
+      // ERR_CONNECTION_REFUSED.
+      //
+      // Externalizing the two roots is sufficient. Their own requires of
+      // the optional packages then happen inside node_modules at
+      // runtime, where OTel already degrades gracefully when an optional
+      // instrumentation is absent.
+      config.externals.push({
+        "@node-rs/argon2": "commonjs @node-rs/argon2",
+        "@opentelemetry/sdk-node": "commonjs @opentelemetry/sdk-node",
+        "@opentelemetry/auto-instrumentations-node":
+          "commonjs @opentelemetry/auto-instrumentations-node",
+      });
     }
     return config;
   },
