@@ -1298,6 +1298,9 @@ importers:
       '@pharmax/database':
         specifier: workspace:*
         version: link:../database
+      '@pharmax/events':
+        specifier: workspace:*
+        version: link:../events
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../platform-core

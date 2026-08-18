@@ -50,6 +50,7 @@
 // enum. `phiDecryptErrors` is a boolean.
 
 import type { Command, HandlerResult } from "@pharmax/command-bus";
+import { PATIENT_VIEW_SURFACES, type PatientViewSurface } from "@pharmax/events";
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
@@ -58,25 +59,28 @@ export const PATIENT_NOT_FOUND = "PATIENT_NOT_FOUND";
 
 /**
  * Closed enum of operator surfaces that read patient PHI. Add a
- * value here whenever a new surface starts decrypting — the
- * audit metadata then becomes queryable per-surface ("show me
- * every PHI view that happened on the patient admin page in May").
+ * value whenever a new surface starts decrypting — the audit
+ * metadata then becomes queryable per-surface ("show me every PHI
+ * view that happened on the patient admin page in May").
  *
  * The values are PHI-FREE strings safe to store + log.
+ *
+ * Re-exported from `@pharmax/events` rather than declared here. This
+ * command writes the audit row and emits `patient.viewed.v1` in one
+ * transaction, and the event's payload schema validates `surface`
+ * against the same list. Two copies drifted once already — the
+ * command accepted `OPERATOR_API`, which the event rejected — and the
+ * failure mode is quiet: the audit row commits, then fan-out drops the
+ * event as a producer bug. One list makes that unrepresentable.
  */
-export const VIEW_PATIENT_SURFACES = [
-  "ORDER_DETAIL_PAGE",
-  "PATIENT_ADMIN_PAGE",
-  "PATIENT_SEARCH_RESULT",
-  "OPERATOR_API",
-] as const;
+export { PATIENT_VIEW_SURFACES as VIEW_PATIENT_SURFACES };
 
-export type ViewPatientSurface = (typeof VIEW_PATIENT_SURFACES)[number];
+export type ViewPatientSurface = PatientViewSurface;
 
 const inputSchema = z
   .object({
     patientId: z.uuid(),
-    surface: z.enum(VIEW_PATIENT_SURFACES),
+    surface: z.enum(PATIENT_VIEW_SURFACES),
     /** Optional context: which order the operator was looking at. */
     orderId: z.uuid().optional(),
     /**
