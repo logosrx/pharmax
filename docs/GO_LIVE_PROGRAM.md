@@ -231,9 +231,9 @@ can hand to their compliance officer without an apology.
 
 **G1 — Pilot feature-complete**
 
-- [ ] Workstream A complete: a prescription can be created through the UI and through the v1 API
-- [ ] Workstream C1–C4 complete: alarms route to a pager; print-agent runs in production
-- [ ] Workstream D1 complete: an E2E test dispenses a synthetic order through the real UI
+- [x] Workstream A complete: a prescription can be created through the UI and through the v1 API — A1, A2, A4, A5, A7 landed; **A3 typing workbench landed in #175** (`apps/web/app/ops/typing/[orderId]`). A6 document intake remains
+- [ ] Workstream C1–C4 complete: alarms route to a pager; **print-agent runs in production** — C1 and C4 closed; C3 is the open one, `ecs_print_agent_desired_count` is still 0
+- [x] Workstream D1 complete: an E2E test dispenses a synthetic order through the real UI — **landed in #174** (`e2e/tests/full-dispense.spec.ts`; the suite is now 3 specs / 13 cases)
 - [ ] `pnpm verify` green; zero `Partial` SOC 2 controls newly introduced
 
 **G2 — Validated and secure**
@@ -744,7 +744,7 @@ Week 1 — start every clock
 D3 command integration harness ───────────────────────┤
 G-1 → G-2 tenant credentials + ship-to-state ─────────┤  ← gates G3
 C3 print agent in production ─────────────────────────┤
-A3, D1, D2, D4, D5, D6, E3…E6, H1…H8 (parallel) ──────┤
+A6, D2, D4, D5, D6, E3…E6, H1…H8 (parallel) ──────────┤
                                                        ▼
                                               G2 → G3 → G4
 ```
@@ -780,7 +780,7 @@ are what a customer's compliance officer tests first and neither exists.
 | ------- | ------------------------------------------------------------------------------------------------------------- | ------ |
 | 1       | Start every clock: F8 to counsel, F4, E1, B1, clinical reviewer, SOC 2 auditor. Ratify policies (F1)          | **G0** |
 | 1–4     | D3 command integration harness; C3 print agent to production; G-1 tenant credentials; land in-flight branches |        |
-| 4–8     | G-2 ship-to-state; A3 typing workbench; A6 document intake; D1 golden-path E2E; D2 load; D4, D5, D6 drills    | **G1** |
+| 4–8     | G-2 ship-to-state; A6 document intake; D2 load; D4, D5, D6 drills. A3 and D1 closed in #175 and #174          | **G1** |
 | 6–14    | Pentest fieldwork; E2 remediation and retest; E3 OIDC; C6 DR region; C7 rotation; C8 incident log             |        |
 | 8–16    | B2, B3, B7, B8 as the drug-knowledge licence lands; B4, B5, B6; F2 close the Partial controls                 | **G2** |
 | 10–18   | H1…H8 enablement pack and onboarding runbook; G-3…G-7; F5, F6, F7                                             |        |
