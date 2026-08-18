@@ -166,20 +166,44 @@ Per HIPAA 45 CFR § 164.308(a)(7)(ii)(A), the data backup plan:
 - **Infrastructure code** (Terraform): in the same GitHub repo. The state file is backed by an S3 bucket with versioning enabled and a DynamoDB lock table.
 - **Secrets**: AWS Secrets Manager retains prior versions for 30 days after rotation; 1Password retains version history for vault items.
 
-Restore procedure: `../RUNBOOK.md` §"Restoring from backup". Restore is tested quarterly per §8 below.
+Restore procedure: `../RUNBOOK.md` §"Restoring from backup". Restore is tested annually per §8 below.
 
 ## 8. Drill cadence
 
-BCP/DR drills are conducted at least **quarterly**, with at least one annual full-procedure drill that exercises the disaster restore against the RTO and RPO targets.
+BCP/DR drills are conducted **annually**, comprising one full-procedure restore
+drill against the RTO and RPO targets, plus one tabletop.
 
-The quarterly drill schedule:
+45 CFR § 164.308(a)(7)(ii)(D) requires "periodic testing and revision" and does
+not name a frequency. This policy previously committed to quarterly drills, which
+was a self-imposed number. It is right-sized here for a reason worth stating: a
+drill that slips is a documented **contingency-plan failure**, which is among the
+worst categories to fail in, and the cadence most likely to slip is the one that
+recurs four times a year against a small team. An annual drill that actually
+happens is stronger evidence than a quarterly schedule that runs twice.
 
-- **Q1.** Restore-from-backup drill against a staging tier. Validate RPO and the procedural muscle memory.
-- **Q2.** Vendor-outage tabletop. Pick a vendor from §5.2 and walk through the degradation plan.
-- **Q3.** KMS rotation drill (once `AwsKmsAdapter` is in production). Rotate a non-production KEK and verify wrapped-DEK survival across the rotation.
-- **Q4.** Full-stack failover tabletop. Walk through an AZ failure and a hypothetical region failure scenario. Document the gaps that ADR 0022 implementation will close.
+**Annual drill programme:**
 
-Drill outputs are documented in `evidence/drills/<YYYY>/<drill-id>/`. Drills that identify a gap generate corrective tickets that are tracked to closure and reviewed in the next quarterly access review.
+- **Full restore drill.** Restore from backup against a staging tier, validating
+  RPO, RTO, and the procedural muscle memory. This is the one that cannot be
+  substituted with a tabletop — a restore never performed is a restore we do not
+  have.
+- **Scenario tabletop**, rotating across years so coverage accumulates rather
+  than repeating: vendor outage (§5.2 degradation plan), KMS rotation
+  (non-production KEK rotation with wrapped-DEK survival verification),
+  full-stack failover (AZ failure and hypothetical region failure).
+
+The rotation is deliberate. Running all four scenarios every year is how a drill
+programme becomes a box-ticking exercise; running one properly, with the gaps
+written down, is how it stays real.
+
+**Off-cycle drills are triggered by event**, not calendar: a material change to
+the restore path, a new critical dependency, a SEV0/SEV1 that exercised the plan
+for real, or a drill that surfaced a gap significant enough to warrant re-testing
+after remediation.
+
+Drill outputs are documented in `evidence/drills/<YYYY>/<drill-id>/`. Drills that
+identify a gap generate corrective tickets tracked to closure and reviewed at the
+next quarterly access review.
 
 ## 9. Emergency-mode operation
 
@@ -191,7 +215,7 @@ For Pharmax, the emergency-mode plan defers to the customer's existing pharmacy 
 - A "manual mode" support channel staffed by the CTO during a SEV0/SEV1 to coordinate with affected customers.
 - Outbox-replay procedures (`../RUNBOOK.md` §"Outbox drain stuck or backed up") to handle the catch-up wave.
 
-The emergency-mode plan is exercised in the Q2 vendor-outage tabletop drill.
+The emergency-mode plan is exercised whenever the vendor-outage scenario comes up in the annual tabletop rotation (§8).
 
 ## 10. Review and revision
 
@@ -200,7 +224,7 @@ This policy is reviewed annually and after any of:
 - A SEV0 or SEV1 incident that exercises the BCP/DR plan.
 - A change in the production architecture (multi-region rollout, new critical vendor, change in the database posture).
 - A change in the customer SLA commitments (a customer contract that tightens our RTO or RPO).
-- A quarterly drill that surfaces a procedural gap.
+- A drill that surfaces a procedural gap.
 
 Revisions are approved by the CEO and recorded in the revision history.
 

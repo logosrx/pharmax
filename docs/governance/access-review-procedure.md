@@ -21,9 +21,38 @@ This procedure maps to:
 - HIPAA **45 CFR § 164.308(a)(4)** — information access management, specifically the periodic review of access authorizations.
 - HIPAA **45 CFR § 164.308(a)(3)(ii)(C)** — termination procedures (the review confirms departures took effect everywhere).
 
+### 1.1 This is the only quarterly compliance event
+
+Several controls that read like independent quarterly commitments elsewhere in
+the bundle are line items **inside this review**, not separate exercises:
+
+- KMS grant review ([risk register](./risk-register.md), R-KMS)
+- Vendor portal access ([Information Security Policy](../policies/information-security-policy.md) §)
+- BAA-vs-integration cross-check ([BAA tracker](./baa-tracker.md), and §5 step 4 below)
+- Privileged-access list confirmation ([Access Control Policy](../policies/access-control-policy.md) §)
+- Training completion status ([Security Training Program](./security-training-program.md) §)
+
+They are consolidated here deliberately. Written as five separate quarterly
+commitments they produce no additional assurance — the work is the same walk
+through the same reports — while creating five additional dated promises that an
+assessor can find unkept. One event with a fuller checklist is both easier to
+sustain and easier to evidence, because it produces one signed artifact instead
+of five that must each be located.
+
+Everything else in the bundle is annual or event-triggered. If a new control
+needs periodic verification, the default answer is to add a line to this
+checklist rather than to create a sixth recurring event.
+
 ## 2. Cadence
 
-The review runs **quarterly**. Each quarter has the following timing:
+The review runs **quarterly** — the one cadence in the bundle kept at that
+frequency. HIPAA § 164.308(a)(4) says only "periodic", so this is a chosen
+number rather than a mandated one, but it is the cadence the market expects for
+SOC 2 CC6.2/CC6.3, access drift is silent and continuous, and the tooling makes
+the review cheap enough to sustain. Relaxing the one quarterly control that is
+both expected and inexpensive would be a false economy.
+
+Each quarter has the following timing:
 
 - **Window opens** at the start of the quarter.
 - **Reports generated** during the first month of the quarter.
