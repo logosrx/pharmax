@@ -16,6 +16,10 @@
 //
 // PHI: this page renders rates only — no recipient address content.
 // Quoting costs nothing and mutates nothing; refreshing re-quotes.
+// It is still a PHI read: producing a quote decrypts the patient's
+// address and sends it to the carrier. `quoteShippingRates` writes the
+// `ViewPatient` audit row for that access and fails closed if it
+// cannot, so the page shows a typed error rather than rates.
 
 import Link from "next/link";
 
@@ -81,6 +85,7 @@ export default async function ShippingRatesPage({
   const result = await quoteShippingRates({
     organizationId: session.tenancy.organizationId,
     orderId,
+    operatorUserId: session.tenancy.actor.userId,
     provider,
   });
 

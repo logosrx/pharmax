@@ -62,6 +62,18 @@ export interface ResolvedParcel {
 
 export interface ResolvedPurchaseContext {
   readonly orderId: string;
+  /**
+   * The patient whose address was decrypted into `toAddress`.
+   *
+   * Carried so the caller can write the `ViewPatient` audit row for
+   * this read. Resolving this context decrypts a name and a home
+   * address and hands them to a carrier API — a PHI read and an
+   * outbound disclosure in one step — and §164.312(b) does not care
+   * that the surface happens to mutate nothing. Without the id the
+   * caller cannot name whose record was opened, so it must come back
+   * with the context rather than be re-fetched.
+   */
+  readonly patientId: string;
   readonly fromAddress: ResolvedAddress;
   readonly toAddress: ResolvedAddress;
   readonly parcel: ResolvedParcel;
@@ -281,6 +293,7 @@ export async function resolvePurchaseContext(input: {
     ok: true,
     context: Object.freeze({
       orderId: order.id,
+      patientId: patient.id,
       fromAddress,
       toAddress,
       parcel: DEFAULT_PARCEL,

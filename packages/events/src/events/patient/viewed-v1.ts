@@ -29,20 +29,36 @@ import { defineEvent } from "../../define-event.js";
  * downstream projection. Keeps audit consumers from drowning in
  * untyped free-text "where did this come from?" strings.
  */
-const VIEW_SURFACES = [
+export const PATIENT_VIEW_SURFACES = [
   "ORDER_DETAIL_PAGE",
   "PATIENT_ADMIN_PAGE",
   "PATIENT_SEARCH_RESULT",
   "ORDER_TIMELINE",
   "BILLING_PAGE",
+  "OPERATOR_API",
+  /**
+   * Rate shopping decrypts the patient's name and home address and
+   * hands them to a carrier's rating API. It buys nothing and mutates
+   * nothing, which is why it had no audit row — but §164.312(b) is
+   * about access to ePHI, not about state changes.
+   */
+  "SHIPPING_RATE_QUOTE",
+  /**
+   * Package photos are captured to prove what shipped, so they
+   * routinely include the label — which carries the patient's name
+   * and address in plain sight.
+   */
+  "PACKAGE_PHOTO",
 ] as const;
+
+export type PatientViewSurface = (typeof PATIENT_VIEW_SURFACES)[number];
 
 const payloadSchema = z
   .object({
     organizationId: z.uuid(),
     patientId: z.uuid(),
     /** Which screen / API surface triggered the view. */
-    surface: z.enum(VIEW_SURFACES),
+    surface: z.enum(PATIENT_VIEW_SURFACES),
     /**
      * Order id surfaced when the view originated from an
      * order-bound surface. Absent for direct patient-admin views.

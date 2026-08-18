@@ -97,6 +97,21 @@ export type { PatientRegisteredV1Payload } from "./events/patient/registered-v1.
 export type { PatientUpdatedV1Payload } from "./events/patient/updated-v1.js";
 export type { PatientCryptoShreddedV1Payload } from "./events/patient/crypto-shredded-v1.js";
 export type { PatientViewedV1Payload } from "./events/patient/viewed-v1.js";
+
+/**
+ * The closed set of operator surfaces that read patient PHI.
+ *
+ * Exported because `ViewPatient` in `@pharmax/patients` validates its
+ * `surface` input against this same list. It previously kept a private
+ * copy, and the two drifted: the command accepted `OPERATOR_API`,
+ * which the event schema rejected, while the event allowed
+ * `ORDER_TIMELINE` and `BILLING_PAGE`, which the command refused. Any
+ * use of the first would have written an audit row whose outbox event
+ * then failed registry validation at fan-out — the access recorded
+ * locally and the downstream projection silently missing it. One list,
+ * so that cannot happen again.
+ */
+export { PATIENT_VIEW_SURFACES, type PatientViewSurface } from "./events/patient/viewed-v1.js";
 export type { PrescriptionCreatedV1Payload } from "./events/prescription/created-v1.js";
 
 export type { ProviderDeactivatedV1Payload } from "./events/provider/deactivated-v1.js";
