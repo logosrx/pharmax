@@ -119,4 +119,30 @@ export const E2E_WEB_ENV: Readonly<Record<string, string>> = Object.freeze({
   PHARMAX_LOCAL_KMS_SEED: E2E_KMS_SEED,
   APP_URL: E2E_BASE_URL,
   LOG_LEVEL: "warn",
+
+  // Command transaction budget, raised well above the production
+  // default for this harness only.
+  //
+  // The suite runs `next dev --webpack` (see playwright.config.ts for
+  // why a production build cannot reach the plaintext docker Postgres).
+  // In dev mode a route is compiled on first request, and that compile
+  // can land INSIDE an open command transaction — so the transaction is
+  // held for however long webpack takes. On a cold, contended CI runner
+  // that exceeded the 5 s default and Prisma refused the commit:
+  //
+  //   Transaction API error: A commit cannot be executed on an expired
+  //   transaction. The timeout for this transaction was 5000 ms,
+  //   however 10406 ms passed since the start of the transaction.
+  //
+  // That surfaced as a flaky `full-dispense` golden path, which is the
+  // dangerous kind of failure: retry it once and it goes green, so the
+  // signal gets discarded. Raising the budget here removes the
+  // compile-time confound WITHOUT touching production, where a
+  // prebuilt server does no lazy compilation and the tight default is
+  // wanted — it bounds how long a command holds its order row lock.
+  //
+  // If the golden path ever exceeds THIS budget, that is a real
+  // finding about the command path rather than a dev-mode artifact.
+  COMMAND_TX_TIMEOUT_MS: "60000",
+  COMMAND_TX_MAX_WAIT_MS: "30000",
 });

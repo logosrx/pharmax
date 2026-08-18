@@ -13,7 +13,7 @@
 // disconnect needed since the connection wasn't used yet).
 
 import { configureBilling, type StripeInvoicePort } from "@pharmax/billing";
-import { configureCommandBus } from "@pharmax/command-bus";
+import { configureCommandBus, transactionBudgetFromEnv } from "@pharmax/command-bus";
 import { buildKmsAdapterFromEnv } from "@pharmax/composition";
 import { configureCrypto } from "@pharmax/crypto";
 import {
@@ -171,6 +171,11 @@ async function main(): Promise<void> {
     prisma,
     clock: clock.systemClock,
     logger: logger.child({ component: "command-bus" }),
+    // Same budget as apps/web, from the same variables. The worker
+    // dispatches commands too (outbox handlers, SLA escalation, invoice
+    // finalisation), and a budget honoured on one surface but not the
+    // other would be worse than none — it would read as configured.
+    transactionBudget: transactionBudgetFromEnv(process.env),
   });
 
   // Report CSV archive. When both env vars are set, wire the S3

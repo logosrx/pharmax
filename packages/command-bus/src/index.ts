@@ -34,6 +34,13 @@ export { executeCommand, executeCommandDetailed } from "./execute-command.js";
 export { executeSystemCommand, type ExecuteSystemOptions } from "./execute-system-command.js";
 
 export {
+  DEFAULT_TRANSACTION_BUDGET,
+  transactionBudgetFromEnv,
+  transactionOptionsFor,
+  type TransactionBudget,
+} from "./transaction-budget.js";
+
+export {
   defineCommand,
   DEFINE_COMMAND_CONFIG_INVALID,
   ORDER_NOT_FOUND,
