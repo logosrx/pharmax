@@ -263,6 +263,14 @@ PHI categories involved, the risk-assessment conclusion with its four-factor
 basis or the exception relied upon, every notification made with its date and
 recipient, and the location of the evidence file.
 
+**The register itself contains no PHI.** It records counts, categories, state
+distributions and references — never names, addresses, dates of birth, or any
+other patient identifier. This is not incidental tidiness: a register that
+accumulated identifiers would become a second, unencrypted copy of exactly the
+data whose exposure it exists to document, and would grow more dangerous with
+every incident recorded. Where an entry needs to point at individuals, it points
+at the evidence file, which is controlled separately under §9.
+
 Determinations of "not a breach" are registered with equal rigour. Under
 § 164.414 the burden is on Pharmax to demonstrate that notification was not
 required — an unrecorded determination is indistinguishable from an unmade one.
@@ -276,8 +284,22 @@ notice issued with proof of sending, HHS and media submissions where applicable,
 state notifications, recipient attestations relied on for mitigation, and the
 supporting audit-chain extracts.
 
+**This file does contain PHI, and that is unavoidable.** Copies of individual
+notices carry names and addresses; the affected-individual list is a patient
+roster by definition. The file is therefore treated as Restricted data under
+[Data Classification](./data-classification.md) and carries the same handling
+rules as any other PHI store — access limited to the roles in §10, encrypted at
+rest, and never copied into a ticket, a chat thread, or a slide.
+
+The asymmetry with §8 is deliberate. The register is the artifact people consult
+routinely, so it holds no PHI. The evidence file is the artifact people consult
+rarely and under supervision, so it holds what proof requires and nothing more.
+
 Retention is **six years** from the date of the determination or the last
-notification, whichever is later, per 45 CFR § 164.530(j).
+notification, whichever is later, per 45 CFR § 164.530(j). Six years is the
+floor and also the ceiling — the file is destroyed on schedule rather than kept
+indefinitely, because a retained breach file is a standing collection of
+identified patient data whose only remaining purpose has expired.
 
 The standard this file must meet is not "we responded well". It is that a
 regulator arriving three years later can reconstruct what was decided, on what

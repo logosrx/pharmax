@@ -1,14 +1,14 @@
 # State Breach Notification Matrix
 
-| Field          | Value                           |
-| -------------- | ------------------------------- |
-| Owner          | Compliance Officer              |
-| Approver       | CTO                             |
-| Effective date | 2026-08-18                      |
-| Last reviewed  | 2026-08-18                      |
-| Next review    | 2026-11-18 (quarterly — see §5) |
-| Version        | 1.0                             |
-| Distribution   | Internal — All staff            |
+| Field          | Value                                   |
+| -------------- | --------------------------------------- |
+| Owner          | Compliance Officer                      |
+| Approver       | CTO                                     |
+| Effective date | 2026-08-18                              |
+| Last reviewed  | 2026-08-18                              |
+| Next review    | 2027-08-18 (annual + on-event — see §5) |
+| Version        | 1.0                                     |
+| Distribution   | Internal — All staff                    |
 
 > **This is a research aid, not legal advice.** No notice is issued on the basis
 > of this document alone. Legal counsel confirms the applicable obligations for
@@ -162,12 +162,22 @@ State breach statutes change frequently — California, Pennsylvania and Texas a
 amended within the last two years. A stale matrix is worse than none, because it
 invites reliance.
 
-- **Quarterly review** by the Compliance Officer against the current source
-  chart, with the review date recorded in the front matter.
-- **On-event review** whenever the dispensing footprint enters a new state.
+The cadence is deliberately **annual plus on-event**, not quarterly. A quarterly
+review here would be a self-imposed commitment with no regulatory basis, and a
+dated promise nobody keeps is worse evidence than an honest annual one. What
+actually catches a statutory change is the event trigger, not the calendar.
+
+- **Annual review** by the Compliance Officer against the current source chart,
+  as part of the Q4 governance cycle, with the date recorded in the front matter.
+- **On-event review**, which is the control that matters, triggered by:
+  - the dispensing footprint entering a new state;
+  - counsel flagging an amendment in a state already on the matrix;
+  - any actual breach touching a state whose row is unverified.
 - **Entries carry their own verification date.** An entry not verified within
-  twelve months reverts to `Awaiting verification` and is treated as unknown.
-- The quarterly review is evidenced under
+  twelve months reverts to `Awaiting verification` and is treated as unknown —
+  so staleness degrades a row to honest ignorance rather than to silent
+  inaccuracy.
+- Reviews are evidenced under
   `evidence/policies/<year>/state-matrix-review.md`.
 
 ## Revision history
