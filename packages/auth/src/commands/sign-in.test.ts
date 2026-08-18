@@ -198,7 +198,13 @@ afterEach(() => {
 
 describe("SignIn — happy path", () => {
   it("issues a session and audits user.signed_in on a valid password", async () => {
-    const fake = buildFake({ user: {}, roleCodes: ["Pharmacist"] });
+    // A NON-elevated role, deliberately. This case is "a valid password
+    // issues a session", and it needs a principal for whom a password
+    // alone is sufficient. It used to use `Pharmacist`, which is now on
+    // the mandatory-MFA floor — pharmacists reach the full patient
+    // record, so password-only is exactly what should no longer work
+    // for them. See the challenge case below.
+    const fake = buildFake({ user: {}, roleCodes: ["PharmacyTechnician"] });
     configureBus(fake.client);
 
     const out = await run(fake.client, { email: "op@example.com", password: "correct-password" });
@@ -416,6 +422,37 @@ describe("SignIn — WebAuthn second factor (ADR-0036)", () => {
 });
 
 describe("SignIn — MFA floor", () => {
+  // The floor is derived from `ELEVATED_ROLE_CODES`, so every role on
+  // that list is challenged. Pharmacists are called out separately
+  // because they were the gap: they hold the broadest PHI access in
+  // the product — PV1, final verification, the full patient record —
+  // and until this change could sign in with a password alone.
+  //
+  // Note what the refusal does, and does not, do: an unenrolled
+  // pharmacist is routed to enrollment, not locked out. The rollout
+  // cost is one enrollment per clinical user at next sign-in.
+  it.each(["Pharmacist", "PharmacistInCharge", "SecurityOfficer", "ComplianceOfficer"])(
+    "challenges %s, who could previously sign in with a password alone",
+    async (roleCode) => {
+      const fake = buildFake({ user: {}, roleCodes: [roleCode], enrollment: null });
+      configureBus(fake.client);
+      await expect(
+        run(fake.client, { email: "clinical@example.com", password: "correct-password" })
+      ).rejects.toMatchObject({ code: "MFA_REQUIRED" });
+      expect(fake.tx.authSession.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it("still lets a non-elevated operational role sign in with a password", async () => {
+    const fake = buildFake({ user: {}, roleCodes: ["ShippingClerk"], enrollment: null });
+    configureBus(fake.client);
+    const out = await run(fake.client, {
+      email: "clerk@example.com",
+      password: "correct-password",
+    });
+    expect(out.sessionId).toBe("session-1");
+  });
+
   it("requires enrollment for a floor role with no authenticator", async () => {
     const fake = buildFake({ user: {}, roleCodes: ["OrgAdmin"], enrollment: null });
     configureBus(fake.client);

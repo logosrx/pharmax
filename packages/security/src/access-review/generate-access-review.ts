@@ -25,17 +25,17 @@
 // patient PHI, or session tokens. Any future expansion to include
 // audit-log slices must re-check this guarantee.
 
-import { PERMISSION_METADATA, type PermissionCode } from "@pharmax/rbac";
+import { ELEVATED_ROLE_CODES, PERMISSION_METADATA, type PermissionCode } from "@pharmax/rbac";
 
-/** Role codes treated as "elevated" for review highlighting purposes. */
-export const ELEVATED_ROLE_CODES: ReadonlyArray<string> = Object.freeze([
-  "OrgAdmin",
-  "Pharmacist",
-  "BillingManager",
-  "SecurityOfficer",
-  "ComplianceOfficer",
-  "PharmacistInCharge",
-]);
+/**
+ * Role codes treated as "elevated" for review highlighting purposes.
+ *
+ * Re-exported from `@pharmax/rbac`, which is now the single definition.
+ * The same list drives the mandatory-MFA floor at sign-in; keeping two
+ * copies is what let the access review and the auth engine disagree
+ * about who counts as privileged.
+ */
+export { ELEVATED_ROLE_CODES };
 
 /** A role assignment older than this many days is flagged for re-justification. */
 export const STALE_ASSIGNMENT_THRESHOLD_DAYS = 365;

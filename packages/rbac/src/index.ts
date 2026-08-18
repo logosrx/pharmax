@@ -18,7 +18,12 @@ export {
   type PermissionCode,
 } from "./permissions.js";
 
-export { ROLE_TEMPLATES, findRoleTemplate, type RoleTemplate } from "./role-templates.js";
+export {
+  ROLE_TEMPLATES,
+  ELEVATED_ROLE_CODES,
+  findRoleTemplate,
+  type RoleTemplate,
+} from "./role-templates.js";
 
 export {
   ALL_FEATURE_CODES,
