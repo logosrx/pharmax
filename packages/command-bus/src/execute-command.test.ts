@@ -111,6 +111,51 @@ afterEach(() => {
   resetRbacConfigurationForTests();
 });
 
+describe("executeCommand — transaction budget", () => {
+  // The regression guard for the CI failure of 2026-08-17, where a
+  // command transaction was aborted at commit after 10406 ms against an
+  // unconfigured 5000 ms default. The point is not the numbers — it is
+  // that no `$transaction` call site may silently inherit Prisma's
+  // defaults. Asserting on every recorded option bag means a call site
+  // added later fails this test instead of quietly reintroducing the
+  // gap, which review did not catch the first time across four sites.
+  it("passes an explicit budget to EVERY transaction, not just the handler's", async () => {
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        sampleCommand(),
+        { orderId: "11111111-1111-7111-a111-111111111111", note: "ok" },
+        { idempotencyKey: "budget-1" }
+      )
+    );
+
+    expect(prisma.transactionOptions.length).toBeGreaterThan(0);
+    for (const options of prisma.transactionOptions) {
+      expect(options).toEqual({ timeout: 5_000, maxWait: 2_000 });
+    }
+  });
+
+  it("honours a configured budget on every transaction", async () => {
+    resetCommandBusConfigurationForTests();
+    configureCommandBus({
+      ...buildFakeConfig(prisma),
+      transactionBudget: { timeoutMs: 31_000, maxWaitMs: 7_000 },
+    });
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        sampleCommand(),
+        { orderId: "11111111-1111-7111-a111-111111111111", note: "ok" },
+        { idempotencyKey: "budget-2" }
+      )
+    );
+
+    expect(prisma.transactionOptions.length).toBeGreaterThan(0);
+    for (const options of prisma.transactionOptions) {
+      expect(options).toEqual({ timeout: 31_000, maxWait: 7_000 });
+    }
+  });
+});
+
 describe("executeCommand — happy path", () => {
   it("writes command_log (PRE-TX, RUNNING) → tx open → audit + outbox + idempotency in tx → command_log SUCCEEDED", async () => {
     const cmd = sampleCommand();

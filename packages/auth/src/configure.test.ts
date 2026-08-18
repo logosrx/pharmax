@@ -1,4 +1,5 @@
 import { clock } from "@pharmax/platform-core";
+import { ELEVATED_ROLE_CODES } from "@pharmax/rbac";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AUTH_NOT_CONFIGURED, authNotConfiguredError } from "./errors.js";
@@ -53,10 +54,34 @@ describe("policy defaults", () => {
     expect(DEFAULT_SESSION_POLICY.tokenBytes).toBeGreaterThanOrEqual(32);
   });
 
-  it("MFA floor covers the privileged roles from ADR-0025", () => {
-    expect(MFA_REQUIRED_ROLE_CODES.has("OrgAdmin")).toBe(true);
-    expect(MFA_REQUIRED_ROLE_CODES.has("BillingManager")).toBe(true);
-    expect(MFA_REQUIRED_ROLE_CODES.has("Pharmacist")).toBe(false);
+  it("MFA floor covers every elevated role", () => {
+    for (const code of ELEVATED_ROLE_CODES) {
+      expect(MFA_REQUIRED_ROLE_CODES.has(code), `${code} must require MFA`).toBe(true);
+    }
+  });
+
+  // The floor was `{OrgAdmin, BillingManager}` and this test used to
+  // assert `Pharmacist` was EXCLUDED — the gap was pinned rather than
+  // caught. Pharmacists hold the broadest PHI access in the product,
+  // so a password-only pharmacist was the largest identity gap in the
+  // system. Named explicitly so re-narrowing the floor has to delete a
+  // test that says why.
+  it("requires MFA for pharmacists, who hold the broadest PHI access", () => {
+    expect(MFA_REQUIRED_ROLE_CODES.has("Pharmacist")).toBe(true);
+    expect(MFA_REQUIRED_ROLE_CODES.has("PharmacistInCharge")).toBe(true);
+  });
+
+  // The engine and the compliance probes evaluate the same question —
+  // "is this principal elevated?" — and used to hold different answers,
+  // so a probe reported an MFA gap the engine had no intention of
+  // enforcing. One definition now, and this fails if that regresses.
+  it("floor is exactly the platform's elevated-role set, with no drift", () => {
+    expect([...MFA_REQUIRED_ROLE_CODES].sort()).toEqual([...ELEVATED_ROLE_CODES].sort());
+  });
+
+  it("does not require MFA for non-elevated operational roles", () => {
+    expect(MFA_REQUIRED_ROLE_CODES.has("PharmacyTechnician")).toBe(false);
+    expect(MFA_REQUIRED_ROLE_CODES.has("ShippingClerk")).toBe(false);
   });
 
   it("buildAuthConfiguration applies partial overrides over defaults", () => {

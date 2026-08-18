@@ -63,6 +63,7 @@ import {
   commandSystemContextRequiredError,
 } from "./errors.js";
 import { redactPayload } from "./redact.js";
+import { transactionOptionsFor } from "./transaction-budget.js";
 import type { PrismaTxClient, SystemCommand } from "./types.js";
 import {
   createAuditLogInTx,
@@ -178,7 +179,7 @@ export async function executeSystemCommand<TInput, TOutput>(
       });
 
       return { result, organizationId: result.targetOrganizationId };
-    });
+    }, transactionOptionsFor(config.transactionBudget));
   } catch (err) {
     // An idempotency replay, not a failure: a prior attempt with this
     // key already reached command_log, so this attempt's mutation
@@ -236,7 +237,7 @@ async function runInSystemTx<T>(
   return config.prisma.$transaction(async (tx) => {
     await applySystemSessionGuc(tx as unknown as SessionGucExecutor, systemReason);
     return fn(tx);
-  });
+  }, transactionOptionsFor(config.transactionBudget));
 }
 
 /**

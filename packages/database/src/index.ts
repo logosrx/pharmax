@@ -12,6 +12,13 @@
 export { prisma } from "./scoped-client.js";
 // The raw, UNSCOPED client. Cross-tenant system/bootstrap code only.
 export { systemPrisma } from "./client.js";
+
+export {
+  assertTransactionWaitWithinPoolTimeout,
+  DEFAULT_POOL_ACQUIRE_TIMEOUT_MS,
+  DEFAULT_POOL_MAX,
+  resolvePoolSettings,
+} from "./client.js";
 // Tenant-scoped read wrappers (ORM extension + optional RLS GUC).
 export {
   readInTenantContext,

@@ -28,6 +28,7 @@ import type {
 } from "@pharmax/workflow";
 
 import { commandBusNotConfiguredError } from "./errors.js";
+import type { TransactionBudget } from "./transaction-budget.js";
 
 /**
  * Tier-2 overlay resolution wiring (ADR-0019).
@@ -122,6 +123,20 @@ export interface CommandBusConfiguration {
    * logs a warning if that happens with NODE_ENV=production.
    */
   readonly requestHashKey?: string | Buffer;
+
+  /**
+   * Time bounds applied to every command transaction — both tenant and
+   * system executors, and their single-statement helpers.
+   *
+   * Omit to use `DEFAULT_TRANSACTION_BUDGET`, which restates Prisma's
+   * own defaults, so leaving this unset preserves historical timing
+   * exactly. Composition roots that want the budget to be tunable
+   * without a deploy should pass `transactionBudgetFromEnv(process.env)`.
+   *
+   * See `transaction-budget.ts` for why the default is not simply
+   * raised: the timeout doubles as the ceiling on row-lock hold time.
+   */
+  readonly transactionBudget?: TransactionBudget;
 }
 
 // globalThis-backed so boot (Next instrumentation bundle) and use

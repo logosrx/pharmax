@@ -30,7 +30,7 @@ import "server-only";
 
 import { buildAuthConfiguration, configureAuth, createArgon2idHasher } from "@pharmax/auth";
 import { configureBilling } from "@pharmax/billing";
-import { configureCommandBus } from "@pharmax/command-bus";
+import { configureCommandBus, transactionBudgetFromEnv } from "@pharmax/command-bus";
 import { buildKmsAdapterFromEnv, createRateLimiterFromEnv } from "@pharmax/composition";
 import { configureCrypto } from "@pharmax/crypto";
 import { prisma, readReportingInOrgScope, reportingClientIsReplica } from "@pharmax/database";
@@ -485,6 +485,12 @@ async function doBootstrap(): Promise<void> {
     prisma,
     clock: clock.systemClock,
     logger: logger.child({ component: "command-bus" }),
+    // Explicit rather than inherited from Prisma. Defaults to the same
+    // values Prisma would have used, so this is a no-op unless
+    // COMMAND_TX_TIMEOUT_MS / COMMAND_TX_MAX_WAIT_MS are set. The E2E
+    // harness raises it because `next dev` can compile a route lazily
+    // inside the transaction window; production should not need to.
+    transactionBudget: transactionBudgetFromEnv(process.env),
   });
 
   // 5.1 @pharmax/verification — the PV1 clinical-screening knowledge

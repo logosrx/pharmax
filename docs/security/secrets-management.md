@@ -1,14 +1,14 @@
 # Secrets Management
 
-| Field          | Value                       |
-| -------------- | --------------------------- |
-| Owner          | [Owner: CTO]                |
-| Approver       | [Approver: CEO]             |
-| Effective date | [Effective date: TBD]       |
-| Last reviewed  | [Last reviewed: YYYY-MM-DD] |
-| Next review    | [Next review: YYYY-MM-DD]   |
-| Version        | 0.1                         |
-| Distribution   | Internal — All staff        |
+| Field          | Value                |
+| -------------- | -------------------- |
+| Owner          | CTO                  |
+| Approver       | CEO                  |
+| Effective date | 2026-08-18           |
+| Last reviewed  | 2026-08-18           |
+| Next review    | 2027-08-18           |
+| Version        | 1.0                  |
+| Distribution   | Internal — All staff |
 
 ## 1. Purpose
 
@@ -155,6 +155,7 @@ Build-time secrets (e.g. a Sentry release token used to upload sourcemaps) follo
 
 ## Revision history
 
-| Version | Date       | Author | Change           |
-| ------- | ---------- | ------ | ---------------- |
-| 0.1     | YYYY-MM-DD | CTO    | Initial drafting |
+| Version | Date       | Author | Change                                                     |
+| ------- | ---------- | ------ | ---------------------------------------------------------- |
+| 0.1     | 2026-05-27 | CTO    | Initial drafting                                           |
+| 1.0     | 2026-08-18 | CEO    | Adopted. Effective date set; annual review cadence begins. |

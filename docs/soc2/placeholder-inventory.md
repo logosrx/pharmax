@@ -7,9 +7,26 @@ This document exists because
 [`audit-readiness-checklist.md`](./audit-readiness-checklist.md) §9
 asserts that no policy carries unresolved markers in its front matter,
 and that assertion has been failing silently. A checklist item that
-nobody can price is a checklist item nobody closes. The purpose here is
-to make the remaining work countable: 230 live markers, of which 38
-carry a named external owner and 192 do not.
+nobody can price is a checklist item nobody closes.
+
+**Front-matter adoption is complete as of 2026-08-18.** The CEO adopted
+the bundle on that date and every authoritative document in
+`docs/policies/`, `docs/security/`, and `docs/governance/` now carries a
+real effective date, a real last-reviewed date, a derived next-review
+date one year on, an unbracketed owner and approver, and version 1.0.
+Twenty-one documents moved at once, which is what the analysis below
+predicted: adoption was never twenty-one decisions, it was one.
+
+That closed roughly 150 markers. What remains is genuinely other
+people's work — counsel, the SOC 2 auditor, and vendor contract portals
+— plus the handful of tokens that document the marker syntax itself and
+are not gaps.
+
+Note that the four documents which _describe_ markers still contain
+them, on purpose: this file, the front-matter template in
+[`../policies/README.md`](../policies/README.md), the checklist, and the
+go-live program. A marker inside a worked example is not an unresolved
+field, and resolving it would destroy the convention it teaches.
 
 **No date in this document is a calendar date.** Effective dates,
 approval dates, and review dates are business decisions that belong to
@@ -47,27 +64,32 @@ Two syntaxes are in use. Both are load-bearing; neither should be
 Counts are as of this revision, taken from
 `docs/soc2/policies/` and the bracket-form documents.
 
-| Class                                         | Count | Owner                                             | Gate              |
-| --------------------------------------------- | ----: | ------------------------------------------------- | ----------------- |
-| `<TBD by legal counsel: …>`                   |    26 | Legal counsel                                     | `PRE-T1`          |
-| `<TBD by SOC 2 auditor: …>`                   |     9 | External auditor                                  | `PRE-T1`          |
-| `<TBD by CEO: …>`                             |     3 | CEO                                               | `AT-T1`           |
-| `<TBD by Engineering Lead: …>`                |     4 | Engineering Lead                                  | `AT-T1` / `DRILL` |
-| `<TBD by Security Officer: …>`                |     2 | Security Officer                                  | `PRE-T1`          |
-| Bare `<TBD>` in stub front matter / history   |    29 | CEO for adoption; document owner for review dates | `AT-T1`           |
-| Stub blockquote instruction (`Every <TBD> …`) |     8 | — (prose, not a field)                            | `N/A`             |
-| `[Effective date: TBD]`                       |    22 | CEO                                               | `AT-T1`           |
-| `[Last reviewed: YYYY-MM-DD]`                 |    39 | Document owner per front matter                   | `AT-T1`           |
-| `[Next review: YYYY-MM-DD]`                   |    44 | Document owner per front matter                   | `AT-T1`           |
-| `[BAA status: TBD]`                           |     8 | CTO (executes) + vendor                           | `PRE-T1`          |
-| `[BAA effective date: TBD]`                   |     8 | CTO (executes) + vendor                           | `PRE-T1`          |
-| `[BAA review date: TBD]`                      |    11 | Compliance Officer                                | `PRE-T2`          |
-| `[Contract URL: TBD]`                         |    17 | CTO                                               | `PRE-T2`          |
-| Marker-syntax definitions in stub README      |     8 | — (documentation)                                 | `N/A`             |
+| Class                                       | Count | Owner                          | Gate              |
+| ------------------------------------------- | ----: | ------------------------------ | ----------------- |
+| `<TBD by legal counsel: …>`                 |    29 | Legal counsel                  | `PRE-T1`          |
+| `<TBD by SOC 2 auditor: …>`                 |    12 | External auditor               | `PRE-T1`          |
+| `<TBD by CEO: …>`                           |     4 | CEO                            | `AT-T1`           |
+| `<TBD by Engineering Lead: …>`              |     5 | Engineering Lead               | `AT-T1` / `DRILL` |
+| `<TBD by Security Officer: …>`              |     3 | Security Officer               | `PRE-T1`          |
+| Bare `<TBD>` in framework stub front matter |    47 | CEO for adoption               | `AT-T1`           |
+| `[Contract URL: TBD]`                       |    19 | CTO                            | `PRE-T2`          |
+| `[BAA status: TBD]`                         |     7 | CTO (executes) + vendor        | `PRE-T1`          |
+| `[BAA effective date: TBD]`                 |     2 | CTO (executes) + vendor        | `PRE-T1`          |
+| `[BAA review date: TBD]`                    |     2 | Compliance Officer             | `PRE-T2`          |
+| `[Effective date: TBD]`                     |     6 | — (worked examples, see above) | `N/A`             |
+| `[Last reviewed: YYYY-MM-DD]`               |     3 | — (worked examples)            | `N/A`             |
+| `[Next review: YYYY-MM-DD]`                 |     3 | — (worked examples)            | `N/A`             |
 
-230 live markers across 31 documents, of which 44 now name a specific
-owner role. 16 further tokens are documentation of the syntax rather
-than gaps: 8 in the stub README and one blockquote instruction per stub.
+The authoritative-bundle front matter is fully resolved. The three
+bracket-form rows that remain are the worked examples in the template,
+this inventory, the checklist, and the go-live program — `N/A` by the
+same rule that already exempted the marker-syntax definitions.
+
+The `docs/soc2/policies/` framework stubs are a separate body of work
+and are untouched by the 2026-08-18 adoption: they are explicitly
+labelled "THIS IS A STUB" and are not authoritative documents. Adopting
+a stub would assert a control that has no text behind it, which is the
+one failure mode worse than an unadopted policy.
 
 ## Blocking analysis
 
@@ -76,18 +98,28 @@ auditor needs a policy set that is adopted — signed, dated, and in
 force — on the observation date. That makes the following genuinely
 blocking:
 
-1. **Every `[Effective date: TBD]` (22 documents).** An unadopted
-   policy is not a control. This is the single largest blocker and it
-   resolves as one decision: the CEO adopts the bundle on a date, and
-   22 front matters take that date.
+1. ~~**Every `[Effective date: TBD]` (22 documents).**~~ **RESOLVED
+   2026-08-18.** An unadopted policy is not a control. This was the
+   single largest blocker and it resolved exactly as predicted — one
+   CEO decision, twenty-one front matters. Version moved 0.1 → 1.0,
+   because a policy that presents itself as a draft undercuts the
+   adoption it is meant to record.
 2. **Every `<TBD by legal counsel: …>` that sits inside a sanctions or
-   regulator-notification clause (27 markers).** A policy that
+   regulator-notification clause (29 markers).** A policy that
    declines to state its own enforcement mechanism is a design gap, not
-   a wording gap.
-3. **`[BAA status: TBD]` for the PHI-touching vendors (8 markers).**
-   HIPAA § 164.308(b)(1) requires the agreement to exist. Whether it
-   exists is a fact about a signed document; this repository cannot
-   assert it and does not.
+   a wording gap. **Now the largest remaining blocker**, and the only
+   one that cannot be closed from inside this repository by anyone here.
+3. **`[BAA status: TBD]` for the PHI-touching vendors.** Largely
+   resolved. HIPAA § 164.308(b)(1) requires the agreement to exist, and
+   for the two vendors that hold or could hold PHI it now does: **AWS**
+   (Organizations BAA, 2026-08-18, accepted at the organization level)
+   and **Sentry** (Business Associate Amendment v1.0.1, 2026-08-18).
+   FedEx and UPS are recorded as conduits under HHS FAQ #245 rather
+   than business associates — a determination, not a request, and one
+   that still wants counsel's concurrence. EasyPost is being
+   decommissioned. What remains is Datadog-or-Honeycomb, which is a
+   vendor nobody has selected rather than a BAA nobody has signed;
+   either select one or delete the row.
 
 Not blocking for Type I, but blocking for Type II, because Type II
 tests operation over a window and a review that never happened cannot

@@ -1,14 +1,14 @@
 # Public-Sources Reference
 
-| Field          | Value                       |
-| -------------- | --------------------------- |
-| Owner          | [Owner: CTO]                |
-| Approver       | [Approver: CEO]             |
-| Effective date | [Effective date: TBD]       |
-| Last reviewed  | [Last reviewed: YYYY-MM-DD] |
-| Next review    | [Next review: YYYY-MM-DD]   |
-| Version        | 0.1                         |
-| Distribution   | Internal — All staff        |
+| Field          | Value                |
+| -------------- | -------------------- |
+| Owner          | CTO                  |
+| Approver       | CEO                  |
+| Effective date | 2026-08-18           |
+| Last reviewed  | 2026-08-18           |
+| Next review    | 2027-08-18           |
+| Version        | 1.0                  |
+| Distribution   | Internal — All staff |
 
 This document is the **authoritative list of public sources** that Pharmax design decisions are derived from. The companion [clean-room development policy](./clean-room-development-policy.md) requires that every significant design decision — workflow rule, schema choice, integration boundary, state-machine transition — be traceable to a source listed here.
 
@@ -181,6 +181,7 @@ A condensed map from each Pharmax workflow stage to the public sources that auth
 
 ## Revision history
 
-| Version | Date       | Author | Change                             |
-| ------- | ---------- | ------ | ---------------------------------- |
-| 0.1     | YYYY-MM-DD | CTO    | Initial drafting with starter set. |
+| Version | Date       | Author | Change                                                     |
+| ------- | ---------- | ------ | ---------------------------------------------------------- |
+| 0.1     | 2026-05-27 | CTO    | Initial drafting with starter set.                         |
+| 1.0     | 2026-08-18 | CEO    | Adopted. Effective date set; annual review cadence begins. |

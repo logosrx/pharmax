@@ -11,6 +11,7 @@
 
 import { runtime } from "@pharmax/platform-core";
 import type { clock } from "@pharmax/platform-core";
+import { ELEVATED_ROLE_CODES } from "@pharmax/rbac";
 
 import { authNotConfiguredError } from "./errors.js";
 import { createSimpleWebAuthnAdapter, type WebAuthnAdapter } from "./mfa/webauthn.js";
@@ -64,9 +65,29 @@ export interface WebAuthnPolicy {
   readonly adapter: WebAuthnAdapter;
 }
 
-/** The privileged-role MFA floor carried forward from ADR-0025. */
+/**
+ * The privileged-role MFA floor (ADR-0025), now derived from the single
+ * `ELEVATED_ROLE_CODES` definition in `@pharmax/rbac`.
+ *
+ * It used to be a hand-written `{OrgAdmin, BillingManager}`, which was
+ * narrower than the platform's own definition of "elevated" and
+ * narrower in the worst direction. `Pharmacist` and
+ * `PharmacistInCharge` hold the broadest PHI access in the product —
+ * PV1, final verification, and the full patient record — and could
+ * sign in with a password alone. The compliance probes had it right
+ * all along: `mfa-elevated-role-enrollment` and
+ * `elevated-session-mfa-satisfied` both evaluate against the elevated
+ * set, so the codebase was already reporting a gap that the engine was
+ * not configured to close.
+ *
+ * Deriving rather than duplicating means the next role added to the
+ * elevated set gets MFA automatically, instead of getting it whenever
+ * someone remembers this file exists.
+ *
+ * Customers may require MFA more broadly; they cannot go below this.
+ */
 export const MFA_REQUIRED_ROLE_CODES: ReadonlySet<string> = Object.freeze(
-  new Set(["OrgAdmin", "BillingManager"])
+  new Set(ELEVATED_ROLE_CODES)
 );
 
 /** HIPAA-conscious session defaults: 30-min idle, 12-hour absolute cap. */

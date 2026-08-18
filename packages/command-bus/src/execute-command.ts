@@ -75,6 +75,7 @@ import {
 import { FALLBACK_REQUEST_HASH_KEY, hashRequestKeyed } from "./hash.js";
 import { lookupIdempotency, storeIdempotencyInTx, type LookupResult } from "./idempotency.js";
 import { redactPayload } from "./redact.js";
+import { transactionOptionsFor } from "./transaction-budget.js";
 import type { Command, ExecuteCommandResult, ExecuteOptions, PrismaTxClient } from "./types.js";
 import {
   createAuditLogInTx,
@@ -316,7 +317,7 @@ export async function executeCommandDetailed<TInput, TOutput>(
       }
 
       return result;
-    });
+    }, transactionOptionsFor(config.transactionBudget));
   } catch (err) {
     // Concurrent same-key race: two attempts both missed the
     // pre-flight lookup (e.g. two retries of a FAILED attempt);
@@ -466,7 +467,7 @@ async function runInTenantTx<T>(
   return config.prisma.$transaction(async (tx) => {
     await applyTenancySessionGuc(tx as unknown as SessionGucExecutor, ctx);
     return fn(tx);
-  });
+  }, transactionOptionsFor(config.transactionBudget));
 }
 
 /**
