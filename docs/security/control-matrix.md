@@ -1,14 +1,14 @@
 # SOC 2 + HIPAA Control Matrix
 
-| Field          | Value                       |
-| -------------- | --------------------------- |
-| Owner          | [Owner: CTO]                |
-| Approver       | [Approver: CEO]             |
-| Effective date | [Effective date: TBD]       |
-| Last reviewed  | [Last reviewed: YYYY-MM-DD] |
-| Next review    | [Next review: YYYY-MM-DD]   |
-| Version        | 0.1                         |
-| Distribution   | Internal — All staff        |
+| Field          | Value                |
+| -------------- | -------------------- |
+| Owner          | CTO                  |
+| Approver       | CEO                  |
+| Effective date | 2026-08-18           |
+| Last reviewed  | 2026-08-18           |
+| Next review    | 2027-08-18           |
+| Version        | 1.0                  |
+| Distribution   | Internal — All staff |
 
 This is the master control-to-evidence map. For each control we care about — SOC 2 Trust Services Criteria and HIPAA Security Rule citations — the matrix names the control, describes how Pharmax implements it, points to the code or policy that constitutes the implementation, lists where the evidence lives, names the owner, and marks status.
 
@@ -218,6 +218,7 @@ This matrix is refreshed during the annual risk-assessment exercise and on every
 
 ## Revision history
 
-| Version | Date       | Author | Change           |
-| ------- | ---------- | ------ | ---------------- |
-| 0.1     | YYYY-MM-DD | CTO    | Initial drafting |
+| Version | Date       | Author | Change                                                     |
+| ------- | ---------- | ------ | ---------------------------------------------------------- |
+| 0.1     | 2026-05-27 | CTO    | Initial drafting                                           |
+| 1.0     | 2026-08-18 | CEO    | Adopted. Effective date set; annual review cadence begins. |
