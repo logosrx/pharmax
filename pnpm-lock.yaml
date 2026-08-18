@@ -92,6 +92,9 @@ importers:
       '@pharmax/package-capture':
         specifier: workspace:*
         version: link:packages/package-capture
+      '@pharmax/partner-api':
+        specifier: workspace:*
+        version: link:packages/partner-api
       '@pharmax/patients':
         specifier: workspace:*
         version: link:packages/patients

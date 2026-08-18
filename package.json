@@ -105,6 +105,7 @@
     "@pharmax/orders": "workspace:*",
     "@pharmax/orgs": "workspace:*",
     "@pharmax/package-capture": "workspace:*",
+    "@pharmax/partner-api": "workspace:*",
     "@pharmax/patients": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/providers": "workspace:*",

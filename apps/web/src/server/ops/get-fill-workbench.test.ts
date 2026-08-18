@@ -126,6 +126,16 @@ describe("getFillWorkbench — happy path", () => {
     expect(result?.lines[1]?.candidateLots).toHaveLength(1); // ndc 00781111102 → 1 lot
     expect(result?.lines[1]?.assignedLot?.lotNumber).toBe("LOT-A2");
     expect(result?.availablePrinters).toHaveLength(1);
+    // Only VIAL-stock printers may be offered here. This list feeds the
+    // vial-label print form, which defaults to whichever printer sorts
+    // first by code — so including a BATCH printer pre-aims the tech at
+    // a PRINTER_NOT_THERMAL refusal (it did, once `BATCH-ZPL-01` was
+    // seeded and won that sort ahead of `VIAL-ZPL-01`).
+    expect(prismaMock.labelPrinter.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ labelStock: "VIAL" }),
+      })
+    );
     expect(result?.availableWorkstations).toHaveLength(1);
     // Line 0 has no lot/label → not ready
     expect(result?.readyForCompletionScans).toBe(false);

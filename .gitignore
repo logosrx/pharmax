@@ -40,6 +40,8 @@ yarn-debug.log*
 # test artifacts
 playwright-report/
 test-results/
+# tenant ids written by scripts/e2e-seed.ts for the Playwright suite
+e2e/.e2e-state.json
 
 # Lockfile copies written by a merge/stash recovery. Operator-local
 # debris — the real lockfile is pnpm-lock.yaml.
