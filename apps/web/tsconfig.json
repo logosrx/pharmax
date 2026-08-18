@@ -7,10 +7,11 @@
     "noEmit": true,
     "incremental": true,
     "plugins": [{ "name": "next" }],
+    // Relative to this file, so no `baseUrl` is needed — and baseUrl is
+    // deprecated in TypeScript 6, removed in 7.
     "paths": {
       "@/*": ["./src/*"]
     },
-    "baseUrl": ".",
     // Next requires loose modes that conflict with our base strict settings.
     // Loosen here for the app only; library packages remain fully strict.
     "verbatimModuleSyntax": false,
