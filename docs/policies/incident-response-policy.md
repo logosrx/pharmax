@@ -88,6 +88,14 @@ Public statements about an incident are issued only by the CEO or a designated c
 
 ## 5. Regulatory notification obligations
 
+> **The breach determination itself is governed by
+> [Breach Notification Policy](./breach-notification-policy.md).** This section
+> states the obligations; that policy states how we decide whether they are
+> triggered, using the 45 CFR § 164.402(2) four-factor risk assessment. An
+> impermissible disclosure of unsecured PHI is **presumed** to be a breach
+> unless that assessment demonstrates otherwise, so the determination is not
+> optional and cannot be made informally.
+
 ### 5.1 HIPAA — Pharmax as Business Associate
 
 Pharmax processes PHI under BAAs with our pharmacy customers. When a breach of unsecured PHI affects customer data, our BA-side obligation under **45 CFR § 164.410** is to notify the affected covered entity **without unreasonable delay and in no case later than 60 calendar days** from the discovery of the breach. The notification includes:
@@ -103,9 +111,22 @@ Bringing in the individual-notification timeline under 45 CFR § 164.404: the co
 
 ### 5.2 State breach notification laws
 
-Many US states have breach-notification statutes that apply on top of HIPAA. Notification timelines and content requirements vary. Where state law applies, the CTO works with legal counsel to identify the obligation and meet it.
+Many US states have breach-notification statutes that apply on top of HIPAA, and
+**HIPAA's 60-day deadline is a ceiling that state law lowers.** California's
+fixed 30-day individual-notice deadline took effect 1 January 2026; running to
+the federal limit would breach it by a month. Several states also require
+Attorney General notice on a tighter clock than the individual notice, and many
+do not exempt business associates even where they exempt covered entities —
+which is the posture Pharmax occupies.
 
-State notifications are tracked separately from HIPAA notifications in the incident postmortem under the compliance-notes section.
+The per-state analysis and the procedure for computing the binding deadline from
+the affected individuals' **states of residence** live in
+[`../compliance/state-breach-notification-matrix.md`](../compliance/state-breach-notification-matrix.md).
+Counsel confirms the applicable obligations before any notice issues.
+
+State notifications are tracked separately from HIPAA notifications in the
+incident postmortem under the compliance-notes section, and in the breach
+register defined in [Breach Notification Policy](./breach-notification-policy.md) §8.
 
 ### 5.3 Other regulators
 
