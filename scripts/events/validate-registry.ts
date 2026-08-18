@@ -17,8 +17,11 @@
 //   V6.  PHI-bearing definitions (`phiSafe === false`) are
 //        REPORTED but not failed — operations needs visibility
 //        into which events MAY carry PHI so PHI-capable consumers
-//        are wired correctly. (Today there are zero such events;
-//        the registry is uniformly PHI-free.)
+//        are wired correctly. These events are excluded from
+//        partner-webhook eligibility by construction. The binding
+//        assertions live in `events/index.test.ts`: any payload
+//        carrying `patientId` must be PHI-bearing, and the set is
+//        pinned in both directions.
 //   V7.  Every allowlist entry has a one-line justification
 //        (synthetic fixture OR documented blocker).
 //

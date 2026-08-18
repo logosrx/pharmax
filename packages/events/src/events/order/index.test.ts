@@ -5,7 +5,10 @@
 //   - Every event has a non-empty description.
 //   - Owner is one of the workflow domains (orders, verification,
 //     fill, shipping).
-//   - All are PHI-free.
+//   - PHI-free EXCEPT the patient-scoped events, which are pinned by
+//     name. Order workflow events track a unit of work, not a person,
+//     so an order event that reaches for `patientId` has left the
+//     workflow plane and needs the classification checked by hand.
 
 import { describe, expect, it } from "vitest";
 
@@ -32,9 +35,23 @@ describe("order domain barrel", () => {
     }
   });
 
-  it("every order.* event is PHI-free", () => {
+  // The one exception carries `patientId` alongside a screening
+  // finding code and severity — a clinical determination about an
+  // identifiable individual, so it is PHI-bearing and not
+  // partner-webhook eligible. Everything else in this domain
+  // describes the order, not the patient.
+  const PHI_BEARING = new Set(["order.pv1.screening.acknowledged_for_patient.v1"]);
+
+  it("every order.* event is PHI-free except the pinned patient-scoped events", () => {
     for (const def of ALL) {
-      expect(def.phiSafe, `${def.fullName} phiSafe`).toBe(true);
+      expect(def.phiSafe, `${def.fullName} phiSafe`).toBe(!PHI_BEARING.has(def.fullName));
+    }
+  });
+
+  it("the pinned PHI-bearing names all still exist in the barrel", () => {
+    const registered = new Set(ALL.map((def) => def.fullName));
+    for (const name of PHI_BEARING) {
+      expect(registered.has(name), `${name} missing from order barrel`).toBe(true);
     }
   });
 });

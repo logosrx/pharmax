@@ -12,9 +12,13 @@
 // previous value from an event stream a consumer may have joined late
 // is not something a consumer should have to do.
 //
-// PHI invariant: PHI-FREE. Ids, coded statuses, a reason CODE, and a
-// timestamp. The reason is a code from a closed list, not the operator's
-// free text — see `ALLERGY_STATUS_CHANGE_REASONS`.
+// PHI classification: PHI-BEARING (`phiSafe: false`). The reason stays
+// a code from a closed list rather than the operator's free text — see
+// `ALLERGY_STATUS_CHANGE_REASONS` — and no allergen is named. What
+// makes this PHI is the pairing: coded clinical statuses, before and
+// after, against a `patientId`, which is an identifier under 45 CFR
+// §164.514(b)(2)(i)(R). "This patient's allergy was refuted" is a
+// statement about their health, so the event is not webhook-eligible.
 
 import { z } from "zod";
 
@@ -54,7 +58,7 @@ export const PatientAllergyStatusAmendedV1 = defineEvent({
   aggregateIdFrom: (p) => p.patientId,
   owner: "patients",
   retention: "7y",
-  phiSafe: true,
+  phiSafe: false,
   routingKey: "patient.allergy",
   description:
     "Emitted by AmendPatientAllergyStatus. Carries the previous AND new clinical/verification status, the reason code, and whether the record is still usable by PV1 screening. The retraction path for an allergy entered in error — the row is never deleted.",

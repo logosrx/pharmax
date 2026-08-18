@@ -31,6 +31,7 @@ describe("defineEvent", () => {
       schema: sampleSchema,
       aggregateIdFrom: (p) => p.orderId,
       description: "sample",
+      phiSafe: true,
     });
     expect(def.fullName).toBe("order.shipped.v1");
     expect(Object.isFrozen(def)).toBe(true);
@@ -45,6 +46,7 @@ describe("defineEvent", () => {
         schema: sampleSchema,
         aggregateIdFrom: (p) => p.orderId,
         description: "x",
+        phiSafe: true,
       })
     ).toThrowError(/must not include the ".v\{n\}" suffix/);
   });
@@ -58,6 +60,7 @@ describe("defineEvent", () => {
         schema: sampleSchema,
         aggregateIdFrom: (p) => p.orderId,
         description: "x",
+        phiSafe: true,
       })
     ).toThrowError(/must contain at least one dotted segment/);
   });
@@ -71,6 +74,7 @@ describe("defineEvent", () => {
         schema: sampleSchema,
         aggregateIdFrom: (p) => p.orderId,
         description: "x",
+        phiSafe: true,
       })
     ).toThrowError(/invalid segment/);
   });
@@ -84,6 +88,7 @@ describe("defineEvent", () => {
         schema: sampleSchema,
         aggregateIdFrom: (p) => p.orderId,
         description: "x",
+        phiSafe: true,
       })
     ).toThrowError(/positive integer/);
   });
@@ -99,6 +104,7 @@ describe("defineEvent", () => {
         schema: z.string() as unknown as z.ZodObject<Record<string, never>>,
         aggregateIdFrom: () => "x",
         description: "x",
+        phiSafe: true,
       })
     ).toThrowError(/must be a ZodObject/);
   });
@@ -125,6 +131,7 @@ describe("validateAgainst", () => {
     schema: sampleSchema,
     aggregateIdFrom: (p) => p.orderId,
     description: "x",
+    phiSafe: true,
   });
 
   it("returns ok: true for a valid payload", () => {

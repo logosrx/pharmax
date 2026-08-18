@@ -10,7 +10,12 @@
 // statement that must be attributable years later. UNABLE_TO_ASSESS is
 // the honest alternative and deliberately does NOT open the axis.
 //
-// PHI invariant: PHI-FREE. Ids, one enum, and timestamps.
+// PHI classification: PHI-BEARING (`phiSafe: false`). The payload is
+// only ids, one enum and timestamps — but the enum is a clinical
+// finding ("no known allergies") recorded against a `patientId`, and
+// a persistent record id is an identifier under 45 CFR
+// §164.514(b)(2)(i)(R). A negative finding is still a finding, so the
+// event is not partner-webhook eligible.
 
 import { z } from "zod";
 
@@ -41,7 +46,7 @@ export const PatientAllergyHistoryAssertedV1 = defineEvent({
   aggregateIdFrom: (p) => p.patientId,
   owner: "patients",
   retention: "7y",
-  phiSafe: true,
+  phiSafe: false,
   routingKey: "patient.allergy",
   description:
     "Emitted by AssertPatientAllergyHistory. Records that an allergy history was taken and what it found: NO_KNOWN_ALLERGIES (which is what lets the PV1 allergy axis report clear) or UNABLE_TO_ASSESS (which does not). Append-only; a later assertion supersedes but does not erase.",

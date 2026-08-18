@@ -144,13 +144,23 @@ export type EventOwner =
  *     `"7y"` if omitted — the safe default for HIPAA-adjacent
  *     workflow signals. Set explicitly to `"90d"` or `"30d"` for
  *     non-audit operational events.
- *   - `phiSafe` is `true` when the payload (envelope + data) is
- *     guaranteed to contain NO PHI. Defaults to `true`; setting
- *     `false` is an explicit acknowledgement that this event MAY
- *     carry PHI and must be handled by PHI-capable consumers
- *     only. **No event in the registry today is PHI-bearing**;
- *     the flag exists so a future need is an explicit, reviewed
- *     change.
+ *   - `phiSafe` is REQUIRED and has no default. `true` asserts the
+ *     payload (envelope + data) carries NO PHI and may therefore
+ *     leave the platform over a partner webhook; `false` marks the
+ *     event PHI-bearing, which makes it unsubscribable.
+ *
+ *     There is deliberately no default. The flag used to fall back
+ *     to `true`, which meant an author who never considered PHI
+ *     produced the most permissive possible result — the omission
+ *     that looked safest was the one that opened an egress path.
+ *     Requiring the field is the entire control.
+ *
+ *     A payload carrying `patientId` next to any clinical or
+ *     enrolment fact IS PHI. A persistent record identifier is an
+ *     identifier under 45 CFR §164.514(b)(2)(i)(R), so omitting the
+ *     name and address does not de-identify it, and the fact that
+ *     an individual is a patient at all is itself protected. The
+ *     registry guard in `events/index.test.ts` enforces this.
  *   - `routingKey` (optional) is a downstream filter hint. Pub/sub
  *     bridges (CloudEvents, BI ingestion) read this off the
  *     definition to route events without re-parsing the name.
@@ -164,7 +174,7 @@ export interface DefineEventSpec<TSchema extends ZodObject> {
   readonly description: string;
   readonly owner?: EventOwner;
   readonly retention?: EventRetention;
-  readonly phiSafe?: boolean;
+  readonly phiSafe: boolean;
   readonly routingKey?: string;
 }
 
@@ -261,17 +271,17 @@ export function defineEvent<TSchema extends ZodObject>(
 
   // Defaults documented on `DefineEventSpec`:
   //   - retention: "7y" — HIPAA-grade safe default.
-  //   - phiSafe:   true — registry events are PHI-free unless
-  //                       explicitly flagged otherwise (no current
-  //                       event is PHI-bearing).
   //   - owner:     "system" — a deliberate red-flag default. Every
   //                           production definition SHOULD set its
   //                           own owner. Leaving it as "system"
   //                           shows up in the generated catalog
   //                           and signals an unmaintained event.
+  //
+  // `phiSafe` has NO default on purpose: a PHI classification that
+  // can be inherited is a PHI classification nobody made.
   const owner: EventOwner = spec.owner ?? "system";
   const retention: EventRetention = spec.retention ?? "7y";
-  const phiSafe: boolean = spec.phiSafe ?? true;
+  const phiSafe: boolean = spec.phiSafe;
 
   return Object.freeze({
     name: spec.name,
