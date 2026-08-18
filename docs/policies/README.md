@@ -59,6 +59,7 @@ Cadence defaults — unless a specific policy overrides them:
 
 - [`vendor-management-policy.md`](./vendor-management-policy.md) — vendor onboarding, security review, BAA requirements, annual re-review, decommissioning.
 - [`incident-response-policy.md`](./incident-response-policy.md) — policy frame on top of `../INCIDENT_RESPONSE.md`. Classification authority, communications tree, regulatory notification obligations, postmortem and drill cadence.
+- [`breach-notification-policy.md`](./breach-notification-policy.md) — the § 164.400–414 workflow that begins partway through an incident: the breach presumption, the four-factor risk assessment, the statutory exceptions, the notification matrix, the register, and the § 164.414 proof file. Separate from incident response because the two answer to different clocks — an incident closes when the system is safe, a breach closes when every notification is discharged and provable.
 - [`business-continuity-and-disaster-recovery.md`](./business-continuity-and-disaster-recovery.md) — RTO, RPO, critical functions, failover scenarios, drill cadence.
 
 ## Related governance and security artifacts
