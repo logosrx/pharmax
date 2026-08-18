@@ -91,19 +91,21 @@ labelled "THIS IS A STUB" and are not authoritative documents. Adopting
 a stub would assert a control that has no text behind it, which is the
 one failure mode worse than an unadopted policy.
 
-> **Recount owed.** The totals above are as of the pass that wrote them
-> and have since drifted. The customer BAA pair adds **8 markers across 2
-> documents** (recorded under §Governance documents below but not folded
-> into these figures), and a direct census of the tree disagrees with
-> several category counts in both directions — so the drift is not only
-> the 8. Resolving this needs the original counting methodology, which
-> the categories imply but do not state: notably whether stub-README
-> syntax tokens and blockquote instructions are inside or outside the
-> headline number. Recount and restate the methodology at the next
-> review rather than patching individual cells, and consider a script so
-> the figure cannot drift silently again — the reason this document
-> exists is that an unpriced checklist item never closes, and an
-> unverifiable total is the same failure one level up.
+> **Recount owed.** The totals above have drifted from the tree in two
+> directions at once. The 2026-08-18 adoption resolved most front-matter
+> markers, so the headline number is now too **high**; the customer BAA
+> pair adds **8 markers across 2 documents** (recorded under §Governance
+> documents below), so it is also too **low** in that row. A direct
+> census disagrees with several category counts either way.
+>
+> Resolving it needs the original counting methodology, which the
+> categories imply but never state — notably whether stub-README syntax
+> tokens and blockquote instructions sit inside or outside the headline.
+> Recount and restate that methodology at the next review rather than
+> patching individual cells, and consider scripting it so the figure
+> cannot drift silently again. This document exists because an unpriced
+> checklist item never closes; an unverifiable total is the same failure
+> one level up.
 
 ## Blocking analysis
 

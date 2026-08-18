@@ -10,6 +10,14 @@
 | Version        | 0.1 — draft, not for use    |
 | Distribution   | Internal — All staff        |
 
+> **Why this is still `TBD` when the rest of the bundle is 1.0.** The
+> 2026-08-18 adoption gave every governance document a real effective date.
+> This one and its [register](./customer-baa-register.md) were deliberately
+> left out: adopting a contract template that counsel has not reviewed
+> would assert a legal instrument with no legal review behind it, which is
+> the same failure as adopting a policy stub. It gets a date when counsel
+> returns it, not when the batch was signed.
+
 > **THIS DRAFT HAS NOT BEEN REVIEWED BY COUNSEL AND MUST NOT BE SENT TO A
 > CUSTOMER.** It exists so that licensed counsel reviews and revises a
 > complete, citation-mapped draft rather than drafting from a blank page.
@@ -150,10 +158,16 @@ as restrictive as those that apply to Pharmax under this Agreement.
 > **BLOCKING PRECONDITION.** This clause is a representation about executed
 > paper, not about intent. Pharmax's Subcontractors that receive PHI or
 > ciphertext include AWS (Aurora, S3, KMS, ECS, CloudWatch Logs) and
-> EasyPost (recipient addresses, which are PHI by linkage). As of the last
-> review of the [BAA tracker](./baa-tracker.md), **zero** upstream BAAs are
-> executed. Signing §3.4 before those are in place would be a false
-> representation in a federally regulated contract. See §7.
+> EasyPost (recipient addresses, which are PHI by linkage).
+>
+> As of the 2026-08-18 adoption of the governance bundle, **AWS and Sentry
+> are `executed`** and **EasyPost is `not requested`**. So §3.4 is closer
+> to true than it was, and still not true: while label purchase is enabled,
+> EasyPost receives PHI under no agreement. Signing this clause in that
+> state would be a false representation in a federally regulated contract.
+> See §7, and check the [BAA tracker](./baa-tracker.md) rather than this
+> paragraph before signature — that file is the record, this is a summary
+> of it on one date.
 
 **3.5 Individual right of access** — _(E)_. Pharmax will make PHI in a
 Designated Record Set available to the Covered Entity as necessary to
@@ -296,7 +310,7 @@ feature.
 
 | #   | Representation                                                          | Clause | Status                                                                                                                     |
 | --- | ----------------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Subcontractor BAAs are executed with every PHI-touching vendor          | §3.4   | **FALSE** — 0 of 8 executed in [baa-tracker.md](./baa-tracker.md). AWS and EasyPost are the blocking two.                  |
+| 1   | Subcontractor BAAs are executed with every PHI-touching vendor          | §3.4   | **FALSE** — AWS and Sentry `executed`; **EasyPost `not requested`** and it receives recipient addresses. One row blocks.   |
 | 2   | A Covered Entity can retrieve an Individual's record set on request     | §3.5   | **PARTIAL** — operator console is the retrieval path; there is no export producer, so a request is served by hand today.   |
 | 3   | Disclosure accounting is queryable per patient for the § 164.528 period | §3.7   | **VERIFY** — the audit log is hash-chained and complete; confirm a per-Individual disclosure query exists and is scoped.   |
 | 4   | Tenant data export and purge exist for the termination path             | §5.4   | **VERIFY** — needed before signing §5.4. Confirm a per-tenant export and purge routine exists and has been exercised once. |

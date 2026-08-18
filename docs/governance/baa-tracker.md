@@ -19,7 +19,14 @@ BAAs run in **two directions**, and this file covers only one of them:
 | **Upstream**   | Pharmax obtains assurances from its vendors (AWS, EasyPost, Sentry) | **This file.**                                         |
 | **Downstream** | Pharmax gives assurances to its pharmacy customers as their BA      | [customer-baa-register.md](./customer-baa-register.md) |
 
-The two are coupled and the coupling is one-way: **§ 164.502(e)(1)(ii)** requires a business associate to obtain the same assurances from its subcontractors that its own BAA imposes on it. Pharmax cannot truthfully promise a customer that its subcontractors are bound until the rows below say `executed`. Every `[BAA status: TBD]` in the table is therefore also a blocker on signing the first customer agreement, not only an internal vendor-management item.
+The two are coupled and the coupling is one-way: **§ 164.502(e)(1)(ii)** requires a business associate to obtain the same assurances from its subcontractors that its own BAA imposes on it. Pharmax cannot truthfully promise a customer that its subcontractors are bound until every row below that actually receives PHI says `executed`.
+
+So the rows in this file are not only internal vendor management — each unexecuted one is a blocker on signing the first **customer** agreement. As of the 2026-08-18 adoption that means:
+
+- **AWS** and **Sentry** are `executed`. The two that mattered most are closed.
+- **EasyPost** is `not requested`, and it is the one that still blocks: recipient addresses on shipping labels are PHI by linkage, so a customer BAA cannot honestly represent subcontractor flow-down while label purchase is enabled.
+- **Resend** is `not requested`, and blocks only if patient-facing notifications carry identifiers.
+- **Datadog or Honeycomb** is `[BAA status: TBD]` because no vendor is selected. A placeholder for an unmade decision is not the same kind of gap as an unsigned agreement with a live integration.
 
 BAA status vocabulary (controlled):
 
