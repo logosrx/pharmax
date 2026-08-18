@@ -1048,6 +1048,21 @@ Confirm from the boot log that the resolved adapters read `s3` and
 evidence pack. Tracked as **R-028** in the
 [risk register](./governance/risk-register.md).
 
+Do not rely on warnings to surface this. Coverage is uneven: the report
+archive and the nightly security digest each warn at boot, while the
+notification channel and the access-review recipient warn about nothing.
+A reader who has seen two warnings and no third will reasonably conclude
+the third path is healthy, which is the opposite of what silence means
+here.
+
+One scheduling note, because it affects when this is checkable. The
+quarterly access-review loop no-ops except on the first day of a
+quarter — Q3 opened 1 July, so the next automatic run is **1 October**.
+Waiting for the scheduler is a six-week feedback loop; run
+`scripts/security/run-access-review.ts` directly instead, as
+[`../compliance/first-cycle-runbook.md`](./compliance/first-cycle-runbook.md)
+Session 1 does.
+
 ---
 
 ## 12. Annex — Track B (insurance billing), REJECTED
