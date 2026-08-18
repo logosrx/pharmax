@@ -15,7 +15,7 @@
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",
     "@pharmax/sla": "workspace:*",
-    "cron-parser": "^5.7.0",
+    "cron-parser": "^5.10.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
