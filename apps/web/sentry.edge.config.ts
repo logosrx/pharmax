@@ -13,6 +13,8 @@
 
 import * as Sentry from "@sentry/nextjs";
 
+import { buildBeforeSend, scrubBreadcrumb } from "./src/observability/sentry-scrub-core.js";
+
 const dsn = process.env["SENTRY_DSN"];
 
 if (dsn !== undefined && dsn.length > 0 && process.env["NODE_ENV"] !== "test") {
@@ -21,5 +23,14 @@ if (dsn !== undefined && dsn.length > 0 && process.env["NODE_ENV"] !== "test") {
     environment: process.env["SENTRY_ENVIRONMENT"] ?? process.env["NODE_ENV"] ?? "development",
     tracesSampleRate: Number(process.env["SENTRY_TRACES_SAMPLE_RATE"] ?? 0),
     sendDefaultPii: false,
+
+    // Same scrubber as the Node and browser runtimes. Edge is unused
+    // today — every route pins `runtime: "nodejs"` for Prisma and
+    // node:crypto — but "keep it in sync with the server config" is
+    // the stated intent of this file, and an unscrubbed init that
+    // nobody exercises is exactly the one that survives review and
+    // then gets exercised.
+    beforeSend: buildBeforeSend({ enabledInEnvironment: true }),
+    beforeBreadcrumb: scrubBreadcrumb,
   });
 }

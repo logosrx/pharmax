@@ -12,6 +12,8 @@
 
 import * as Sentry from "@sentry/nextjs";
 
+import { buildBeforeSend, scrubBreadcrumb } from "./src/observability/sentry-scrub-core.js";
+
 const dsn = process.env["NEXT_PUBLIC_SENTRY_DSN"];
 
 if (dsn !== undefined && dsn.length > 0) {
@@ -29,10 +31,21 @@ if (dsn !== undefined && dsn.length > 0) {
     replaysOnErrorSampleRate: 0,
     replaysSessionSampleRate: 0,
 
-    // Server-side scrubbing handles the bulk of PHI defense; client
-    // events go through Sentry's default scrubbing only. Custom
-    // scrubbing for the browser SDK would need a separate
-    // `beforeSend` that knows nothing about server tenancy context.
     sendDefaultPii: false,
+
+    // The browser SDK runs the SAME scrubber as the server. The old
+    // note here said a browser hook "would need a separate
+    // `beforeSend` that knows nothing about server tenancy context" —
+    // correct, and it turns out it needs none. The scrubber is a
+    // static allowlist plus regexes, so the only thing that ever kept
+    // it server-side was a `server-only` import in the module, not
+    // anything in the logic.
+    //
+    // This matters more here than on the server. A browser event
+    // carries whatever was on screen: an unhandled render error in a
+    // patient view can put a name straight into `Error.message`, and
+    // until now that reached Sentry with default scrubbing only.
+    beforeSend: buildBeforeSend({ enabledInEnvironment: true }),
+    beforeBreadcrumb: scrubBreadcrumb,
   });
 }
