@@ -2,18 +2,74 @@
 
 ## 0. What this document is
 
+> **Scope correction, 2026-08-17.** Every version of this document before
+> today was written as though Pharmax **is** a pharmacy: it gave a
+> pharmacist-in-charge veto authority over its own gates, put state
+> pharmacy licensure and DEA registration on its own critical path, and
+> planned a cutover that stages a paper downtime packet "physically in the
+> pharmacy". That framing contradicted the security and compliance bundle,
+> which has always been correct —
+> [HIPAA SRA §1](./security/hipaa-security-risk-analysis.md): "Pharmax is
+> a Business Associate under HIPAA. It processes ePHI on behalf of pharmacy
+> customers." The consequence was not cosmetic: it produced a finish date
+> dominated by licences Pharmax will never hold, and it hid the items that
+> genuinely block a first customer. §0.1 states the model plainly so no
+> future reader re-derives the old plan from this file.
+
+### 0.1 Who Pharmax is, and what that means for this program
+
+**Pharmax is a multi-tenant B2B software vendor and a HIPAA Business
+Associate.** It sells a pharmacy operating platform to pharmacies. It
+does not dispense, does not hold a pharmacy licence, does not hold a DEA
+registration, and does not employ a pharmacist-in-charge.
+
+The tenant pharmacy is the Covered Entity. It holds every licence and
+registration, designates its own PIC, writes its own SOPs, trains its own
+staff, and answers to its own board of pharmacy. Pharmax's obligation is
+to be **software the tenant can pass an inspection with**, and to record
+and enforce against the tenant's credentials — not to obtain them.
+
+This single distinction moves a great deal:
+
+| Concern                                                  | Before (wrong)                                   | Actual                                                                      |
+| -------------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------- |
+| State pharmacy licence, DEA registration, PDMP enrolment | Pharmax obtains them — 2–6 months, critical path | The tenant's. Pharmax stores, validates and enforces against them.          |
+| Pharmacist-in-charge                                     | Pharmax hires one; PIC vetoes gates              | The tenant's. Pharmax retains a pharmacist **clinical reviewer**.           |
+| Operator SOPs, training, competency                      | Pharmax writes and delivers them                 | The tenant's quality system. Pharmax ships **templates** as enablement.     |
+| Computer system validation (IQ/OQ/PQ)                    | Pharmax's PIC signs it                           | Pharmax produces the pack; the **tenant** validates and signs for its site. |
+| SOC 2 Type II                                            | A compliance chore, late in the plan             | **The gate on revenue.** No pharmacy signs without it.                      |
+| Definition of "live"                                     | Pharmax dispenses to a patient                   | A **tenant** dispenses to a patient **through** Pharmax.                    |
+
+Two consequences worth stating explicitly, because they run in opposite
+directions:
+
+1. Roughly **3–5 months of pure calendar leaves the critical path** with
+   licensure and DEA registration. Nothing replaces it.
+2. The work does not disappear — it **relocates from company paperwork
+   into product features**. Software that cannot record a tenant's licence
+   number, or that lets a tenant ship into a state it holds no
+   non-resident licence for, fails the tenant's inspection on Pharmax's
+   behalf. That is Workstream G, rewritten.
+
+### 0.2 Relationship to the implementation plan
+
 `docs/IMPLEMENTATION_PLAN.md` records **what we have built**. This
-document records **what must be true before a real prescription for a
-real patient is dispensed through Pharmax**, and the order in which to
-make it true.
+document records **what must be true before a tenant pharmacy dispenses a
+real prescription to a real patient through Pharmax**, and the order in
+which to make it true.
 
 The two differ more than they look. The implementation plan is organised
-by capability and is largely complete: 103 command handlers, a traceable
-`RECEIVED → SHIPPED` chain, RLS on 67+ tables, a live Multi-AZ production
-cluster, and a real point-in-time restore drill with committed evidence.
-Go-live is organised by **risk to a patient and to the licence**, and by
-that measure the platform is not close, for three reasons that have
-nothing to do with code quality:
+by capability and is largely complete: 111 command handlers, a traceable
+`RECEIVED → SHIPPED` chain, RLS on 83 of 106 models, a live Multi-AZ
+production cluster, and an executed point-in-time restore drill.
+Go-live is organised by **risk to a patient, to the tenant's licence, and
+to the trust a customer extends by sending us their PHI** — and by that
+measure the platform is not close, for reasons that have nothing to do
+with code quality.
+
+The three headline blockers this document opened with in August 2026 have
+all closed, and are retained here because the pattern matters: each was a
+narrow gap at a seam, not a deficiency in the bulk of the system.
 
 1. **There is no way to put a prescription into the system.** No
    `CreatePrescription` command exists. The only code in the repository
@@ -47,26 +103,61 @@ exists, is committed, and is signed.
 
 ### Audience and authority
 
-| Role                       | Held by          | Authority                                                    |
-| -------------------------- | ---------------- | ------------------------------------------------------------ |
-| Program owner              | Engineering lead | Declares gates passed or failed                              |
-| Pharmacist-in-charge (PIC) | Licensed RPh     | **Veto** on G2, G3, G4. No software argument overrides this. |
-| Security owner             | Engineering lead | Owns Workstream E, signs pentest closure                     |
-| Compliance owner           | Engineering lead | Owns Workstream F, signs auditor readiness                   |
-| Quality owner              | Engineering lead | Owns validation (H2); signs IQ/OQ/PQ                         |
+| Role                      | Held by                 | Authority                                                                           |
+| ------------------------- | ----------------------- | ----------------------------------------------------------------------------------- |
+| Program owner             | Engineering lead        | Declares gates passed or failed                                                     |
+| Clinical reviewer         | Licensed RPh (contract) | **Veto** on any gate that asserts clinical safety (B3, G2). Not a PIC.              |
+| Security owner            | Engineering lead        | Owns Workstream E, signs pentest closure                                            |
+| Compliance owner          | Engineering lead        | Owns Workstream F, signs auditor readiness                                          |
+| Quality owner             | Engineering lead        | Owns the validation pack (H2) that tenants execute against                          |
+| Design-partner pharmacist | The tenant's PIC        | **Veto** on G3 and G4 for their own site. Pharmax cannot overrule a customer's PIC. |
 
-On a solo-plus-agents team one person wears several of these hats. That
-is acceptable for every hat except **PIC**, which must be a licensed
-pharmacist and cannot be the same person who wrote the code they are
-attesting to. Segregation of duties is already modelled in the command
-bus (`sodRules`); it must also hold at the program level.
+Two changes from earlier versions of this table, both material.
+
+**Pharmax does not have a PIC, and does not need one.** What it needs is a
+**licensed pharmacist under contract as clinical reviewer** to attest that
+the screening logic, workflow policy and label content are clinically
+sound. That is a part-time engagement, not a hire, and the distinction is
+several months and a salary. The reviewer must not be the person who wrote
+the code they are attesting to — segregation of duties is already modelled
+in the command bus (`sodRules`) and must hold at the program level too.
+
+**The PIC veto still exists, it just belongs to the customer.** The design
+partner's pharmacist-in-charge decides whether their site goes live on
+Pharmax, and no argument from this program overrides that. Practically
+this is stronger than a veto held internally: a customer's PIC has no
+incentive to approve software they do not trust.
+
+On a solo-plus-agents team one person wears most of the internal hats.
+That is acceptable for all of them; it is not acceptable for the clinical
+reviewer, and it cannot substitute for the customer's PIC.
 
 ---
 
-## 1. D-1 — the scope decision that governs everything
+## 1. D-1 — the scope decision that governed everything (CLOSED)
 
-**This decision is due by end of Week 1. Nothing else in this program
-can be correctly sequenced until it is made.**
+> **Resolved 2026-08-15 by [ADR-0039](./adr/0039-cash-only-no-pbm-adjudication.md),
+> status Accepted.** Pharmax is cash-only / clinic-billed by design. NCPDP
+> D.0 real-time adjudication is **out of scope permanently**, not deferred.
+> [ADR-0040](./adr/0040-direct-connect-prescription-intake.md), accepted the
+> same day, settles the companion question: the partner API is the eRx path
+> and Surescripts is not adopted, so NCPDP SCRIPT certification does not
+> apply either.
+>
+> Between them these two decisions removed the entire Track B branch —
+> 6–12 months of engineering plus 3–6 months of switch-contract calendar —
+> and a further 3–6 months of e-prescribing certification. They are the
+> largest timeline reductions in the program's history and they cost two
+> afternoons of writing.
+>
+> Note for future readers: the ADR numbers do not match the ones this
+> section originally demanded. It called for `0038-payer-model-scope.md`;
+> 0038 went to an unrelated PV1 decision and the payer question landed at 0039. The decision is what binds, not the number. §12 is retained only
+> as the record of what was rejected.
+
+The analysis below is preserved because it explains _why_ the decision went
+the way it did, and because a future pressure to reverse it should have to
+argue with the original reasoning rather than a summary of it.
 
 Nothing in the 85-model schema models a payer. There is no BIN, PCN,
 group, copay, claim, or adjudication response anywhere. `Invoice`,
@@ -83,13 +174,16 @@ clinic-billed pharmacy, not a retail one.
 | Added time  | —                                                            | +6 to 12 months                                                              |
 | Schema fit  | Native                                                       | Requires a new bounded context                                               |
 
-**This program plans Track A.** Track B is scoped in Annex §12 and is
-deliberately _not_ interleaved, because starting it before G3 would
-destabilise a codebase that is otherwise nearly ready to dispense.
+**This program plans Track A, permanently.** Track B is recorded in Annex
+§12 as rejected scope, not as deferred work.
 
-Record the decision as an ADR (`docs/adr/0038-payer-model-scope.md`)
-whichever way it goes. A decision this expensive must not live only in
-someone's memory.
+One nuance the original framing missed. Because Pharmax is a vendor rather
+than a pharmacy, "cash-only" is a statement about **the product's billing
+domain**, not about one pharmacy's business model. It means Pharmax sells
+to cash-pay and clinic-billed pharmacies and does not serve
+insurance-billed retail. That is a market-segmentation decision, and it
+should be stated as one in sales material so a prospect is disqualified in
+the first call rather than in month three of an implementation.
 
 ---
 
@@ -97,55 +191,92 @@ someone's memory.
 
 Five gates. Each has exit criteria that are **artifacts, not opinions**.
 
-| Gate   | Name                         | Meaning                                                                           | Blocking veto        |
-| ------ | ---------------------------- | --------------------------------------------------------------------------------- | -------------------- |
-| **G0** | Scope locked, clocks started | The fork is decided and every calendar-bound clock is running                     | Program owner        |
-| **G1** | Pilot feature-complete       | An operator can take an Rx from intake to shipped label without touching a script | Program owner        |
-| **G2** | Validated and secure         | Pentest clean, validation signed, system proven under load                        | PIC + Security owner |
-| **G3** | Limited production           | First real patient, capped volume, heightened monitoring                          | PIC                  |
-| **G4** | General availability         | Volume caps removed, normal on-call                                               | PIC + Program owner  |
+| Gate   | Name                         | Meaning                                                                                        | Blocking veto                        |
+| ------ | ---------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------ |
+| **G0** | Scope locked, clocks started | Scope is decided and every calendar-bound clock is running                                     | Program owner                        |
+| **G1** | Pilot feature-complete       | An operator can take an Rx from intake to shipped label without touching a script              | Program owner                        |
+| **G2** | Validated and secure         | Pentest clean, validation pack produced, system proven under load, screening clinically signed | Clinical reviewer + Security owner   |
+| **G3** | Sellable to a design partner | A customer may lawfully and safely send PHI: BAA executed, tenant credentials enforced         | Compliance owner + the partner's PIC |
+| **G4** | Generally available          | Sellable without bespoke hand-holding; SOC 2 report in hand; normal on-call                    | Program owner + Compliance owner     |
+
+G3 and G4 changed meaning in the 2026-08-17 correction and it is worth
+being precise about how, because the old names survive in older documents.
+
+**G3 was "first real patient, capped volume".** That is a _customer's_
+milestone, and Pharmax cannot pass or fail it — the tenant's PIC decides
+when their pharmacy dispenses. What Pharmax controls is whether it is
+**lawful and safe for a customer to try**, which is a different and
+sharper test: is there an executed BAA, can the platform record and enforce
+the tenant's licences, and would an alarm wake someone. The volume cap and
+abort criteria in §7–§8 still exist; they are now terms Pharmax _agrees
+with_ the design partner rather than rules it imposes on itself.
+
+**G4 was "volume caps removed".** For a vendor the meaningful threshold is
+commercial: can you sell to a pharmacy that is not a hand-held design
+partner, which in practice means a SOC 2 report and a pentest letter you
+can hand to their compliance officer without an apology.
 
 ### Gate exit criteria
 
 **G0 — Scope locked, clocks started**
 
-- [ ] ADR-0038 merged recording the Track A/B decision
+- [x] Payer scope recorded as an ADR — closed by ADR-0039 and ADR-0040, 2026-08-15
 - [ ] Pentest vendor under contract with a scheduled fieldwork window
-- [ ] Drug-knowledge vendor (First Databank or Medi-Span) in commercial conversation with a written quote
+- [ ] Drug-knowledge vendor in commercial conversation with a written quote, scoped as a **redistribution/OEM licence for ingredient-level content** (see B1)
 - [ ] SOC 2 auditor engaged; Type I readiness date agreed
-- [ ] All BAAs in `docs/governance/baa-tracker.md` moved off `TBD` to `requested`, `executed`, or `N/A — justified`
+- [x] All BAAs in `docs/governance/baa-tracker.md` moved off `TBD` to `requested`, `executed`, or `N/A — justified` — done 2026-08-18. Only `Datadog or Honeycomb` remains `TBD`, and that is an unselected vendor rather than an unsigned agreement. **Note this criterion is weaker than F4**: moving off `TBD` is not executing, and EasyPost sits at `not requested` while receiving PHI
+- [ ] Customer-facing BAA template with counsel — [`customer-baa-template.md`](./governance/customer-baa-template.md)
+- [ ] Licensed pharmacist retained as clinical reviewer (contract, not hire)
 - [ ] On-call rotation named, with a human who answers a phone
 
 **G1 — Pilot feature-complete**
 
-- [ ] Workstream A complete: a prescription can be created through the UI and through the v1 API
-- [ ] Workstream C1–C4 complete: alarms route to a pager; print-agent runs in production
-- [ ] Workstream D1 complete: an E2E test dispenses a synthetic order through the real UI
+- [x] Workstream A complete: a prescription can be created through the UI and through the v1 API — A1, A2, A4, A5, A7 landed; **A3 typing workbench landed in #175** (`apps/web/app/ops/typing/[orderId]`). A6 document intake remains
+- [ ] Workstream C1–C4 complete: alarms route to a pager; **print-agent runs in production** — C1 and C4 closed; C3 is the open one, `ecs_print_agent_desired_count` is still 0
+- [x] Workstream D1 complete: an E2E test dispenses a synthetic order through the real UI — **landed in #174** (`e2e/tests/full-dispense.spec.ts`; the suite is now 3 specs / 13 cases)
 - [ ] `pnpm verify` green; zero `Partial` SOC 2 controls newly introduced
 
 **G2 — Validated and secure**
 
-- [ ] Pentest final report received; **zero open Critical or High** findings (or formally risk-accepted by PIC and Security owner, recorded in the risk register)
-- [ ] IQ/OQ/PQ validation pack signed by PIC (H2)
+- [ ] Pentest final report received; **zero open Critical or High** findings (or formally risk-accepted by the Security owner and recorded in the risk register)
+- [ ] IQ/OQ/PQ validation pack **produced and executable by a tenant** against their own site (H2)
 - [ ] Load test demonstrates the documented NFRs with headroom (D2)
-- [ ] DUR screening live and clinically reviewed by PIC (B3)
-- [ ] All three chaos drills executed with committed evidence (D4)
+- [ ] DUR screening live and signed off by the **clinical reviewer** (B3)
+- [ ] All three chaos drills executed with retained evidence (D4)
 - [ ] Restore drill re-executed against a database containing real data volume (D5)
+- [ ] Command-level integration harness proves the four-table transaction against real Postgres (D3)
 
-**G3 — Limited production**
+**G3 — Sellable to a design partner**
 
-- [ ] Pharmacy licences, DEA registration, and PDMP enrolment in hand for the launch state (G1 workstream in §4.G)
-- [ ] SOPs written, staff trained, competency assessed (H1, H3)
-- [ ] Parallel run completed with zero unexplained discrepancies (H4)
-- [ ] Downtime/paper procedure rehearsed (H6)
-- [ ] Volume cap and abort criteria agreed in writing (§8)
+Everything here is a Pharmax obligation. The partner's own licences, SOPs
+and training are their responsibility and are **not** gates Pharmax can
+pass — but Pharmax must be able to _evidence_ them, which is the
+difference between the two lists below.
 
-**G4 — General availability**
+Pharmax must have:
+
+- [ ] Customer BAA executed with the design partner, recorded in [`customer-baa-register.md`](./governance/customer-baa-register.md)
+- [ ] Every upstream BAA `executed` — §164.502(e)(1)(ii) flow-down makes this a precondition of the clause above, not a parallel task
+- [ ] Tenant credential capture and enforcement shipped: licence number and expiry, DEA registration, NPI, NCPDP/NABP, and ship-to-state restriction (G-1, G-2)
+- [ ] Print path proven end to end from production on the partner's hardware (C3)
+- [ ] Validation pack, SOP templates and training material delivered to the partner (H1, H2, H3)
+- [ ] Volume cap and abort criteria **agreed in writing with the partner** (§7, §8)
+- [ ] Support model live: named on-call, escalation path, pharmacist-reachable channel (H7)
+
+The partner must have (Pharmax verifies and records, does not obtain):
+
+- [ ] Pharmacy licence current for its state, and non-resident licences for every state it ships into
+- [ ] DEA registration current for the schedules it dispenses
+- [ ] PDMP enrolment where applicable
+- [ ] Its PIC's written approval to go live on Pharmax
+
+**G4 — Generally available**
 
 - [ ] 30 consecutive days at G3 with no SEV0/SEV1 attributable to Pharmax
 - [ ] SOC 2 Type I report issued; Type II observation window running
 - [ ] Auditor readiness checklist (`docs/compliance/auditor-readiness-checklist.md`, 48 items) fully checked
 - [ ] Error budget policy in force and not exhausted
+- [ ] Onboarding runbook exercised by someone who did not build the platform — the test of whether G3 needed hand-holding
 
 ---
 
@@ -351,19 +482,53 @@ is missed. Run `pnpm verify` before opening the PR.
 automated clinical screening.
 
 **Why it blocks.** This is the difference between a fulfilment workflow
-and a pharmacy. A pharmacist verifying PV1 without interaction, allergy,
-and duplicate-therapy screening is doing so unaided, and a board
-inspector will ask which knowledge base you use. There is no defensible
-answer that is "none".
+and a pharmacy system. A pharmacist verifying PV1 without interaction,
+allergy and duplicate-therapy screening is doing so unaided. The
+**tenant's** board inspector will ask which knowledge base the software
+uses, and the customer's clinical leadership will ask before signing.
+There is no defensible answer that is "none" — and because Pharmax is the
+vendor, "our customer decided that" is not available either.
 
-| ID  | Task                           | Acceptance criteria                                                                                                                                                                                                | Evidence                          | Depends on | Est.                   |
-| --- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- | ---------- | ---------------------- |
-| B1  | Drug knowledge vendor          | Signed licence with First Databank or Medi-Span; BAA executed if PHI crosses the boundary                                                                                                                          | Contract + BAA row                | G0         | **[calendar] 4–12 wk** |
-| B2  | `@pharmax/drug-knowledge` port | Adapter interface with a deterministic in-repo fake; no vendor SDK imported outside the package; vendor data version recorded on every screening result                                                            | Merged PR + ADR                   | B1         | 2 wk                   |
-| B3  | DUR engine at PV1              | Interaction, allergy, duplicate-therapy and dose-range screening run before `ApprovePV1`; each alert requires pharmacist acknowledgement with a reason; alerts persisted immutably with the knowledge-base version | Merged PR + PIC clinical sign-off | B2, A1     | 2 wk                   |
-| B4  | Patient allergy capture        | Allergy list on `Patient`, encrypted, editable through a command; allergy screening cannot silently pass on an empty list — absence must be an explicit "no known allergies" attestation                           | Migration + PR                    | —          | 1 wk                   |
-| B5  | Counseling record              | Offer-to-counsel recorded per dispense; refusal captured; visible on order timeline                                                                                                                                | Migration + PR                    | —          | 0.5 wk                 |
-| B6  | Med guides + auxiliary labels  | FDA Medication Guide attached where required; auxiliary warning label rules driven by the knowledge base rather than hand-maintained                                                                               | Merged PR                         | B2         | 1 wk                   |
+**What the compounding model changes, and what it does not.** A frequent
+and reasonable objection is that if most dispensed preparations are
+compounded in-house, there are no manufactured products for a drug
+database to match. That reasoning does not hold — knowledge bases screen
+**ingredients**, not products, and compounded preparations are made of
+ingredients. But it arrives at a partly correct conclusion by luck, and
+the real position is better than the objection assumes:
+
+- `CompoundFormulaIngredient.rxnormInRxcui` already carries RxNorm
+  ingredient (IN) concepts, in the same code space
+  `patient_allergy.substanceCode` uses under `substanceCodeSystem =
+RXNORM`, compared by string equality in the PV1 allergy screen. So
+  **exact-ingredient allergy and duplicate-ingredient screening on
+  compounded preparations work today with no licensed content**, because
+  the formulas are coded in-house. For a compounder that is the
+  highest-frequency axis and it is already owned outright.
+- **Interactions still require a licence, and matter more, not less.**
+  Compounded preparations are multi-API by design, so the interaction
+  surface within a single preparation is combinatorial; and the patient's
+  other medications are commercial drugs prescribed elsewhere, so one side
+  of every interaction pair needs commercial content regardless of what is
+  dispensed. This is the one axis where an in-house table is indefensible.
+- **Dose range inverts: build, do not buy.** For a manufactured product
+  the package insert bounds the dose. For a compounded preparation there is
+  no FDA-approved dose — the formula _is_ the dose decision. A generic
+  min/max-daily-dose file is a poor fit; per-formula limits authored on
+  `CompoundFormula` (which already models `finalStrength`, quantity, unit
+  and BUD policy) encode the reviewing pharmacist's judgement for the
+  actual preparation. Tracked as B7.
+
+| ID  | Task                           | Acceptance criteria                                                                                                                                                                                                                                                                                                        | Evidence                               | Depends on | Est.                   |
+| --- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ---------- | ---------------------- |
+| B1  | Drug knowledge licence         | Signed licence covering **ingredient-level interactions and allergen cross-sensitivity, keyed to RxNorm ingredient concepts, redistributed to N pharmacy tenants**. Not the NDC-keyed dispensing file, AWP/WAC pricing, or OTC/nutraceutical catalogue. BAA executed if PHI crosses the boundary                           | Contract + BAA row                     | G0         | **[calendar] 4–12 wk** |
+| B2  | `@pharmax/drug-knowledge` port | Adapter interface with a deterministic in-repo fake; no vendor SDK imported outside the package; vendor data version recorded on every screening result                                                                                                                                                                    | Merged PR + ADR                        | B1         | 2 wk                   |
+| B3  | DUR engine at PV1              | Interaction, allergy, duplicate-therapy and dose-range screening run before `ApprovePV1`; each alert requires pharmacist acknowledgement with a reason; alerts persisted immutably with the knowledge-base version                                                                                                         | Merged PR + clinical-reviewer sign-off | B2, A1     | 2 wk                   |
+| B4  | Patient allergy capture        | Allergy list on `Patient`, encrypted, editable through a command; allergy screening cannot silently pass on an empty list — absence must be an explicit "no known allergies" attestation                                                                                                                                   | Migration + PR                         | —          | 1 wk                   |
+| B5  | Counseling record              | Offer-to-counsel recorded per dispense; refusal captured; visible on order timeline                                                                                                                                                                                                                                        | Migration + PR                         | —          | 0.5 wk                 |
+| B6  | Med guides + auxiliary labels  | FDA Medication Guide attached where required; auxiliary warning label rules driven by the knowledge base rather than hand-maintained                                                                                                                                                                                       | Merged PR                              | B2         | 1 wk                   |
+| B7  | Per-formula dose limits        | Min/max dose and daily-dose limits authored on `CompoundFormula`, versioned with the formula, enforced at PV1 alongside the licensed dose-range axis; reviewing pharmacist recorded on the limit                                                                                                                           | Migration + PR + reviewer sign-off     | —          | 1 wk                   |
+| B8  | Compensating control until B1  | Until interaction content is licensed, `SCR_KNOWLEDGE_UNAVAILABLE` becomes a **documented** compensating control: a written procedure requiring the verifying pharmacist to check a named external reference, shipped to tenants as an SOP template. Without this the gap is an unmanaged risk rather than an accepted one | SOP template + risk entry              | —          | 0.3 wk                 |
 
 > **Sequencing note.** B1 is the longest pole in Track A and is pure
 > calendar. Start the vendor conversation in Week 1 even though no code
@@ -405,14 +570,14 @@ tests, zero browser tests, and zero load tests. The eleven-command
 `RECEIVED → SHIPPED` chain has never been executed through the actual
 UI by anything other than a human.
 
-| ID  | Task                         | Acceptance criteria                                                                                                                                                                                                    | Evidence                                      | Depends on | Est.   |
-| --- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ---------- | ------ |
-| D1  | E2E suite                    | Playwright in CI against a seeded stack; the golden path (intake → typing → PV1 → fill → label → final → ship) passes headless; also covers PV1 rejection, hold/release, and cancellation                              | Green CI job                                  | A1, A3     | 2 wk   |
-| D2  | Load + soak                  | Documented NFRs (orders/day, concurrent operators, queue-read p95) then k6 proving them with headroom; 24-hour soak with no leak or lock escalation; **row-lock contention on the hot order path measured explicitly** | Load report                                   | C2         | 1.5 wk |
-| D3  | Integration depth            | Raise DB-bound integration coverage beyond the current 61 tests to cover every command that writes `order_event`; assert outbox and audit rows are written in the same transaction                                     | Coverage delta                                | —          | 1 wk   |
-| D4  | Execute the chaos drills     | All three scenarios in `docs/operations/chaos-drills.md` run for real: printer outage, queue backpressure, Stripe outage. Tooling exists; execution does not.                                                          | Evidence packs under `evidence/chaos-drills/` | C1, C3     | 0.5 wk |
-| D5  | Restore drill at real volume | Re-run the restore drill against a database with production-scale data. The 2026-07-23 drill was clean but **vacuous — zero organizations, zero orders**; it proved the mechanism, not the timing.                     | Drill evidence pack                           | —          | 0.5 wk |
-| D6  | Migration rehearsal          | Every migration replayed against a prod-sized dataset with lock-time measured; any migration holding an exclusive lock beyond the agreed budget is rewritten                                                           | Rehearsal log                                 | D5         | 0.5 wk |
+| ID  | Task                         | Acceptance criteria                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Evidence                                      | Depends on | Est.   |
+| --- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ---------- | ------ |
+| D1  | E2E suite                    | Playwright in CI against a seeded stack; the golden path (intake → typing → PV1 → fill → label → final → ship) passes headless; also covers PV1 rejection, hold/release, and cancellation                                                                                                                                                                                                                                                                                                                                                                                                                  | Green CI job                                  | A1, A3     | 2 wk   |
+| D2  | Load + soak                  | Documented NFRs (orders/day, concurrent operators, queue-read p95) then k6 proving them with headroom; 24-hour soak with no leak or lock escalation; **row-lock contention on the hot order path measured explicitly**                                                                                                                                                                                                                                                                                                                                                                                     | Load report                                   | C2         | 1.5 wk |
+| D3  | Command integration harness  | **The highest-leverage engineering task in the program.** A harness that dispatches real command handlers against real Postgres and asserts `command_log`, `order_event`, `audit_log` and `event_outbox` commit in one transaction — and roll back together on failure. Today 0 of 111 handlers are exercised this way: the unit tests use a fake whose `$transaction` is `fn => fn(tx)`, so the central architectural invariant is asserted thousands of times and proven zero times. Cover every command that writes `order_event`, plus concurrent dispatch on one order and duplicate idempotency keys | Coverage delta + harness                      | —          | 2 wk   |
+| D4  | Execute the chaos drills     | All three scenarios in `docs/operations/chaos-drills.md` run for real: printer outage, queue backpressure, Stripe outage. Tooling exists; execution does not.                                                                                                                                                                                                                                                                                                                                                                                                                                              | Evidence packs under `evidence/chaos-drills/` | C1, C3     | 0.5 wk |
+| D5  | Restore drill at real volume | Re-run the restore drill against a database with production-scale data. The 2026-07-23 drill was clean but **vacuous — zero organizations, zero orders**; it proved the mechanism, not the timing.                                                                                                                                                                                                                                                                                                                                                                                                         | Drill evidence pack                           | —          | 0.5 wk |
+| D6  | Migration rehearsal          | Every migration replayed against a prod-sized dataset with lock-time measured; any migration holding an exclusive lock beyond the agreed budget is rewritten                                                                                                                                                                                                                                                                                                                                                                                                                                               | Rehearsal log                                 | D5         | 0.5 wk |
 
 ---
 
@@ -431,138 +596,248 @@ UI by anything other than a human.
 
 ### Workstream F — Compliance
 
-**Objective.** Be able to hand an auditor a folder and answer questions
-from evidence rather than memory.
+**Objective.** Be able to hand **an auditor or a prospect's security
+reviewer** a folder and answer questions from evidence rather than memory.
+
+The second audience is the one the vendor correction adds, and it changes
+the priority rather than the content. An auditor arrives once a year by
+appointment; a prospect's compliance officer arrives in the middle of every
+sales cycle and can end it. That is why F3 moved from a late compliance
+chore to the constraint on G4, and why F9 exists.
 
 The machinery here is genuinely good and mostly needs finishing, not
 building: a TSC control matrix with real control IDs, a HIPAA Security
 Risk Analysis, a control matrix mapping §164.308/310/312, and a
 quarterly evidence pack orchestrator producing SHA-256 manifests.
 
-| ID  | Task                              | Acceptance criteria                                                                                                                                                     | Evidence                        | Depends on | Est.                   |
-| --- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- | ---------- | ---------------------- |
-| F1  | Ratify the policies               | Every `[Effective date: TBD]` and `<TBD>` in `docs/policies/` and `docs/soc2/policies/` resolved and dated. Nine SOC 2 policy files are labelled **"THIS IS A STUB"**.  | Signed, dated policies          | —          | 1 wk                   |
-| F2  | Close the `Partial` controls      | `CC1.2-1`, `CC2.3-1`, `CC7.2-3`, `CC7.5-1`, `A1.2-2`, `A1.3-1`, `P1.1-1`, `P4.1-1` moved to `Implemented` with evidence, or formally scoped out                         | Updated `controls-inventory.md` | C1–C8      | 1.5 wk                 |
-| F3  | SOC 2 Type I → Type II            | Type I report issued, then the observation window opened                                                                                                                | Auditor report                  | F1, F2, E2 | **[calendar] 3–12 mo** |
-| F4  | Execute BAAs                      | AWS, EasyPost, FedEx, UPS, Sentry, Vercel, Resend moved off `TBD`. No PHI may flow to a counterparty without one.                                                       | `baa-tracker.md` all resolved   | G0         | **[calendar] 2–8 wk**  |
-| F5  | Workforce training                | `docs/governance/security-training-program.md` delivered and attested by every person with production access                                                            | Attestation records             | —          | 0.3 wk                 |
-| F6  | Auditor readiness checklist       | All 48 items in `docs/compliance/auditor-readiness-checklist.md` checked                                                                                                | Completed checklist             | F1–F5      | 0.5 wk                 |
-| F7  | HIPAA §164.316 + breach procedure | Add an explicit §164.316 documentation-retention row to the control matrix (currently mapped mainly to §164.530(j)), and a state-by-state breach notification procedure | Updated docs                    | —          | 0.5 wk                 |
+| ID  | Task                                        | Acceptance criteria                                                                                                                                                                                                                                                                                                                                                                                                          | Evidence                                                                                                                                                     | Depends on | Est.                   |
+| --- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- | ---------------------- |
+| F1  | ~~Ratify the policies~~ **DONE 2026-08-18** | Closed by #200: the governance bundle carries real effective dates, `Last reviewed` / `Next review`, and version 1.0. The nine `docs/soc2/policies/` stubs were deliberately **not** adopted — adopting a stub asserts a control with no text behind it, which is worse than an unadopted policy. F3 is therefore unblocked.                                                                                                 | Adopted bundle, effective 2026-08-18                                                                                                                         | —          | ✅ 0                   |
+| F2  | Close the `Partial` controls                | `CC1.2-1`, `CC2.3-1`, `CC7.2-3`, `CC7.5-1`, `A1.2-2`, `A1.3-1`, `P1.1-1`, `P4.1-1` moved to `Implemented` with evidence, or formally scoped out                                                                                                                                                                                                                                                                              | Updated `controls-inventory.md`                                                                                                                              | C1–C8      | 1.5 wk                 |
+| F3  | SOC 2 Type I → Type II                      | Type I report issued, then the observation window opened                                                                                                                                                                                                                                                                                                                                                                     | Auditor report                                                                                                                                               | F1, F2, E2 | **[calendar] 3–12 mo** |
+| F4  | Execute BAAs                                | **Partly closed 2026-08-18.** AWS and Sentry `executed`; FedEx, UPS and Vercel re-scoped to `N/A — not a BA` (tenant-owned carrier relationships routed through EasyPost). **Remaining: EasyPost**, at `not requested` while receiving recipient addresses — PHI by linkage — which is the single row blocking the customer BAA's flow-down clause (F8 §3.4). Resend blocks only if patient notifications carry identifiers. | `baa-tracker.md`: every PHI-receiving row `executed`                                                                                                         | —          | **[calendar] 2–6 wk**  |
+| F5  | Workforce training                          | `docs/governance/security-training-program.md` delivered and attested by every person with production access                                                                                                                                                                                                                                                                                                                 | Attestation records                                                                                                                                          | —          | 0.3 wk                 |
+| F6  | Auditor readiness checklist                 | All 48 items in `docs/compliance/auditor-readiness-checklist.md` checked                                                                                                                                                                                                                                                                                                                                                     | Completed checklist                                                                                                                                          | F1–F5      | 0.5 wk                 |
+| F7  | HIPAA §164.316 + breach procedure           | Add an explicit §164.316 documentation-retention row to the control matrix (currently mapped mainly to §164.530(j)), and a state-by-state breach notification procedure                                                                                                                                                                                                                                                      | Updated docs                                                                                                                                                 | —          | 0.5 wk                 |
+| F8  | **Customer-facing BAA**                     | The agreement Pharmax signs **as** Business Associate with each pharmacy, reviewed and issued by counsel; every §7 precondition in the template true before first signature; executed agreements recorded in the register, which gates tenant provisioning                                                                                                                                                                   | [`customer-baa-template.md`](./governance/customer-baa-template.md) + [`customer-baa-register.md`](./governance/customer-baa-register.md) + counsel sign-off | F4         | **[calendar] 1–3 wk**  |
+| F9  | Customer security-review pack               | The folder a prospect's compliance officer asks for, assembled once rather than per deal: pentest letter, SOC 2 report or bridge letter, SRA summary, subprocessor list, architecture and data-flow summary, BAA. Reusable across every sale                                                                                                                                                                                 | Assembled pack                                                                                                                                               | E2, F3     | 0.5 wk                 |
 
 ---
 
-### Workstream G — Pharmacy regulatory
+### Workstream G — Tenant regulatory enablement
 
-**Objective.** Be legally permitted to dispense.
+> **This workstream was rewritten on 2026-08-17.** It previously read
+> "Pharmacy regulatory — be legally permitted to dispense", and listed
+> obtaining a state pharmacy licence and a DEA registration as Pharmax
+> tasks with a 2–6 month calendar. Those are the **tenant's** obligations
+> and cannot be transferred to a vendor. Removing them takes roughly 3–5
+> months off the critical path.
+>
+> The work does not vanish, it inverts. Pharmax's obligation is to be
+> software a licensed pharmacy can operate **and prove it operated
+> lawfully**: to record the tenant's credentials, enforce the limits those
+> credentials impose, and produce the records an inspector asks for. None
+> of that existed when this was written, because the plan was watching the
+> wrong side of the boundary.
 
-**Why it blocks.** No amount of software quality substitutes for a
-licence. These items are almost entirely external and must start early.
+**Objective.** Make it possible for a licensed pharmacy to run its
+regulated operation on Pharmax, and to evidence compliance to its own
+board of pharmacy and to the DEA.
 
-| ID  | Task                               | Acceptance criteria                                                                                                     | Depends on | Est.                        |
-| --- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------- |
-| G-1 | Pharmacy licence(s)                | Resident licence for the dispensing state; non-resident licences for every state shipped into                           | —          | **[calendar] 2–6 mo/state** |
-| G-2 | DEA registration                   | Registration current for every schedule dispensed at the registered address                                             | G-1        | **[calendar] 4–8 wk**       |
-| G-3 | PDMP reporting                     | Enrolled with each state's PDMP; automated submission in the required format and cadence; submission failures alarm     | G-1        | 1.5 wk + calendar           |
-| G-4 | Controlled-substance recordkeeping | 21 CFR 1304 perpetual inventory for CII; biennial inventory procedure; DEA 222/CSOS ordering path                       | G-2        | 2 wk                        |
-| G-5 | USP 795/797/800 SOPs               | Written SOPs aligned to the shipped `CompoundFormula` / `CompoundingRecord` models; BUD policy; hazardous-drug handling | —          | 1 wk                        |
-| G-6 | DSCSA verification                 | Extend the existing `DscsaTransaction` receipt model with saleable-return verification and suspect-product quarantine   | —          | 1.5 wk                      |
-| G-7 | Board inspection readiness         | Mock inspection against the state's checklist; findings closed                                                          | G-1…G-6    | 0.5 wk                      |
+**Why it blocks.** A pharmacy cannot adopt software that has nowhere to
+record its licence, cannot stop it shipping into a state it is not
+licensed in, and cannot produce a perpetual inventory. Today
+`PharmacySite` carries name, code, timezone, address and phone and no
+credential fields at all; `deaNumber` and `npi` exist only on `Provider`,
+the prescriber. There is no ship-to-state restriction anywhere in `apps`
+or `packages`. These are product gaps that surface as the customer's
+inspection finding, which makes them Pharmax's commercial problem.
 
-> **EPCS is deliberately excluded from Track A go-live.** ADR-0037 is
-> still **Proposed**, and shipping prescriber-side signing would make
+| ID  | Task                                   | Acceptance criteria                                                                                                                                                                                                | Depends on     | Est.   |
+| --- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- | ------ |
+| G-1 | Tenant credential model                | `PharmacySite` records state licence number and expiry, DEA registration and expiry, NPI, and NCPDP/NABP identifier, through a command with audit; expiry surfaces a warning before lapse and blocks on lapse      | Migration + PR | 1.5 wk |
+| G-2 | Ship-to-state licensure enforcement    | A site declares the states it is licensed to dispense into; `PurchaseShipmentLabel` and release-to-ship refuse a destination outside that set with a typed error; the check is enforced server-side, not in the UI | PR + tests     | 1 wk   |
+| G-3 | PDMP submission on the tenant's behalf | Per-state format and cadence; submitted under the **tenant's** PDMP credentials held in a credential store, never Pharmax's; submission failure alarms and is visible to the tenant                                | PR + runbook   | 2 wk   |
+| G-4 | Controlled-substance recordkeeping     | 21 CFR 1304 perpetual inventory for CII derived from operational truth; biennial inventory report; DEA 222/CSOS receipt capture. Pharmax produces the record; the tenant files it                                  | PR             | 2 wk   |
+| G-5 | USP 795/797/800 SOP **templates**      | SOP templates aligned to the shipped `CompoundFormula` / `CompoundingRecord` models, BUD policy and hazardous-drug handling, written for a tenant to adopt and edit. Enablement content, not Pharmax's own SOPs    | Template pack  | 1 wk   |
+| G-6 | DSCSA verification                     | Extend the existing `DscsaTransaction` receipt model with saleable-return verification and suspect-product quarantine                                                                                              | PR             | 1.5 wk |
+| G-7 | Inspection-readiness reporting         | A tenant can produce, unaided, the reports an inspector asks for: dispensing log by date range, CS perpetual inventory, label reprint log with reasons, verification audit trail, and access history               | PR             | 1 wk   |
+
+> **G-1 and G-2 are the two that gate G3**, because they are the ones a
+> customer's compliance officer tests in the first review. G-3 through G-7
+> can follow a design partner into production provided the partner's
+> existing process covers them in the interim and that is written down.
+
+> **EPCS is deliberately excluded from go-live — and being a vendor makes
+> this constraint stronger, not weaker.** This is the one place where the
+> scope correction cuts against Pharmax. Under **21 CFR 1311** the
+> third-party audit or certification attaches to the **application
+> provider**, so it is squarely Pharmax's obligation and cannot be
+> delegated to a tenant. Shipping prescriber-side signing would make
 > Pharmax both an electronic prescription application and a pharmacy
-> application under 21 CFR 1311, triggering a third-party audit and
-> re-certification on every change to controlled-substance
-> functionality. Until that audit passes, controlled-substance
-> prescriptions must arrive on paper or by an already-certified external
-> system. This constraint belongs in the SOPs (G-5), not just in an ADR.
+> application, triggering that audit plus re-certification on **every**
+> change to controlled-substance functionality — a permanent tax on
+> release velocity across a multi-tenant platform, not a one-off cost at
+> one pharmacy.
+>
+> ADR-0037 remains **Proposed**. Until an audit passes, controlled-substance
+> prescriptions must arrive on paper or through an already-certified
+> external system. This belongs in the G-5 SOP templates and in the sales
+> qualification script, not only in an ADR: a prospect whose volume is
+> mostly electronically-prescribed controlled substances is not a
+> candidate, and finding that out on the first call is worth a great deal.
 
 ---
 
-### Workstream H — Operational readiness
+### Workstream H — Vendor operations and customer enablement
 
-**Objective.** Make the pharmacy, not just the software, ready.
+> **Rewritten 2026-08-17.** This workstream previously assumed Pharmax
+> employed the operators: it called for a signed SOP binder, trained staff,
+> a competency assessment and a PIC signature on validation. A vendor
+> cannot write its customer's SOPs or sign its customer's validation. What
+> it can do — and must, or every onboarding is bespoke — is **produce the
+> artifacts the customer needs and run its own operation well.** The
+> estimates barely change; the deliverable changes from "our binder" to
+> "a pack we hand over", which is reusable across every customer instead
+> of once.
+
+**Objective.** Be operable as a vendor, and make a tenant's own readiness
+achievable without a Pharmax engineer sitting beside them.
 
 **Why it blocks.** This is the workstream software teams skip and
-regulators open with. A validated system with untrained staff and no
-downtime procedure is a patient-safety incident waiting for its first
-outage.
+regulators open with — the tenant's regulator. A validated platform whose
+customer has untrained staff and no downtime procedure is still a
+patient-safety incident waiting for its first outage, and the customer
+will not distinguish between "the software failed" and "the software gave
+us no way to cope when it failed."
 
-| ID  | Task                       | Acceptance criteria                                                                                                                                                                          | Evidence           | Est.   |
-| --- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ------ |
-| H1  | SOP set                    | Written SOPs for intake, typing, PV1, filling, final verification, shipping, cancellation, recall, downtime, and complaint handling — each referencing the actual Pharmax screen and command | Signed SOP binder  | 2 wk   |
-| H2  | Computer system validation | IQ (environment as specified), OQ (each function meets spec), PQ (real workflows by real staff on real hardware). Traceability matrix from requirement → test → result. **PIC signs.**       | Validation pack    | 2 wk   |
-| H3  | Training + competency      | Every operator trained per role and competency-assessed; records retained                                                                                                                    | Training records   | 1 wk   |
-| H4  | Parallel run               | An agreed period running Pharmax alongside the existing process; every discrepancy investigated to root cause and closed                                                                     | Reconciliation log | 1.5 wk |
-| H5  | Cutover rehearsal          | The §7 cutover executed end to end in staging, including rollback                                                                                                                            | Rehearsal log      | 0.5 wk |
-| H6  | Downtime procedure         | Paper fallback and post-outage reconciliation written and **rehearsed** — including how a paper-dispensed Rx is back-entered without breaking the audit chain                                | Rehearsal log      | 0.5 wk |
-| H7  | Support model              | On-call rotation, escalation path, and a pharmacist-reachable channel for clinical questions during operating hours                                                                          | Rotation document  | 0.3 wk |
+| ID  | Task                  | Acceptance criteria                                                                                                                                                                                                                                                                                                                    | Evidence              | Est.   |
+| --- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------ |
+| H1  | SOP **template** pack | Adoptable templates for intake, typing, PV1, filling, final verification, shipping, cancellation, recall, downtime and complaint handling — each referencing the actual Pharmax screen and command. The tenant edits, adopts and signs; Pharmax never signs a customer's SOP                                                           | Template pack         | 2 wk   |
+| H2  | Validation pack       | **IQ and OQ authored by Pharmax** (environment as specified; each function meets spec) with a requirement → test → result traceability matrix, shipped so a tenant can execute **PQ** against its own site, staff and hardware and sign it. Pharmax's Quality owner signs the pack's accuracy; the **tenant** signs its own validation | Validation pack       | 2 wk   |
+| H3  | Training material     | Role-based training content and a competency-assessment template the tenant delivers to its own staff; Pharmax trains the partner's trainer, not the partner's technicians                                                                                                                                                             | Training pack         | 1 wk   |
+| H4  | Parallel-run support  | Reporting that lets a tenant reconcile Pharmax against its existing process for an agreed period, and a defined path for investigating every discrepancy to root cause                                                                                                                                                                 | Reconciliation report | 1.5 wk |
+| H5  | Onboarding rehearsal  | The §7 onboarding executed end to end in staging against a synthetic tenant, including rollback                                                                                                                                                                                                                                        | Rehearsal log         | 0.5 wk |
+| H6  | Downtime procedure    | Two halves: Pharmax's own customer-communication and status procedure for an outage, **and** a paper-fallback template for the tenant plus the platform capability to back-enter a paper-dispensed Rx without breaking the audit chain. **Rehearsed**, not merely written                                                              | Rehearsal log         | 1 wk   |
+| H7  | Support model         | On-call rotation, escalation path, and a channel through which a tenant's pharmacist can reach a pharmacist — the clinical reviewer or a named alternate — during operating hours                                                                                                                                                      | Rotation document     | 0.3 wk |
+| H8  | Onboarding runbook    | A repeatable sequence from signed MSA to first dispense: BAA, credential capture, org bootstrap, validation hand-off, training, parallel run, go-live. Exercised by someone who did not build the platform — that is the G4 test of whether onboarding still needs its author                                                          | Runbook + dry run     | 1 wk   |
 
 ---
 
 ## 5. Critical path
 
-The critical path is **not** the code. Ordered by finish date:
+The critical path is **not** the code. It never was — but until the
+2026-08-17 correction it was measured against the wrong finish line.
+Removing state licensure and DEA registration removes the old longest pole
+outright; **SOC 2 inherits the title**, and it inherits it for a
+commercial reason rather than a regulatory one.
 
 ```
-G0 decision (Wk 1)
-  ├── B1 drug-knowledge licence   [calendar 4–12 wk] ──┐
-  ├── E1 pentest fieldwork        [calendar 7–10 wk] ──┤
-  ├── F4 BAAs                     [calendar 2–8 wk]  ──┤
-  └── G-1/G-2 licence + DEA       [calendar 2–6 mo]  ──┤  ← longest pole
+Week 1 — start every clock
+  ├── F8 customer BAA to counsel   [calendar 1–3 wk] ──┐  ← gates the FIRST customer
+  ├── F4 upstream BAAs             [calendar 2–8 wk] ──┤  ← §164.502(e)(1)(ii) gates F8
+  ├── E1 pentest fieldwork         [calendar 7–10 wk] ─┤
+  ├── B1 drug-knowledge licence    [calendar 4–12 wk] ─┤
+  ├── F1 policies ratified         [DONE 2026-08-18] ──┤  ← F3 now unblocked
+  └── F3 SOC 2 Type I → Type II    [calendar 6–24 mo] ─┤  ← longest pole, gates G4 only
                                                        │
-A1 → A3 → D1 ─────────────────────────────────────────┤
-B2 → B3 (needs B1) ───────────────────────────────────┤
-C1..C8, D2..D6 (parallel, no external dependency) ────┤
+D3 command integration harness ───────────────────────┤
+G-1 → G-2 tenant credentials + ship-to-state ─────────┤  ← gates G3
+C3 print agent in production ─────────────────────────┤
+A6, D2, D4, D5, D6, E3…E6, H1…H8 (parallel) ──────────┤
                                                        ▼
-                                                   G2 → G3
+                                              G2 → G3 → G4
 ```
 
-**The four things to start in Week 1 regardless of engineering capacity**
-are B1, E1, F4, and G-1. They consume almost no engineering time and they
-dominate the finish date. Everything else can be compressed by adding
-people; these cannot.
+**The ordering insight the old plan could not see.** F4 and F8 are not
+parallel: § 164.502(e)(1)(ii) requires flow-down assurances from
+subcontractors, so Pharmax cannot truthfully sign the subcontractor clause
+of a customer BAA until the AWS and EasyPost BAAs are executed. The
+cheapest item in the program is therefore also a hard predecessor of the
+item that gates the first dollar of revenue. See
+[`customer-baa-template.md`](./governance/customer-baa-template.md) §7.
 
-**The single highest-leverage engineering task is A1.** It is roughly a
-week and a half of work that connects a finished machine to the outside
-world.
+**The things to start in Week 1 regardless of engineering capacity** are
+F8, F4, E1, B1, F1 and the clinical-reviewer engagement. Between them they
+consume a few days of anyone's attention and they set every date in §6.
+Everything else can be compressed by adding capacity; these cannot.
 
----
+**The single highest-leverage engineering task is D3** — a real-Postgres
+command integration harness. 5,877 unit tests pass in 12 seconds against a
+fake whose `$transaction` is `fn => fn(tx)`, so the four-table atomic write
+that the whole architecture rests on is asserted constantly and proven
+nowhere. Roughly two weeks converts the largest body of work in the
+repository from assertion into evidence.
 
-## 6. Indicative timeline (Track A)
-
-| Weeks | Focus                                                                                         | Gate   |
-| ----- | --------------------------------------------------------------------------------------------- | ------ |
-| 1     | D-1 decision; start every calendar clock (B1, E1, F4, G-1); C1 alarm routing; C4 verification | **G0** |
-| 2–5   | A1, A2, A3, A4, A7; C3, C5, C8; D1; E4, E6                                                    |        |
-| 6     | Buffer + integration; staging pentest environment prepared                                    | **G1** |
-| 6–12  | D2, D3, D4, D5, D6; E3; G-3…G-6; pentest fieldwork runs                                       |        |
-| 9–14  | B2, B3, B4, B5, B6 as the drug-knowledge licence lands; E2 remediation and retest             |        |
-| 10–16 | F1, F2, F5, F6, F7; H1…H7 ops readiness and validation; G-7                                   | **G2** |
-| 16–20 | Limited production: first real patient, capped volume                                         | **G3** |
-| 20–24 | Volume ramp; SOC 2 Type I; Type II window opens                                               | **G4** |
-
-**Realistic range: 4 to 6 months to G3**, driven by whichever of the
-drug-knowledge licence and the state licensure finishes last, not by
-engineering. If state licensure is already in hand, the range compresses
-to roughly 3 to 4 months. If it is not started until G1, add three
-months.
+**The two highest-leverage product tasks are G-1 and G-2**, because they
+are what a customer's compliance officer tests first and neither exists.
 
 ---
 
-## 7. Cutover plan
+## 6. Indicative timeline
 
-Cutover is a **capped, reversible, observed** event, not a switch flip.
+| Weeks   | Focus                                                                                                             | Gate   |
+| ------- | ----------------------------------------------------------------------------------------------------------------- | ------ |
+| 1       | Start every clock: F8 to counsel, E1, B1, clinical reviewer, SOC 2 auditor. F1 and AWS/Sentry BAAs already closed | **G0** |
+| 1–4     | D3 command integration harness; C3 print agent to production; G-1 tenant credentials; land in-flight branches     |        |
+| 4–8     | G-2 ship-to-state; A6 document intake; D2 load; D4, D5, D6 drills. A3 and D1 closed in #175 and #174              | **G1** |
+| 6–14    | Pentest fieldwork; E2 remediation and retest; E3 OIDC; C6 DR region; C7 rotation; C8 incident log                 |        |
+| 8–16    | B2, B3, B7, B8 as the drug-knowledge licence lands; B4, B5, B6; F2 close the Partial controls                     | **G2** |
+| 10–18   | H1…H8 enablement pack and onboarding runbook; G-3…G-7; F5, F6, F7                                                 |        |
+| 12–20   | Design-partner onboarding: BAA executed, credentials captured, validation handed over, parallel run               | **G3** |
+| 6–24 mo | SOC 2 Type I issued; Type II observation window runs to completion                                                | **G4** |
 
-**T-7 days.** Freeze non-critical deploys. Re-run `pnpm verify`, the E2E
-suite, and a restore drill. Confirm every alarm has an action and every
-on-call phone rings. PIC confirms licences and DEA registration are
-current and displayed.
+Three ranges, because the three questions have materially different
+answers and collapsing them into one number is what produced the old
+estimate.
 
-**T-1 day.** Final `terraform plan` shows no drift. Confirm backup
-retention ≥ 35 days and the latest restorable time is current. Brief
-every operator on the abort criteria in §8. Stage the paper downtime
-packet physically in the pharmacy.
+**Software feature-complete: 6 to 10 weeks.** Roughly 28 engineer-weeks
+remain against a demonstrated throughput of about 4–5 engineer-weeks per
+calendar week. Engineering has not been the binding constraint for some
+time and is not now.
+
+**Design partner in production: 3 to 4 months.** Gated by the customer
+BAA — which is itself gated by the upstream BAAs — by G-1 and G-2, by a
+print path proven on real hardware, and by the partner's own readiness,
+which the partner controls and which a good enablement pack shortens. This
+is where the previous version said 4–6 months and was wrong by the width of
+a state licensure queue that was never Pharmax's to stand in.
+
+**Generally available: 12 to 18 months.** Unchanged by the correction, and
+now the number that matters most. Type I cannot begin until the policies
+are ratified; the Type II observation window is 3–12 months after that. No
+pharmacy compliance officer signs without the report, so this is the
+constraint on revenue beyond hand-held design partners — and the one place
+where starting a clock a week earlier buys a week of runway.
+
+---
+
+## 7. Design-partner onboarding (formerly "cutover plan")
+
+Onboarding is a **capped, reversible, observed** event, not a switch flip.
+It is run **jointly**: Pharmax owns the platform steps, the partner owns
+every step that touches their licence, their staff and their patients. The
+sequence below marks which is which, because the previous version assumed
+one party did all of it.
+
+**T-7 days — Pharmax.** Freeze non-critical deploys. Re-run `pnpm verify`,
+the E2E suite, and a restore drill. Confirm every alarm has an action and
+that a subscribed on-call endpoint actually rings.
+
+**T-7 days — partner.** The partner's PIC confirms its pharmacy licence,
+non-resident licences for every destination state, and DEA registration are
+current and displayed. Pharmax records the credentials (G-1) and verifies
+the ship-to-state set is enforced (G-2). Pharmax does not assess whether the
+licences are adequate; it records what the PIC attests and enforces against
+it.
+
+**T-1 day — Pharmax.** Final `terraform plan` shows no drift. Confirm
+backup retention ≥ 35 days and the latest restorable time is current.
+Confirm the executed BAA is on file and the register row reads `executed`.
+
+**T-1 day — partner.** Brief every operator on the abort criteria in §8.
+Stage the paper downtime packet physically at the pharmacy, from the H6
+template.
 
 **T-0.**
 
@@ -571,15 +846,25 @@ packet physically in the pharmacy.
 2. Confirm the running image tag on **every** service — the matrix
    deploys them independently and the ECS circuit breaker can roll one
    back, leaving production on mixed versions.
-3. Bootstrap the production organisation, site, clinic, buckets, and
-   roles via `pnpm bootstrap:org`. Verify RLS fail-closed behaviour: an
-   app-role connection with no tenancy GUC must return zero rows.
-4. Create the first real prescription through the UI. Two people watch.
+3. Bootstrap the tenant organisation, site, clinic, buckets, and roles via
+   `pnpm bootstrap:org`, including the credential set from G-1. Verify RLS
+   fail-closed behaviour: an app-role connection with no tenancy GUC must
+   return zero rows. Verify cross-tenant isolation against a second
+   synthetic tenant — with more than one customer this stops being
+   theoretical.
+4. **The partner's operator** creates the first real prescription through
+   the UI, and **the partner's pharmacist** verifies it. Two people watch,
+   one from each party. Pharmax does not touch production PHI during
+   onboarding; if a Pharmax engineer needs to, that is a break-glass
+   session with its own record.
 5. Walk it to `SHIPPED`. Verify at each stage: `command_log`,
    `order_event`, `audit_log`, `event_outbox` rows written; the SLA
-   interval closed; the vial label physically correct.
+   interval closed; the vial label physically correct on the partner's own
+   printer stock.
 6. Verify the billing event materialised and the invoice line appeared.
-7. Hold at **10 orders/day for five business days** before any increase.
+7. Hold at the agreed cap — **10 orders/day for five business days** is the
+   recommended default — before any increase. The cap is a term agreed with
+   the partner in writing, not a rule Pharmax imposes.
 
 **T+1 through T+30.** Daily audit-chain verification reviewed by a human.
 Daily reconciliation of dispensed versus shipped versus invoiced. Weekly
@@ -589,11 +874,31 @@ error-budget review. No volume increase while any SEV1 is open.
 
 ## 8. Abort criteria
 
+**Either party may abort, and the mechanics differ.** The partner stops
+intake and reverts to its paper procedure. Pharmax pauses the tenant,
+convenes an incident, and — where PHI is implicated — discharges its
+**Business Associate notification duty under 45 CFR § 164.410**: notify the
+affected Covered Entity without unreasonable delay, statutory maximum 60
+days, internal target 24 hours from confirmation
+([Incident Response Policy §5.1](./policies/incident-response-policy.md)).
+The customer cannot meet its own § 164.404 deadline to patients if Pharmax
+is slow, so the internal target is the real one.
+
+With more than one tenant, one further rule applies that a single-pharmacy
+plan had no reason to state: **an incident affecting one tenant does not
+authorise silence toward the others.** If the root cause is platform-wide,
+every affected customer is notified, not only the one that reported it.
+
 Stop intake, revert to the paper procedure, and convene an incident if
 **any** of these occur:
 
 - Any suspected cross-tenant data exposure. This is a SEV0 and a
-  reportable event — no exceptions, no waiting to confirm.
+  reportable event — no exceptions, no waiting to confirm. For a vendor
+  this is also the single most existential failure mode there is: it is
+  simultaneously a breach for **two** covered entities, and it is the exact
+  risk every prospect's security review is probing for.
+- Any tenant able to ship to a destination state outside its licensed set,
+  or to dispense against a lapsed licence or DEA registration.
 - Any dispense that reaches a patient having skipped PV1 or final
   verification.
 - Audit chain verification fails and cannot be explained within one hour.
@@ -632,11 +937,17 @@ Retire **R-004** (Clerk account takeover) — Clerk is retired.
 Summing the task estimates gives two distinct pools, and conflating them
 is how go-live plans slip:
 
-| Pool                     | Total                                                                                       | Who does it                     |
-| ------------------------ | ------------------------------------------------------------------------------------------- | ------------------------------- |
-| Engineering build        | **~38 engineer-weeks** (A 6.1, B 6.5, C 6.3, D 6.0, E 4.8, F 3.8, G engineering 5.0)        | Engineer + agents               |
-| Operational / regulatory | **~11 person-weeks** (H 7.8, G-5 and G-7 1.5, plus policy ratification and training effort) | PIC, ops lead, compliance       |
-| External calendar        | **20–26 weeks**, largely concurrent                                                         | Vendors, auditors, state boards |
+| Pool                    | Total                                                                             | Who does it                             |
+| ----------------------- | --------------------------------------------------------------------------------- | --------------------------------------- |
+| Engineering build       | **~40 engineer-weeks** (A 4.5, B 7.3, C 6.3, D 6.0, E 4.8, F 3.8, G product 10.0) | Engineer + agents                       |
+| Enablement / compliance | **~12 person-weeks** (H 8.8, G-5 1.0, policy ratification, training material)     | Ops lead, compliance, clinical reviewer |
+| External calendar       | **12–20 weeks** to G3, largely concurrent; **6–24 months** for SOC 2              | Counsel, vendors, auditors, pentesters  |
+
+Two changes from the previous version worth noting. Workstream G grew from
+5 to 10 engineer-weeks because it became **product work** — tenant
+credentials, ship-to-state enforcement, PDMP submission, inspection
+reporting — where it used to be licence applications. And **state boards
+left the external column entirely**, which is where the 3–5 months went.
 
 A large fraction of the engineering pool is parallelisable, which is why
 the timeline in §6 is shorter than 38 weeks. The operational pool is
@@ -647,38 +958,61 @@ At the velocity this repository has demonstrated, one engineer plus
 agents can carry Workstreams A, C, D and E. What that configuration
 **cannot** provide is:
 
-- a **licensed pharmacist** for B3 clinical sign-off, H2 validation
-  signature, and every PIC veto;
-- an **independent reviewer** for segregation of duties on access
-  reviews and break-glass — the program models SoD in code and must not
-  violate it in practice;
+- a **licensed pharmacist under contract** for B3 clinical sign-off and to
+  attest the H2 validation pack is clinically accurate. Not a PIC, and not
+  an employee — but not optional either, because "who reviewed this
+  clinically?" is asked in every customer's diligence;
+- **legal counsel** for the customer BAA (F8), the governing-law and
+  state-addendum decisions, and review of customer-supplied paper. This is
+  new to the resourcing table and it sits on the path to the first dollar;
+- an **independent reviewer** for segregation of duties on access reviews
+  and break-glass — the program models SoD in code and must not violate it
+  in practice;
 - a **second on-call human**, because a one-person rotation is not a
-  rotation.
+  rotation, and because a customer contract will eventually specify a
+  response time that one person cannot honour while asleep.
 
-These three are hiring or contracting decisions, and they are on the
-critical path for G2. Treat them as Week 1 actions alongside the vendor
-clocks.
+These four are hiring or contracting decisions. Counsel is on the path to
+G3; the rest are on the path to G2. Treat all four as Week 1 actions
+alongside the vendor clocks.
 
 ---
 
 ## 11. What "live" means
 
-Pharmax is live when a prescription written by a real prescriber for a
-real patient is entered through the operator console, screened
-clinically, verified twice by a pharmacist, filled against a scanned lot,
-labelled on a Zebra printer, shipped with tracking, invoiced from
-operational truth, and fully reconstructable from `command_log`,
-`order_event`, `audit_log` and `event_outbox` — with an alarm that would
-have woken someone had any step failed.
+Pharmax is live when a prescription written by a real prescriber for a real
+patient is entered — **by an operator employed by a licensed pharmacy that
+is not Pharmax, under an executed Business Associate Agreement** — through
+the operator console, screened clinically, verified twice by that
+pharmacy's pharmacists, filled against a scanned lot, labelled on their
+Zebra printer, shipped only to a state that pharmacy is licensed to ship
+into, invoiced from operational truth, and fully reconstructable from
+`command_log`, `order_event`, `audit_log` and `event_outbox` — with an
+alarm that would have woken someone at Pharmax had any step failed, and a
+tenant boundary that held while it did.
+
+The clauses added to that sentence in the 2026-08-17 revision are the whole
+correction in miniature: _not Pharmax_, _under an executed BAA_, _only to a
+licensed state_, and _the tenant boundary held_. Each is a requirement the
+previous version could not express, because it thought Pharmax was the
+pharmacy and there was no boundary to hold.
 
 Everything in this document exists to make that sentence true.
 
 ---
 
-## 12. Annex — Track B (insurance billing)
+## 12. Annex — Track B (insurance billing), REJECTED
 
-Only if D-1 selects Track B. Not interleaved with Track A; sequenced
-after G3.
+> **Closed 2026-08-15 by [ADR-0039](./adr/0039-cash-only-no-pbm-adjudication.md).**
+> Track B is **rejected scope, not deferred work.** Nothing below is
+> planned, estimated for, or resourced. It is retained for one reason: a
+> future proposal to add insurance billing should have to argue against the
+> full cost, and that cost is easier to underestimate than any other number
+> in this document.
+>
+> If that argument is ever made and won, it needs a new ADR superseding
+> 0039, and this annex becomes a program of its own rather than a section
+> of this one.
 
 | Item                       | Note                                                                                                                                                                                 | Est.                         |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------- |
@@ -698,6 +1032,8 @@ and billing models that Track A is about to harden.
 
 ## Change log
 
-| Date       | Change                                                                                                                |
-| ---------- | --------------------------------------------------------------------------------------------------------------------- |
-| 2026-08-02 | Initial program. Derived from a full-repository readiness audit plus live read-only inspection of `pharmax-prod-ue1`. |
+| Date       | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2026-08-02 | Initial program. Derived from a full-repository readiness audit plus live read-only inspection of `pharmax-prod-ue1`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 2026-08-17 | **Scope correction: Pharmax is a software vendor, not a pharmacy.** Added §0.1 stating the model. Replaced the PIC veto with a contracted clinical reviewer plus the customer's PIC. Re-gated G3 to "sellable to a design partner" and G4 to "generally available". Rewrote Workstream G from obtaining licences to enabling tenants to prove theirs (tenant credential model, ship-to-state enforcement, PDMP on the tenant's behalf, inspection reporting). Rewrote Workstream H from our SOPs and training to an enablement pack plus an onboarding runbook. Added B7 per-formula dose limits and B8 compensating control. Recorded D-1 as closed by ADR-0039/0040 and Track B as rejected. Rebuilt §5–§7 and §10–§11 around the corrected critical path. |
+| 2026-08-18 | Closed F1 — #200 adopted the governance bundle with real effective dates, which unblocks F3. Partly closed F4: AWS and Sentry `executed`, FedEx/UPS/Vercel re-scoped to `N/A`, leaving **EasyPost** as the one PHI-receiving row still unsigned and therefore the single blocker on the customer BAA's flow-down clause. Corrected the Week 1 row and the §5 critical path accordingly.                                                                                                                                                                                                                                                                                                                                                                      |
