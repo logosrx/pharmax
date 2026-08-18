@@ -34,12 +34,40 @@ operating rule correctly:
 > A BAA-required vendor whose status is not `executed` must not
 > receive PHI.
 
-Every PHI-touching row in that tracker currently reads
-`[BAA status: TBD]`. The rule is right; nothing satisfies it yet.
+When this playbook was written, every PHI-touching row in that tracker
+read `[BAA status: TBD]` — the rule was right and nothing satisfied it.
+AWS has since been executed (below). The tracker file itself still needs
+updating to say so, which is the bookkeeping step this playbook closes.
 
-## Tier 0 — clears today, no vendor contact required
+## Tier 0 — self-service, no vendor contact required
 
-### AWS
+### AWS — EXECUTED 2026-08-17
+
+**Scope of PHI:** all of it. Encrypted patient columns and blind
+indexes in Aurora PostgreSQL, documents and package photos in S3, the
+audit archive, data keys in KMS, application memory in ECS/Fargate,
+connection secrets in Secrets Manager, and anything reaching CloudWatch
+Logs. If AWS is not covered, nothing is.
+
+**Status:** the AWS Organizations Business Associate Addendum was
+accepted on 2026-08-17 at the **Organization** level, so it covers the
+management account and every member account — including accounts joined
+after the effective date, per the addendum's own `Member Account`
+definition. The AWS Organizations HCLS BAA Addendum was accepted at the
+same time.
+
+Coverage is bounded by the addendum's definition of PHI: information
+_"received by AWS from or on behalf of you and that is in a HIPAA
+Account."_ PHI placed in any AWS account outside this Organization is
+not covered.
+
+The executed PDF is `AMAZON CONFIDENTIAL` and subject to the AWS
+Artifact NDA. File it under `evidence/` — which is gitignored — never
+in source control, and do not reproduce its clauses in policy
+documents. For customer security reviews, attest that an AWS BAA is
+executed and give the date; do not redistribute AWS's paper.
+
+The steps below are retained for the next account or organization.
 
 **Scope of PHI:** all of it. Encrypted patient columns and blind
 indexes in Aurora PostgreSQL, documents and package photos in S3, the
@@ -94,20 +122,6 @@ account or organization it was accepted under.
 
 ## Tier 1 — blocking, requires vendor outreach
 
-### EasyPost
-
-**Scope of PHI:** recipient name, street address, city, state, postal
-code, and optionally phone and email on every shipment — plus the
-implicit fact that the named individual is receiving a pharmacy
-delivery. This is PHI by linkage and is not reducible; a parcel cannot
-be delivered to a de-identified person.
-
-EasyPost publishes no standard BAA in its legal centre, so this is a
-direct request to its sales or legal contact. It markets a healthcare
-and pharmacy shipping product, so the request is routine for them
-rather than novel — say "pharmacy fulfilment" early and it routes
-correctly.
-
 ### Sentry
 
 **Scope of PHI:** intended to be none. The tracker records the BAA as a
@@ -128,6 +142,73 @@ reduced to an id. But three gaps remain open today:
 
 Until those close, treat Sentry as PHI-reachable and the BAA as
 load-bearing rather than precautionary.
+
+## Shipping carriers — a determination, not a request
+
+Pharmax integrates **directly with FedEx**; the EasyPost aggregator is
+being removed. That change subtracts a BAA obligation rather than
+adding one, and the reason is worth stating precisely, because the
+intuition ("we ship PHI, so the shipper needs a BAA") gets it backwards.
+
+**EasyPost needed a BAA because it was a SaaS middleman, not because
+shipping involves PHI.** It received recipient names and addresses into
+its own platform and stored them. That is persistent access, which
+makes a vendor a business associate.
+
+**A carrier moving a sealed parcel is a conduit.** HHS FAQ #245 is
+directly on point:
+
+> the Privacy Rule does not require a covered entity to enter into
+> business associate contracts with organizations, such as the US
+> Postal Service, certain private couriers and their electronic
+> equivalents that act merely as conduits for protected health
+> information.
+
+The HIPAA Omnibus Rule preamble names FedEx, UPS and DHL as examples.
+A conduit transports information without accessing it other than on a
+random or infrequent basis as necessary to perform the transport.
+
+### Why this is a determination and not an assumption
+
+The conduit exception is **narrow**, and whether it applies is a legal
+call rather than an engineering one. Two facts make the Pharmax case
+less clean than a paper mail carrier, and both belong in the record:
+
+- Addresses are transmitted through FedEx's **API**, not written on an
+  envelope.
+- FedEx **retains tracking and signature records persistently**, where
+  the exception contemplates storage that is transient and incidental.
+
+The mainstream position in pharmacy logistics is that carriers remain
+conduits regardless, and HHS has not retracted FAQ #245. That is very
+likely right. It is still a position, and a position that is written
+down with its reasoning survives an audit while an assumption does not.
+
+**Tenant-owned credentials strengthen it further.** Each pharmacy
+brings its own FedEx account via `carrier_credential`, so the tenant is
+the shipper of record and the carrier relationship runs between the
+tenant and FedEx. Pharmax transmits on the tenant's behalf, as that
+tenant's business associate, using that tenant's credentials — it never
+interposes itself as a party to the carrier relationship. The
+conduit determination therefore sits with the covered entity, which is
+where it belongs, and the customer-facing BAA should say so.
+
+### What to record
+
+Set the FedEx and UPS rows to `N/A — not a BA` with this rationale, a
+citation to HHS FAQ #245, and counsel's concurrence noted. Do not leave
+them blank and do not leave them `TBD`; an assessor will ask how the
+conclusion was reached, and "we never sent them a BAA request" is not
+an answer.
+
+If FedEx signature services are used for controlled substances, note
+that too. Signature capture is still incidental to delivery, but it is
+the first thing an assessor probes after accepting the conduit
+argument.
+
+Re-open this determination if the integration ever stores PHI **in** a
+carrier system beyond what a label and its tracking require, or if a
+carrier value-added service starts processing rather than transporting.
 
 ## Tier 2 — not blocking today, but gate before enabling
 
@@ -154,13 +235,14 @@ rather than budgeting from this file.
 These need no BAA, but "no BAA needed" is a conclusion that must be
 written down with its reasoning, not left as a blank.
 
-| Vendor          | Position                                                                                                                                                                                                      |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Stripe**      | Out of PHI scope by design — invoice lines and descriptions carry org and clinic ids, never patient identifiers. Re-confirm whenever invoice content changes.                                                 |
-| **GitHub**      | No PHI in source. Fixtures are synthetic (`check:seed` enforces this in CI).                                                                                                                                  |
-| **1Password**   | Workforce credentials only. Confirm no PHI is stored as attachments.                                                                                                                                          |
-| **FedEx / UPS** | Tenant-owned carrier credentials, routed through EasyPost as aggregator. Confirm no direct Pharmax-to-carrier PHI flow has emerged; if one has, they move to Tier 1.                                          |
-| **Vercel**      | The Terraform estate deploys `apps/web` to ECS behind ALB and CloudFront, so Vercel appears unused. Confirm, then record `N/A — not a BA` with that rationale, or execute a BAA if it is in fact in the path. |
+| Vendor          | Position                                                                                                                                                                                                                                                                                                        |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Stripe**      | Out of PHI scope by design — invoice lines and descriptions carry org and clinic ids, never patient identifiers. Re-confirm whenever invoice content changes.                                                                                                                                                   |
+| **GitHub**      | No PHI in source. Fixtures are synthetic (`check:seed` enforces this in CI).                                                                                                                                                                                                                                    |
+| **1Password**   | Workforce credentials only. Confirm no PHI is stored as attachments.                                                                                                                                                                                                                                            |
+| **FedEx / UPS** | Direct integration with tenant-owned credentials. Conduit exception applies — see "Shipping carriers" above for the determination and what must be recorded. Not a request; a documented conclusion.                                                                                                            |
+| **EasyPost**    | Being removed. It was a business associate because it stored addresses in its own platform, so decommission it under the Vendor Management Policy termination steps: engineering switch off, return-or-destroy exercised, destruction certificate filed, status `terminated`, row retained for the audit trail. |
+| **Vercel**      | The Terraform estate deploys `apps/web` to ECS behind ALB and CloudFront, so Vercel appears unused. Confirm, then record `N/A — not a BA` with that rationale, or execute a BAA if it is in fact in the path.                                                                                                   |
 
 ## Two inventory gaps to close first
 
@@ -189,28 +271,10 @@ Send from a company address. Fill the bracketed fields. Keep the PHI
 scope sentence — it is what routes the request to the right team and
 prevents a second round-trip.
 
-### EasyPost
-
-> **Subject:** HIPAA Business Associate Agreement request — [Company legal name]
->
-> Hello,
->
-> We operate a pharmacy fulfilment platform and use the EasyPost API
-> for label purchase, rating, and tracking. Shipment payloads include
-> recipient name and address, which constitute Protected Health
-> Information under HIPAA when linked to a pharmacy delivery.
->
-> We need an executed Business Associate Agreement in place before we
-> transmit this data in production. Could you send your standard BAA,
-> or let me know the right process to start one?
->
-> Account details: [account ID / email]. Expected volume: [labels per month].
->
-> Happy to work from your paper. If it helps, I can share our data-flow
-> summary describing exactly which fields reach your API.
->
-> Thanks,
-> [Name], [Title], [Company]
+There is deliberately no carrier email here. FedEx and UPS are handled
+by the determination above, not by a request — sending a BAA request to
+a conduit invites a "we don't sign those" reply that reads, later, like
+a refusal rather than a category error.
 
 ### Sentry
 
@@ -321,10 +385,25 @@ control.
 
 ## Definition of done
 
-- [ ] AWS BAA accepted in Artifact; Pharmax services confirmed against
-      the current HIPAA-eligible list.
-- [ ] EasyPost BAA executed and filed.
-- [ ] Sentry BAA executed and filed.
+- [x] **AWS BAA accepted in Artifact — done 2026-08-17**, at the
+      Organization level, covering the management account and every
+      current and future member account. The HCLS addendum was accepted
+      alongside it.
+- [ ] AWS evidence filed to `evidence/baa/aws/2026-08-baa-executed.pdf`
+      and the tracker row set to `executed`. Note the HCLS addendum as
+      its own line — it authorises Amazon Connect de-identification for
+      service improvement, which is inert while Connect is unused but
+      is a granted permission either way.
+- [ ] Pharmax services confirmed against the current HIPAA-eligible
+      list, and confirmed no workload runs on AWS Outposts, which the
+      addendum excludes from eligibility.
+- [ ] Sentry BAA executed and filed. **This is now the only outreach
+      BAA outstanding.**
+- [ ] FedEx and UPS recorded as `N/A — not a BA` with the conduit
+      determination, the HHS FAQ #245 citation, and counsel's
+      concurrence.
+- [ ] EasyPost decommissioned under the Vendor Management Policy
+      termination steps; status `terminated`, row retained.
 - [ ] Grafana Cloud added to the vendor inventory and BAA tracker, and
       either covered by a BAA or its exporter confirmed disabled.
 - [ ] Datadog-or-Honeycomb row either resolved to a selected vendor or
@@ -332,6 +411,6 @@ control.
 - [ ] Resend and Twilio BAA status recorded, with the `phiCapable`
       flag flip named as the trigger that makes them mandatory.
 - [ ] Tier 3 negatives confirmed and written down with reasoning —
-      Stripe, GitHub, 1Password, FedEx/UPS, Vercel.
+      Stripe, GitHub, 1Password, Vercel.
 - [ ] No PHI-touching row in `baa-tracker.md` still reads
       `[BAA status: TBD]`.
