@@ -28,6 +28,40 @@ const ALL_PERMS: ReadonlyArray<PermissionCode> = Object.values(
   PERMISSIONS
 ) as ReadonlyArray<PermissionCode>;
 
+/**
+ * Role codes treated as ELEVATED across the platform.
+ *
+ * Elevated means the holder can reach PHI broadly, change who else
+ * can, or both. Two consequences follow from being on this list, and
+ * they are deliberately the same list:
+ *
+ *   1. MFA is mandatory at sign-in (`@pharmax/auth`, ADR-0025 floor).
+ *   2. The quarterly access review highlights the principal for
+ *      re-justification (`@pharmax/security`).
+ *
+ * It lives here, in the RBAC vocabulary, because both of those
+ * packages already depend on `@pharmax/rbac` and neither depends on
+ * the other. It previously lived in the access-review module, where
+ * the auth engine could not see it — so the MFA floor kept its own
+ * shorter copy and the two silently disagreed. The compliance probes
+ * checked enrolment against THIS list while sign-in enforced against
+ * the other, which meant a Pharmacist could be reported as an MFA gap
+ * by a probe that the engine had no intention of enforcing.
+ *
+ * `Pharmacist` and `PharmacistInCharge` are the substantive additions.
+ * They hold the broadest PHI access in the product — PV1, final
+ * verification, and the full patient record — so a password-only
+ * pharmacist was the largest identity gap in the system.
+ */
+export const ELEVATED_ROLE_CODES: ReadonlyArray<string> = Object.freeze([
+  "OrgAdmin",
+  "Pharmacist",
+  "BillingManager",
+  "SecurityOfficer",
+  "ComplianceOfficer",
+  "PharmacistInCharge",
+]);
+
 export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
   {
     code: "OrgAdmin",
