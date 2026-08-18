@@ -24,7 +24,8 @@ The two are coupled and the coupling is one-way: **§ 164.502(e)(1)(ii)** requir
 So the rows in this file are not only internal vendor management — each unexecuted one is a blocker on signing the first **customer** agreement. As of the 2026-08-18 adoption that means:
 
 - **AWS** and **Sentry** are `executed`. The two that mattered most are closed.
-- **EasyPost** is `not requested`, and it is the one that still blocks: recipient addresses on shipping labels are PHI by linkage, so a customer BAA cannot honestly represent subcontractor flow-down while label purchase is enabled.
+- **EasyPost** is `not requested` and is **being decommissioned** (2026-08-17) rather than signed. It was the last row blocking the customer BAA's flow-down clause; retiring it closes that blocker by removing the counterparty instead of papering it. The blocker is closed when the integration is actually off in production — not when the decision is recorded — so the switch stays off and no PHI reaches EasyPost in the interim.
+- **FedEx** and **UPS** are `N/A — not a BA` on a **conduit determination**, not on the previous reasoning that Pharmax reached them through EasyPost as aggregator. That premise disappears with EasyPost; the conclusion survives on HHS FAQ #245 and tenant-owned credentials. **Counsel concurrence is required before Type I** — see [`vendor-baa-execution.md`](../soc2/playbooks/vendor-baa-execution.md) §"Shipping carriers".
 - **Resend** is `not requested`, and blocks only if patient-facing notifications carry identifiers.
 - **Datadog or Honeycomb** is `[BAA status: TBD]` because no vendor is selected. A placeholder for an unmade decision is not the same kind of gap as an unsigned agreement with a live integration.
 
