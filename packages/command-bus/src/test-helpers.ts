@@ -21,6 +21,14 @@ export interface FakeCall {
 
 export interface FakePrisma {
   readonly calls: FakeCall[];
+  /**
+   * The option bag each `$transaction` call received, in call order. An
+   * `undefined` entry means that call site passed nothing and is running
+   * on Prisma's framework defaults — which is what
+   * `transaction-budget.ts` exists to prevent, so tests assert against
+   * this rather than trusting review to catch a missed call site.
+   */
+  readonly transactionOptions: Array<{ timeout?: number; maxWait?: number } | undefined>;
   /** Set the row that `idempotencyKey.findUnique` returns. */
   setIdempotencyHit: (row: Record<string, unknown> | null) => void;
   /**
@@ -109,6 +117,10 @@ export interface FakePrisma {
 
 export function buildFakePrisma(): FakePrisma {
   const calls: FakeCall[] = [];
+  // Option bags passed to `$transaction`, in call order. `undefined`
+  // entries mark a call site that passed nothing and would therefore be
+  // running on Prisma's defaults.
+  const transactionOptions: Array<{ timeout?: number; maxWait?: number } | undefined> = [];
   let idempotencyHit: Record<string, unknown> | null = null;
   let commitError: Error | null = null;
   let commandLogRow: { id: string; status: string; responsePayload: unknown } | null = null;
@@ -308,23 +320,34 @@ export function buildFakePrisma(): FakePrisma {
         return idempotencyHit;
       }),
     },
-    $transaction: vi.fn(async (fn: (tx: typeof txClient) => Promise<unknown>) => {
-      const callCountBefore = calls.length;
-      const out = await fn(txClient);
-      const touchedMainTables = calls
-        .slice(callCountBefore)
-        .some((c) => MAIN_TX_MARKERS.has(c.table));
-      if (commitError !== null && touchedMainTables) {
-        const err = commitError;
-        commitError = null;
-        throw err;
+    // The second parameter is Prisma's transaction option bag. The fake
+    // does not honour timeouts — there is no real transaction to expire —
+    // but it records them so tests can assert that every call site passes
+    // a budget rather than silently inheriting framework defaults.
+    $transaction: vi.fn(
+      async (
+        fn: (tx: typeof txClient) => Promise<unknown>,
+        options?: { timeout?: number; maxWait?: number }
+      ) => {
+        transactionOptions.push(options);
+        const callCountBefore = calls.length;
+        const out = await fn(txClient);
+        const touchedMainTables = calls
+          .slice(callCountBefore)
+          .some((c) => MAIN_TX_MARKERS.has(c.table));
+        if (commitError !== null && touchedMainTables) {
+          const err = commitError;
+          commitError = null;
+          throw err;
+        }
+        return out;
       }
-      return out;
-    }),
+    ),
   };
 
   return {
     calls,
+    transactionOptions,
     setIdempotencyHit: (row) => {
       idempotencyHit = row;
     },
