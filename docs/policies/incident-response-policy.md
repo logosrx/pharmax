@@ -154,7 +154,7 @@ Policy-level requirements on top of the runbook's template:
 
 - **Action items are tracked to closure.** A postmortem with open action items remains "open" in the incident tracker until the items are resolved.
 - **Compliance notes are mandatory** for SEV0 and SEV1 incidents. They cover PHI exposure (yes/no, what, who, how long), notification obligations triggered, evidence captured, and the regulatory timer reset point.
-- **Cross-incident pattern review.** The CTO reviews postmortems quarterly for recurring patterns; recurring patterns become risks in the [risk register](../governance/risk-register.md).
+- **Cross-incident pattern review.** The CTO reviews postmortems for recurring patterns as part of the annual risk assessment ([`../governance/risk-assessment-procedure.md`](../governance/risk-assessment-procedure.md)); recurring patterns become risks in the [risk register](../governance/risk-register.md). This is folded into an existing event rather than standing as its own quarterly commitment — pattern recognition across incidents needs a year of incidents to be worth doing, and the risk assessment is already the session where findings become register entries.
 - **Customer-shared summary** for SEV0 / SEV1 incidents affecting customer data: the postmortem is distilled into a customer-facing summary by the CTO and shared with affected customers within five business days.
 
 Postmortems are archived in `evidence/incidents/<YYYY>/<incident-id>/postmortem.md`.

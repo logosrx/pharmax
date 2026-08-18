@@ -38,6 +38,8 @@ And ends with a revision-history table:
 Cadence defaults — unless a specific policy overrides them:
 
 - **Review cadence:** annual, plus any time a material control changes (new vendor with PHI access, new sub-processor, change in regulatory posture, change in the modular monolith's blast-radius boundaries).
+- **One quarterly event, not many.** The [quarterly access review](../governance/access-review-procedure.md) is the only quarterly compliance commitment in this bundle. Controls needing periodic verification are added as line items to its checklist rather than as new recurring events. HIPAA specifies no frequencies — it says "periodic" and "regularly" throughout — so every cadence here is chosen, and a chosen cadence is graded exactly as strictly as a mandated one. Fewer dated promises, each kept, evidences better than many that are aspirational.
+- **Prefer event triggers to calendars** where the event is what actually catches the change: a new vendor, a new dispensing state, a departure, a scope change, counsel flagging a statutory amendment. A calendar catches drift on average; a trigger catches it when it happens.
 - **Approval authority:** CEO. The CTO is accountable owner; the CEO is the formal approver.
 - **Distribution:** Internal — All staff. Versions intended for external sharing (procurement, audit) are exported on request and marked `External` in the distribution row.
 - **Storage of evidence:** signed PDFs, training certificates, access-review attestations, and BAA executions live under `evidence/` (gitignored — references only in this repo). Source-of-truth markdown is in this directory.
