@@ -256,6 +256,17 @@ const schema = z.object({
   // that never finalize invoices.
   STRIPE_SECRET_KEY: z.string().min(1).optional(),
 
+  // ---- AI typing-assist model (Bedrock) ----------------------------
+  // Bedrock model id (or inference-profile ARN) for the typing-
+  // suggestion model stage. When unset, the outbox handler still runs
+  // but every PENDING_MODEL run is marked FAILED("MODEL_NOT_CONFIGURED")
+  // — visible on the run row and in the outcome counter, never a
+  // silently-stuck run. Requires AWS_REGION (shared with KMS/S3
+  // below) and Bedrock invoke permission on the worker's IAM role.
+  // Bedrock is the only permitted provider: the prompt may carry the
+  // decrypted sig, which must stay inside the AWS BAA boundary.
+  BEDROCK_TYPING_MODEL_ID: z.string().min(1).optional(),
+
   // ---- Lifecycle ---------------------------------------------------
   // Maximum time the process waits for in-flight work after SIGTERM
   // before force-exiting. Should be larger than the longest expected

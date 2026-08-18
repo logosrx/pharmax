@@ -39,6 +39,7 @@ import {
   ControlledSubstancePartialFillBasis,
   ControlledSubstanceSchedule,
   LabelPrinterStatus,
+  LabelStockKind,
   LotStatus,
   WorkstationStatus,
   type OrderStatus,
@@ -266,11 +267,18 @@ export async function getFillWorkbench(input: {
     // ---- Fetch site-scoped print infrastructure ----
     // Sequential (not Promise.all): these run inside one interactive
     // transaction on a single connection.
+    // VIAL stock only. This list feeds the vial-label print form, and
+    // PrintVialLabel refuses anything else with PRINTER_NOT_THERMAL — so
+    // an unfiltered list offers the tech a printer that cannot possibly
+    // work, and the form defaults to whichever sorts first by code. Once
+    // batch printers were seeded alongside vial ones, `BATCH-ZPL-01` won
+    // that sort and every vial print started out pre-aimed at a refusal.
     const printers = await tx.labelPrinter.findMany({
       where: {
         organizationId: input.organizationId,
         siteId: order.siteId,
         status: LabelPrinterStatus.ACTIVE,
+        labelStock: LabelStockKind.VIAL,
       },
       select: { id: true, code: true, name: true, workstationId: true },
       orderBy: [{ code: "asc" }],

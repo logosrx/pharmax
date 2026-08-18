@@ -7,18 +7,29 @@
 //   CII/CIII/CIV/CV prescription exists before it is ever dispensed)
 //   and the clinic-facing activity feed.
 //
-// PHI invariant: this payload is PHI-FREE. The directions for use
-// (`sig`), the note to the pharmacist, the note to the patient and
-// the indication all live ONLY in the encrypted columns on the
-// prescription row and never appear here.
+// PHI classification: PHI-BEARING (`phiSafe: false`).
 //
-// `drugNdc` and `controlledSubstanceSchedule` ARE carried, following
-// the precedent set by `AddPrescription`'s audit metadata: an NDC
-// keyed to an id is catalog data, not patient data, and a consumer
-// that needs to know "is this a controlled substance?" should not
-// have to decrypt anything to find out. The patient is referenced by
-// id only, so the payload identifies a drug and a row, never a
-// person and their medication together in plaintext.
+// The free text is still absent and still belongs only in the
+// encrypted columns: the directions for use (`sig`), the note to the
+// pharmacist, the note to the patient, and the indication never
+// appear here.
+//
+// This event was previously classified PHI-free on the reasoning
+// that "an NDC keyed to an id is catalog data, not patient data —
+// the payload identifies a drug and a row, never a person and their
+// medication together." That reasoning does not survive contact with
+// §164.514(b). `patientId` is a unique identifying code under
+// (b)(2)(i)(R), so a row keyed by it is not de-identified; and the
+// payload does put a person and their medication together, because
+// the id resolves to the person for anyone holding the mapping —
+// which every recipient of `patient.registered.v1` does. Pairing it
+// with `drugNdc`, `controlledSubstanceSchedule` and `daysSupply`
+// yields a medication profile for an identifiable individual.
+//
+// The fields stay: an internal consumer genuinely should not decrypt
+// anything to answer "is this a controlled substance?". What changes
+// is that this event may no longer leave the platform. Partner
+// delivery requires an executed BAA and a disclosure record.
 
 import { z } from "zod";
 
@@ -47,10 +58,10 @@ export const PrescriptionCreatedV1 = defineEvent({
   aggregateIdFrom: (p) => p.prescriptionId,
   owner: "orders",
   retention: "7y",
-  phiSafe: true,
+  phiSafe: false,
   routingKey: "prescription.lifecycle",
   description:
-    "Emitted by CreatePrescription once the encrypted sig and the blind-indexed Rx number are persisted. Carries ids, the NDC and the schedule snapshot — never the directions for use.",
+    "Emitted by CreatePrescription once the encrypted sig and the blind-indexed Rx number are persisted. Carries ids, the NDC and the schedule snapshot — never the directions for use. PHI-bearing: patientId plus drug identity is a medication profile for an identifiable individual, so the event is not webhook-eligible.",
 });
 
 export type PrescriptionCreatedV1Payload = z.infer<typeof payloadSchema>;

@@ -4,9 +4,16 @@
 // Consumers: compliance ledger (right-to-be-forgotten satisfaction);
 //   downstream cache invalidation.
 //
-// PHI invariant: this payload is PHI-FREE. The point of the
-// command is to RENDER PHI unreadable — the event reports the
-// disposition (reason code only), not the data.
+// PHI classification: PHI-BEARING (`phiSafe: false`). The point of
+// the command is to RENDER PHI unreadable, and the event reports the
+// disposition (reason code only), never the data.
+//
+// It is still PHI, and awkwardly so: the payload says that a specific
+// `patientId` — an identifier under 45 CFR §164.514(b)(2)(i)(R) — was
+// a patient and why their record was destroyed. Broadcasting a
+// right-to-be-forgotten fulfilment to external subscribers would
+// disclose the very individual the command exists to protect. Not
+// partner-webhook eligible.
 //
 // `reason` mirrors `CRYPTO_SHRED_REASONS` from `@pharmax/crypto`.
 // We re-declare the literal union here so `@pharmax/events` does
@@ -42,7 +49,7 @@ export const PatientCryptoShreddedV1 = defineEvent({
   aggregateIdFrom: (p) => p.patientId,
   owner: "patients",
   retention: "7y",
-  phiSafe: true,
+  phiSafe: false,
   routingKey: "patient.compliance",
   description:
     "Emitted by CryptoShredPatient after the per-row DEK is destroyed. Anchors the right-to-be-forgotten / data-retention compliance ledger.",

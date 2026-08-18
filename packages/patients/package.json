@@ -13,6 +13,7 @@
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/crypto": "workspace:*",
     "@pharmax/database": "workspace:*",
+    "@pharmax/events": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
     "@pharmax/rbac": "workspace:*",
     "@pharmax/tenancy": "workspace:*",

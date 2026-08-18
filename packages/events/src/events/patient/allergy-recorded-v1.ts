@@ -6,7 +6,15 @@
 //   recording an allergy for a patient with an order already in PV1
 //   means the pharmacist is looking at a screen that predates the fact.
 //
-// PHI invariant: PHI-FREE. Ids, coded enum values, and a timestamp.
+// PHI classification: PHI-BEARING (`phiSafe: false`).
+//
+// Withholding the substance (below) reduces the clinical detail but
+// does not de-identify the payload. `patientId` is an identifier
+// under 45 CFR §164.514(b)(2)(i)(R), and `category` + `criticality` +
+// `verificationStatus` still state a health condition about the
+// individual it resolves to: "this patient has a confirmed,
+// high-criticality medication allergy." That is PHI with or without
+// the allergen named, so the event is not webhook-eligible.
 //
 // WHAT IS NOT HERE, and why. The substance code is deliberately absent.
 // Every other coded value on this payload is structural — it says what
@@ -68,7 +76,7 @@ export const PatientAllergyRecordedV1 = defineEvent({
   aggregateIdFrom: (p) => p.patientId,
   owner: "patients",
   retention: "7y",
-  phiSafe: true,
+  phiSafe: false,
   routingKey: "patient.allergy",
   description:
     "Emitted by RecordPatientAllergy after the row is persisted. Carries ids and the coded structural fields (category, type, criticality, verification status, code system) plus whether the record is usable by PV1 screening. The substance itself is deliberately omitted — read the row under tenancy for that.",

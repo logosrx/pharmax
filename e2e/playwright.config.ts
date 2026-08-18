@@ -41,8 +41,21 @@ export default defineConfig({
   outputDir: "./test-results",
   fullyParallel: false,
   workers: 1,
-  // Dev-mode route compiles are lazy; the first hit on a heavy page can
-  // exceed Playwright's 30s default.
+  // Dev-mode route compiles are lazy, so the first request to any route
+  // pays for compiling it, and a test that walks the whole dispense
+  // workflow pays that once per stage. On a two-vCPU CI runner sharing
+  // those cores with Chromium, a single cold ops route can take over a
+  // minute, and the golden path crosses fifteen of them.
+  //
+  // Compiling them up front instead was tried and reverted: eagerly
+  // holding the whole ops surface in the dev server's module graph
+  // exhausts its heap, and `next dev` responds by restarting itself
+  // mid-suite (dropping sockets, abandoning Postgres transactions, and
+  // discarding every compile). Lazy-and-patient is what this app's dev
+  // server can actually sustain, so the budget has to cover it.
+  // Default for the short smoke specs. The long workflow tests set their
+  // own budgets with `test.setTimeout`, which overrides this — see
+  // WORKFLOW_TEST_TIMEOUT_MS in full-dispense.spec.ts.
   timeout: 90_000,
   forbidOnly: process.env["CI"] !== undefined,
   retries: process.env["CI"] !== undefined ? 1 : 0,

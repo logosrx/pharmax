@@ -149,6 +149,10 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       PERMISSIONS.TYPING_START,
       PERMISSIONS.TYPING_COMPLETE,
       PERMISSIONS.TYPING_MARK_MISSING_INFO,
+      // The AI review loop is typing work: the typist requests the
+      // run, and the typist is the human gate every proposal must
+      // pass. Org-level enablement stays an OrgAdmin decision.
+      PERMISSIONS.AI_TYPING_SUGGESTIONS_USE,
       PERMISSIONS.FILL_START,
       PERMISSIONS.FILL_ASSIGN_LOT,
       PERMISSIONS.FILL_PRINT_VIAL_LABEL,

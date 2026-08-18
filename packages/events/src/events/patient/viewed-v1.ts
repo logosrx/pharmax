@@ -7,9 +7,17 @@
 // Consumers: PHI access-audit projections; future "who viewed
 //   my record?" patient-portal feed.
 //
-// PHI invariant: this payload is PHI-FREE. It records the FACT
-// that a view occurred (patient id + actor + surface + decrypt
-// error count), but never any decrypted patient attribute.
+// PHI classification: PHI-BEARING (`phiSafe: false`). It records the
+// FACT that a view occurred — patient id, actor, surface, decrypt
+// error count — and never a decrypted patient attribute.
+//
+// The fact is the PHI. This is the §164.312(b) access log: it states
+// that a `patientId` exists, that they are a patient, and who looked
+// at their record and when. An access log over PHI is PHI, and it is
+// also the last record that should leave the platform — a subscriber
+// receiving these could reconstruct the full patient roster and the
+// staff-to-patient graph without ever reading a chart. Not
+// partner-webhook eligible.
 
 import { z } from "zod";
 
@@ -21,20 +29,36 @@ import { defineEvent } from "../../define-event.js";
  * downstream projection. Keeps audit consumers from drowning in
  * untyped free-text "where did this come from?" strings.
  */
-const VIEW_SURFACES = [
+export const PATIENT_VIEW_SURFACES = [
   "ORDER_DETAIL_PAGE",
   "PATIENT_ADMIN_PAGE",
   "PATIENT_SEARCH_RESULT",
   "ORDER_TIMELINE",
   "BILLING_PAGE",
+  "OPERATOR_API",
+  /**
+   * Rate shopping decrypts the patient's name and home address and
+   * hands them to a carrier's rating API. It buys nothing and mutates
+   * nothing, which is why it had no audit row — but §164.312(b) is
+   * about access to ePHI, not about state changes.
+   */
+  "SHIPPING_RATE_QUOTE",
+  /**
+   * Package photos are captured to prove what shipped, so they
+   * routinely include the label — which carries the patient's name
+   * and address in plain sight.
+   */
+  "PACKAGE_PHOTO",
 ] as const;
+
+export type PatientViewSurface = (typeof PATIENT_VIEW_SURFACES)[number];
 
 const payloadSchema = z
   .object({
     organizationId: z.uuid(),
     patientId: z.uuid(),
     /** Which screen / API surface triggered the view. */
-    surface: z.enum(VIEW_SURFACES),
+    surface: z.enum(PATIENT_VIEW_SURFACES),
     /**
      * Order id surfaced when the view originated from an
      * order-bound surface. Absent for direct patient-admin views.
@@ -67,7 +91,7 @@ export const PatientViewedV1 = defineEvent({
   aggregateIdFrom: (p) => p.patientId,
   owner: "patients",
   retention: "7y",
-  phiSafe: true,
+  phiSafe: false,
   routingKey: "patient.access",
   description:
     "Emitted by ViewPatient before any server-rendered page shows decrypted PHI. The HIPAA-required access-log signal — drives the PHI access-audit projection.",
