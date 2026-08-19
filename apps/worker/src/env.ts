@@ -205,6 +205,32 @@ const schema = z.object({
     .default(15 * 60_000), // 15 minutes
   PACKAGE_PHOTO_TOKEN_REAPER_BATCH_SIZE: z.coerce.number().int().positive().default(500),
 
+  // ---- Operator telemetry pruner -----------------------------------
+  // Enforces the retention window on `operator_presence_slot` and
+  // `operator_activity_event` — the only two tables written at
+  // operator-interaction rate. The slot unique key already bounds how
+  // MANY rows an operator can create per slot; this bounds how far
+  // back they are kept at all. Without it both tables grow for as
+  // long as the pharmacy operates.
+  //
+  // These are telemetry, not audit evidence: login stays in
+  // audit_log, commands in command_log, prints in print_job, and scan
+  // failures in command_log.errorCode, so pruning loses no compliance
+  // record. 90 days covers a quarterly staffing review, which is the
+  // longest window the consuming reports are built for
+  // (DEFAULT_TELEMETRY_RETENTION_DAYS in @pharmax/presence).
+  //
+  // Hourly is ample for a daily-granularity cutoff, and the batch cap
+  // keeps the first run after this loop ships — when neither table has
+  // ever been swept — from issuing one enormous DELETE.
+  OPERATOR_TELEMETRY_PRUNER_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60 * 60_000), // 1 hour
+  OPERATOR_TELEMETRY_RETENTION_DAYS: z.coerce.number().int().positive().default(90),
+  OPERATOR_TELEMETRY_PRUNER_BATCH_SIZE: z.coerce.number().int().positive().default(5_000),
+
   // ---- Stale label-purchase reconciler -----------------------------
   // Dispositions PurchaseShipmentLabel command_log rows stuck in
   // RUNNING past any legitimate transaction lifetime (a crash

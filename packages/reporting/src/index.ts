@@ -147,6 +147,12 @@ export {
   type ThroughputByClinicRow,
 } from "./reports/throughput-by-clinic.js";
 
+export {
+  idleTimeByUserReport,
+  type IdleTimeByUserParams,
+  type IdleTimeByUserRow,
+} from "./reports/idle-time-by-user.js";
+
 export { REPORT_REGISTRY, type ReportDefinitionAny } from "./report-registry.js";
 
 export {

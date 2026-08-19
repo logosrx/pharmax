@@ -988,6 +988,10 @@ model Organization {
   patientAllergies                PatientAllergy[]
   patientAllergyHistoryAssertions PatientAllergyHistoryAssertion[]
 
+  // Operator presence + activity telemetry (§11).
+  operatorPresenceSlots  OperatorPresenceSlot[]
+  operatorActivityEvents OperatorActivityEvent[]
+
   @@map("organization")
 }
 
@@ -1148,6 +1152,8 @@ model Bucket {
 
   orders Order[]
 
+  operatorActivityEvents OperatorActivityEvent[]
+
   @@unique([organizationId, code])
   @@index([organizationId, kind])
   @@index([siteId, sortOrder])
@@ -1176,6 +1182,9 @@ model Workstation {
   labelPrinters LabelPrinter[]
   printJobs     PrintJob[]
   packagePhotos PackagePhoto[]
+
+  operatorPresenceSlots  OperatorPresenceSlot[]
+  operatorActivityEvents OperatorActivityEvent[]
 
   @@unique([siteId, code])
   @@index([organizationId, status])
@@ -1286,12 +1295,16 @@ model User {
   complianceExceptionsRevoked  ComplianceCheckException[] @relation("ComplianceExceptionRevokedBy")
   complianceTasksAssigned      ComplianceTask[]           @relation("ComplianceTaskAssignee")
   complianceTasksCompleted     ComplianceTask[]           @relation("ComplianceTaskCompletedBy")
+
+  // Operator presence + activity telemetry (§11).
+  operatorPresenceSlots       OperatorPresenceSlot[]  @relation("OperatorPresenceUser")
+  operatorActivityEvents      OperatorActivityEvent[] @relation("OperatorActivityUser")
   // Who asked a model for a draft, and who reviewed it. Both are
   // Restrict FKs for the same reason as the rest: "a model wrote
   // this and a person approved it" is only an answer if the person
   // cannot later be deleted out of the record.
-  complianceAiDraftsRequested  ComplianceAiDraft[]        @relation("ComplianceAiDraftRequestedBy")
-  complianceAiDraftsReviewed   ComplianceAiDraft[]        @relation("ComplianceAiDraftReviewedBy")
+  complianceAiDraftsRequested ComplianceAiDraft[]     @relation("ComplianceAiDraftRequestedBy")
+  complianceAiDraftsReviewed  ComplianceAiDraft[]     @relation("ComplianceAiDraftReviewedBy")
 
   patientAllergiesRecorded        PatientAllergy[]                 @relation("PatientAllergyRecordedBy")
   patientAllergyStatusChanges     PatientAllergy[]                 @relation("PatientAllergyStatusChangedBy")
@@ -3629,6 +3642,7 @@ model Order {
   // asc. Postgres can serve this from one btree.
   compoundingRecords             CompoundingRecord[]
   controlledSubstanceDispensings ControlledSubstanceDispensing[]
+  operatorActivityEvents         OperatorActivityEvent[]
 
   @@index([organizationId, currentBucketId, currentStatus, priority, slaDeadlineAt, receivedAt])
   // "What is this user currently working on?"
@@ -6751,4 +6765,174 @@ model RxnormProductIngredient {
 
   @@id([releaseId, productRxcui, ingredientRxcui])
   @@map("rxnorm_product_ingredient")
+}
+
+// ===========================================================================
+// 11. Operator presence + activity telemetry
+// ===========================================================================
+//
+// The application-level activity vocabulary from
+// `.cursor/rules/03-sla-performance.mdc`. Seven of the eleven listed
+// signals were already on disk before this section existed:
+//
+//   login              -> audit_log action `user.signed_in`
+//   command started    -> command_log.startedAt
+//   command completed  -> command_log.completedAt
+//   print              -> print_job (with isReprint + reprintReasonCode)
+//   scan (FAILURES)    -> command_log.errorCode LIKE 'FILL_SCAN_%' on a
+//                         FAILED CompleteFill; the `scan-failure-rate`
+//                         report already reads exactly that
+//   logout (PARTIAL)   -> auth_session.revokedAt + revokedReason
+//                         'USER_LOGOUT' — a session-state fact, with no
+//                         activity or audit row anywhere
+//   idle started/ended -> DERIVED, not stored; see @pharmax/presence
+//
+// So these two tables carry only what nothing else records:
+// contiguous presence (heartbeat) and the four discrete activity
+// signals that leave no other trace.
+//
+// PRIVACY BOUNDARY (same rule file: "Do not track screenshots,
+// keystrokes, unrelated websites, or personal device activity").
+// That prohibition is enforced STRUCTURALLY, not by convention:
+// neither table has a free-text, JSON, or otherwise open column.
+// Every column is an enum, a typed uuid foreign key, a timestamp, or
+// a counter. There is nowhere to put a URL, a keystroke buffer, a
+// screenshot key, or a personal-device identifier — Postgres rejects
+// the value at the column type, and widening the surface takes a
+// reviewed migration rather than one more key in a metadata blob.
+//
+// PHI: none. `orderId` / `bucketId` are opaque workflow references
+// that carry no patient identity, and a scan records only its
+// CLASSIFICATION and OUTCOME, never the scanned value — an operator
+// can point a scanner at anything, including a patient wristband, so
+// the raw string is never accepted in the first place.
+
+/// The four activity signals that no other table already records.
+/// Deliberately NOT a superset of the rule's vocabulary: LOGIN,
+/// COMMAND_STARTED, COMMAND_COMPLETED, PRINT, and scan FAILURES are
+/// each already durable elsewhere, and a second writer for any of
+/// them would let the two records disagree.
+enum OperatorActivityKind {
+  /// Operator ended their session. Closes the presence window for the
+  /// idle calculation. The SECURITY record of session termination is
+  /// `auth_session.revokedAt` + `revokedReason`, owned by
+  /// @pharmax/auth; this row is the presence signal, not that audit.
+  SIGNED_OUT
+  /// Operator opened an order detail view. References the order, never
+  /// the patient.
+  ORDER_OPENED
+  /// Operator took work off a queue. Observational only — this row does
+  /// NOT perform the claim and nothing in the workflow engine reads it.
+  /// Claiming, where it mutates state, is a command.
+  QUEUE_CLAIMED
+  /// Operator scanned a barcode. Classification + outcome only.
+  SCAN
+}
+
+/// Classification of a scanned barcode, mirroring `ScannedValueKind`
+/// in @pharmax/scan. The scanned VALUE is deliberately absent: even
+/// though a Pharmax vial-label barcode is PHI-free by construction
+/// (`buildVialBarcodeValue` emits `PX:<orderLineId>`, an opaque uuid),
+/// a scanner is a general-purpose input device and the operator
+/// controls what goes under it. A closed enum cannot hold whatever
+/// they scanned; a text column could.
+enum OperatorScanKind {
+  GS1
+  NDC
+  VIAL_LABEL
+  LOT
+  UNKNOWN
+}
+
+/// What the scan resolved to. `MISMATCHED` is the safety-relevant one
+/// (wrong physical item on the bench).
+enum OperatorScanOutcome {
+  MATCHED
+  MISMATCHED
+  UNPARSEABLE
+}
+
+/// Compacted operator presence: ONE row per (organization, user, time
+/// slot), not one row per heartbeat.
+///
+/// Why a slot and not an append-only heartbeat log. A heartbeat per
+/// operator per interval is by far the highest-write-rate signal in
+/// the platform, and an append-only table would grow without bound at
+/// a rate chosen by the CLIENT. Folding every beat within a slot into
+/// one upserted row makes that rate a property of the SCHEMA instead:
+/// at most one row per operator per slot, however often or however
+/// erratically a client beats. A misbehaving client beating every
+/// 100ms rewrites one row 3,000 times rather than inserting 3,000
+/// rows. `heartbeatCount` keeps the individual beats countable.
+///
+/// The unique key deliberately omits `workstationId`: Postgres treats
+/// NULLs as distinct in a unique constraint, so including a nullable
+/// column would silently re-open the unbounded-insert path for every
+/// heartbeat that arrives without a workstation. Presence is a
+/// property of the person; `workstationId` rides along as attribution.
+model OperatorPresenceSlot {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  userId String @db.Uuid
+  user   User   @relation("OperatorPresenceUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  /// Last workstation this operator beat from during the slot.
+  /// Attribution only — never part of the unique key.
+  workstationId String?      @db.Uuid
+  workstation   Workstation? @relation(fields: [workstationId], references: [id], onDelete: SetNull)
+
+  /// First beat floored to the slot grid (`PRESENCE_SLOT_MS`).
+  slotStartedAt    DateTime
+  firstHeartbeatAt DateTime
+  lastHeartbeatAt  DateTime
+  /// Beats folded into this slot. A slot with a plausible count is
+  /// continuous presence; a one-beat slot is a fragment.
+  heartbeatCount   Int      @default(1)
+
+  @@unique([organizationId, userId, slotStartedAt])
+  @@index([organizationId, slotStartedAt])
+  @@map("operator_presence_slot")
+}
+
+/// One discrete operator activity signal.
+///
+/// Append-only in practice (nothing updates a row) but NOT audit
+/// evidence: this is operational telemetry feeding the idle-time and
+/// productivity reports, so it is pruned on a retention window rather
+/// than kept for seven years the way `audit_log` is.
+model OperatorActivityEvent {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  userId String @db.Uuid
+  user   User   @relation("OperatorActivityUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  workstationId String?      @db.Uuid
+  workstation   Workstation? @relation(fields: [workstationId], references: [id], onDelete: SetNull)
+
+  kind       OperatorActivityKind
+  occurredAt DateTime             @default(now())
+
+  /// Subject of the activity, as a typed foreign key rather than a
+  /// free-text reference. ORDER_OPENED sets `orderId`; QUEUE_CLAIMED
+  /// sets `bucketId` (and `orderId` when a specific order was taken).
+  /// A uuid column with referential integrity cannot hold a URL, a
+  /// file path, or a device id, which is the point.
+  orderId String? @db.Uuid
+  order   Order?  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  bucketId String? @db.Uuid
+  bucket   Bucket? @relation(fields: [bucketId], references: [id], onDelete: Cascade)
+
+  /// SCAN only. Classification and outcome — never the scanned value.
+  scanKind    OperatorScanKind?
+  scanOutcome OperatorScanOutcome?
+
+  @@index([organizationId, userId, occurredAt])
+  @@index([organizationId, occurredAt])
+  @@index([organizationId, kind, occurredAt])
+  @@map("operator_activity_event")
 }

@@ -13,6 +13,7 @@
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/database": "workspace:*",
     "@pharmax/platform-core": "workspace:*",
+    "@pharmax/presence": "workspace:*",
     "@pharmax/rbac": "workspace:*",
     "@pharmax/sla": "workspace:*",
     "cron-parser": "^5.7.0",

@@ -73,6 +73,7 @@ import { createNpiSyncScheduler } from "./drains/npi-sync-scheduler.js";
 import { createProviderOnboardingProver } from "./drains/provider-onboarding-prover.js";
 import { portalSetupMailer } from "./portal-setup-mailer.js";
 import { createOutboxHandlers, createWebhookFanOutHook } from "./drains/outbox-handlers.js";
+import { createOperatorTelemetryPruner } from "./drains/prune-operator-telemetry.js";
 import { createExpiredPackagePhotoUploadTokenReaper } from "./drains/reap-expired-package-photo-upload-tokens.js";
 import { createStaleLabelPurchaseReconciler } from "./drains/reconcile-stale-label-purchases.js";
 import {
@@ -411,6 +412,11 @@ async function main(): Promise<void> {
       intervalMs: env.PACKAGE_PHOTO_TOKEN_REAPER_INTERVAL_MS,
       batchSize: env.PACKAGE_PHOTO_TOKEN_REAPER_BATCH_SIZE,
     },
+    operatorTelemetryPruner: {
+      intervalMs: env.OPERATOR_TELEMETRY_PRUNER_INTERVAL_MS,
+      retentionDays: env.OPERATOR_TELEMETRY_RETENTION_DAYS,
+      batchSize: env.OPERATOR_TELEMETRY_PRUNER_BATCH_SIZE,
+    },
     labelPurchaseReconciler: {
       intervalMs: env.LABEL_PURCHASE_RECONCILER_INTERVAL_MS,
       staleAfterMs: env.LABEL_PURCHASE_RECONCILER_STALE_AFTER_MS,
@@ -701,6 +707,19 @@ async function main(): Promise<void> {
   const packagePhotoTokenReaper = createExpiredPackagePhotoUploadTokenReaper(
     { client: prisma, logger, clock: clock.systemClock },
     { batchSize: env.PACKAGE_PHOTO_TOKEN_REAPER_BATCH_SIZE }
+  );
+
+  // Operator telemetry pruner. Enforces the retention window on
+  // `operator_presence_slot` + `operator_activity_event`, the two
+  // tables written at operator-interaction rate. The slot unique key
+  // bounds rows-per-operator-per-slot; this bounds how far back they
+  // are kept. Runs cross-org in system context.
+  const operatorTelemetryPruner = createOperatorTelemetryPruner(
+    { client: prisma, logger, clock: clock.systemClock },
+    {
+      retentionDays: env.OPERATOR_TELEMETRY_RETENTION_DAYS,
+      batchSize: env.OPERATOR_TELEMETRY_PRUNER_BATCH_SIZE,
+    }
   );
 
   // Stale label-purchase reconciler. Dispositions crashed
@@ -1074,6 +1093,15 @@ async function main(): Promise<void> {
     logger,
   });
 
+  const operatorTelemetryPrunerLoop = createPollLoop({
+    name: "operator-telemetry-pruner",
+    intervalMs: env.OPERATOR_TELEMETRY_PRUNER_INTERVAL_MS,
+    tick: async () => {
+      await operatorTelemetryPruner.tick();
+    },
+    logger,
+  });
+
   const packagePhotoObjectSweeperLoop =
     packagePhotoObjectSweeper !== null
       ? createPollLoop({
@@ -1138,6 +1166,7 @@ async function main(): Promise<void> {
   providerOnboardingProverLoop.start();
   packagePhotoTokenReaperLoop.start();
   labelPurchaseReconcilerLoop.start();
+  operatorTelemetryPrunerLoop.start();
   if (packagePhotoObjectSweeperLoop !== null) {
     packagePhotoObjectSweeperLoop.start();
   }
@@ -1198,6 +1227,7 @@ async function main(): Promise<void> {
     providerOnboardingProverLoop.stop(),
     packagePhotoTokenReaperLoop.stop(),
     labelPurchaseReconcilerLoop.stop(),
+    operatorTelemetryPrunerLoop.stop(),
     ...(packagePhotoObjectSweeperLoop !== null ? [packagePhotoObjectSweeperLoop.stop()] : []),
     workflowBucketScraperLoop.stop(),
     outboxBacklogProbeLoop.stop(),

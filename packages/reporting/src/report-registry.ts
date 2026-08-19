@@ -19,6 +19,7 @@ import { billingSummaryByClinicReport } from "./reports/billing-summary-by-clini
 import { cancellationReasonsReport } from "./reports/cancellation-reasons.js";
 import { clinicStatementReport } from "./reports/clinic-statement.js";
 import { emergencyBucketCountsReport } from "./reports/emergency-bucket-counts.js";
+import { idleTimeByUserReport } from "./reports/idle-time-by-user.js";
 import { invoiceAgingReport } from "./reports/invoice-aging.js";
 import { labelReprintRateReport } from "./reports/label-reprint-rate.js";
 import { lateDeliveriesReport } from "./reports/late-deliveries.js";
@@ -78,4 +79,5 @@ export const REPORT_REGISTRY: Readonly<Record<string, ReportDefinitionAny>> = Ob
   [reworkRateReport.id]: reworkRateReport as unknown as ReportDefinitionAny,
   [emergencyBucketCountsReport.id]: emergencyBucketCountsReport as unknown as ReportDefinitionAny,
   [throughputByClinicReport.id]: throughputByClinicReport as unknown as ReportDefinitionAny,
+  [idleTimeByUserReport.id]: idleTimeByUserReport as unknown as ReportDefinitionAny,
 });

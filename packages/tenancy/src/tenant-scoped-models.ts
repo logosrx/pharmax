@@ -288,6 +288,22 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["ApiKey", { kind: "organizationId" }] as const,
   ["WebhookSubscription", { kind: "organizationId" }] as const,
   ["WebhookDelivery", { kind: "organizationId" }] as const,
+
+  // Operator presence + activity telemetry (schema.prisma §11). Both
+  // carry a NON-NULLABLE `organizationId` (rule 1).
+  //
+  // Auto-scoping is load-bearing on the WRITE side here in a way it
+  // is not for most models. The ingest path is called on nearly every
+  // operator interaction and takes the actor from the tenancy frame
+  // rather than from its input, so the org filter is the thing that
+  // makes "record my own activity" unable to become "record activity
+  // for a user in another tenant". On the READ side these rows drive
+  // per-operator productivity and idle-time reports — cross-tenant
+  // reads would leak one pharmacy's staffing levels and work patterns
+  // to another, which is competitive intelligence even though the
+  // rows contain no PHI.
+  ["OperatorPresenceSlot", { kind: "organizationId" }] as const,
+  ["OperatorActivityEvent", { kind: "organizationId" }] as const,
 ]);
 
 /**
