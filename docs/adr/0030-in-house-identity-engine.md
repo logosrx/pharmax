@@ -159,6 +159,50 @@ verbatim.
 - **Recovery-flow abuse.** Reset requests are rate-limited and
   audited; a spike is a detectable signal, not a silent event.
 
+## Amendment 2026-08-18 — rate-limiter availability posture
+
+**This section records a posture the ADR never stated.**
+`packages/composition/src/rate-limit/ioredis-rate-limiter.ts` attributed
+its fail-open behaviour to "ADR-0030", but no such decision appears above:
+the ADR's only availability reasoning concerns the read-through cache
+degrading to a DB read. The code cited a decision that existed nowhere,
+which is how it went unreviewed for two months. Stating it here makes the
+citation true and the posture reviewable.
+
+**Decision.** Sign-in rate limiting **degrades, it does not disable**. On
+a Redis transport error the limiter delegates to a process-local
+`InMemoryRateLimiter` rather than returning `allowed: true`.
+
+**Why the original fail-open was half right.** Its stated reason — a Redis
+outage must not lock every operator out, and the durable per-email lockout
+in `login_attempt` is the backstop for sustained attacks — is sound, and
+the backstop is real: `countRecentFailedAttempts` is a Postgres query with
+no Redis dependency.
+
+But `signIn` enforces **two** keys, `signin:ip:<ip>` and
+`signin:email:<email>`, and the DB lockout replaces only the email half
+because it counts failures per email. With Redis down and a blanket allow,
+per-IP throttling vanished. Single-account brute force stayed bounded;
+what became free was **credential spraying and user enumeration** from one
+source across many accounts. Same exposure on the provider-portal sign-in
+and credential-setup paths.
+
+**Trade-off accepted.** Process-local counting is weaker than the
+distributed limiter — each web task counts independently, so the effective
+limit multiplies by instance count — and strictly stronger than nothing.
+It preserves the property this ADR actually cares about: no global lockout
+when Redis is unavailable. The fallback is bounded by `maxKeys` with a
+sweep, so a spray across many keys cannot turn a Redis outage into memory
+exhaustion.
+
+**Residual risk.** An attacker who can both take Redis down and distribute
+across many source IPs still gets more attempts than the distributed
+limiter would permit. Closing that needs the limit enforced somewhere
+authoritative — a per-IP ledger in Postgres alongside `login_attempt`, or
+throttling at the edge (WAF rate rules) rather than in the application.
+Neither is in scope here; both are better answers than a larger in-memory
+cap.
+
 ## Alternatives Considered
 
 - **Stay on Clerk (ADR-0015 status quo).** Lowest engineering cost

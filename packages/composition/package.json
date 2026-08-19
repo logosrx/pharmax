@@ -20,7 +20,7 @@
     "@pharmax/rbac": "workspace:*",
     "@pharmax/shipping": "workspace:*",
     "@pharmax/verification": "workspace:*",
-    "ioredis": "^5.11.1"
+    "ioredis": "^6.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
