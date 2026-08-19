@@ -68,24 +68,29 @@ only person who can is unreachable — ill, travelling, or gone — is a
 contingency-planning matter under 45 CFR § 164.308(a)(7), not an
 access-control one.
 
-As of 2026-08-19 there is no documented answer. The first infrastructure
-access review confirmed a single Identity Center principal holding
-Administrator on both the production and management accounts, so the bus
-factor is one. The consequence that matters is not that a breach becomes
-more likely; it is that the **response** to one becomes impossible on
-schedule, including the notification clock in the
-[breach notification policy](../policies/breach-notification-policy.md).
+The answer is a **written acceptance**, recorded 2026-08-19 in
+[business continuity §3.4](../policies/business-continuity-and-disaster-recovery.md).
+Read it before you need it; the short version is:
 
-Three answers are defensible and one is not:
+- There is no credential escrow, external trustee, or second
+  administrator. Each was considered and declined, because at this
+  headcount they trade a real availability risk for a real
+  confidentiality one — an escrowed production credential is a standing
+  target with no operational purpose the rest of the year.
+- Consequently the 4-hour RTO, the 24-hour MTD, and the SEV0 timelines
+  are **objectives conditional on operator availability**, not
+  guarantees, and must be stated that way to customers and auditors.
+- The breach-notification clock is the sharpest edge: its deadlines are
+  statutory and do not pause for staffing.
+- The acceptance **expires at the first engineering hire**, when the
+  Identity Center groups that already exist can finally be staffed by
+  more than one person.
 
-- A named external trustee with a documented, audited retrieval path.
-- Sealed credential escrow with a written retrieval procedure and a
-  tamper-evident seal.
-- A written, dated acceptance that recovery may be delayed until the
-  administrator returns, with the consequences spelled out.
+So if you are reading this because the administrator is unavailable:
+there is no hidden path and no sealed envelope. That was a decision, not
+an oversight.
 
-Silence is the one that is not. Pick one before the first tenant
-onboards; it is carried as mitigation (c) under R-029 until then.
+Tracked as **R-029**.
 
 ## Examples
 
