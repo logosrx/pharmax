@@ -197,31 +197,38 @@ describe("golden path — real commands, real transactions", () => {
   });
 
   it("CreateOrder lands the order in RECEIVED", async () => {
-    const out = await actingAs(
-      {
-        organizationId: fixture.organizationId,
-        userId: fixture.adminUserId,
-        siteId: fixture.siteId,
-      },
-      () =>
-        executeCommand(
-          CreateOrder,
-          {
-            clinicId: fixture.clinicId,
-            siteId: fixture.siteId,
-            patientId: fixture.patientId,
-            intakeSourceKind: "API",
-            lines: [{ prescriptionId, quantityToFill: 30, daysSupplyToFill: 30 }],
-          },
-          { idempotencyKey: newIdempotencyKey("order") }
-        )
-    );
-    orderId = out.orderId;
+    // `orderId` is assigned inside the dispatched callback so that
+    // `expectTransitionRecorded` — which reads the order's status after
+    // `fn` resolves — sees the freshly created row. The four-table
+    // audit trail is load-bearing on the very first transition that
+    // lands an order, and skipping the helper here is how a broken
+    // `order_event` / `command_log` / `audit_log` / `event_outbox` /
+    // `idempotency_key` write on `CreateOrder` becomes invisible.
+    const out = await expectTransitionRecorded("CreateOrder", "RECEIVED", async () => {
+      const result = await actingAs(
+        {
+          organizationId: fixture.organizationId,
+          userId: fixture.adminUserId,
+          siteId: fixture.siteId,
+        },
+        () =>
+          executeCommand(
+            CreateOrder,
+            {
+              clinicId: fixture.clinicId,
+              siteId: fixture.siteId,
+              patientId: fixture.patientId,
+              intakeSourceKind: "API",
+              lines: [{ prescriptionId, quantityToFill: 30, daysSupplyToFill: 30 }],
+            },
+            { idempotencyKey: newIdempotencyKey("order") }
+          )
+      );
+      orderId = result.orderId;
+      return result;
+    });
     orderLineId = out.orderLineIds[0] ?? "";
     expect(orderLineId).toMatch(/^[0-9a-f-]{36}$/);
-
-    const state = await readOrderState(owner, orderId);
-    expect(state?.status).toBe("RECEIVED");
   });
 
   it("walks RECEIVED to SHIPPED, auditing every transition", async () => {

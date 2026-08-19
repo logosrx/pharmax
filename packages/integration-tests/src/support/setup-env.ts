@@ -46,7 +46,7 @@
 
 import process from "node:process";
 
-import { pinSessionRole } from "./db-url.js";
+import { pinSessionRole, stripSessionRole } from "./db-url.js";
 
 /** Session role the Prisma client connects as. Mirrors apps/web. */
 const APP_ROLE = "pharmax_app";
@@ -94,9 +94,14 @@ process.env["DATABASE_URL"] = pinSessionRole(baseUrl, APP_ROLE);
 // the one under test.
 process.env["DIRECT_URL"] = process.env["DATABASE_URL"];
 
-// Preserve the un-pinned URL for `db.ts`, which needs the login user so
-// its explicit `SET ROLE` still controls the session.
-process.env["INTEGRATION_OWNER_DATABASE_URL"] = baseUrl;
+// Preserve the un-pinned URL for `db.ts` and `system-prisma.ts`. `db.ts`
+// needs the login user so its explicit `SET ROLE` still controls the
+// session, and `system-prisma.ts` re-pins this URL to `pharmax_system`
+// — `pinSessionRole` deliberately respects an existing `role=`, so a
+// URL that arrives already pinned to `pharmax_app` (local `.env` and
+// production-shaped strings both do) would keep the system client on
+// the app role and silently defeat the RxNorm grant checks.
+process.env["INTEGRATION_OWNER_DATABASE_URL"] = stripSessionRole(baseUrl);
 
 if (
   process.env["PHARMAX_LOCAL_KMS_SEED"] === undefined ||

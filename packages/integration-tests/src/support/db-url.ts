@@ -28,3 +28,24 @@ export function pinSessionRole(url: string, role: string): string {
   parsed.searchParams.set("options", `-c role=${role}`);
   return parsed.toString();
 }
+
+/**
+ * Return `url` with the libpq `options` startup parameter removed, so
+ * the connection opens as the login user and any explicit role decision
+ * is made downstream (either by a `SET ROLE` or by re-pinning to a
+ * different role via `pinSessionRole`).
+ *
+ * Returns the input unchanged if it will not parse — an unparseable URL
+ * should surface as a connection error naming the target, not as a
+ * silent rewrite here.
+ */
+export function stripSessionRole(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.searchParams.has("options")) return url;
+    parsed.searchParams.delete("options");
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
