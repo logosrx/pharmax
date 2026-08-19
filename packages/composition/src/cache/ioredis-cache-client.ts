@@ -17,7 +17,12 @@
 
 import { NoopCache, RedisCache, type Cache, type RedisLikeClient } from "@pharmax/cache";
 import type { logger as loggerTypes } from "@pharmax/platform-core";
-import { Redis, type RedisOptions } from "ioredis";
+import { Redis } from "ioredis";
+
+import {
+  mergeRedisOptions,
+  type RedisConnectionOptions,
+} from "../rate-limit/ioredis-rate-limiter.js";
 
 type Logger = loggerTypes.Logger;
 
@@ -87,7 +92,7 @@ export interface CreateRedisCacheOptions {
   /** When set, transport errors are logged (warn) instead of being silent. */
   readonly logger?: Logger;
   /** Extra ioredis options merged over the defaults. */
-  readonly redisOptions?: RedisOptions;
+  readonly redisOptions?: RedisConnectionOptions;
 }
 
 /**
@@ -101,13 +106,11 @@ export function createRedisCache(
   redisUrl: string,
   options: CreateRedisCacheOptions = {}
 ): RedisCacheHandle {
-  const redis = new Redis(redisUrl, {
-    // Fail commands fast on a wedged connection rather than queueing them
-    // unbounded — the cache is a shortcut, callers fall through to the DB.
-    maxRetriesPerRequest: 3,
-    enableReadyCheck: true,
-    ...options.redisOptions,
-  });
+  // Defaults live in `mergeRedisOptions` — the cache is a shortcut and
+  // callers fall through to the DB, so failing commands fast beats
+  // queueing them unbounded. See that helper for why the options are
+  // merged there rather than spread inline.
+  const redis = new Redis(redisUrl, mergeRedisOptions(options.redisOptions));
 
   const { logger } = options;
   if (logger !== undefined) {

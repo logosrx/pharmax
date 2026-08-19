@@ -12,10 +12,41 @@
 // mode of a two-command INCR-then-EXPIRE where the process dies between
 // them).
 //
-// Availability posture: FAIL OPEN. A Redis outage must not lock every
-// operator out — the durable per-email DB lockout (`login_attempt`) is
-// the backstop for sustained attacks. A transport error is logged and
-// treated as "allowed".
+// Availability posture: DEGRADE, NOT DISABLE — see ADR-0030 §"Amendment
+// 2026-08-18". A Redis outage must not lock every operator out, so this
+// never fails closed; it no longer fails fully open either.
+//
+// Worth knowing how the previous behaviour survived review: this file
+// returned `allowed: true` on transport error and attributed that to
+// ADR-0030, but the ADR contained no such decision — its only
+// availability reasoning was about the read-through cache degrading to a
+// DB read. A citation to a decision that did not exist read like a
+// reviewed trade-off for two months. The amendment now states the posture
+// so the reference is true and the choice is reviewable.
+//
+// The original reasoning was half right: a durable per-email lockout in
+// `login_attempt` really is the backstop for sustained attacks, and it
+// has no Redis dependency.
+//
+// That reasoning is sound and still holds, but it only covers half the
+// surface. `signIn` enforces TWO keys — `signin:ip:<ip>` and
+// `signin:email:<email>` — and the DB lockout replaces only the email
+// half, because it counts failures per email. With Redis down and a
+// blanket allow, per-IP throttling disappeared entirely: one source could
+// spray attempts across many accounts unthrottled. Each individual
+// account stayed protected, so this was never single-account brute force
+// — it was free credential spraying and user enumeration.
+//
+// So the error path now delegates to a process-local `InMemoryRateLimiter`
+// instead of returning `allowed: true`. That is weaker than the
+// distributed limiter (each web task counts independently, so the
+// effective limit multiplies by instance count) and strictly stronger
+// than nothing. It preserves the property ADR-0030 actually cared about:
+// no global lockout when Redis is unavailable.
+//
+// The fallback is bounded — `InMemoryRateLimiter` caps at `maxKeys` and
+// sweeps — so a spray across many keys cannot turn a Redis outage into a
+// memory exhaustion incident.
 
 import {
   InMemoryRateLimiter,
@@ -45,10 +76,21 @@ export interface IoredisEvalLike {
 }
 
 export class RedisRateLimiter implements RateLimiter {
+  /**
+   * Degraded-path limiter, used only when Redis errors. Constructed
+   * eagerly and shared for the process lifetime so its counters survive
+   * across a flapping connection — a per-call instance would reset the
+   * window on every failure and throttle nothing.
+   */
+  private readonly fallback: RateLimiter;
+
   public constructor(
     private readonly redis: IoredisEvalLike,
-    private readonly logger?: Logger
-  ) {}
+    private readonly logger?: Logger,
+    fallback: RateLimiter = new InMemoryRateLimiter()
+  ) {
+    this.fallback = fallback;
+  }
 
   public async hit(key: string, rule: RateLimitRule): Promise<RateLimitResult> {
     try {
@@ -64,13 +106,64 @@ export class RedisRateLimiter implements RateLimiter {
         retryAfterMs: allowed ? 0 : ttl > 0 ? ttl : rule.windowMs,
       };
     } catch (error) {
-      // Fail open — the DB lockout is the durable backstop.
-      this.logger?.warn("auth.rate_limit.redis_error", {
+      // Degrade to process-local counting rather than allowing outright.
+      // See the availability-posture note at the top of this file.
+      this.logger?.warn("auth.rate_limit.redis_error_degraded", {
         errorMessage: error instanceof Error ? `${error.name}: ${error.message}` : "unknown",
       });
-      return { allowed: true, retryAfterMs: 0 };
+      return this.fallback.hit(key, rule);
     }
   }
+}
+
+/**
+ * Connection options minus `replyMapping`.
+ *
+ * ## Why this type exists — an upstream incompatibility, not a local one
+ *
+ * ioredis 6 added `replyMapping` and declared it inconsistently with its
+ * own constructor. The exported `RedisOptions` has
+ * `replyMapping?: ReplyMappingMode | undefined`, while the constructor
+ * overload requires `{ replyMapping?: ReplyMappingMode }` — no
+ * `| undefined`. Under `exactOptionalPropertyTypes: true` those are not
+ * the same type, so **ioredis's own `RedisOptions` is not assignable to
+ * ioredis's own constructor**:
+ *
+ * ```text
+ * Argument of type 'RedisOptions' is not assignable to parameter of type
+ * 'CommonRedisOptions & … & { replyMapping?: ReplyMappingMode; }'
+ *   Type 'ReplyMappingMode | undefined' is not assignable to
+ *   type 'ReplyMappingMode'.
+ * ```
+ *
+ * That is why the v6 bump failed `Typecheck` in CI (PR #188). It is not
+ * fixable by rearranging the call site: any value typed `RedisOptions`
+ * fails, and any spread of one widens the optionals the same way.
+ *
+ * Omitting the key is the narrowest workaround available. Pharmax never
+ * sets `replyMapping` — it selects ioredis's RESP reply shape, and the
+ * default is what the codebase already assumes — so an absent property
+ * satisfies the optional parameter and nothing is lost. `Omit` rather
+ * than a cast, so if a future ioredis declares more properties this way,
+ * the compiler says so instead of a blanket assertion hiding it.
+ *
+ * Remove this indirection once upstream aligns the two declarations.
+ */
+export type RedisConnectionOptions = Omit<RedisOptions, "replyMapping">;
+
+/**
+ * Merge caller overrides onto the shared connection defaults.
+ *
+ * One helper for both this module and the cache client, so the two
+ * cannot drift apart on retry and ready-check behaviour.
+ */
+export function mergeRedisOptions(
+  overrides: RedisConnectionOptions | undefined
+): RedisConnectionOptions {
+  // Fail commands fast on a wedged connection rather than queueing them
+  // unbounded.
+  const defaults: RedisConnectionOptions = { maxRetriesPerRequest: 3, enableReadyCheck: true };
+  return overrides === undefined ? defaults : { ...defaults, ...overrides };
 }
 
 export interface RateLimiterHandle {
@@ -81,7 +174,7 @@ export interface RateLimiterHandle {
 export interface CreateRateLimiterFromEnvInput {
   readonly redisUrl?: string | undefined;
   readonly logger?: Logger;
-  readonly redisOptions?: RedisOptions;
+  readonly redisOptions?: RedisConnectionOptions;
 }
 
 /**
@@ -91,11 +184,7 @@ export interface CreateRateLimiterFromEnvInput {
  */
 export function createRateLimiterFromEnv(input: CreateRateLimiterFromEnvInput): RateLimiterHandle {
   if (typeof input.redisUrl === "string" && input.redisUrl.length > 0) {
-    const redis = new Redis(input.redisUrl, {
-      maxRetriesPerRequest: 3,
-      enableReadyCheck: true,
-      ...input.redisOptions,
-    });
+    const redis = new Redis(input.redisUrl, mergeRedisOptions(input.redisOptions));
     if (input.logger !== undefined) {
       redis.on("error", (error: Error) => {
         input.logger?.warn("auth.rate_limit.redis_connection_error", {
