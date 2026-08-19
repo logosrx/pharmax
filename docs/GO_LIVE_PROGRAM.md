@@ -1000,6 +1000,69 @@ pharmacy and there was no boundary to hold.
 
 Everything in this document exists to make that sentence true.
 
+### 11.1 Environment preconditions — the adapters must be real
+
+One clause in that sentence has a precondition the rest of this document
+did not state: _"an alarm that would have woken someone at Pharmax had
+any step failed."_
+
+As of 2026-08-18 no alarm can wake anyone, because the production worker
+is running an **in-memory notification channel**. It is not broken and it
+does not warn — the fallback is deliberate, so that a missing environment
+variable cannot stop the worker draining the outbox. The consequence is
+narrower and worse than an outage: every control still runs, still
+succeeds, and delivers its output nowhere.
+
+The same fallback applies to the report archive, which is running
+in-memory in production and therefore discards scheduled-run CSVs.
+
+This is latent today because production has zero organizations. It
+becomes active on the day the first tenant onboards — which is exactly
+when nobody is reading a boot log.
+
+**Gate: none of the following may be unset when the first tenant is
+onboarded.** Verify from the worker boot log, not from Terraform, because
+the question is what the running process resolved and not what the plan
+intended.
+
+| Variable                                  | Without it                                                               |
+| ----------------------------------------- | ------------------------------------------------------------------------ |
+| `REPORT_ARCHIVE_S3_BUCKET`                | Scheduled-report CSVs exist only in process memory and vanish on restart |
+| `REPORT_ARCHIVE_S3_KMS_KEY_ID`            | Same — both are required for the S3 adapter to be selected               |
+| `RESEND_API_KEY`                          | No notification leaves the platform                                      |
+| `NOTIFICATION_FROM_EMAIL`                 | Same — both are required for the Resend channel to be selected           |
+| `COMPLIANCE_NOTIFY_RECIPIENT_EMAIL`       | A quarterly access review that finds something tells nobody              |
+| `NIGHTLY_SECURITY_DIGEST_RECIPIENT_EMAIL` | The nightly security digest is computed and discarded                    |
+
+Two of these have prerequisites that are not engineering tasks and should
+be started before they are needed. **No reports bucket exists in
+Terraform** — `infra/terraform/modules/` has `s3-audit-archive` and
+`s3-documents` only, so one must be added and applied. And **Resend has
+no executed BAA** ([`baa-tracker.md`](./governance/baa-tracker.md)); it is
+currently `not requested` and gated to non-PHI templates by
+`phiCapable: false`, which is sufficient for operational alerting but not
+for anything patient-facing.
+
+Confirm from the boot log that the resolved adapters read `s3` and
+`resend` rather than `in-memory`, and record the check in the go-live
+evidence pack. Tracked as **R-028** in the
+[risk register](./governance/risk-register.md).
+
+Do not rely on warnings to surface this. Coverage is uneven: the report
+archive and the nightly security digest each warn at boot, while the
+notification channel and the access-review recipient warn about nothing.
+A reader who has seen two warnings and no third will reasonably conclude
+the third path is healthy, which is the opposite of what silence means
+here.
+
+One scheduling note, because it affects when this is checkable. The
+quarterly access-review loop no-ops except on the first day of a
+quarter — Q3 opened 1 July, so the next automatic run is **1 October**.
+Waiting for the scheduler is a six-week feedback loop; run
+`scripts/security/run-access-review.ts` directly instead, as
+[`../compliance/first-cycle-runbook.md`](./compliance/first-cycle-runbook.md)
+Session 1 does.
+
 ---
 
 ## 12. Annex — Track B (insurance billing), REJECTED
