@@ -1,31 +1,34 @@
 #!/usr/bin/env tsx
 // scripts/soc2/export-incident-log.ts
 //
-// SOC 2 evidence script — STUB MODE.
+// SOC 2 + HIPAA evidence script.
 //
-// Pharmax does not yet maintain a structured `incident_log` table.
-// Incidents are tracked outside the production database (issue
-// tracker + `evidence/incidents/<year>/` postmortems) per the
-// incident-response policy. Until a database-backed incident log
-// exists, this script emits a stub artifact that:
+// Emits the structured incident log from `incident_log`, plus the
+// HIPAA §164.408 annual breach register for the period.
 //
-//   1. Documents the absence and points at where incidents ARE
-//      tracked (the issue tracker, the postmortem folder).
-//   2. Surfaces a best-effort proxy from `audit_log`: rows whose
-//      `action` matches incident-related prefixes (e.g.,
-//      `incident.*`, `rbac.breakglass.*`, `audit.chain.broken`).
-//      These are not a substitute for a structured incident log —
-//      they help the auditor cross-check.
+// This script was previously a stub, because no structured table
+// existed and incidents lived only in the issue tracker and the
+// `evidence/incidents/<year>/` postmortems. The audit-log proxy it
+// emitted is retained as a cross-check — it answers "did something
+// incident-shaped happen that nobody registered?", which a register
+// cannot answer about itself.
 //
-// When the `incident_log` table is added, this script will be
-// upgraded to emit the structured CSV directly. The stub artifact
-// surfaces a banner at the top so the auditor sees the gap.
+// Three artifacts:
 //
-// Primary evidence for CC7.3-1 (defined incident response process)
-// and CC7.4-1 (response to identified security events) — the
-// authoritative evidence remains the postmortem files.
+//   1. incident-log.csv — every incident in the period.
+//   2. breach-register.csv — the §164.414 view: PHI-involved rows with
+//      their determination, notification record, and evidence pointer.
+//   3. incident-log-audit-proxy.csv — incident-adjacent `audit_log`
+//      rows, as an independent cross-check against 1.
 //
-// PHI posture: no PHI columns are read.
+// Evidence for CC7.3-1 (defined incident response process), CC7.4-1
+// (response to identified security events), and HIPAA §164.408 /
+// §164.414.
+//
+// PHI posture: no PHI columns are read, and `incident_log` holds none
+// by construction — counts, coded categories and references only. The
+// identified material stays in the evidence file that `evidencePath`
+// points at, which is NOT exported here.
 //
 // Usage:
 //   pnpm exec tsx scripts/soc2/export-incident-log.ts \
@@ -54,8 +57,9 @@ Usage: pnpm exec tsx scripts/soc2/export-incident-log.ts \\
   [--dry-run]
 
 Outputs:
-  <out-dir>/incident-log-stub.txt        — banner + pointer
-  <out-dir>/incident-log-audit-proxy.csv — incident-adjacent audit rows in period
+  <out-dir>/incident-log.csv             — every incident in the period
+  <out-dir>/breach-register.csv          — §164.414 view of PHI-involved incidents
+  <out-dir>/incident-log-audit-proxy.csv — incident-adjacent audit rows (cross-check)
 
 Required env:
   DATABASE_URL              Postgres connection string.
@@ -121,29 +125,36 @@ function rowToCsv(values: ReadonlyArray<string>): string {
   return values.map(csvEscape).join(",");
 }
 
-const STUB_BANNER = `
-INCIDENT LOG STUB — no structured incident_log table exists yet.
+const INCIDENT_HEADER = [
+  "incidentRef",
+  "severity",
+  "status",
+  "title",
+  "detectedAt",
+  "discoveredAt",
+  "discoveredBy",
+  "containedAt",
+  "resolvedAt",
+  "phiInvolved",
+  "determination",
+  "subjectOrganizationId",
+];
 
-The authoritative incident evidence for the period is the set of
-postmortem files under:
-
-  evidence/incidents/<year>/<incident-id>/
-
-If no postmortem files exist for the period, the period had no
-incidents at MINOR or above severity. Land a one-line file at
-evidence/incidents/<year>/no-incidents-<period>.txt to confirm the
-absence is intentional.
-
-A companion CSV at incident-log-audit-proxy.csv enumerates audit_log
-rows whose action prefix is incident-adjacent (incident.*,
-rbac.breakglass.*, audit.chain.broken, sod.violation). These are a
-best-effort cross-check and are NOT a substitute for a structured
-incident log.
-
-When the incident_log table is added (tracked in the engineering
-backlog), this script will emit a structured incident-log.csv and
-the stub will be retired.
-`.trim();
+const BREACH_HEADER = [
+  "incidentRef",
+  "discoveredAt",
+  "breachRole",
+  "determination",
+  "determinationBasis",
+  "exceptionRelied",
+  "affectedIndividualCount",
+  "stateDistribution",
+  "phiCategories",
+  "notifications",
+  "hhsAnnualLogSubmittedAt",
+  "evidencePath",
+  "determinedAt",
+];
 
 async function main(): Promise<void> {
   const args = parseCliArgs(process.argv.slice(2));
@@ -158,6 +169,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   configureCrypto({ kms: new LocalKmsAdapter({ seed }) });
+
+  const incidents = await withSystemContext("soc2:export-incident-log", () =>
+    prisma.incidentLog.findMany({
+      where: { discoveredAt: { gte: args.from, lte: args.to } },
+      orderBy: [{ discoveredAt: "asc" }],
+    })
+  );
 
   const proxyRows = await withSystemContext("soc2:export-incident-audit-proxy", () =>
     prisma.auditLog.findMany({
@@ -211,25 +229,99 @@ async function main(): Promise<void> {
   }
   const body = `${lines.join("\n")}\n`;
 
+  const incidentLines: string[] = [rowToCsv(INCIDENT_HEADER)];
+  for (const i of incidents) {
+    incidentLines.push(
+      rowToCsv([
+        i.incidentRef,
+        i.severity,
+        i.status,
+        i.title,
+        i.detectedAt.toISOString(),
+        i.discoveredAt.toISOString(),
+        i.discoveredBy,
+        i.containedAt?.toISOString() ?? "",
+        i.resolvedAt?.toISOString() ?? "",
+        String(i.phiInvolved),
+        i.determination,
+        i.subjectOrganizationId ?? "",
+      ])
+    );
+  }
+  const incidentBody = `${incidentLines.join("\n")}\n`;
+
+  // The §164.414 view. Only PHI-involved rows: an incident with no PHI
+  // is a SOC 2 record and has no place in a breach register.
+  const breaches = incidents.filter((i) => i.phiInvolved);
+  const breachLines: string[] = [rowToCsv(BREACH_HEADER)];
+  for (const b of breaches) {
+    breachLines.push(
+      rowToCsv([
+        b.incidentRef,
+        b.discoveredAt.toISOString(),
+        b.breachRole ?? "",
+        b.determination,
+        b.determinationBasis ?? "",
+        b.exceptionRelied ?? "",
+        b.affectedIndividualCount?.toString() ?? "",
+        b.stateDistribution === null ? "" : JSON.stringify(b.stateDistribution),
+        b.phiCategories.join(";"),
+        b.notifications === null ? "" : JSON.stringify(b.notifications),
+        b.hhsAnnualLogSubmittedAt?.toISOString() ?? "",
+        b.evidencePath ?? "",
+        b.determinedAt?.toISOString() ?? "",
+      ])
+    );
+  }
+  const breachBody = `${breachLines.join("\n")}\n`;
+
+  // Surfaced loudly rather than left for the reader to notice. An
+  // undetermined row is not a neutral state — §164.402 presumes a
+  // breach until the four-factor assessment says otherwise, so a
+  // PENDING row in a closed audit period is an open obligation.
+  const pending = breaches.filter((b) => b.determination === "PENDING");
+  const subFiveHundredUnfiled = breaches.filter(
+    (b) =>
+      b.determination === "BREACH" &&
+      (b.affectedIndividualCount ?? 0) < 500 &&
+      b.hhsAnnualLogSubmittedAt === null
+  );
+
   const outDir = args.outDir ?? resolve(process.cwd(), "evidence", currentQuarterLabel(args.to));
-  const stubPath = resolve(outDir, "incident-log-stub.txt");
+  const incidentPath = resolve(outDir, "incident-log.csv");
+  const breachPath = resolve(outDir, "breach-register.csv");
   const proxyPath = resolve(outDir, "incident-log-audit-proxy.csv");
-  const stubText =
-    `${STUB_BANNER}\n\n` +
-    `Period: ${args.from.toISOString()} → ${args.to.toISOString()}\n` +
-    `Audit-proxy rows in period: ${proxyRows.length}\n`;
+
+  const summary =
+    `[incident-log] period ${args.from.toISOString()} → ${args.to.toISOString()}\n` +
+    `[incident-log] incidents=${incidents.length} phiInvolved=${breaches.length} ` +
+    `proxyRows=${proxyRows.length}\n`;
 
   if (args.dryRun) {
-    process.stdout.write(
-      `[incident-log] dry-run — would write ${stubPath} and ${proxyPath} (${proxyRows.length} proxy rows)\n`
-    );
-    process.stdout.write(stubText);
+    process.stdout.write(`[incident-log] dry-run — would write:\n`);
+    process.stdout.write(`  ${incidentPath}\n  ${breachPath}\n  ${proxyPath}\n`);
+    process.stdout.write(summary);
   } else {
-    mkdirSync(dirname(stubPath), { recursive: true });
-    writeFileSync(stubPath, stubText, "utf8");
+    mkdirSync(dirname(incidentPath), { recursive: true });
+    writeFileSync(incidentPath, incidentBody, "utf8");
+    writeFileSync(breachPath, breachBody, "utf8");
     writeFileSync(proxyPath, body, "utf8");
+    process.stdout.write(`[incident-log] wrote 3 artifacts to ${outDir}\n`);
+    process.stdout.write(summary);
+  }
+
+  if (pending.length > 0) {
     process.stdout.write(
-      `[incident-log] wrote ${stubPath} + ${proxyPath} (${proxyRows.length} proxy rows)\n`
+      `[incident-log] WARNING: ${pending.length} PHI-involved incident(s) still PENDING ` +
+        `determination — §164.402 presumes a breach until the four-factor assessment ` +
+        `concludes otherwise: ${pending.map((p) => p.incidentRef).join(", ")}\n`
+    );
+  }
+  if (subFiveHundredUnfiled.length > 0) {
+    process.stdout.write(
+      `[incident-log] NOTE: ${subFiveHundredUnfiled.length} sub-500 breach(es) not yet in an ` +
+        `annual HHS submission — due within 60 days of calendar year end (§164.408): ` +
+        `${subFiveHundredUnfiled.map((p) => p.incidentRef).join(", ")}\n`
     );
   }
 

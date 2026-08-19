@@ -1307,19 +1307,19 @@ model User {
   // control, accepted an exception, or closed a remediation task is
   // exactly what an auditor traces, so those edges are real FKs with
   // onDelete: Restrict.
-  complianceControlsSignedOff  ComplianceControl[]        @relation("ComplianceControlSignedOffBy")
-  complianceExceptionsApproved ComplianceCheckException[] @relation("ComplianceExceptionApprovedBy")
-  complianceExceptionsRevoked  ComplianceCheckException[] @relation("ComplianceExceptionRevokedBy")
-  complianceTasksAssigned      ComplianceTask[]           @relation("ComplianceTaskAssignee")
-  complianceTasksCompleted     ComplianceTask[]           @relation("ComplianceTaskCompletedBy")
+  complianceControlsSignedOff   ComplianceControl[]        @relation("ComplianceControlSignedOffBy")
+  complianceExceptionsApproved  ComplianceCheckException[] @relation("ComplianceExceptionApprovedBy")
+  complianceExceptionsRevoked   ComplianceCheckException[] @relation("ComplianceExceptionRevokedBy")
+  complianceTasksAssigned       ComplianceTask[]           @relation("ComplianceTaskAssignee")
+  complianceTasksCompleted      ComplianceTask[]           @relation("ComplianceTaskCompletedBy")
   // Who asked a model for a draft, and who reviewed it. Both are
   // Restrict FKs for the same reason as the rest: "a model wrote
   // this and a person approved it" is only an answer if the person
   // cannot later be deleted out of the record.
-  complianceAiDraftsRequested  ComplianceAiDraft[]        @relation("ComplianceAiDraftRequestedBy")
-  typingSuggestionRunsRequested TypingSuggestionRun[]     @relation("TypingSuggestionRunRequestedBy")
-  typingSuggestionsResolved     TypingSuggestion[]        @relation("TypingSuggestionResolvedBy")
-  complianceAiDraftsReviewed   ComplianceAiDraft[]        @relation("ComplianceAiDraftReviewedBy")
+  complianceAiDraftsRequested   ComplianceAiDraft[]        @relation("ComplianceAiDraftRequestedBy")
+  typingSuggestionRunsRequested TypingSuggestionRun[]      @relation("TypingSuggestionRunRequestedBy")
+  typingSuggestionsResolved     TypingSuggestion[]         @relation("TypingSuggestionResolvedBy")
+  complianceAiDraftsReviewed    ComplianceAiDraft[]        @relation("ComplianceAiDraftReviewedBy")
 
   patientAllergiesRecorded        PatientAllergy[]                 @relation("PatientAllergyRecordedBy")
   patientAllergyStatusChanges     PatientAllergy[]                 @relation("PatientAllergyStatusChangedBy")
@@ -5095,10 +5095,10 @@ model CompoundBatch {
   // this date regardless of status.
   beyondUseDate DateTime @db.Date
 
-  status CompoundBatchStatus @default(COMPOUNDED)
+  status          CompoundBatchStatus @default(COMPOUNDED)
   // When `status` last changed — the SLA clock for "how long has this
   // batch been stuck at the lab".
-  statusChangedAt DateTime @default(now())
+  statusChangedAt DateTime            @default(now())
 
   // Reason code when status = REJECTED (lab failure). CHECK-enforced
   // in the migration: REJECTED requires a reason, non-REJECTED forbids
@@ -7261,4 +7261,175 @@ model RxnormProductIngredient {
 
   @@id([releaseId, productRxcui, ingredientRxcui])
   @@map("rxnorm_product_ingredient")
+}
+
+// ---------------------------------------------------------------------------
+// 11. Incident log + breach register (HIPAA §164.408 / §164.414, SOC 2 CC7.3–7.4)
+// ---------------------------------------------------------------------------
+//
+// One row per incident. Breach-determination columns are populated only
+// when PHI was involved, so the same table serves the SOC 2 incident log
+// and the HIPAA breach register without keeping two records in sync — a
+// breach is a subset of incidents, not a parallel universe of them.
+//
+// Compliance-plane table, following `ComplianceCheckRun`: RLS-exempt,
+// with a SOFT organization reference and no foreign key, because a
+// breach record must outlive the tenant whose PHI it concerns. An
+// organization that offboards after an incident does not get to take
+// the evidence of that incident with it.
+//
+// PHI INVARIANT — the register holds NO PHI. Counts, coded categories,
+// state distributions, and references only. Never names, addresses,
+// dates of birth, or any patient identifier. Breach Notification Policy
+// §8 states why: a register that accumulated identifiers would become a
+// second, unencrypted copy of exactly the data whose exposure it exists
+// to document, growing more dangerous with every incident recorded. The
+// identified material lives in the §9 evidence file, which is
+// classified Restricted and pointed at by `evidencePath`.
+
+enum IncidentSeverity {
+  SEV0
+  SEV1
+  SEV2
+  SEV3
+}
+
+enum IncidentStatus {
+  OPEN
+  CONTAINED
+  RESOLVED
+  CLOSED
+}
+
+/// Which hat Pharmax wore for this incident. Drives which notification
+/// obligations attach: a business associate owes §164.410 to the covered
+/// entity; a covered entity owes §164.404/.406/.408 directly.
+enum BreachRole {
+  BUSINESS_ASSOCIATE
+  COVERED_ENTITY
+}
+
+/// Outcome of the §164.402(2) four-factor risk assessment.
+///
+/// `PENDING` is the honest default and is deliberately not the same as
+/// `NOT_A_BREACH`: an impermissible disclosure is PRESUMED to be a
+/// breach until the assessment demonstrates otherwise, so an
+/// undetermined row carries live notification obligations.
+enum BreachDetermination {
+  PENDING
+  BREACH
+  NOT_BREACH_LOW_PROBABILITY
+  NOT_BREACH_EXCEPTION
+  NOT_BREACH_SECURED_PHI
+}
+
+model IncidentLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Human-facing reference used in postmortems, tickets, and the
+  /// evidence tree (e.g. "INC-2026-004"). Unique so an incident cannot
+  /// be double-registered under the same name.
+  incidentRef String @unique
+
+  /// Soft reference to the tenant whose PHI was involved. Intentionally
+  /// NOT a foreign key — see the section header. Null for incidents
+  /// with no tenant subject (platform outage, internal-only exposure).
+  subjectOrganizationId String? @db.Uuid
+
+  // --- Incident facts (SOC 2 CC7.3 / CC7.4) ---
+
+  severity IncidentSeverity
+  status   IncidentStatus   @default(OPEN)
+
+  /// Short, PHI-FREE label. "Carrier API echoed recipient address into
+  /// error logs" — never the address itself.
+  title String
+
+  /// When monitoring or a human first saw the symptom.
+  detectedAt DateTime
+
+  /// HIPAA discovery: the first day the incident was known, or by
+  /// exercising reasonable diligence would have been known, to any
+  /// workforce member other than whoever caused it. Frequently EARLIER
+  /// than `detectedAt` once reasonable diligence is applied, and every
+  /// statutory deadline runs from here — which is why it is a separate
+  /// column rather than an alias.
+  discoveredAt DateTime
+
+  /// Name or role of the discoverer. Workforce identity, not PHI.
+  discoveredBy String
+
+  containedAt DateTime?
+  resolvedAt  DateTime?
+
+  // --- Breach determination (HIPAA §164.402) ---
+
+  /// Whether PHI was involved at all. False leaves every column below
+  /// null and the row is a plain SOC 2 incident record.
+  phiInvolved Boolean @default(false)
+
+  determination BreachDetermination @default(PENDING)
+
+  breachRole BreachRole?
+
+  /// Narrative basis for the determination, PHI-free. For a
+  /// `NOT_BREACH_LOW_PROBABILITY` outcome this summarises all four
+  /// factors; §164.414 puts the burden on us to show the reasoning, and
+  /// a conclusion without it is indistinguishable from a guess.
+  determinationBasis String?
+
+  /// Which §164.402(1) exception was relied on, when the outcome is
+  /// `NOT_BREACH_EXCEPTION`.
+  exceptionRelied String?
+
+  /// Affected individuals. Drives the §164.408 route (500+ immediate to
+  /// HHS, under 500 to the annual log) and, with `stateDistribution`,
+  /// the §164.406 media test.
+  affectedIndividualCount Int?
+
+  /// Counts by state of residence, e.g. `{"CA": 520, "TX": 300}`.
+  /// COUNTS ONLY. §164.406 turns on more than 500 residents of a single
+  /// state, not 500 in aggregate, so the distribution is the fact that
+  /// decides it and an aggregate total cannot answer the question.
+  stateDistribution Json?
+
+  /// Coded PHI categories involved, e.g. `["name","address","medication"]`.
+  /// Categories, never values.
+  phiCategories String[] @default([])
+
+  /// Notifications issued, e.g.
+  /// `[{"kind":"CUSTOMER","recipient":"<org-ref>","sentAt":"...","ref":"..."}]`.
+  /// Recipient is an organization or regulator reference — never an
+  /// individual's name or address. Proof of sending lives in the
+  /// evidence file.
+  notifications Json?
+
+  /// Whether this row has been included in the §164.408 annual
+  /// submission of sub-500 breaches. Explicit rather than derived,
+  /// because "did we actually file it?" is a fact about an action taken,
+  /// not something inferable from dates.
+  hhsAnnualLogSubmittedAt DateTime?
+
+  // --- Provenance ---
+
+  /// Path to the §164.414 evidence file. That file DOES contain PHI —
+  /// notice copies carry names and addresses — and is classified
+  /// Restricted. This column is the only link between the PHI-free
+  /// register and the identified material.
+  evidencePath String?
+
+  determinedAt       DateTime?
+  determinedByUserId String?   @db.Uuid
+  approvedByUserId   String?   @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// The annual §164.408 filing is "every sub-500 breach discovered in
+  /// calendar year N", so discovery date and determination are the
+  /// access path for the one query this table must always answer.
+  @@index([discoveredAt])
+  @@index([determination, discoveredAt])
+  @@index([subjectOrganizationId, discoveredAt])
+  @@map("incident_log")
 }
