@@ -47,6 +47,37 @@ export function buildTotpKeyUri(input: {
 }
 
 /**
+ * Generate the code an authenticator app would show right now.
+ *
+ * Exists for callers that must PROVE possession of a secret rather than
+ * check one — the E2E harness signing in as a seeded operator whose role
+ * sits on the MFA floor. It lives beside `verifyTotpCode` so both sides
+ * read the algorithm, digit count and period from one place; a harness
+ * that rebuilt those constants for itself would keep passing while
+ * drifting away from what production actually accepts.
+ *
+ * Never call this to satisfy a real user's second factor: a code this
+ * process can mint is not a factor the operator holds.
+ */
+export function generateTotpCode(input: {
+  readonly secretBase32: string;
+  /**
+   * Provisioning-URI labels. Optional because RFC 6238 derives the code
+   * from the secret and the time only — these reach the HMAC through
+   * neither, so a caller holding just a secret does not have to
+   * reconstruct the account name enrollment happened to use.
+   */
+  readonly issuer?: string;
+  readonly accountName?: string;
+}): string {
+  return buildTotp({
+    secretBase32: input.secretBase32,
+    issuer: input.issuer ?? "Pharmax",
+    accountName: input.accountName ?? "totp",
+  }).generate();
+}
+
+/**
  * Verify a submitted TOTP code. `window` is the ± number of 30s periods
  * tolerated for clock drift (from `MfaPolicy.totpWindow`). Whitespace is
  * stripped so "123 456" and "123456" both work. Returns true iff the

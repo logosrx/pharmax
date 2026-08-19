@@ -3,16 +3,31 @@
 // walks the critical console surfaces — dashboard + queue counters,
 // sidebar navigation, the ⌘K command palette, and the order search
 // bar. No auth bypass: the session comes from POST /api/auth/sign-in
-// exactly as production issues it.
+// exactly as production issues it, including the TOTP second factor the
+// Pharmacist role requires (see ../mfa.ts).
 //
 // These tests run against the tenant origin (acme.localhost): sign-in
 // resolves the organization from the request subdomain (ADR-0030).
 
+import process from "node:process";
+
 import { expect, test, type Page } from "@playwright/test";
 
 import { E2E_OPERATOR_EMAIL, E2E_OPERATOR_PASSWORD, E2E_ORG_BASE_URL } from "../env";
+import { completeSecondFactor } from "../mfa";
 
 test.use({ baseURL: E2E_ORG_BASE_URL });
+
+/**
+ * Sign-in as a unit: navigate, fill, submit, answer the second factor,
+ * land on the dashboard. Same values as full-dispense.spec.ts.
+ *
+ * Raised from a flat 45s when this operator moved onto the MFA floor: a
+ * two-factor sign-in is two round trips, and the budget has to hold at
+ * least two whole attempts for the pre-hydration retry below to mean
+ * anything.
+ */
+const SIGN_IN_RETRY_BUDGET_MS = process.env["CI"] !== undefined ? 180_000 : 90_000;
 
 /**
  * Submit the sign-in form and wait for `expectAfterSubmit` to hold.
@@ -34,11 +49,15 @@ async function submitSignIn(
     await page.getByLabel("Password").fill(password);
     await page.getByRole("button", { name: "Sign in" }).click();
     await expectAfterSubmit();
-  }).toPass({ timeout: 45_000 });
+  }).toPass({ timeout: SIGN_IN_RETRY_BUDGET_MS });
 }
 
 async function signIn(page: Page): Promise<void> {
   await submitSignIn(page, E2E_OPERATOR_PASSWORD, async () => {
+    // This operator is a Pharmacist, which is on the MFA floor, so the
+    // password only gets as far as the code prompt. Inside the retry so
+    // each attempt mints a code for the current 30s step.
+    await completeSecondFactor(page, E2E_OPERATOR_EMAIL);
     await page.waitForURL("**/ops", { timeout: 10_000 });
   });
 }

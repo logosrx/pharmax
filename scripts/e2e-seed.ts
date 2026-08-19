@@ -26,9 +26,20 @@
 //     and PV1-approve / fill-complete each forbid final-approve by
 //     the same actor. Every grant is org-wide (siteId/clinicId/teamId
 //     null) — a site-scoped grant would never match the site-less web
-//     session. All four roles sit BELOW the platform MFA floor, so
-//     the suite completes password-only sign-ins without weakening or
-//     bypassing the MFA policy for privileged roles.
+//     session.
+//
+//     Operators whose role sits on the platform MFA floor get a REAL
+//     verified TOTP enrollment, sealed with the same envelope cipher
+//     production uses, and the suite completes the genuine two-factor
+//     sign-in. Which roles those are is read from ELEVATED_ROLE_CODES
+//     rather than listed here: this file previously asserted that all
+//     five operators sat below the floor, and when `Pharmacist` was
+//     added to it (PR #201) that sentence became false and every
+//     authenticated spec failed at sign-in. Deriving the set means the
+//     next change to the floor reseeds instead of breaking.
+//
+//     Roles below the floor are left password-only on purpose, so the
+//     suite still covers both sign-in shapes.
 //
 //   - One synthetic patient, registered through the REAL
 //     RegisterPatient command (encrypt + blind index + audit) as the
@@ -69,14 +80,19 @@ import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import process from "node:process";
 
-import { createArgon2idHasher } from "@pharmax/auth";
+import { createArgon2idHasher, generateTotpSecretBase32, sealTotpSecret } from "@pharmax/auth";
 import { configureCommandBus, executeCommand } from "@pharmax/command-bus";
 import { configureCrypto, LocalKmsAdapter } from "@pharmax/crypto";
-import { prisma, ProviderStatus, UserStatus } from "@pharmax/database";
+import { MfaType, prisma, ProviderStatus, UserStatus } from "@pharmax/database";
 import { CreateApiKey, hashApiKeyToken } from "@pharmax/partner-api";
 import { PATIENT_BLIND_INDEX, RegisterPatient } from "@pharmax/patients";
 import { clock, logger as loggerNs } from "@pharmax/platform-core";
-import { configureRbac, PERMISSIONS, PrismaPermissionLoader } from "@pharmax/rbac";
+import {
+  configureRbac,
+  ELEVATED_ROLE_CODES,
+  PERMISSIONS,
+  PrismaPermissionLoader,
+} from "@pharmax/rbac";
 import { buildTenancyContext, withSystemContext, withTenancyContext } from "@pharmax/tenancy";
 
 import {
@@ -152,11 +168,57 @@ const OPERATORS: ReadonlyArray<OperatorSpec> = [
   },
 ];
 
+interface SeededOperator {
+  readonly userId: string;
+  /** Base32 TOTP secret when the role is on the MFA floor, else null. */
+  readonly totpSecret: string | null;
+}
+
+/**
+ * Give `user` exactly one active TOTP authenticator and return its
+ * secret, so the suite can mint real codes at sign-in.
+ *
+ * Written as a direct row rather than through EnrollMfa + ConfirmMfa,
+ * for the same reason the provider below is: those commands are
+ * self-service and assume a human. EnrollMfa refuses when an active
+ * authenticator already exists, so a re-run against the reused
+ * `pharmax_e2e` database would have to disable the old one first — and
+ * the old secret is unrecoverable (sealed, and the state file that
+ * carried it has been overwritten). ConfirmMfa would additionally spend
+ * an Argon2id hash per recovery code on every seed run for codes no
+ * spec uses.
+ *
+ * What the suite actually exercises is the SIGN-IN side, and that stays
+ * real: the secret is sealed with the same envelope cipher and AAD
+ * binding production uses, so `SignIn` opens it and verifies the code
+ * through its own unmodified path.
+ */
+async function enrollTotp(organizationId: string, userId: string): Promise<string> {
+  const secretBase32 = generateTotpSecretBase32();
+  const secretCiphertext = await sealTotpSecret({ secretBase32, organizationId, userId });
+
+  // Replace, don't add: sign-in picks one enrollment with findFirst, so
+  // leaving a previous run's row behind is a coin flip between the
+  // secret we just wrote and one nobody holds.
+  await prisma.mfaEnrollment.deleteMany({ where: { userId } });
+  await prisma.mfaEnrollment.create({
+    data: {
+      organizationId,
+      userId,
+      type: MfaType.TOTP,
+      secretCiphertext,
+      verifiedAt: clock.systemClock.now(),
+    },
+  });
+
+  return secretBase32;
+}
+
 async function seedOperator(
   organizationId: string,
   spec: OperatorSpec,
   hashedPassword: string
-): Promise<string> {
+): Promise<SeededOperator> {
   const user = await prisma.user.upsert({
     where: { organizationId_email: { organizationId, email: spec.email } },
     update: { hashedPassword, status: UserStatus.ACTIVE },
@@ -196,7 +258,20 @@ async function seedOperator(
   // normalizes emailAttempted before writing.
   await prisma.loginAttempt.deleteMany({ where: { emailAttempted: spec.email.toLowerCase() } });
 
-  return user.id;
+  // Read the floor from RBAC instead of naming roles here, so adding a
+  // role to ELEVATED_ROLE_CODES reseeds this fixture instead of locking
+  // the suite out of its own operators.
+  if (!ELEVATED_ROLE_CODES.includes(spec.roleCode)) {
+    // Below the floor: stay password-only, and undo an enrollment left
+    // by an earlier revision so the suite keeps covering that path.
+    await prisma.mfaEnrollment.deleteMany({ where: { userId: user.id } });
+    await prisma.user.update({ where: { id: user.id }, data: { mfaEnrolled: false } });
+    return { userId: user.id, totpSecret: null };
+  }
+
+  const totpSecret = await enrollTotp(organizationId, user.id);
+  await prisma.user.update({ where: { id: user.id }, data: { mfaEnrolled: true } });
+  return { userId: user.id, totpSecret };
 }
 
 async function main(): Promise<void> {
@@ -226,9 +301,18 @@ async function main(): Promise<void> {
     }
 
     const userIds: string[] = [];
+    // email -> base32 TOTP secret, for the operators the MFA floor
+    // covers. Handed to the specs through the state file; never logged.
+    const totpSecrets: Record<string, string> = {};
     for (let i = 0; i < OPERATORS.length; i++) {
-      userIds.push(await seedOperator(org.id, OPERATORS[i]!, hashes[i]!));
-      console.log(`✓ E2E operator ready: ${OPERATORS[i]!.email} (${OPERATORS[i]!.roleCode})`);
+      const spec = OPERATORS[i]!;
+      const seeded = await seedOperator(org.id, spec, hashes[i]!);
+      userIds.push(seeded.userId);
+      if (seeded.totpSecret !== null) {
+        totpSecrets[spec.email] = seeded.totpSecret;
+      }
+      const factor = seeded.totpSecret === null ? "password-only" : "password + TOTP";
+      console.log(`✓ E2E operator ready: ${spec.email} (${spec.roleCode}, ${factor})`);
     }
 
     // Synthetic ACTIVE provider — direct upsert by NPI (deliberate
@@ -278,6 +362,7 @@ async function main(): Promise<void> {
       existingPatientId: existingPatient?.id ?? null,
       apiKeyExists: existingKey !== null,
       tokenHash,
+      totpSecrets,
     };
   });
 
@@ -333,6 +418,7 @@ async function main(): Promise<void> {
     patientId,
     patientLastName: E2E_PATIENT.lastName,
     providerId: bootstrap.providerId,
+    totpSecrets: bootstrap.totpSecrets,
   };
   writeFileSync(E2E_STATE_FILE, `${JSON.stringify(state, null, 2)}\n`);
   console.log(`✓ E2E state written: ${E2E_STATE_FILE}`);

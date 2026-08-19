@@ -33,11 +33,17 @@ export const E2E_DATABASE_URL =
 export const E2E_KMS_SEED = "pharmax-e2e-local-kms-seed-synthetic-never-production";
 
 /**
- * The seeded operator. A Pharmacist deliberately: the role is NOT on
- * the platform MFA floor (OrgAdmin / BillingManager are), so the suite
- * exercises the real password sign-in path without inventing an MFA
- * bypass. Seeded by scripts/e2e-seed.ts through the same Argon2id
- * hasher the app boots with.
+ * The seeded operator. A Pharmacist deliberately: PV1 and final
+ * verification require pharmacist authority, so the golden path cannot
+ * be walked by a lesser role.
+ *
+ * `Pharmacist` is ON the platform MFA floor (ELEVATED_ROLE_CODES), so
+ * this operator signs in with password + TOTP. The seed enrolls a real
+ * authenticator and passes the secret through the state file; the specs
+ * mint codes with the same module `SignIn` verifies against. No MFA
+ * bypass anywhere — the floor is enforced exactly as in production.
+ * Seeded by scripts/e2e-seed.ts through the same Argon2id hasher the
+ * app boots with.
  */
 export const E2E_OPERATOR_EMAIL = "e2e-pharmacist@acme.test";
 export const E2E_OPERATOR_PASSWORD = "pharmax-e2e-smoke-Password-1!";
@@ -54,8 +60,11 @@ export const E2E_OPERATOR_PASSWORD = "pharmax-e2e-smoke-Password-1!";
  *   - pharmacist 2 (Pharmacist): final verification
  *   - shipping clerk (ShippingClerk): release / create / confirm shipment
  *
- * All four roles sit BELOW the platform MFA floor (OrgAdmin /
- * BillingManager), so every sign-in is the real password-only path.
+ * The two Pharmacists are on the MFA floor and sign in with a second
+ * factor; the technicians and the shipping clerk are below it and sign
+ * in with a password only. The suite therefore covers both shapes, and
+ * which is which follows ELEVATED_ROLE_CODES rather than a list here —
+ * the list is what broke when `Pharmacist` joined the floor.
  */
 export const E2E_TECH_EMAIL = "e2e-tech@acme.test";
 export const E2E_TECH_PASSWORD = "pharmax-e2e-tech-Password-1!";
@@ -100,6 +109,16 @@ export interface E2ESeedState {
   readonly patientId: string;
   readonly patientLastName: string;
   readonly providerId: string;
+  /**
+   * Base32 TOTP secrets by operator email, for the operators whose role
+   * sits on the platform MFA floor. Generated fresh on every seed run
+   * and handed over here rather than fixed in this file: a constant
+   * shaped like a shared secret is both a secret-scanner finding and a
+   * standing invitation to reuse it somewhere that matters.
+   *
+   * Absent for below-floor roles, which stay password-only.
+   */
+  readonly totpSecrets: Readonly<Record<string, string>>;
 }
 
 /**
