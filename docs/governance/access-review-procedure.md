@@ -66,20 +66,30 @@ This pacing leaves headroom for the third month of the quarter to absorb any cro
 
 The review covers every system in which Pharmax users (humans or service identities) have credentials or roles:
 
-| Scope                  | System                                                                                            | Source for the report                                                                        |
-| ---------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Operator console users | Pharmax `User` table + role assignments via `@pharmax/rbac`                                       | SQL queries in `scripts/security/access-review/` (delivered by Tier 3 lane O)                |
-| Authentication         | Clerk                                                                                             | Clerk dashboard CSV export, organization-scoped                                              |
-| Cloud infrastructure   | AWS IAM principals, AWS SSO assignments, AWS service-account roles                                | `aws iam list-users`, `aws sso-admin list-account-assignments`, plus role-policy enumeration |
-| Payments               | Stripe dashboard users                                                                            | Stripe dashboard CSV export                                                                  |
-| Shipping               | EasyPost portal users; FedEx and UPS direct-account users where applicable                        | Vendor portal export                                                                         |
-| Source code and CI     | GitHub organization members and outside collaborators with repo access                            | `gh api orgs/pharmax/members` + per-repo collaborator listing                                |
-| Observability          | Sentry users, Datadog or Honeycomb users (when selected)                                          | Vendor admin export                                                                          |
-| Communications         | Resend users (when in use)                                                                        | Vendor admin export                                                                          |
-| Workforce credentials  | 1Password vault membership and group access                                                       | 1Password admin export                                                                       |
-| Database               | PostgreSQL roles in use, focused on `pharmax_app`, `pharmax_system`, and any human-attached roles | `\du` in psql against the production read-replica, plus IAM-related Secrets Manager queries  |
+| Scope                  | System                                                                                            | Source for the report                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Operator console users | Pharmax `User` table + role assignments via `@pharmax/rbac`                                       | `scripts/security/run-access-review.ts`                                                     |
+| Authentication         | In-house (`@pharmax/auth`) — reviewed as part of the `User` table above                           | Same as operator console; Clerk was retired 2026-07 per ADR-0030                            |
+| Cloud infrastructure   | AWS account root, IAM principals, Identity Center assignments, KMS key policies                   | `scripts/security/access-review/infrastructure-access.ts`, plus the management account (§6) |
+| Payments               | Stripe dashboard users                                                                            | Stripe dashboard CSV export                                                                 |
+| Shipping               | EasyPost portal users; FedEx and UPS direct-account users where applicable                        | Vendor portal export                                                                        |
+| Source code and CI     | GitHub organization members and outside collaborators with repo access                            | `gh api orgs/pharmax/members` + per-repo collaborator listing                               |
+| Observability          | Sentry users, Datadog or Honeycomb users (when selected)                                          | Vendor admin export                                                                         |
+| Communications         | Resend users (when in use)                                                                        | Vendor admin export                                                                         |
+| Workforce credentials  | 1Password vault membership and group access                                                       | 1Password admin export                                                                      |
+| Database               | PostgreSQL roles in use, focused on `pharmax_app`, `pharmax_system`, and any human-attached roles | `\du` in psql against the production read-replica, plus IAM-related Secrets Manager queries |
 
 The exact set of vendor portals tracks the current [vendor inventory](./vendor-inventory.md). When a vendor is added or removed under [Vendor Management Policy](../policies/vendor-management-policy.md), the next quarterly review picks up the change.
+
+### 3.1 Before the first tenant, the application half is empty and the infrastructure half is not
+
+Until an organization exists, `run-access-review.ts` has nothing to read: it takes an organization UUID and an operator who is a user inside that organization, and with neither present it exits rather than producing an empty report.
+
+That is the correct behaviour and it is not a gap in the review. An access review reviews who can reach PHI; with no tenants, no users and no PHI there is genuinely nothing on that surface to review. "No organizations existed during this period" is a complete answer, and creating one so the script has something to read would manufacture the evidence rather than produce it.
+
+The conclusion that does **not** follow is that the quarter has no access to review. Every principal that can reach the production database, the KMS keys that will wrap every tenant DEK, and the pipeline that deploys to the environment holding PHI exists today and is reviewable today. That is the [infrastructure access review worksheet](../compliance/infrastructure-access-review-worksheet.md), and in the pre-tenant quarters it is the whole review.
+
+Record the application half as "not run — zero organizations" in the worksheet §2 rather than omitting it. An omission and a reasoned non-applicability look identical in an evidence folder a year later, and only one of them is defensible.
 
 ## 4. Roles
 
@@ -166,20 +176,18 @@ At the next quarter's review kick-off, the prior-quarter corrective tickets are 
 
 ## 6. SQL and CLI scripts
 
-The SQL queries and CLI invocations that produce the per-scope reports live in `scripts/security/access-review/` (delivered by the Tier 3 access-review lane). The current planned set:
+Two scripts exist today. Both are reproducible — same input set, same output — which matters for the audit trail, because an auditor who asks "what did the world look like in Q2 of last year?" needs the run to be repeatable.
 
-- `operator-console.ts` — Pharmax `User` rows + effective role assignments + last-activity timestamp.
-- `clerk-users.ts` — Clerk users via the Clerk API.
-- `aws-principals.ts` — AWS IAM users, AWS SSO assignments, service-account roles.
-- `stripe-users.ts` — Stripe team-member listing via the Stripe API.
-- `easypost-users.ts` — EasyPost team listing.
-- `github-collaborators.ts` — GitHub org members + outside collaborators.
-- `sentry-users.ts` — Sentry team listing.
-- `observability-users.ts` — Datadog or Honeycomb team listing (once selected).
-- `onepassword-membership.ts` — 1Password vault membership.
-- `database-roles.ts` — PostgreSQL role enumeration via `\du`.
+| Script                                                    | Covers                                                                                                                                                                                                                                                    | Status |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| `scripts/security/run-access-review.ts`                   | Application RBAC for one organization: `User` rows, effective role assignments, elevated roles, stale assignments. Writes a digest-sealed `access_review_snapshot` row and a JSON report.                                                                 | Exists |
+| `scripts/security/access-review/infrastructure-access.ts` | AWS account root posture, IAM users, Identity Center instances, KMS customer-managed key policies, GitHub collaborators, deploy keys and production-environment reviewers. Writes `infrastructure-access.csv` with blank `decision` columns for the walk. | Exists |
 
-The scripts are designed to be reproducible — same input set, same output. Reproducibility matters for the audit trail; an auditor who asks "what did the world look like in Q2 of last year?" needs to be able to re-run.
+Everything else in §3 is enumerated manually into the [infrastructure access review worksheet](../compliance/infrastructure-access-review-worksheet.md) §4. That is a deliberate stopping point rather than a backlog. A vendor with one or two human users does not repay an API integration and a credential to maintain, and each such script would be one more thing that can silently stop working — a report that returns an empty list because its token expired reads exactly like a clean review.
+
+**An earlier version of this section listed ten planned scripts, none of which existed.** Several named vendors that have since been retired (Clerk, per ADR-0030) or are being decommissioned (EasyPost) or were never selected (Datadog/Honeycomb). A procedure that promises tooling it does not have is the same defect as a risk register that credits a control it does not have — see R-027 — and it is worse here, because the promise is what a reviewer relies on when deciding the review is complete.
+
+If a manual surface grows past a handful of principals, add a script and add a row above. The test for whether it is worth automating is whether a human can still enumerate it accurately in a few minutes.
 
 ## 7. Off-cycle reviews
 
@@ -205,7 +213,8 @@ Off-cycle reviews follow the same procedure, scoped to the trigger.
 
 ## Revision history
 
-| Version | Date       | Author | Change                                                     |
-| ------- | ---------- | ------ | ---------------------------------------------------------- |
-| 0.1     | 2026-05-27 | CTO    | Initial drafting                                           |
-| 1.0     | 2026-08-18 | CEO    | Adopted. Effective date set; annual review cadence begins. |
+| Version | Date       | Author | Change                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------- | ---------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0.1     | 2026-05-27 | CTO    | Initial drafting                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 1.0     | 2026-08-18 | CEO    | Adopted. Effective date set; annual review cadence begins.                                                                                                                                                                                                                                                                                                                                                                               |
+| 1.1     | 2026-08-18 | CEO    | §6 corrected: it listed ten scripts that did not exist, several for retired or never-selected vendors. Replaced with the two that do, and a stated reason for not automating the rest. §3 refreshed for the retirement of Clerk and for the infrastructure script. New §3.1 states how the review works before the first tenant exists, when the application half is legitimately empty and the infrastructure half is the whole review. |
