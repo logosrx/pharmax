@@ -52,15 +52,14 @@ so this list is stable across CI changes.
 
 - `ci-pass` — produced by `.github/workflows/ci.yml`. Aggregates:
   `lint`, `format`, `typecheck`, `prisma-validate`, `safety-linters`,
-  `test`.
+  `test`, `integration`, `drift`. (The `integration` and `drift` jobs
+  moved into `ci.yml` from the retired `integration.yml` and now run
+  unconditionally on every PR — the real-Postgres suite guards the
+  command bus's atomic-write invariant, so path-filtering it was a
+  hole, and `ci-pass` aggregates via `needs`, which cannot cross
+  workflows.)
 - `security-pass` — produced by `.github/workflows/security.yml`.
   Aggregates: `codeql`, `gitleaks`, `dependency-review`, `sbom`.
-- `integration` — produced by `.github/workflows/integration.yml`
-  when the PR touches paths that opt the integration suite in
-  (`prisma/**`, `packages/database/**`, ...). Required only when
-  it runs; configure as **"Require branches to be up to date
-  before merging"** so a stale PR that doesn't touch DB paths
-  cannot evade the check by merging behind a sibling PR that did.
 
 **Strict mode:** enable `Require branches to be up to date before
 merging` so every CI run is on the actual merge candidate. Disabled

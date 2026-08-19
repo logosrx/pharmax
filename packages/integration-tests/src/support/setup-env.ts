@@ -46,6 +46,8 @@
 
 import process from "node:process";
 
+import { pinSessionRole } from "./db-url.js";
+
 /** Session role the Prisma client connects as. Mirrors apps/web. */
 const APP_ROLE = "pharmax_app";
 
@@ -59,26 +61,16 @@ const APP_ROLE = "pharmax_app";
  */
 const LOCAL_KMS_SEED = "pharmax-integration-suite-synthetic-kms-seed-never-production";
 
-/**
- * Return `url` with the libpq `options` startup parameter set to pin the
- * session role, preserving anything already in the query string.
- *
- * If the caller already pinned a role — a CI job or a developer testing
- * the `pharmax_system` path — that choice is respected rather than
- * overwritten. Silently replacing an explicit role would make this file
- * the reason a deliberate experiment produced confusing results.
- */
-export function pinSessionRole(url: string, role: string): string {
-  const parsed = new URL(url);
-  const existing = parsed.searchParams.get("options");
-  if (existing !== null && existing.includes("role=")) {
-    return url;
-  }
-  parsed.searchParams.set("options", `-c role=${role}`);
-  return parsed.toString();
-}
-
 function resolveBaseUrl(): string {
+  // Re-execution guard. Vitest can instantiate this module TWICE: once
+  // as the setupFiles entry and once more if any test helper imports it
+  // (separate module instances, same process). On the second run
+  // DATABASE_URL is already pinned to the app role, so deriving "base"
+  // from it would store a pinned URL as the owner URL — and everything
+  // that builds an owner or system connection from it would silently
+  // run as `pharmax_app`. The first run's preserved base is the truth.
+  const preserved = process.env["INTEGRATION_OWNER_DATABASE_URL"];
+  if (typeof preserved === "string" && preserved.length > 0) return preserved;
   const integration = process.env["INTEGRATION_DATABASE_URL"];
   if (typeof integration === "string" && integration.length > 0) return integration;
   const dev = process.env["DATABASE_URL"];

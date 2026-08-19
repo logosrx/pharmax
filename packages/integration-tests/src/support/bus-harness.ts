@@ -102,6 +102,34 @@ export function configureHarness(): { prisma: typeof prisma } {
   return { prisma };
 }
 
+/**
+ * Fail unless the Prisma client is really connected as `pharmax_app`.
+ *
+ * This is the load-bearing assumption of the whole harness and the one
+ * most likely to break silently. If `setup-env.ts` stops pinning the
+ * role — a refactor, a CI job that exports its own DATABASE_URL, a
+ * future change to how `packages/database` reads config — then every
+ * command here would run as a Postgres SUPERUSER with RLS bypassed. The
+ * suite would stay green while quietly proving nothing about tenant
+ * isolation, and a green check that has stopped testing what it claims
+ * is worse than no check.
+ *
+ * Verified shape: `current_user` is the assumed role, `session_user`
+ * remains the login user. Asserting on `current_user` is what matters,
+ * since that is what RLS policies evaluate against.
+ */
+export async function assertAppRolePinned(): Promise<void> {
+  const rows = await prisma.$queryRaw<Array<{ current_user: string }>>`select current_user`;
+  const role = rows[0]?.current_user;
+  if (role !== "pharmax_app") {
+    throw new Error(
+      `bus-harness: expected Prisma to connect as "pharmax_app" but it is "${String(role)}".\n` +
+        "RLS would be bypassed and this suite's isolation assertions would be vacuous.\n" +
+        "Check that DATABASE_URL carries `options=-c role=pharmax_app` (see support/setup-env.ts)."
+    );
+  }
+}
+
 export interface ActingAsInput {
   readonly organizationId: string;
   readonly userId: string;

@@ -62,8 +62,8 @@ Pharmax-specific patterns in `.github/gitleaks.toml`:
 - Clerk `sk_*`, `pk_live_*`, `whsec_*`.
 - EasyPost `EZTK*`, `EZAK*`.
 - A guarded pattern for `PHARMAX_LOCAL_KMS_SEED` assignments
-  that allows the CI-only seed in `integration.yml` but blocks
-  everywhere else.
+  that allows the CI-only seed in `ci.yml` (home of the
+  integration job) but blocks everywhere else.
 
 Gitleaks blocks (`continue-on-error: false`). A leaked credential
 is a critical incident, not advisory.

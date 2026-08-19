@@ -1008,9 +1008,15 @@ importers:
       '@pharmax/fill':
         specifier: workspace:*
         version: link:../fill
+      '@pharmax/labels':
+        specifier: workspace:*
+        version: link:../labels
       '@pharmax/orders':
         specifier: workspace:*
         version: link:../orders
+      '@pharmax/patients':
+        specifier: workspace:*
+        version: link:../patients
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../platform-core

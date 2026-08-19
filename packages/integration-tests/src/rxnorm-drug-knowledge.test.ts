@@ -38,6 +38,7 @@ import {
 
 import { assertSchemaReady, connect } from "./lib/db.js";
 import { cleanupTenant, seedOrderChain, seedTenant, type SeededTenant } from "./lib/seed.js";
+import { disconnectSystemDb, systemDb } from "./support/system-prisma.js";
 
 import type { Client } from "pg";
 
@@ -118,9 +119,10 @@ function writeReleaseDir(marker: string): string {
 }
 
 async function wipeRxnormTables(): Promise<void> {
-  // Global tables: pass through the tenancy extension with no frame.
-  // Cascade removes the data rows.
-  await prisma.rxnormRelease.deleteMany({});
+  // Global tables, and pharmax_app deliberately holds no DELETE on them
+  // — the write set belongs to pharmax_system, the role the ingestion
+  // job runs as. Cascade removes the data rows.
+  await systemDb().rxnormRelease.deleteMany({});
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +259,7 @@ afterAll(async () => {
   }
   await cleanupTenant(owner, tenant.organizationId);
   await owner.end();
+  await disconnectSystemDb();
   await prisma.$disconnect().catch(() => undefined);
   resetClinicalScreeningConfigurationForTests();
 });
@@ -266,7 +269,7 @@ describe("rxnorm ingestion — versioned, checksummed, atomic", () => {
 
   it("loads a release, promotes it LIVE, and records sane counts", async () => {
     const summary = await ingestRxnormRelease({
-      db: prisma,
+      db: systemDb(),
       directory: v1Dir,
       version: "07072026",
     });
@@ -284,7 +287,7 @@ describe("rxnorm ingestion — versioned, checksummed, atomic", () => {
 
   it("is idempotent over byte-identical input", async () => {
     const summary = await ingestRxnormRelease({
-      db: prisma,
+      db: systemDb(),
       directory: v1Dir,
       version: "07072026",
     });
@@ -295,7 +298,7 @@ describe("rxnorm ingestion — versioned, checksummed, atomic", () => {
   it("refuses a release older than what is live", async () => {
     const olderDir = writeReleaseDir("V0-OLDER");
     await expect(
-      ingestRxnormRelease({ db: prisma, directory: olderDir, version: "06092026" })
+      ingestRxnormRelease({ db: systemDb(), directory: olderDir, version: "06092026" })
     ).rejects.toMatchObject({ code: RXNORM_INGEST_ERRORS.RELEASE_NOT_NEWER });
     // And nothing changed: the live release is still v1.
     const live = await prisma.rxnormRelease.findFirst({ where: { status: "LIVE" } });
@@ -304,14 +307,14 @@ describe("rxnorm ingestion — versioned, checksummed, atomic", () => {
 
   it("refuses a garbage version token before touching anything", async () => {
     await expect(
-      ingestRxnormRelease({ db: prisma, directory: v1Dir, version: "13372026" })
+      ingestRxnormRelease({ db: systemDb(), directory: v1Dir, version: "13372026" })
     ).rejects.toBeInstanceOf(RxnormIngestError);
   });
 
   it("supersedes atomically on a newer release, keeping at most one LIVE", async () => {
     const v2Dir = writeReleaseDir("V2");
     const summary = await ingestRxnormRelease({
-      db: prisma,
+      db: systemDb(),
       directory: v2Dir,
       version: "08032026",
     });
