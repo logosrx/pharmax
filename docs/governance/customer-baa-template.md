@@ -160,14 +160,19 @@ as restrictive as those that apply to Pharmax under this Agreement.
 > ciphertext include AWS (Aurora, S3, KMS, ECS, CloudWatch Logs) and
 > EasyPost (recipient addresses, which are PHI by linkage).
 >
-> As of the 2026-08-18 adoption of the governance bundle, **AWS and Sentry
-> are `executed`** and **EasyPost is `not requested`**. So §3.4 is closer
-> to true than it was, and still not true: while label purchase is enabled,
-> EasyPost receives PHI under no agreement. Signing this clause in that
-> state would be a false representation in a federally regulated contract.
-> See §7, and check the [BAA tracker](./baa-tracker.md) rather than this
-> paragraph before signature — that file is the record, this is a summary
-> of it on one date.
+> As of 2026-08-18: **AWS and Sentry are `executed`**, and **EasyPost is
+> being decommissioned** rather than signed (2026-08-17). Retiring it
+> closes the last gap by removing the counterparty — it was a SaaS
+> middleman storing addresses in its own platform, which is what made it a
+> business associate. FedEx and UPS replace it directly under a **conduit
+> determination** (HHS FAQ #245) with tenant-owned credentials, so they add
+> no BAA obligation.
+>
+> So §3.4 becomes signable — but on a fact about production, not about
+> intent. It is true once the EasyPost integration is **off in production**
+> and counsel has concurred with the carrier conduit determination.
+> Verify both against the [BAA tracker](./baa-tracker.md) before signature;
+> that file is the record and this paragraph is a summary of it on one date.
 
 **3.5 Individual right of access** — _(E)_. Pharmax will make PHI in a
 Designated Record Set available to the Covered Entity as necessary to
@@ -308,14 +313,14 @@ Each row is a factual representation this Agreement makes. Verify before
 signature; a false representation here is materially worse than a missing
 feature.
 
-| #   | Representation                                                          | Clause | Status                                                                                                                     |
-| --- | ----------------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Subcontractor BAAs are executed with every PHI-touching vendor          | §3.4   | **FALSE** — AWS and Sentry `executed`; **EasyPost `not requested`** and it receives recipient addresses. One row blocks.   |
-| 2   | A Covered Entity can retrieve an Individual's record set on request     | §3.5   | **PARTIAL** — operator console is the retrieval path; there is no export producer, so a request is served by hand today.   |
-| 3   | Disclosure accounting is queryable per patient for the § 164.528 period | §3.7   | **VERIFY** — the audit log is hash-chained and complete; confirm a per-Individual disclosure query exists and is scoped.   |
-| 4   | Tenant data export and purge exist for the termination path             | §5.4   | **VERIFY** — needed before signing §5.4. Confirm a per-tenant export and purge routine exists and has been exercised once. |
-| 5   | Workforce security training is delivered and attested                   | §3.10  | **VERIFY** — the program document exists; confirm attestations are on file for everyone with production access.            |
-| 6   | Breach notification can be executed within the 24-hour internal target  | §3.3   | **VERIFY** — depends on alarms reaching a human. Confirm a subscribed, confirmed on-call endpoint exists.                  |
+| #   | Representation                                                          | Clause | Status                                                                                                                                                                                                |
+| --- | ----------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Subcontractor BAAs are executed with every PHI-touching vendor          | §3.4   | **PENDING TWO FACTS** — AWS and Sentry `executed`; EasyPost decommissioning; FedEx/UPS conduit. True once (a) EasyPost is off in **production** and (b) counsel concurs on the conduit determination. |
+| 2   | A Covered Entity can retrieve an Individual's record set on request     | §3.5   | **PARTIAL** — operator console is the retrieval path; there is no export producer, so a request is served by hand today.                                                                              |
+| 3   | Disclosure accounting is queryable per patient for the § 164.528 period | §3.7   | **VERIFY** — the audit log is hash-chained and complete; confirm a per-Individual disclosure query exists and is scoped.                                                                              |
+| 4   | Tenant data export and purge exist for the termination path             | §5.4   | **VERIFY** — needed before signing §5.4. Confirm a per-tenant export and purge routine exists and has been exercised once.                                                                            |
+| 5   | Workforce security training is delivered and attested                   | §3.10  | **VERIFY** — the program document exists; confirm attestations are on file for everyone with production access.                                                                                       |
+| 6   | Breach notification can be executed within the 24-hour internal target  | §3.3   | **VERIFY** — depends on alarms reaching a human. Confirm a subscribed, confirmed on-call endpoint exists.                                                                                             |
 
 Rows 1 and 2 are the two that change what the paper may say. Row 1 is
 procurement; row 2 is roughly a week of engineering, or a narrowing of §3.5

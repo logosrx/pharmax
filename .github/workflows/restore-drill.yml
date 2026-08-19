@@ -171,7 +171,7 @@ jobs:
         continue-on-error: true
 
       - name: Open / update the drill tracking issue
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const preflightResult = '${{ needs.preflight.result }}';      // success|failure|skipped

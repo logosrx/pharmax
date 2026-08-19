@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@node-rs/argon2": "^2.0.2",
+    "@node-rs/argon2": "^2.1.0",
     "@pharmax/cache": "workspace:*",
     "@pharmax/command-bus": "workspace:*",
     "@pharmax/crypto": "workspace:*",

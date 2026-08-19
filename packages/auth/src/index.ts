@@ -90,7 +90,12 @@ export {
   type RevokeReason,
 } from "./session/service.js";
 
-export { generateTotpSecretBase32, buildTotpKeyUri, verifyTotpCode } from "./mfa/totp.js";
+export {
+  generateTotpSecretBase32,
+  buildTotpKeyUri,
+  generateTotpCode,
+  verifyTotpCode,
+} from "./mfa/totp.js";
 export {
   createSimpleWebAuthnAdapter,
   type WebAuthnAdapter,
