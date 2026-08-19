@@ -64,6 +64,14 @@ Cadence defaults — unless a specific policy overrides them:
 - [`breach-notification-policy.md`](./breach-notification-policy.md) — the § 164.400–414 workflow that begins partway through an incident: the breach presumption, the four-factor risk assessment, the statutory exceptions, the notification matrix, the register, and the § 164.414 proof file. Separate from incident response because the two answer to different clocks — an incident closes when the system is safe, a breach closes when every notification is discharged and provable.
 - [`business-continuity-and-disaster-recovery.md`](./business-continuity-and-disaster-recovery.md) — RTO, RPO, critical functions, failover scenarios, drill cadence.
 
+## Running the controls for the first time
+
+Every policy here is adopted and none of its controls has yet operated. The
+[first-cycle runbook](../compliance/first-cycle-runbook.md) sequences the first
+execution of each one, scoped for solo execution, and states the
+concentrated-roles position explicitly rather than fabricating separation that
+does not exist. Work through it before the first quarterly window closes.
+
 ## Related governance and security artifacts
 
 The policies above are the **what** and the **why**. Two sibling directories hold the **who**, the **when**, and the **how**:
