@@ -166,6 +166,25 @@ a real `incident-log.csv` and `breach-register.csv` rather than the stub.
 Skim the manifest for anything that looks wrong — an empty export where you
 expect rows usually means a filter or a date range, not an absence.
 
+**Check `source` and `complete` before you file anything.** The manifest records
+which host and database it read from, and whether every export succeeded:
+
+```json
+"source": { "host": "…", "database": "…", "looksNonProduction": false },
+"complete": true
+```
+
+`looksNonProduction: true` means the pack is a smoke test and must not be filed
+as evidence. This is not hypothetical — the first run of this session was
+generated against a seeded development database and written straight into
+`evidence/`, where nothing about the artifacts distinguished 42 fixture users
+from 42 real ones. The provenance fields exist so that mistake is visible rather
+than permanent.
+
+`complete: false` means at least one export failed and the pack is partial. A
+partial pack is worth keeping, but it must be labelled, because the gap will not
+be obvious to whoever samples it later.
+
 ---
 
 ## Session 3 — Policy adoption record (30 min)

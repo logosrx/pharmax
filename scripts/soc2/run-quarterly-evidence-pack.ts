@@ -9,7 +9,18 @@
 // Failure semantics: a single script failure does NOT abort the
 // pack. The orchestrator records the failure in the manifest and
 // continues. The exit code is non-zero if any script failed so a
-// CI/cron wrapper notices.
+// CI/cron wrapper notices, and the manifest carries `complete: false`
+// so a human reading it later — when the exit code is long gone — sees
+// the conclusion rather than having to scan for a non-zero exitCode.
+//
+// Provenance: the manifest records the host, port and database name it
+// read from (never the credentials). Without that, a pack generated
+// from a seeded development database is byte-indistinguishable from one
+// generated against production — same artifact names, same columns, and
+// seed fixtures realistic enough that the contents do not give it away.
+// An auditor sampling the folder cannot tell, and neither can the
+// operator who produced it. Recording the source is what keeps an
+// honest mistake distinguishable from a fabrication.
 //
 // Usage:
 //   pnpm exec tsx scripts/soc2/run-quarterly-evidence-pack.ts \
@@ -130,6 +141,71 @@ function runScript(scriptPath: string, args: ReadonlyArray<string>): Promise<Scr
   });
 }
 
+interface PackSource {
+  readonly host: string;
+  readonly port: string;
+  readonly database: string;
+  readonly looksNonProduction: boolean;
+}
+
+/**
+ * Hostnames that are never production. Used to warn, not to block: a
+ * local pack is legitimate as a smoke test, and refusing to produce one
+ * would just push people to run the child scripts by hand where nothing
+ * records provenance at all.
+ */
+const NON_PRODUCTION_HOSTS: ReadonlySet<string> = new Set([
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "0.0.0.0",
+  "host.docker.internal",
+]);
+
+const NON_PRODUCTION_HINTS: ReadonlyArray<string> = ["dev", "staging", "test", "local", "sandbox"];
+
+/**
+ * Describes WHERE the pack's data came from, so the manifest can say so.
+ *
+ * Without this a pack generated from a seeded development database is
+ * byte-indistinguishable from one generated against production: the
+ * artifacts have the same names, the same columns, and seed fixtures are
+ * realistic enough that the contents do not give it away either. An
+ * auditor sampling the folder a year later has no way to tell, and
+ * neither has the operator who produced it.
+ *
+ * That makes an honest mistake indistinguishable from a fabrication,
+ * which is the property worth removing. The connection string's
+ * credentials are deliberately NOT recorded — host, port and database
+ * name identify the source without putting a password in an artifact
+ * that gets emailed to auditors.
+ */
+function describeSource(databaseUrl: string): PackSource {
+  let parsed: URL;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    return {
+      host: "(unparseable DATABASE_URL)",
+      port: "",
+      database: "",
+      // Fail toward suspicion: a source we cannot identify is not one we
+      // should quietly treat as production.
+      looksNonProduction: true,
+    };
+  }
+  const host = parsed.hostname;
+  const database = parsed.pathname.replace(/^\//, "");
+  const haystack = `${host} ${database}`.toLowerCase();
+  return {
+    host,
+    port: parsed.port,
+    database,
+    looksNonProduction:
+      NON_PRODUCTION_HOSTS.has(host) || NON_PRODUCTION_HINTS.some((h) => haystack.includes(h)),
+  };
+}
+
 interface ArtifactEntry {
   readonly name: string;
   readonly sizeBytes: number;
@@ -178,10 +254,12 @@ const SCRIPTS_IN_ORDER: ReadonlyArray<string> = [
 async function main(): Promise<void> {
   const args = parseCliArgs(process.argv.slice(2));
 
-  if (typeof process.env["DATABASE_URL"] !== "string") {
+  const databaseUrl = process.env["DATABASE_URL"];
+  if (typeof databaseUrl !== "string") {
     process.stderr.write("DATABASE_URL is required.\n");
     process.exit(1);
   }
+  const source = describeSource(databaseUrl);
   const seed = process.env["PHARMAX_LOCAL_KMS_SEED"];
   if (typeof seed !== "string" || seed.length < 32) {
     process.stderr.write("PHARMAX_LOCAL_KMS_SEED is required (>=32 chars).\n");
@@ -194,6 +272,20 @@ async function main(): Promise<void> {
   const outDir = args.outDir ?? resolve(repoRoot, "evidence", currentQuarterLabel(toDate));
 
   mkdirSync(outDir, { recursive: true });
+
+  // Said before the work rather than after, so an operator who is about
+  // to produce a pack from the wrong database finds out while they still
+  // care, not once the folder looks finished.
+  if (source.looksNonProduction) {
+    process.stderr.write(
+      `\n[quarterly-pack] ⚠ SOURCE DOES NOT LOOK LIKE PRODUCTION\n` +
+        `  reading from ${source.host}${source.port === "" ? "" : `:${source.port}`}/${source.database}\n` +
+        `  writing to   ${outDir}\n` +
+        `  This pack is a smoke test, not evidence. Do not file it, and do not\n` +
+        `  leave it in evidence/ where the next reader will assume otherwise.\n` +
+        `  The manifest records the source so the distinction survives you.\n\n`
+    );
+  }
 
   const childArgs: ReadonlyArray<string> = [
     `--from=${args.from}`,
@@ -219,11 +311,26 @@ async function main(): Promise<void> {
   }
 
   const artifacts = listArtifacts(outDir);
+  const failureCount = results.filter((r) => r.exitCode !== 0).length;
   const manifest = {
     pack: currentQuarterLabel(toDate),
     period: { from: args.from, to: args.to },
     generatedAt: new Date().toISOString(),
     dryRun: args.dryRun,
+    // Provenance. Credentials are excluded on purpose — this file is
+    // handed to auditors.
+    source: {
+      host: source.host,
+      port: source.port,
+      database: source.database,
+      looksNonProduction: source.looksNonProduction,
+    },
+    // A reader a year from now sees a list of script entries and would
+    // otherwise have to scan for a non-zero exitCode to notice the pack
+    // is partial. The exit code is gone by then; the manifest is what
+    // remains, so it states the conclusion rather than only the inputs.
+    complete: failureCount === 0,
+    failedScriptCount: failureCount,
     scripts: results.map((r) => ({
       script: r.script.replace(`${repoRoot}/`, ""),
       exitCode: r.exitCode,
@@ -256,8 +363,7 @@ async function main(): Promise<void> {
     );
   }
 
-  const failures = results.filter((r) => r.exitCode !== 0).length;
-  process.exit(failures > 0 ? 1 : 0);
+  process.exit(failureCount > 0 ? 1 : 0);
 }
 
 main().catch((cause: unknown) => {
