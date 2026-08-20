@@ -187,7 +187,9 @@ export const DeactivateProvider: Command<DeactivateProviderInput, DeactivateProv
         organizationId: true,
         npi: true,
         status: true,
-        deaNumber: true,
+        // Count only — same posture as the `deaNumber` column this
+        // replaces, which was selected solely to derive a boolean.
+        _count: { select: { deaRegistrations: true } },
       },
     });
 
@@ -237,7 +239,7 @@ export const DeactivateProvider: Command<DeactivateProviderInput, DeactivateProv
     // text. `hadDea` is a pre-deactivation snapshot for compliance
     // reports ("how many providers we deactivated had DEA?").
     const hasReasonText = input.reasonText !== undefined && input.reasonText.length > 0;
-    const hadDea = provider.deaNumber !== null;
+    const hadDea = provider._count.deaRegistrations > 0;
 
     return {
       output: {

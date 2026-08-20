@@ -14,7 +14,7 @@
 //   4. NPI immutability — submitting `npi` is rejected at Zod
 //      (`.strict()`) as COMMAND_INPUT_INVALID; `status` similarly
 //      not in schema.
-//   5. PHI rule — `command_log.requestPayload` redacts `deaNumber`;
+//   5. PHI rule — audit metadata carries NPI as the anchor and
 //      audit metadata keeps NPI as anchor + structural diff +
 //      post-update `hasDea`; outbox payload is ids + diff +
 //      timestamp + NPI only.
@@ -93,7 +93,7 @@ interface ProviderReadRow {
   organizationId: string;
   npi: string;
   status: ProviderStatus;
-  deaNumber: string | null;
+  _count: { deaRegistrations: number };
 }
 
 interface FakePrismaOptions {
@@ -109,7 +109,7 @@ function buildProviderRow(overrides: Partial<ProviderReadRow> = {}): ProviderRea
     organizationId: ORG_ID,
     npi: NPI,
     status: ProviderStatus.ACTIVE,
-    deaNumber: null,
+    _count: { deaRegistrations: 0 },
     ...overrides,
   };
 }
@@ -265,7 +265,7 @@ describe("UpdateProvider — happy path (single field)", () => {
 
   beforeEach(() => {
     fake = buildFakePrisma({
-      providerRow: buildProviderRow({ deaNumber: "BR1234567" }),
+      providerRow: buildProviderRow({ _count: { deaRegistrations: 1 } }),
     });
     wireBusAndRbac(fake.client);
   });
@@ -307,7 +307,7 @@ describe("UpdateProvider — happy path (single field)", () => {
 describe("UpdateProvider — happy path (mixed update + clear)", () => {
   it("writes set values + SQL NULL for cleared optionals, omits absent keys", async () => {
     const fake = buildFakePrisma({
-      providerRow: buildProviderRow({ deaNumber: "BR1234567" }),
+      providerRow: buildProviderRow({ _count: { deaRegistrations: 1 } }),
     });
     wireBusAndRbac(fake.client);
 
@@ -347,54 +347,41 @@ describe("UpdateProvider — happy path (mixed update + clear)", () => {
     });
 
     // Untouched columns are absent (not `undefined`, not `null`).
-    for (const k of ["lastName", "deaNumber", "addressLine1", "city", "state", "postalCode"]) {
+    for (const k of ["lastName", "addressLine1", "city", "state", "postalCode"]) {
       expect(k in data).toBe(false);
     }
   });
 });
 
-describe("UpdateProvider — happy path (clearing DEA flips hasDea)", () => {
-  it("hasDea reflects post-update state when DEA is cleared", async () => {
-    const fake = buildFakePrisma({
-      providerRow: buildProviderRow({ deaNumber: "BR1234567" }),
-    });
+describe("UpdateProvider — DEA is no longer this command's business", () => {
+  // A DEA registration moved to its own model and its own commands: it
+  // has an expiry, a registrant type, and per-schedule authority, none
+  // of which a `deaNumber` string on this input could express. These
+  // tests pin the narrowing so it cannot be quietly undone by someone
+  // adding the field back to the schema for convenience.
+
+  it("refuses a deaNumber input rather than ignoring it", async () => {
+    const fake = buildFakePrisma();
     wireBusAndRbac(fake.client);
 
-    await withTenancyContext(ctx(), () =>
-      executeCommand(
-        UpdateProvider,
-        { providerId: PROVIDER_ID, deaNumber: null },
-        { idempotencyKey: "clear-dea" }
+    // Silently dropping it would be worse than refusing: an operator
+    // who typed a renewed registration into this form would see a
+    // success and believe it was recorded.
+    await expect(
+      withTenancyContext(ctx(), () =>
+        executeCommand(
+          UpdateProvider,
+          { providerId: PROVIDER_ID, deaNumber: "AB1234563" } as never,
+          { idempotencyKey: "rejects-dea" }
+        )
       )
-    );
-
-    const audit = findOnly(fake.calls, "auditLog", "create");
-    const metadata = (audit.args as { data: { metadata: Record<string, unknown> } }).data.metadata;
-    expect(metadata["hasDea"]).toBe(false);
+    ).rejects.toThrow();
+    expect(fake.calls.some((c) => c.table === "provider" && c.op === "updateMany")).toBe(false);
   });
 
-  it("hasDea reflects post-update state when DEA is set", async () => {
+  it("reports hasDea from the registration count, unchanged by the update", async () => {
     const fake = buildFakePrisma({
-      providerRow: buildProviderRow({ deaNumber: null }),
-    });
-    wireBusAndRbac(fake.client);
-
-    await withTenancyContext(ctx(), () =>
-      executeCommand(
-        UpdateProvider,
-        { providerId: PROVIDER_ID, deaNumber: "BR1234567" },
-        { idempotencyKey: "set-dea" }
-      )
-    );
-
-    const audit = findOnly(fake.calls, "auditLog", "create");
-    const metadata = (audit.args as { data: { metadata: Record<string, unknown> } }).data.metadata;
-    expect(metadata["hasDea"]).toBe(true);
-  });
-
-  it("hasDea preserves pre-read state when DEA is untouched", async () => {
-    const fake = buildFakePrisma({
-      providerRow: buildProviderRow({ deaNumber: "BR1234567" }),
+      providerRow: buildProviderRow({ _count: { deaRegistrations: 2 } }),
     });
     wireBusAndRbac(fake.client);
 
@@ -402,7 +389,7 @@ describe("UpdateProvider — happy path (clearing DEA flips hasDea)", () => {
       executeCommand(
         UpdateProvider,
         { providerId: PROVIDER_ID, credential: "DO" },
-        { idempotencyKey: "untouched-dea" }
+        { idempotencyKey: "hasdea-readthrough" }
       )
     );
 
@@ -410,47 +397,24 @@ describe("UpdateProvider — happy path (clearing DEA flips hasDea)", () => {
     const metadata = (audit.args as { data: { metadata: Record<string, unknown> } }).data.metadata;
     expect(metadata["hasDea"]).toBe(true);
   });
-});
 
-// ---------------------------------------------------------------------
-// command_log redaction
-// ---------------------------------------------------------------------
-
-describe("UpdateProvider — command_log redaction", () => {
-  it("redacts ONLY deaNumber from requestPayload; other fields survive", async () => {
-    const fake = buildFakePrisma();
+  it("reports hasDea false when the prescriber holds no registration", async () => {
+    const fake = buildFakePrisma({
+      providerRow: buildProviderRow({ _count: { deaRegistrations: 0 } }),
+    });
     wireBusAndRbac(fake.client);
 
     await withTenancyContext(ctx(), () =>
       executeCommand(
         UpdateProvider,
-        {
-          providerId: PROVIDER_ID,
-          firstName: "Hannah",
-          credential: "MD",
-          deaNumber: "BR1234567",
-          email: "office@reyes-clinic.test",
-        },
-        { idempotencyKey: "redact" }
+        { providerId: PROVIDER_ID, credential: "DO" },
+        { idempotencyKey: "hasdea-none" }
       )
     );
 
-    const cmdLogCreate = findOnly(fake.calls, "commandLog", "create");
-    const payload = (
-      cmdLogCreate.args as {
-        data: { requestPayload: Record<string, unknown> };
-      }
-    ).data.requestPayload;
-
-    expect(payload["deaNumber"]).toBe("[Redacted]");
-
-    expect(payload["providerId"]).toBe(PROVIDER_ID);
-    expect(payload["firstName"]).toBe("Hannah");
-    expect(payload["credential"]).toBe("MD");
-    expect(payload["email"]).toBe("office@reyes-clinic.test");
-
-    const cmdLogJson = JSON.stringify(cmdLogCreate.args);
-    expect(cmdLogJson).not.toContain("BR1234567");
+    const audit = findOnly(fake.calls, "auditLog", "create");
+    const metadata = (audit.args as { data: { metadata: Record<string, unknown> } }).data.metadata;
+    expect(metadata["hasDea"]).toBe(false);
   });
 });
 
@@ -459,9 +423,9 @@ describe("UpdateProvider — command_log redaction", () => {
 // ---------------------------------------------------------------------
 
 describe("UpdateProvider — audit + outbox shape", () => {
-  it("audit metadata carries NPI + sorted diff lists + hasDea; no DEA plaintext", async () => {
+  it("audit metadata carries NPI + sorted diff lists + hasDea", async () => {
     const fake = buildFakePrisma({
-      providerRow: buildProviderRow({ deaNumber: null }),
+      providerRow: buildProviderRow({ _count: { deaRegistrations: 1 } }),
     });
     wireBusAndRbac(fake.client);
 
@@ -472,7 +436,6 @@ describe("UpdateProvider — audit + outbox shape", () => {
           providerId: PROVIDER_ID,
           firstName: "Hannah",
           credential: "MD",
-          deaNumber: "BR1234567",
           email: null,
         },
         { idempotencyKey: "audit" }
@@ -489,14 +452,11 @@ describe("UpdateProvider — audit + outbox shape", () => {
     const metadata = data["metadata"] as Record<string, unknown>;
     expect(metadata).toMatchObject({
       npi: NPI,
-      updatedFields: ["credential", "deaNumber", "firstName"],
+      updatedFields: ["credential", "firstName"],
       clearedFields: ["email"],
       hasDea: true,
     });
     expect(metadata["commandLogId"]).toBeDefined();
-
-    const auditJson = JSON.stringify(data, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
-    expect(auditJson).not.toContain("BR1234567");
   });
 
   it("outbox payload is ids + npi + diff + timestamp only; no plaintext PII", async () => {
@@ -510,7 +470,6 @@ describe("UpdateProvider — audit + outbox shape", () => {
           providerId: PROVIDER_ID,
           firstName: "Hannah",
           lastName: "Reyes",
-          deaNumber: "BR1234567",
         },
         { idempotencyKey: "outbox" }
       )
@@ -533,7 +492,7 @@ describe("UpdateProvider — audit + outbox shape", () => {
       providerId: PROVIDER_ID,
       organizationId: ORG_ID,
       npi: NPI,
-      updatedFields: ["deaNumber", "firstName", "lastName"],
+      updatedFields: ["firstName", "lastName"],
       clearedFields: [],
       occurredAt: "2026-06-01T12:00:00.000Z",
     });
@@ -680,8 +639,10 @@ describe("UpdateProvider — input validation", () => {
       { providerId: PROVIDER_ID, status: "INACTIVE" },
     ],
     ["extra fields rejected", { providerId: PROVIDER_ID, website: "https://x.test" }],
-    ["DEA wrong shape", { providerId: PROVIDER_ID, deaNumber: "br1234567" }],
-    ["DEA wrong length", { providerId: PROVIDER_ID, deaNumber: "BR123456" }],
+    [
+      "DEA rejected (separate command RecordProviderDeaRegistration)",
+      { providerId: PROVIDER_ID, deaNumber: "AB1234563" },
+    ],
     ["email malformed", { providerId: PROVIDER_ID, email: "not-an-email" }],
     ["state must be 2 uppercase letters", { providerId: PROVIDER_ID, state: "Cal" }],
     ["postalCode shape", { providerId: PROVIDER_ID, postalCode: "abcde" }],

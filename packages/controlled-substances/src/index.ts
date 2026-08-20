@@ -39,3 +39,20 @@ export type {
   DispensingViolationCode,
   PartialFillBasis,
 } from "./dispensing-rules.js";
+
+export {
+  DEA_AUTHORITY_EXPIRED,
+  DEA_AUTHORITY_NO_REGISTRATION,
+  DEA_AUTHORITY_NOT_ACTIVE,
+  DEA_AUTHORITY_SCHEDULE_NOT_AUTHORIZED,
+  evaluatePrescriberDeaAuthority,
+} from "./prescriber-authority.js";
+
+export type {
+  DeaAuthorityGranted,
+  DeaAuthorityRefusalCode,
+  DeaAuthorityRefused,
+  DeaAuthorityVerdict,
+  EvaluatePrescriberDeaAuthorityInput,
+  PrescriberDeaRegistrationFacts,
+} from "./prescriber-authority.js";

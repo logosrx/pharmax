@@ -44,9 +44,20 @@ import { randomUUID } from "node:crypto";
 
 import { errors } from "@pharmax/platform-core";
 import type { Command, HandlerResult } from "@pharmax/command-bus";
-import { Prisma, ProviderStatus } from "@pharmax/database";
+import {
+  ControlledSubstanceSchedule,
+  CredentialStatus,
+  CredentialVerificationMethod,
+  Prisma,
+  ProviderStatus,
+} from "@pharmax/database";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
+
+import { validateDeaNumber, type DeaValidationSuccess } from "../dea/validate-dea-number.js";
+
+/** A supplied DEA number failed offline validation. */
+export const PROVIDER_DEA_INVALID = "PROVIDER_DEA_INVALID";
 
 // ---------------------------------------------------------------------
 // Input schema
@@ -65,11 +76,20 @@ const inputSchema = z
     // the long tail of valid credentials is large and ever-growing.
     credential: z.string().min(1).max(40).optional(),
 
-    // DEA format: 2 letters + 7 digits. We validate shape only; the
-    // checksum check is a future hardening pass (see file comment).
+    // Optional convenience: onboarding usually has the DEA number to
+    // hand, and making the operator run a second command for it is
+    // friction with no safety benefit. Shape is checked here; the
+    // checksum, registrant type and surname cross-check run in the
+    // handler via `validateDeaNumber`, which also accepts the `9`
+    // second character this regex used to refuse.
+    //
+    // Expiry and per-schedule authority are NOT inputs here. Those are
+    // what `RecordProviderDeaRegistration` is for — a registration
+    // recorded at onboarding gets every controlled schedule and no
+    // expiry, matching what the old `deaNumber` column conferred.
     deaNumber: z
       .string()
-      .regex(/^[A-Z]{2}\d{7}$/, "expected 2 uppercase letters followed by 7 digits")
+      .regex(/^[A-Za-z][A-Za-z9]\d{7}$/, "expected a letter, a letter or 9, then seven digits")
       .optional(),
 
     // Practice contact (public, not PHI).
@@ -120,6 +140,36 @@ export const RegisterProvider: Command<RegisterProviderInput, RegisterProviderOu
     const now = clock.now();
     const providerId = randomUUID();
 
+    // Validate before writing anything: a bad check digit should refuse
+    // the whole registration rather than leave a prescriber row behind
+    // with no credential and no explanation.
+    let deaValidation: DeaValidationSuccess | null = null;
+    if (input.deaNumber !== undefined) {
+      const result = validateDeaNumber({
+        deaNumber: input.deaNumber,
+        lastName: input.lastName,
+      });
+      if (!result.ok) {
+        throw new errors.ValidationError({
+          code: PROVIDER_DEA_INVALID,
+          message: result.message,
+          issues: [{ path: ["deaNumber"], message: result.message }],
+          // The number itself stays out of the error: it is redacted
+          // from command_log for the same reason.
+          metadata: { reason: result.code },
+        });
+      }
+      if (!result.canPrescribe) {
+        throw new errors.ValidationError({
+          code: PROVIDER_DEA_INVALID,
+          message: `This DEA number is registered to a ${result.registrantType.toLowerCase().replace(/_/g, " ")}, which cannot write prescriptions.`,
+          issues: [{ path: ["deaNumber"], message: "not a prescribing registrant type" }],
+          metadata: { reason: "NOT_A_PRESCRIBING_REGISTRANT" },
+        });
+      }
+      deaValidation = result;
+    }
+
     // Single-row insert. organizationId is auto-injected by the
     // tenancy extension, but we set it explicitly so the row data
     // is self-documenting at the call site (and so test fakes that
@@ -133,7 +183,6 @@ export const RegisterProvider: Command<RegisterProviderInput, RegisterProviderOu
           firstName: input.firstName,
           lastName: input.lastName,
           ...(input.credential === undefined ? {} : { credential: input.credential }),
-          ...(input.deaNumber === undefined ? {} : { deaNumber: input.deaNumber }),
           ...(input.phone === undefined ? {} : { phone: input.phone }),
           ...(input.email === undefined ? {} : { email: input.email }),
           ...(input.addressLine1 === undefined ? {} : { addressLine1: input.addressLine1 }),
@@ -158,6 +207,32 @@ export const RegisterProvider: Command<RegisterProviderInput, RegisterProviderOu
         });
       }
       throw err;
+    }
+
+    // Same transaction as the provider row: a prescriber who appears
+    // registered but whose DEA silently failed to save is the state
+    // that produces an unexplained refusal at PV1.
+    if (deaValidation !== null) {
+      await tx.providerDeaRegistration.create({
+        data: {
+          organizationId: ctx.organizationId,
+          providerId,
+          deaNumber: deaValidation.deaNumber,
+          registrantType: deaValidation.registrantType,
+          // Every controlled schedule, matching exactly what the
+          // superseded `deaNumber` column conferred. Narrowing at
+          // onboarding would refuse prescriptions the old code allowed.
+          authorizedSchedules: [
+            ControlledSubstanceSchedule.CII,
+            ControlledSubstanceSchedule.CIII,
+            ControlledSubstanceSchedule.CIV,
+            ControlledSubstanceSchedule.CV,
+          ],
+          status: CredentialStatus.ACTIVE,
+          verificationMethod: CredentialVerificationMethod.ATTESTED,
+          recordedByUserId: ctx.actor.userId,
+        },
+      });
     }
 
     const hasContact = input.phone !== undefined || input.email !== undefined;
