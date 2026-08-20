@@ -147,6 +147,20 @@ export interface Command<TInput, TOutput> {
    */
   readonly requiresWorkstation?: boolean;
   /**
+   * True when the command locks an order row as its target (set by
+   * `defineCommand` whenever a `lockTarget` is declared).
+   *
+   * The bus uses this to switch the PRE-lock RBAC gate from the
+   * session-scoped `requirePermission` to the scope-agnostic
+   * `requirePermissionAnyScope`: an order's home clinic/site is unknown
+   * until the row is locked, so the authoritative cross-clinic scope
+   * check runs POST-lock inside the factory
+   * (`requirePermissionForScope`) against the locked order. Without this
+   * split a clinic-pinned grant is either unusable (dropped pre-lock) or
+   * unenforced (org-wide grant acts on any clinic) — pentest H1.
+   */
+  readonly locksOrderTarget?: boolean;
+  /**
    * Object-path strings to redact from `command_log.requestPayload`
    * and `responsePayload` before write. Phase 1: simple top-level
    * key allowlist. Phase 2: extends to dotted paths and Zod

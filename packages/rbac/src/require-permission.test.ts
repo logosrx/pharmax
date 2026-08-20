@@ -37,7 +37,13 @@ import type { ResolvedGrant } from "./grants.js";
 import { InMemoryPermissionLoader, type EffectivePermissionLoader } from "./loader.js";
 import { PERMISSIONS } from "./permissions.js";
 import { clearContextCacheForTests } from "./resolver.js";
-import { getEffectivePermissions, hasPermission, requirePermission } from "./require-permission.js";
+import {
+  getEffectivePermissions,
+  hasPermission,
+  requirePermission,
+  requirePermissionAnyScope,
+  requirePermissionForScope,
+} from "./require-permission.js";
 
 // Helper: build a TenancyContext while honoring exactOptionalPropertyTypes
 // (i.e. an override of `siteId: undefined` removes the key, not sets it).
@@ -73,6 +79,26 @@ function pharmacistAtSiteGrants(siteId: string): ReadonlyArray<ResolvedGrant> {
       roleScope: RoleScope.SITE,
       grantScope: { siteId, clinicId: null, teamId: null },
       permissions: new Set([PERMISSIONS.ORDERS_READ, PERMISSIONS.PV1_APPROVE]),
+    },
+  ];
+}
+
+function pharmacistAtClinicGrants(clinicId: string): ReadonlyArray<ResolvedGrant> {
+  return [
+    {
+      roleScope: RoleScope.CLINIC,
+      grantScope: { siteId: null, clinicId, teamId: null },
+      permissions: new Set([PERMISSIONS.ORDERS_READ, PERMISSIONS.PV1_APPROVE]),
+    },
+  ];
+}
+
+function teamPinnedGrants(teamId: string): ReadonlyArray<ResolvedGrant> {
+  return [
+    {
+      roleScope: RoleScope.TEAM,
+      grantScope: { siteId: null, clinicId: null, teamId },
+      permissions: new Set([PERMISSIONS.PV1_APPROVE]),
     },
   ];
 }
@@ -257,6 +283,144 @@ describe("requirePermission — per-context caching", () => {
     });
 
     expect(spied.load).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("requirePermissionAnyScope — pre-lock existence gate", () => {
+  it("allows a clinic-pinned actor even when the context declares no scope", async () => {
+    // The whole point: an operator dispatch context has no clinic/site,
+    // so the session-scoped requirePermission would drop this grant. The
+    // any-scope gate must NOT, so the pin stays usable.
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: "user-1", grants: pharmacistAtClinicGrants("clinic-A") },
+      ]),
+    });
+    await expect(
+      requirePermissionAnyScope(ctxFor(), PERMISSIONS.PV1_APPROVE)
+    ).resolves.toBeUndefined();
+  });
+
+  it("denies when the actor holds the permission in no grant at all", async () => {
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: "user-1", grants: pharmacistAtClinicGrants("clinic-A") },
+      ]),
+    });
+    await expect(
+      requirePermissionAnyScope(ctxFor(), PERMISSIONS.BILLING_MANAGE)
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+  });
+
+  it("throws PERMISSION_UNKNOWN for an unregistered code", async () => {
+    configureRbac({ loader: new InMemoryPermissionLoader([]) });
+    await expect(
+      requirePermissionAnyScope(ctxFor(), "orders.invent" as never)
+    ).rejects.toMatchObject({ code: "PERMISSION_UNKNOWN" });
+  });
+});
+
+describe("requirePermissionForScope — authoritative cross-clinic gate", () => {
+  const orgWideCtx = () => ctxFor();
+
+  it("allows an org-wide grant against any resource scope", async () => {
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: "user-1", grants: orgWideAdminGrants() },
+      ]),
+    });
+    await expect(
+      requirePermissionForScope(orgWideCtx(), PERMISSIONS.PV1_APPROVE, {
+        siteId: "site-Z",
+        clinicId: "clinic-Z",
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("allows a clinic-pinned grant on an order in THAT clinic", async () => {
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: "user-1", grants: pharmacistAtClinicGrants("clinic-A") },
+      ]),
+    });
+    await expect(
+      requirePermissionForScope(orgWideCtx(), PERMISSIONS.PV1_APPROVE, {
+        siteId: "site-1",
+        clinicId: "clinic-A",
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("DENIES a clinic-A-pinned grant on an order in clinic B (the H1 regression)", async () => {
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: "user-1", grants: pharmacistAtClinicGrants("clinic-A") },
+      ]),
+    });
+    await expect(
+      requirePermissionForScope(orgWideCtx(), PERMISSIONS.PV1_APPROVE, {
+        siteId: "site-1",
+        clinicId: "clinic-B",
+      })
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+  });
+
+  it("enforces the site pin independently of clinic", async () => {
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: "user-1", grants: pharmacistAtSiteGrants("site-A") },
+      ]),
+    });
+    await expect(
+      requirePermissionForScope(orgWideCtx(), PERMISSIONS.PV1_APPROVE, {
+        siteId: "site-A",
+        clinicId: "clinic-1",
+      })
+    ).resolves.toBeUndefined();
+    await expect(
+      requirePermissionForScope(orgWideCtx(), PERMISSIONS.PV1_APPROVE, {
+        siteId: "site-B",
+        clinicId: "clinic-1",
+      })
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+  });
+
+  it("fails closed for a team-pinned grant against a clinic/site order (no team dimension)", async () => {
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: "user-1", grants: teamPinnedGrants("team-A") },
+      ]),
+    });
+    await expect(
+      requirePermissionForScope(orgWideCtx(), PERMISSIONS.PV1_APPROVE, {
+        siteId: "site-1",
+        clinicId: "clinic-A",
+      })
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+  });
+
+  it("denies when the actor holds no grant carrying the permission", async () => {
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: "user-1", grants: pharmacistAtClinicGrants("clinic-A") },
+      ]),
+    });
+    await expect(
+      requirePermissionForScope(orgWideCtx(), PERMISSIONS.BILLING_MANAGE, {
+        siteId: "site-1",
+        clinicId: "clinic-A",
+      })
+    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+  });
+
+  it("throws PERMISSION_UNKNOWN for an unregistered code", async () => {
+    configureRbac({ loader: new InMemoryPermissionLoader([]) });
+    await expect(
+      requirePermissionForScope(orgWideCtx(), "orders.invent" as never, {
+        siteId: "site-1",
+        clinicId: "clinic-A",
+      })
+    ).rejects.toMatchObject({ code: "PERMISSION_UNKNOWN" });
   });
 });
 

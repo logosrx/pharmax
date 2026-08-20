@@ -43,9 +43,11 @@ export {
 
 export {
   appliesInContext,
+  appliesToScope,
   unionPermissions,
   type GrantScope,
   type ResolvedGrant,
+  type ScopeTarget,
 } from "./grants.js";
 
 export {
@@ -56,7 +58,11 @@ export {
 
 export { PrismaPermissionLoader } from "./prisma-permission-loader.js";
 
-export { resolveEffectivePermissions, clearContextCacheForTests } from "./resolver.js";
+export {
+  resolveEffectivePermissions,
+  loadGrantsForContext,
+  clearContextCacheForTests,
+} from "./resolver.js";
 
 export {
   configureRbac,
@@ -70,6 +76,8 @@ export {
   hasPermission,
   PERMISSION_DENIED,
   requirePermission,
+  requirePermissionAnyScope,
+  requirePermissionForScope,
 } from "./require-permission.js";
 
 export {

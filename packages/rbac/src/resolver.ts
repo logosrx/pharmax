@@ -29,6 +29,33 @@ import type { EffectivePermissionLoader } from "./loader.js";
 import type { PermissionCode } from "./permissions.js";
 
 const cache = new WeakMap<TenancyContext, ReadonlySet<PermissionCode>>();
+const grantCache = new WeakMap<TenancyContext, ReadonlyArray<ResolvedGrant>>();
+
+/**
+ * Load the actor's RAW grants for this context, cached per-context (same
+ * lifecycle + GC semantics as the effective-set cache above). Exposed so
+ * the scope-aware guards (`requirePermissionAnyScope` /
+ * `requirePermissionForScope`) can evaluate grants against a resource
+ * scope WITHOUT the session-context filter — and share a single load
+ * with `resolveEffectivePermissions` when they run against the same
+ * request context object (the bus passes one `ctx` through to the
+ * factory, so the pre-lock and post-lock checks hit the cache, not the
+ * database twice).
+ */
+export async function loadGrantsForContext(
+  ctx: TenancyContext,
+  loader: EffectivePermissionLoader
+): Promise<ReadonlyArray<ResolvedGrant>> {
+  const cached = grantCache.get(ctx);
+  if (cached !== undefined) return cached;
+
+  const grants: ReadonlyArray<ResolvedGrant> = await loader.load({
+    organizationId: ctx.organizationId,
+    userId: ctx.actor.userId,
+  });
+  grantCache.set(ctx, grants);
+  return grants;
+}
 
 export async function resolveEffectivePermissions(
   ctx: TenancyContext,
@@ -37,10 +64,7 @@ export async function resolveEffectivePermissions(
   const cached = cache.get(ctx);
   if (cached !== undefined) return cached;
 
-  const grants: ReadonlyArray<ResolvedGrant> = await loader.load({
-    organizationId: ctx.organizationId,
-    userId: ctx.actor.userId,
-  });
+  const grants = await loadGrantsForContext(ctx, loader);
   const applicable = grants.filter((g) => appliesInContext(g, ctx));
   const set = unionPermissions(applicable);
   const frozen: ReadonlySet<PermissionCode> = new Set(set);
@@ -55,4 +79,5 @@ export async function resolveEffectivePermissions(
  */
 export function clearContextCacheForTests(ctx: TenancyContext): void {
   cache.delete(ctx);
+  grantCache.delete(ctx);
 }

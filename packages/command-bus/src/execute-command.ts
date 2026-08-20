@@ -61,7 +61,7 @@ import {
   type SessionGucExecutor,
   type TenancyContext,
 } from "@pharmax/tenancy";
-import { requirePermission } from "@pharmax/rbac";
+import { requirePermission, requirePermissionAnyScope } from "@pharmax/rbac";
 import { CommandStatus, OutboxStatus, type Prisma } from "@pharmax/database";
 
 import { getCommandBusConfiguration, type CommandBusConfiguration } from "./configure.js";
@@ -173,7 +173,15 @@ export async function executeCommandDetailed<TInput, TOutput>(
   // Step 5 — Validate workstation if required.
   const ctx = tenancy.requireCurrentContext();
   if (command.permission !== null) {
-    await requirePermission(command.permission);
+    if (command.locksOrderTarget === true) {
+      // Order-scoped command: the target's clinic/site is unknown until
+      // the row is locked, so gate on mere possession here and let the
+      // factory enforce the actual clinic/site against the locked order
+      // (requirePermissionForScope). See Command.locksOrderTarget.
+      await requirePermissionAnyScope(ctx, command.permission);
+    } else {
+      await requirePermission(command.permission);
+    }
   }
   if (command.requiresWorkstation === true && ctx.workstationId === undefined) {
     throw commandWorkstationRequiredError({ commandName: command.name });

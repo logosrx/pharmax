@@ -297,6 +297,160 @@ describe("defineCommand — lockTarget", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Cross-clinic scope enforcement (pentest H1)
+// ---------------------------------------------------------------------------
+
+describe("defineCommand — cross-clinic scope enforcement (H1)", () => {
+  // The attack this block pins down: operator dispatch builds a tenancy
+  // context with NO clinic/site (only organizationId + actor), so before
+  // the fix a clinic-pinned pharmacist either could not act at all
+  // (grant dropped pre-lock) or — once admins worked around that with
+  // org-wide grants — could sign off orders homed in ANY clinic. The
+  // factory now re-checks the grant against the LOCKED row's home scope.
+
+  function pinnedTo(clinicId: string): ReadonlyArray<ResolvedGrant> {
+    return [
+      {
+        roleScope: RoleScope.CLINIC,
+        grantScope: { siteId: null, clinicId, teamId: null },
+        permissions: new Set([PERMISSIONS.PV1_APPROVE]),
+      },
+    ];
+  }
+
+  function signOffCommand(): DefineCommandSpec<{ orderId: string }, { ok: boolean }> {
+    return {
+      name: "ScopedSignOff",
+      inputSchema: z.object({ orderId: z.string().uuid() }),
+      permission: PERMISSIONS.PV1_APPROVE,
+      lockTarget: { table: "order", by: (i) => ({ id: i.orderId }) },
+      exec: async () => ({
+        output: { ok: true },
+        audit: { action: "pv1.approved", resourceType: "Order", resourceId: ORDER_ID },
+        emits: [],
+        targetOrderId: ORDER_ID,
+      }),
+    };
+  }
+
+  function orderHomedIn(clinicId: string): void {
+    prisma.setOrderRowForLock({
+      id: ORDER_ID,
+      organizationId: "org-1",
+      clinicId,
+      siteId: "site-1",
+      currentStatus: "PV1_IN_PROGRESS",
+      version: 3,
+      workflowPolicyId: POLICY_ID,
+      workflowPolicyVersion: 1,
+    });
+  }
+
+  it("sets locksOrderTarget on the synthesized Command iff a lockTarget is declared", () => {
+    expect(defineCommand(signOffCommand()).locksOrderTarget).toBe(true);
+    expect(
+      defineCommand({
+        name: "NoLock",
+        inputSchema: z.object({}),
+        permission: null,
+        exec: async () => ({
+          output: {},
+          audit: { action: "x", resourceType: "Order" },
+          emits: [],
+        }),
+      }).locksOrderTarget
+    ).toBeUndefined();
+  });
+
+  it("DENIES a clinic-A-pinned actor on an order homed in clinic B (the regression)", async () => {
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: USER_ID, grants: pinnedTo("clinic-A") },
+      ]),
+    });
+    orderHomedIn("clinic-B");
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(
+          defineCommand(signOffCommand()),
+          { orderId: ORDER_ID },
+          { idempotencyKey: "h1-cross" }
+        )
+      ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    });
+
+    // The denial rolls back inside the tx: no timeline event, no audit
+    // success record, no outbox side effects for the refused act.
+    expect(callsTo(prisma, "orderEvent", "create")).toHaveLength(0);
+    expect(callsTo(prisma, "auditLog", "create")).toHaveLength(0);
+    expect(callsTo(prisma, "eventOutbox", "createMany")).toHaveLength(0);
+  });
+
+  it("ALLOWS the same clinic-pinned actor on an order homed in the pinned clinic", async () => {
+    // The usability half of the fix: pre-fix, this exact call failed
+    // PERMISSION_DENIED at the pre-lock gate because the dispatch
+    // context carries no clinicId, which is what pushed admins toward
+    // org-wide grants in the first place.
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: USER_ID, grants: pinnedTo("clinic-A") },
+      ]),
+    });
+    orderHomedIn("clinic-A");
+
+    const result = await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        defineCommand(signOffCommand()),
+        { orderId: ORDER_ID },
+        { idempotencyKey: "h1-home" }
+      )
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(callsTo(prisma, "auditLog", "create")).toHaveLength(1);
+  });
+
+  it("still allows an org-wide grant on any clinic's order (no over-tightening)", async () => {
+    orderHomedIn("clinic-Z");
+
+    const result = await withTenancyContext(ctxFor(), () =>
+      executeCommand(
+        defineCommand(signOffCommand()),
+        { orderId: ORDER_ID },
+        { idempotencyKey: "h1-orgwide" }
+      )
+    );
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("denies BEFORE lock when the actor holds the permission in no grant at all", async () => {
+    // The any-scope pre-lock gate is looser than the old session-scoped
+    // check but it is not open: an actor with zero grants carrying the
+    // permission never reaches the row lock.
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: USER_ID, grants: [] },
+      ]),
+    });
+    orderHomedIn("clinic-A");
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(
+          defineCommand(signOffCommand()),
+          { orderId: ORDER_ID },
+          { idempotencyKey: "h1-nogrant" }
+        )
+      ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    });
+
+    expect(callsTo(prisma, "$queryRaw", "select_for_update_order")).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Policy load
 // ---------------------------------------------------------------------------
 

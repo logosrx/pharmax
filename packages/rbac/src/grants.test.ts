@@ -15,7 +15,12 @@ import { describe, expect, it } from "vitest";
 import { RoleScope } from "@pharmax/database";
 import { buildTenancyContext, type TenancyContext } from "@pharmax/tenancy";
 
-import { appliesInContext, unionPermissions, type ResolvedGrant } from "./grants.js";
+import {
+  appliesInContext,
+  appliesToScope,
+  unionPermissions,
+  type ResolvedGrant,
+} from "./grants.js";
 import { PERMISSIONS } from "./permissions.js";
 
 function grant(overrides: Partial<ResolvedGrant>): ResolvedGrant {
@@ -110,6 +115,75 @@ describe("appliesInContext — compound pin (site + clinic)", () => {
     const g = grant({ grantScope: { siteId: "site-1", clinicId: "clinic-1", teamId: null } });
     expect(appliesInContext(g, ctx({ siteId: "site-1", clinicId: "clinic-2" }))).toBe(false);
     expect(appliesInContext(g, ctx({ siteId: "site-2", clinicId: "clinic-1" }))).toBe(false);
+  });
+});
+
+// appliesToScope compares a grant against a RESOURCE's home scope (the
+// locked order's siteId/clinicId), not the session context. The key
+// semantic difference from appliesInContext: the target's fields are
+// concrete `string | null` values read from the row, never "absent",
+// so a pinned grant matches iff the row's value equals the pin.
+describe("appliesToScope — org-wide grant", () => {
+  it("applies to any target scope", () => {
+    const g = grant({ grantScope: { siteId: null, clinicId: null, teamId: null } });
+    expect(appliesToScope(g, { siteId: "site-A", clinicId: "clinic-Z" })).toBe(true);
+    expect(appliesToScope(g, { siteId: null, clinicId: null })).toBe(true);
+  });
+});
+
+describe("appliesToScope — clinic-pinned grant (the H1 cell)", () => {
+  const g = grant({ grantScope: { siteId: null, clinicId: "clinic-A", teamId: null } });
+
+  it("applies to an order homed in the pinned clinic", () => {
+    expect(appliesToScope(g, { siteId: "site-1", clinicId: "clinic-A" })).toBe(true);
+  });
+
+  it("does NOT apply to an order homed in another clinic", () => {
+    expect(appliesToScope(g, { siteId: "site-1", clinicId: "clinic-B" })).toBe(false);
+  });
+
+  it("does NOT apply to an order with no clinic (clinicId null)", () => {
+    expect(appliesToScope(g, { siteId: "site-1", clinicId: null })).toBe(false);
+  });
+});
+
+describe("appliesToScope — site-pinned grant", () => {
+  const g = grant({ grantScope: { siteId: "site-1", clinicId: null, teamId: null } });
+
+  it("applies within the pinned site regardless of clinic", () => {
+    expect(appliesToScope(g, { siteId: "site-1", clinicId: "clinic-X" })).toBe(true);
+    expect(appliesToScope(g, { siteId: "site-1", clinicId: null })).toBe(true);
+  });
+
+  it("does NOT apply outside the pinned site", () => {
+    expect(appliesToScope(g, { siteId: "site-2", clinicId: "clinic-X" })).toBe(false);
+    expect(appliesToScope(g, { siteId: null, clinicId: "clinic-X" })).toBe(false);
+  });
+});
+
+describe("appliesToScope — team-pinned grant", () => {
+  const g = grant({ grantScope: { siteId: null, clinicId: null, teamId: "team-1" } });
+
+  it("fails closed when the target carries no team dimension", () => {
+    // Orders are homed by site/clinic, not team; a team-only pin can
+    // never authorize an order-scope check.
+    expect(appliesToScope(g, { siteId: "site-1", clinicId: "clinic-A" })).toBe(false);
+  });
+
+  it("applies when the target explicitly carries the pinned team", () => {
+    expect(appliesToScope(g, { siteId: "site-1", clinicId: "clinic-A", teamId: "team-1" })).toBe(
+      true
+    );
+  });
+});
+
+describe("appliesToScope — compound pin (site + clinic)", () => {
+  const g = grant({ grantScope: { siteId: "site-1", clinicId: "clinic-A", teamId: null } });
+
+  it("requires BOTH dimensions to match", () => {
+    expect(appliesToScope(g, { siteId: "site-1", clinicId: "clinic-A" })).toBe(true);
+    expect(appliesToScope(g, { siteId: "site-1", clinicId: "clinic-B" })).toBe(false);
+    expect(appliesToScope(g, { siteId: "site-2", clinicId: "clinic-A" })).toBe(false);
   });
 });
 
