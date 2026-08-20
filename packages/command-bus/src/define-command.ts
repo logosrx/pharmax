@@ -85,7 +85,7 @@
 
 import type { Prisma } from "@pharmax/database";
 import { errors } from "@pharmax/platform-core";
-import type { PermissionCode } from "@pharmax/rbac";
+import { requirePermissionForScope, type PermissionCode } from "@pharmax/rbac";
 import {
   CREATE_READABLE_STATUSES,
   IN_FLIGHT_READABLE_STATUSES,
@@ -376,6 +376,22 @@ export function defineCommand<TInput, TOutput>(
               id: spec.lockTarget.by(deps.input).id,
             });
 
+      // Step 1a — authoritative cross-clinic scope check. The bus's
+      // pre-lock gate only proved the actor holds `spec.permission`
+      // SOMEWHERE; now that the order is locked we know its home
+      // clinic/site and can enforce that the actor's grant actually
+      // reaches THIS order. An org-wide grant matches any scope and
+      // still passes; a clinic-pinned grant is confined to its clinic.
+      // Runs before policy/SoD/exec so a cross-clinic attempt does no
+      // further work (pentest H1). A denial throws PERMISSION_DENIED,
+      // rolling the tx back and marking command_log FAILED.
+      if (spec.permission !== null && target !== undefined) {
+        await requirePermissionForScope(deps.ctx, spec.permission, {
+          siteId: target.siteId,
+          clinicId: target.clinicId,
+        });
+      }
+
       // Step 2 — load workflow policy.
       const policy =
         spec.loadPolicy === undefined
@@ -493,6 +509,9 @@ export function defineCommand<TInput, TOutput>(
     ...(spec.requiresWorkstation === undefined
       ? {}
       : { requiresWorkstation: spec.requiresWorkstation }),
+    // Signal the bus to use the scope-agnostic pre-lock gate; the
+    // authoritative clinic/site check runs post-lock in `handle` above.
+    ...(spec.lockTarget === undefined ? {} : { locksOrderTarget: true }),
     ...(spec.redactFields === undefined ? {} : { redactFields: spec.redactFields }),
     handle,
   };

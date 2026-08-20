@@ -30,12 +30,13 @@
 //     calling `getEffectivePermissions` directly (for OR). The
 //     primary guard stays single-purpose for code-review clarity.
 
-import { tenancy } from "@pharmax/tenancy";
+import { tenancy, type TenancyContext } from "@pharmax/tenancy";
 
 import { getRbacConfiguration } from "./configure.js";
 import { PERMISSION_DENIED, permissionDeniedError, permissionUnknownError } from "./errors.js";
+import { appliesToScope, type ScopeTarget } from "./grants.js";
 import { ALL_PERMISSION_CODES, type PermissionCode } from "./permissions.js";
-import { resolveEffectivePermissions } from "./resolver.js";
+import { loadGrantsForContext, resolveEffectivePermissions } from "./resolver.js";
 
 /**
  * Throws if the active actor does not have the given permission
@@ -51,6 +52,75 @@ export async function requirePermission(permission: PermissionCode): Promise<voi
   const effective = await resolveEffectivePermissions(ctx, config.loader);
 
   if (!effective.has(permission)) {
+    throw permissionDeniedError({
+      permission,
+      organizationId: ctx.organizationId,
+      userId: ctx.actor.userId,
+      correlationId: ctx.actor.correlationId,
+    });
+  }
+}
+
+/**
+ * Existence gate for resource-scoped commands: throws unless the actor
+ * holds `permission` in AT LEAST ONE grant, IGNORING that grant's scope.
+ *
+ * This is the PRE-lock half of order-command authorization. The order's
+ * home clinic/site is not known until the row is locked, so the pre-lock
+ * gate can only ask "could this actor ever do this?"; the authoritative
+ * scope check runs post-lock via `requirePermissionForScope`.
+ *
+ * Why it must ignore scope: the operator dispatch context carries no
+ * site/clinic/team, so the session-scoped `requirePermission` would drop
+ * every pinned grant and deny a clinic-scoped pharmacist outright —
+ * which is exactly why admins were forced to hand out org-wide roles
+ * (pentest H1). Ignoring scope here, then enforcing it against the
+ * locked order, is what makes a clinic-pinned grant both usable AND
+ * confined to its clinic.
+ */
+export async function requirePermissionAnyScope(
+  ctx: TenancyContext,
+  permission: PermissionCode
+): Promise<void> {
+  if (!(ALL_PERMISSION_CODES as ReadonlyArray<string>).includes(permission)) {
+    throw permissionUnknownError({ attempted: permission });
+  }
+  const config = getRbacConfiguration();
+  const grants = await loadGrantsForContext(ctx, config.loader);
+  if (!grants.some((g) => g.permissions.has(permission))) {
+    throw permissionDeniedError({
+      permission,
+      organizationId: ctx.organizationId,
+      userId: ctx.actor.userId,
+      correlationId: ctx.actor.correlationId,
+    });
+  }
+}
+
+/**
+ * Authoritative scope gate: throws unless the actor holds `permission`
+ * in a grant whose scope includes `target` (the resource's own
+ * clinic/site — e.g. a locked order's home).
+ *
+ * This is where cross-clinic isolation is enforced: an org-wide grant
+ * (all-null pins) matches any target and still works everywhere; a
+ * clinic-A-pinned grant matches a clinic-A order and is DENIED on a
+ * clinic-B order. The check is independent of the session context, so
+ * it holds even when the dispatch path never populated ctx.siteId /
+ * ctx.clinicId.
+ */
+export async function requirePermissionForScope(
+  ctx: TenancyContext,
+  permission: PermissionCode,
+  target: ScopeTarget
+): Promise<void> {
+  if (!(ALL_PERMISSION_CODES as ReadonlyArray<string>).includes(permission)) {
+    throw permissionUnknownError({ attempted: permission });
+  }
+  const config = getRbacConfiguration();
+  const grants = await loadGrantsForContext(ctx, config.loader);
+  const authorized = grants.some((g) => g.permissions.has(permission) && appliesToScope(g, target));
+  if (!authorized) {
     throw permissionDeniedError({
       permission,
       organizationId: ctx.organizationId,

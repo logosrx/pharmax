@@ -69,6 +69,49 @@ export function appliesInContext(grant: ResolvedGrant, ctx: TenancyContext): boo
 }
 
 /**
+ * A concrete resource scope to authorize an action against — e.g. the
+ * clinic/site a locked order belongs to. Unlike a `TenancyContext`
+ * (which describes where the ACTOR is operating), this describes where
+ * the RESOURCE lives, and is the axis cross-clinic isolation must be
+ * enforced on. `teamId` is optional because most resources (orders) are
+ * clinic/site-scoped and carry no team dimension.
+ */
+export interface ScopeTarget {
+  readonly siteId: string | null;
+  readonly clinicId: string | null;
+  readonly teamId?: string | null;
+}
+
+/**
+ * Returns true iff the grant's scope pins are all satisfied by the
+ * resource's own scope. The mirror of `appliesInContext`, but evaluated
+ * against a concrete resource rather than the session context: for each
+ * dimension the grant pins (non-null), the resource's value on that
+ * dimension MUST equal it; a null pin is a wildcard.
+ *
+ * Fail-closed on dimensions the resource does not carry: a grant pinned
+ * to a team does NOT authorize an action on a clinic/site-scoped order
+ * (the order has no team to match), so a purely team-scoped role holds
+ * no authority over orders. This is deliberate — the safe direction.
+ *
+ * This is the authoritative cross-clinic check: a clinic-A-pinned grant
+ * `appliesToScope` an order in clinic A and NOT one in clinic B,
+ * regardless of what (if anything) the session context declared.
+ */
+export function appliesToScope(grant: ResolvedGrant, target: ScopeTarget): boolean {
+  if (grant.grantScope.siteId !== null) {
+    if (target.siteId !== grant.grantScope.siteId) return false;
+  }
+  if (grant.grantScope.clinicId !== null) {
+    if (target.clinicId !== grant.grantScope.clinicId) return false;
+  }
+  if (grant.grantScope.teamId !== null) {
+    if ((target.teamId ?? null) !== grant.grantScope.teamId) return false;
+  }
+  return true;
+}
+
+/**
  * Convenience: flatten a list of applicable grants into a single
  * `Set<PermissionCode>`. Used by the resolver to produce the
  * effective set the guard checks against.
