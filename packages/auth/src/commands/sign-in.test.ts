@@ -212,7 +212,17 @@ describe("SignIn — happy path", () => {
     expect(out.userId).toBe(USER_ID);
     expect(out.sessionId).toBe("session-1");
     expect(out.rawToken).toEqual(expect.any(String));
-    expect(out.mfaSatisfied).toBe(true);
+    // FALSE, and this assertion is the point of the case. No second
+    // factor was presented — this principal is not on the floor and is
+    // not voluntarily enrolled — so the session must not claim one was.
+    // It asserted `true` until 2026-08-20, which made the write-time
+    // gate in `require-mfa.ts` unable to deny and made the
+    // `elevated-session-mfa-satisfied` compliance check count a
+    // condition that could never occur.
+    expect(out.mfaSatisfied).toBe(false);
+    expect(fake.tx.authSession.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ mfaSatisfied: false }) })
+    );
     expect(fake.tx.authSession.create).toHaveBeenCalledTimes(1);
     // lastLoginAt stamped.
     expect(fake.tx.user.update).toHaveBeenCalledTimes(1);

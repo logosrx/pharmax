@@ -178,12 +178,42 @@ export const SignIn: SystemCommand<SignInInput, SignInOutput> = {
       }
     }
 
-    // We only reach here once the MFA step (if any) is satisfied.
+    // Record what actually happened, not what the control flow implies.
+    //
+    // This was `mfaSatisfied: true` unconditionally, on the reasoning in
+    // the comment it replaced: "we only reach here once the MFA step (if
+    // any) is satisfied." True as far as it goes — but "if any" is
+    // carrying the whole claim. When `mfaRequired` is false the entire
+    // block above is skipped, no second factor is presented, and the
+    // session still asserted that one was.
+    //
+    // The flag is not a statement about whether sign-in was allowed. It
+    // is a statement about whether a second factor was verified, and
+    // three downstream controls read it as exactly that:
+    //
+    //   - `enforceOperatorMfa` denies a privileged write when a floor
+    //     role holds and the session has not cleared MFA. With the flag
+    //     always true, its deny branch was unreachable.
+    //   - The `elevated-session-mfa-satisfied` compliance check counts
+    //     live elevated sessions with `mfaSatisfied: false`. That count
+    //     was structurally always zero, so the check reported PASS
+    //     without measuring anything.
+    //   - `scripts/soc2/export-session-log.ts` emits the flag as CC6.1-4
+    //     evidence, so every exported row read `true`.
+    //
+    // Recording it truthfully cannot lock anyone out who was not already
+    // subject to the floor: `evaluateOperatorMfa` returns
+    // `mfa_not_required` for an operator holding no floor role before it
+    // ever looks at this flag. What it does change is the case that
+    // matters — an elevated role granted to a user who is already signed
+    // in. That session was minted before the role existed, carries no
+    // second factor, and now correctly fails the gate instead of being
+    // waved through on a fabricated true.
     const session = await createSessionInTx({
       tx,
       userId,
       organizationId: input.organizationId,
-      mfaSatisfied: true,
+      mfaSatisfied: mfaMethod !== null,
       ipAddress: input.ipAddress ?? null,
       userAgent: input.userAgent ?? null,
       config,
@@ -200,7 +230,12 @@ export const SignIn: SystemCommand<SignInInput, SignInOutput> = {
       organizationId: input.organizationId,
       sessionId: session.sessionId,
       rawToken: session.rawToken,
-      mfaSatisfied: true,
+      // Same value as the session row, for the same reason. No
+      // production caller reads this field — every gate resolves
+      // `session.operator.mfaSatisfied` from the database — but a
+      // returned value that contradicts the row it describes is a trap
+      // for whoever reads it next.
+      mfaSatisfied: mfaMethod !== null,
       themePreference,
     };
 
