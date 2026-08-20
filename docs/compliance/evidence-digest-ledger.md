@@ -1,0 +1,101 @@
+# Evidence Digest Ledger
+
+| Field          | Value                |
+| -------------- | -------------------- |
+| Owner          | CTO                  |
+| Effective date | 2026-08-19           |
+| Version        | 1.0                  |
+| Distribution   | Internal — All staff |
+
+## 1. What this solves
+
+Signed compliance evidence lives under `evidence/`, which is **gitignored**. That
+is deliberate — access reviews, restore drills and evidence packs name
+infrastructure, principals and account identifiers that should not be committed to
+a source repository that may one day have more readers than it does today.
+
+The cost of that decision is that a signed artifact has no integrity story. The
+signature asserts that a human read the document and formed a view. It does not
+establish _which_ document they read. A worksheet edited three months after
+signing looks exactly like one that was not, because the only copy is a local file
+whose modification time is trivially rewritten.
+
+This ledger closes that gap at the cheapest possible price: the artifact stays out
+of git, and its **SHA-256 digest goes in**. Any later edit changes the digest,
+and the digest is fixed in a commit whose date is not quietly editable.
+
+It is not a substitute for the [audit chain](../../packages/audit) or for S3
+Object Lock, and it does not try to be. Those protect records the system
+generates. This protects records a human signs.
+
+## 2. When to add an entry
+
+Whenever an artifact is **signed** or otherwise finalised as evidence:
+
+- Quarterly access reviews — worksheet and the report CSV it was walked from.
+- DR and restore drill records.
+- Quarterly SOC 2 evidence packs — the manifest is sufficient; it already covers
+  the files beneath it.
+- Policy adoption records and training completion records.
+- Any breach risk assessment reaching a determination.
+
+Do **not** add entries for working drafts. A digest of an unsigned document
+records nothing worth recording and trains the reader to skim the table.
+
+## 3. How to add an entry
+
+From the directory holding the artifacts:
+
+```bash
+shasum -a 256 worksheet.md infrastructure-access.csv
+```
+
+Append a row per artifact to §5. Commit in the same change as any documentation
+the artifact relates to, so the digest and its context arrive together.
+
+**Record the digest after signing, not before.** A digest of the pre-signature
+file proves the wrong thing.
+
+## 4. How to verify later
+
+Re-run `shasum -a 256` against the archived file and compare to the row. Then
+confirm the row itself is old:
+
+```bash
+git log --format='%h %ad %s' --date=short -- docs/compliance/evidence-digest-ledger.md
+```
+
+A digest that matches, in a row committed on or near the signing date, establishes
+that the file being read now is the file that was signed then. A mismatch is a
+finding — it means either the artifact changed after signature or the wrong file
+was archived, and both are worth knowing.
+
+Note the honest limit: this proves **integrity since the digest was committed**,
+not that the content was true when signed. Someone determined to falsify evidence
+could sign a false document and record its digest faithfully. That is not the
+threat this addresses. The threat it addresses is the ordinary one — a file
+quietly corrected after the fact, with no record that it ever said something else.
+
+## 5. Ledger
+
+| Date recorded | Artifact                                                    | SHA-256                                                            | Signed by                                   | Notes                                                                                                                                                                                                                                                 |
+| ------------- | ----------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-08-19    | `evidence/access-reviews/2026-Q3/worksheet.md`              | `c5c1691a5c6968bdd2da6a0b4943d3cd898b03f41a37b442ef1050e8702bcde6` | Italo Pignano, CTO, 2026-08-19              | First infrastructure access review. Application-RBAC half recorded as not-applicable — zero organizations existed in the period.                                                                                                                      |
+| 2026-08-19    | `evidence/access-reviews/2026-Q3/infrastructure-access.csv` | `2482083b8a354603a6af54a2c4017a86bcc48253fda51fa3d7533325874fffc9` | — (report walked under the worksheet above) | 20 enumerated principals plus 6 manual surfaces, each carrying a decision and reason. Generated by `scripts/security/access-review/infrastructure-access.ts`.                                                                                         |
+| 2026-08-20    | `evidence/dr-drills/2026/incident-tabletop.md`              | `688812b3ad0e07ac640e8438b26162b2a3b2558d9da9c2a7dee63e2e4f29c314` | Italo Pignano, CTO, 2026-08-20              | 2026 annual incident-response tabletop. One scenario worked to a completed four-factor assessment. Five gaps recorded; R-018 raised to Elevated as a result. The single-participant limitation is stated in the log header rather than left implicit. |
+
+## 6. Cross-references
+
+- [Access review procedure](../governance/access-review-procedure.md) §5.5 — where
+  the quarterly review's artifacts are archived.
+- [Evidence collection guide](./evidence-collection-guide.md) — what to collect.
+- [SOC 2 evidence inventory](../soc2/evidence-inventory.md) — the mapping from
+  control to artifact.
+- 45 CFR § 164.530(j) — six-year retention, which is why an integrity story
+  matters: the gap between signing and sampling can be years.
+
+## Revision history
+
+| Version | Date       | Author | Change                                                                                                                                           |
+| ------- | ---------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1.0     | 2026-08-19 | CTO    | Created when the first signed access review exposed the gap — the artifact was gitignored, so nothing established which version had been signed. |
