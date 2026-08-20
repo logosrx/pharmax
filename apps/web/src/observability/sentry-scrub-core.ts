@@ -28,6 +28,7 @@
 // dropped. Free text has no keys to check, so it gets swept for the
 // shapes PHI actually takes.
 
+import { phi } from "@pharmax/platform-core";
 import type { ErrorEvent, EventHint, Breadcrumb, Context } from "@sentry/core";
 
 /**
@@ -98,74 +99,19 @@ const REDACTED = "[Redacted]";
 const MAX_MESSAGE_LENGTH = 500;
 
 /**
- * Shapes PHI takes inside free text, and the stable token each is
- * replaced with.
+ * Re-exported so existing importers and tests keep their entry point.
  *
- * Order matters. SSN runs before the phone sweep so a `123-45-6789`
- * is not partially consumed, and the street-address sweep runs before
- * the bare-date rules so a house number is not mistaken for anything
- * else.
- *
- * These are deliberately blunt. A false positive costs a little
- * debugging context; a false negative is a disclosure to a third
- * party. When those two are the choices, over-redaction wins.
+ * The patterns themselves moved to `@pharmax/platform-core` on
+ * 2026-08-20, when the worker and print-agent needed them too. They were
+ * not copied: a duplicated regex set drifts, and the drift would be
+ * silent and in the unsafe direction — one runtime quietly redacting
+ * less than its sibling, with nothing to notice.
  */
-const PHI_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = Object.freeze([
-  // Most specific digit shapes first, so a looser rule cannot consume
-  // part of one and leave a fragment behind.
-  [/\b\d{3}-\d{2}-\d{4}\b/g, "[ssn]"],
-  [/\b\d{5}-\d{4}\b/g, "[zip]"],
-  [/[\w.+-]+@[\w-]+\.[\w.-]+/g, "[email]"],
-  // The boundary here is a negative lookbehind rather than `\b`,
-  // because `\b` sits between two word characters and a leading `(`
-  // is not one — anchoring with `\b` left the paren stranded outside
-  // the match, emitting `([phone]`. Excluding a preceding digit or
-  // hyphen also stops the rule reaching into a UUID segment.
-  [/(?<![\d-])(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)/g, "[phone]"],
-  [
-    /\b\d{1,6}\s+[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,4}\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl|Terrace|Ter|Circle|Cir|Highway|Hwy)\b\.?/gi,
-    "[address]",
-  ],
-  // A bare calendar date is the shape a date of birth takes. The
-  // negative lookahead spares ISO timestamps, which are pure debugging
-  // value and never a birth date.
-  [/\b\d{4}-\d{2}-\d{2}\b(?!T)/g, "[date]"],
-  [/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g, "[date]"],
-] as ReadonlyArray<readonly [RegExp, string]>);
-
-/**
- * Sweep PHI shapes out of a free-text string.
- *
- * The previous position was that exception messages could not be
- * scrubbed because doing so "would destroy the grouping fingerprint",
- * leaving call-site discipline as the only control and a length cap as
- * the backstop. Call-site discipline is exactly the control that fails
- * — nobody writes `throw new Error(patient.firstName)` on purpose, and
- * a carrier's API error message is not written by us at all.
- *
- * Replacing a match with a STABLE token is what makes this safe for
- * grouping, and in fact improves it. `Recipient jane@x.com not found`
- * and `Recipient bob@y.com not found` are two Sentry issues today;
- * redacted, they are one. Variable content is precisely what should
- * not be in a fingerprint.
- */
-export function redactPhiPatterns(text: string): string {
-  let out = text;
-  for (const [pattern, token] of PHI_PATTERNS) {
-    // Each regex is a module-level literal with the `g` flag, so
-    // `lastIndex` must not leak between calls. `String.replace` with a
-    // global regex resets it, but reassigning keeps that explicit.
-    out = out.replace(pattern, token);
-  }
-  return out;
-}
+export const redactPhiPatterns = phi.redactPhiPatterns;
 
 /** Redact, then cap. Capping first would let a truncation point split a match. */
 function redactAndCap(text: string): string {
-  const redacted = redactPhiPatterns(text);
-  return redacted.length > MAX_MESSAGE_LENGTH
-    ? `${redacted.slice(0, MAX_MESSAGE_LENGTH)}…`
-    : redacted;
+  return phi.redactAndCap(text, MAX_MESSAGE_LENGTH);
 }
 
 /**

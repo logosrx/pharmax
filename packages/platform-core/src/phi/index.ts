@@ -30,6 +30,10 @@
 // rewording; a false negative puts patient data somewhere it can
 // never be deleted from.
 
+// Redaction lives next door, for boundaries that cannot fail closed.
+// See `./redact.ts` for why the two are separate.
+export { redactAndCap, redactPhiPatterns } from "./redact.js";
+
 export interface TripwireHit {
   /** Which rule fired. Never contains the matched text. */
   readonly rule: string;
