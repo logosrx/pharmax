@@ -73,6 +73,39 @@ export default defineConfig({
     // First compile of the health route on a cold CI runner is slow.
     timeout: 600_000,
     reuseExistingServer: process.env["CI"] === undefined,
-    env: { ...E2E_WEB_ENV },
+    env: {
+      ...E2E_WEB_ENV,
+      // Raise the dev server's heap ceiling.
+      //
+      // Next's dev server self-restarts when it approaches ~80% of the
+      // V8 old-space limit, logging "Server is approaching the used
+      // memory threshold, restarting...". On a cold CI runner it
+      // compiles the whole operator console route-by-route as the
+      // golden-path spec walks intake → typing → PV1 → fill → label →
+      // final → ship, and the accumulated compilation output reaches
+      // that ceiling partway through.
+      //
+      // The restart drops every in-flight request. What the suite then
+      // reports is a 120s `waitForResponse` timeout on whichever POST
+      // was open — most often assign-lot, sometimes a sign-in — plus a
+      // Postgres "unexpected EOF on client connection with an open
+      // transaction" a second later. None of that names the real cause,
+      // which is why this flake has been diagnosed as a product
+      // regression more than once.
+      //
+      // Observed rate before this change: roughly 5 failures in 30
+      // completed e2e runs, across `main` and four unrelated PR
+      // branches, always in full-dispense.spec.ts and always at a
+      // different step. That is frequent enough to make a red e2e run
+      // uninformative, which is worse than a slow one — go-live D1
+      // exists so this suite means something.
+      //
+      // 4 GB against the 7 GB a standard GitHub runner has: enough
+      // headroom for the full route set without competing with
+      // Postgres and Chromium in the same container.
+      NODE_OPTIONS: [process.env["NODE_OPTIONS"], "--max-old-space-size=4096"]
+        .filter((v) => v !== undefined && v.length > 0)
+        .join(" "),
+    },
   },
 });
