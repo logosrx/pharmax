@@ -128,12 +128,6 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
         return { id: ORDER_LINE_ID };
       }),
     },
-    lot: {
-      findFirst: vi.fn(async (args: unknown) => {
-        calls.push({ table: "lot", op: "findFirst", args });
-        return lot;
-      }),
-    },
     lotAssignment: {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "lotAssignment", op: "create", args });
@@ -208,10 +202,10 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     },
     $queryRaw: vi.fn(async (template: TemplateStringsArray, ...values: ReadonlyArray<unknown>) => {
       const joined = template.join("?");
-      const op =
-        /\bFROM\s+"?order"?\b/i.test(joined) && /\bFOR\s+UPDATE\b/i.test(joined)
-          ? "select_for_update_order"
-          : "raw";
+      const forUpdate = /\bFOR\s+UPDATE\b/i.test(joined);
+      let op = "raw";
+      if (forUpdate && /\bFROM\s+"?order"?\b/i.test(joined)) op = "select_for_update_order";
+      else if (forUpdate && /\bFROM\s+"?lot"?\b/i.test(joined)) op = "select_for_update_lot";
       calls.push({ table: "$queryRaw", op, args: { sql: joined, values: [...values] } });
       if (op === "select_for_update_order") {
         return lockedRow === null
@@ -225,6 +219,33 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
                 version: lockedRow.version,
               },
             ];
+      }
+      if (op === "select_for_update_lot") {
+        // Map the readable `lot` override (Date + nested product) onto
+        // the raw locked-read shape the command consumes: expiration
+        // as 'YYYY-MM-DD' text and product NDC flattened.
+        if (lot === null) return [];
+        const l = lot as {
+          id: string;
+          siteId: string;
+          lotNumber: string;
+          expirationDate: Date | string;
+          status: string;
+          product: { ndc: string };
+        };
+        return [
+          {
+            id: l.id,
+            siteId: l.siteId,
+            lotNumber: l.lotNumber,
+            expirationDate:
+              l.expirationDate instanceof Date
+                ? l.expirationDate.toISOString().slice(0, 10)
+                : l.expirationDate,
+            status: l.status,
+            productNdc: l.product.ndc,
+          },
+        ];
       }
       return [];
     }),
@@ -337,6 +358,65 @@ describe("AssignLot — happy path", () => {
   });
 });
 
+describe("AssignLot — lot row is locked (pentest TOCTOU)", () => {
+  it("reads the lot with SELECT … FOR UPDATE, scoped to (lotId, organizationId), before any write", async () => {
+    const fake = buildPrismaFake();
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(AssignLot, validInput(), { idempotencyKey: "assign-lot-lock" })
+    );
+
+    const lotLocks = callsOf(fake.calls, "$queryRaw", "select_for_update_lot");
+    expect(lotLocks).toHaveLength(1);
+
+    const { sql, values } = lotLocks[0]!.args as { sql: string; values: ReadonlyArray<unknown> };
+    // It is a genuine row lock on the lot, not a plain read.
+    expect(sql).toMatch(/FOR\s+UPDATE\s+OF\s+l/i);
+    // Bound parameters (no interpolation): the lot id and the tenant.
+    expect(values).toEqual(expect.arrayContaining([LOT_ID, ORG_ID]));
+
+    // The lock is acquired BEFORE the assignment / inventory writes, so
+    // a concurrent hold or deplete serializes against this transaction
+    // instead of slipping in after the status check.
+    const lockIdx = fake.calls.indexOf(lotLocks[0]!);
+    const assignIdx = fake.calls.indexOf(callsOf(fake.calls, "lotAssignment", "create")[0]!);
+    const invIdx = fake.calls.indexOf(callsOf(fake.calls, "inventoryTransaction", "create")[0]!);
+    expect(lockIdx).toBeGreaterThanOrEqual(0);
+    expect(lockIdx).toBeLessThan(assignIdx);
+    expect(lockIdx).toBeLessThan(invIdx);
+  });
+
+  it("validates status against the LOCKED row: a held lot is refused", async () => {
+    // Same behavior as before, but now proven to be evaluated on the
+    // row we hold FOR UPDATE — the state a concurrent writer cannot
+    // change out from under us between check and commit.
+    const fake = buildPrismaFake({
+      lot: {
+        id: LOT_ID,
+        siteId: SITE_ID,
+        lotNumber: "LOT-A1",
+        expirationDate: new Date("2027-12-31"),
+        status: LotStatus.ON_HOLD,
+        product: { ndc: NDC },
+      },
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(AssignLot, validInput(), { idempotencyKey: "held-under-lock" })
+      ).rejects.toMatchObject({ code: LOT_HELD });
+    });
+
+    // The lock WAS taken (we read the row we validated), and nothing
+    // was written for the refused assignment.
+    expect(callsOf(fake.calls, "$queryRaw", "select_for_update_lot")).toHaveLength(1);
+    expect(callsOf(fake.calls, "lotAssignment", "create")).toHaveLength(0);
+    expect(callsOf(fake.calls, "inventoryTransaction", "create")).toHaveLength(0);
+  });
+});
+
 describe("AssignLot — guards", () => {
   it("wrong order status → FILL_WRONG_STATUS", async () => {
     const fake = buildPrismaFake({
@@ -361,7 +441,8 @@ describe("AssignLot — guards", () => {
         executeCommand(AssignLot, validInput(), { idempotencyKey: "k" })
       ).rejects.toMatchObject({ code: FILL_NOT_ASSIGNED_TO_ACTOR });
     });
-    expect(callsOf(fake.calls, "lot", "findFirst")).toHaveLength(0);
+    // Bailed on the assignee guard before ever locking the lot row.
+    expect(callsOf(fake.calls, "$queryRaw", "select_for_update_lot")).toHaveLength(0);
   });
 
   it("order line missing → ORDER_LINE_NOT_FOUND", async () => {

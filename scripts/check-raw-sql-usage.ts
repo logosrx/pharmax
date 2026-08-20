@@ -123,6 +123,12 @@ const ALLOWLIST: ReadonlySet<string> = new Set<string>([
   "packages/audit/src/chain/writer.ts",
   // Command-bus transaction internals (row locks / claims).
   "packages/command-bus/src/define-command.ts",
+  // Lot-row SELECT … FOR UPDATE that serializes lot assignment with
+  // concurrent lot-status mutations (no-held/expired-lot-assignment
+  // invariant). Tagged-template with bound params; runs inside the
+  // command tx with the org GUC set AND an explicit organizationId
+  // filter (tenant-scoped).
+  "packages/fill/src/commands/assign-lot.ts",
   // Permission load; runs inside the tenancy tx with the org GUC set.
   "packages/rbac/src/prisma-permission-loader.ts",
   // THE tenant-scoping primitive: sets pharmax.organization_id /
