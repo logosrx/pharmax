@@ -4,6 +4,7 @@
 
 import Link from "next/link";
 
+import type { PortalIdentityScoped } from "../../server/portal/current-session.js";
 import { BrandWordmark } from "../shell/brand.js";
 import { PortalSignOutButton } from "./portal-sign-out-button.js";
 
@@ -18,11 +19,21 @@ const NAV_ITEMS: ReadonlyArray<{ key: PortalNavKey; href: string; label: string 
 
 export function PortalShell({
   active,
+  identity,
   children,
 }: {
   readonly active: PortalNavKey;
+  /**
+   * Present on every data-bearing page. Drives the client indicator: a
+   * prescriber who writes for several practices must be able to see at
+   * a glance which one they are acting as, because it decides what this
+   * page is showing them and which practice gets invoiced.
+   */
+  readonly identity?: PortalIdentityScoped;
   readonly children: React.ReactNode;
 }) {
+  const canSwitch = identity !== undefined && identity.clinicOptions.length > 1;
+
   return (
     <main className="min-h-screen bg-canvas">
       <header className="border-b border-line bg-surface">
@@ -33,7 +44,25 @@ export function PortalShell({
               Provider portal
             </span>
           </div>
-          <PortalSignOutButton />
+          <div className="flex items-center gap-3">
+            {identity !== undefined ? (
+              <span className="flex items-center gap-2 text-xs">
+                <span className="text-muted">Acting for</span>
+                <span className="rounded-full border border-line px-2.5 py-0.5 font-medium text-fg">
+                  {identity.activeClinic.name}
+                </span>
+                {canSwitch ? (
+                  <Link
+                    href="/portal/select-client"
+                    className="text-brand underline underline-offset-2 hover:no-underline"
+                  >
+                    Switch
+                  </Link>
+                ) : null}
+              </span>
+            ) : null}
+            <PortalSignOutButton />
+          </div>
         </div>
         <nav aria-label="Portal" className="mx-auto flex max-w-3xl gap-1 px-4">
           {NAV_ITEMS.map((item) => (

@@ -163,6 +163,7 @@ import { ProviderPortalAccountActivatedV1 } from "./events/provider/portal-accou
 import { ProviderPortalAccountPasswordChangedV1 } from "./events/provider/portal-account-password-changed-v1.js";
 import { ProviderPortalAccountProvisionedV1 } from "./events/provider/portal-account-provisioned-v1.js";
 import { ProviderPortalAccountSignedInV1 } from "./events/provider/portal-account-signed-in-v1.js";
+import { ProviderPortalSessionClientSwitchedV1 } from "./events/provider/portal-session-client-switched-v1.js";
 import { ProviderReactivatedV1 } from "./events/provider/reactivated-v1.js";
 import { ProviderRegisteredV1 } from "./events/provider/registered-v1.js";
 import { ProviderUpdatedV1 } from "./events/provider/updated-v1.js";
@@ -329,6 +330,7 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   ProviderPortalAccountPasswordChangedV1,
   ProviderPortalAccountProvisionedV1,
   ProviderPortalAccountSignedInV1,
+  ProviderPortalSessionClientSwitchedV1,
   ProviderReactivatedV1,
   ProviderRegisteredV1,
   ProviderUpdatedV1,

@@ -31,7 +31,7 @@ import {
   executeSystemCommand,
   resetCommandBusConfigurationForTests,
 } from "@pharmax/command-bus";
-import { PortalAccountStatus } from "@pharmax/database";
+import { ClinicStatus, PortalAccountStatus } from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
 import { withSystemContext } from "@pharmax/tenancy";
 
@@ -39,19 +39,26 @@ import { changePortalPassword, type ChangePortalPasswordInput } from "./change-p
 import {
   PORTAL_SESSION_ABSOLUTE_EXPIRED,
   PORTAL_SESSION_ACCOUNT_DISABLED,
+  PORTAL_SESSION_CLIENT_ACCESS_REVOKED,
   PORTAL_SESSION_IDLE_EXPIRED,
   PORTAL_SESSION_NOT_FOUND,
   PORTAL_SESSION_REVOKED,
   resolvePortalSession,
 } from "./session.js";
-import { PortalSignIn } from "./sign-in-command.js";
+import { PORTAL_NO_ACTIVE_CLINIC, PortalSignIn } from "./sign-in-command.js";
 import { setupPortalAccount, type SetupPortalAccountInput } from "./setup-account.js";
+import {
+  SWITCH_PORTAL_CLINIC_NOT_AFFILIATED,
+  SWITCH_PORTAL_CLINIC_SESSION_NOT_FOUND,
+  SwitchPortalClinic,
+} from "./switch-clinic-command.js";
 
 const NOW = new Date("2026-07-31T12:00:00.000Z");
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const OTHER_ORG_ID = "00000000-0000-4000-8000-000000000002";
 const ACCOUNT_ID = "00000000-0000-4000-8000-0000000000b1";
 const PROVIDER_ID = "00000000-0000-4000-8000-0000000000c1";
+const CLINIC_ID = "00000000-0000-4000-8000-0000000000e1";
 const TOKEN_ID = "00000000-0000-4000-8000-0000000000d1";
 // Synthetic office contact for the one seeded account — not PHI.
 const ACCOUNT_EMAIL = "a.patel@example-practice.test";
@@ -90,6 +97,8 @@ interface FakeOptions {
   accountByEmail?: Record<string, unknown> | null;
   passwordHistory?: Array<{ hashedPassword: string }>;
   sessionsRevokedCount?: number;
+  /** Clients the prescriber may act for. Empty means sign-in refuses. */
+  clinicOptions?: ReadonlyArray<{ id: string; code: string; name: string }>;
 }
 
 function buildFake(opts: FakeOptions = {}) {
@@ -140,9 +149,26 @@ function buildFake(opts: FakeOptions = {}) {
     },
     portalSession: {
       create: vi.fn(async (_args: unknown) => ({ id: "portal-session-1" })),
+      findFirst: vi.fn(async (_args: unknown) => ({
+        id: "portal-session-1",
+        activeClinicId: null,
+      })),
+      update: vi.fn(async (_args: unknown) => ({})),
       updateMany: vi.fn(async (_args: unknown) => ({
         count: opts.sessionsRevokedCount ?? 2,
       })),
+    },
+    // Sign-in resolves which clients the prescriber may act for, to
+    // decide whether to mint a scoped session or send them to the
+    // chooser. Default is a single affiliation — the common case, and
+    // the one that keeps the pre-existing sign-in assertions valid.
+    clinicProviderAffiliation: {
+      findMany: vi.fn(async (_args: unknown) =>
+        (opts.clinicOptions ?? [{ id: CLINIC_ID, code: "DEMO", name: "Demo Clinic" }]).map(
+          (clinic) => ({ clinic })
+        )
+      ),
+      findFirst: vi.fn(async (_args: unknown) => ({ id: "affiliation-1" })),
     },
     commandLog: {
       create: vi.fn(async () => ({ id: "cmd-log-1" })),
@@ -629,6 +655,8 @@ interface SessionRow {
     providerId: string;
     organizationId: string;
   };
+  activeClinicId: string | null;
+  activeClinic: { id: string; status: ClinicStatus } | null;
 }
 
 function sessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -647,16 +675,27 @@ function sessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
       providerId: PROVIDER_ID,
       organizationId: ORG_ID,
     },
+    // Default is a session scoped to a live client, which is the shape
+    // every pre-existing assertion in this file was written against.
+    activeClinicId: CLINIC_ID,
+    activeClinic: { id: CLINIC_ID, status: ClinicStatus.ACTIVE },
     ...overrides,
   };
 }
 
-function sessionClient(row: SessionRow | null) {
+function sessionClient(row: SessionRow | null, opts: { affiliated?: boolean } = {}) {
   const tx = {
     $executeRaw: vi.fn(async () => 0),
     portalSession: {
       findUnique: vi.fn(async (_args: unknown) => row),
       update: vi.fn(async (_args: unknown) => ({})),
+    },
+    // Client access is re-proven on every resolve, so the resolve path
+    // reads this too.
+    clinicProviderAffiliation: {
+      findFirst: vi.fn(async (_args: unknown) =>
+        (opts.affiliated ?? true) ? { id: "affiliation-1" } : null
+      ),
     },
   };
   const client = {
@@ -800,5 +839,245 @@ describe("resolvePortalSession", () => {
     expect((update.data["idleExpiresAt"] as Date).getTime()).toBe(
       NOW.getTime() + config.session.idleTtlMs
     );
+  });
+});
+
+// ---------------------------------------------------------------------
+// Multi-client affiliations.
+//
+// A prescriber commonly writes for several client practices, and the
+// active one decides which orders the session may read and which
+// practice the pharmacy bills. These suites cover the three places that
+// scope is decided: minted at sign-in, re-proven on every resolve, and
+// changed by an explicit switch.
+// ---------------------------------------------------------------------
+
+const SECOND_CLINIC_ID = "00000000-0000-4000-8000-0000000000e2";
+
+describe("PortalSignIn — client scope at mint time", () => {
+  it("mints a session already scoped when the prescriber has exactly one client", async () => {
+    const fake = buildFake({ accountByEmail: ACTIVE_ACCOUNT });
+    configureBus(fake.client);
+
+    const out = await runSignIn({});
+
+    expect(out.activeClinicId).toBe(CLINIC_ID);
+    expect(out.clinicOptionCount).toBe(1);
+
+    const create = fake.tx.portalSession.create.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    };
+    expect(create.data["activeClinicId"]).toBe(CLINIC_ID);
+  });
+
+  it("leaves the session unscoped when several clients are available", async () => {
+    const fake = buildFake({
+      accountByEmail: ACTIVE_ACCOUNT,
+      clinicOptions: [
+        { id: CLINIC_ID, code: "VALLEY", name: "Valley Wellness" },
+        { id: SECOND_CLINIC_ID, code: "COASTAL", name: "Coastal Med" },
+      ],
+    });
+    configureBus(fake.client);
+
+    const out = await runSignIn({});
+
+    // Null is the signal the web tier routes on: send them to the
+    // chooser rather than guessing which practice they meant.
+    expect(out.activeClinicId).toBeNull();
+    expect(out.clinicOptionCount).toBe(2);
+
+    const create = fake.tx.portalSession.create.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    };
+    expect(create.data["activeClinicId"]).toBeNull();
+  });
+
+  it("refuses sign-in with no active client, distinctly from bad credentials", async () => {
+    const fake = buildFake({ accountByEmail: ACTIVE_ACCOUNT, clinicOptions: [] });
+    configureBus(fake.client);
+
+    // NOT folded into INVALID_CREDENTIALS: authentication succeeded.
+    // Telling a prescriber whose practice was just deactivated that
+    // their password is wrong sends them to reset a working password.
+    await expect(runSignIn({})).rejects.toMatchObject({ code: PORTAL_NO_ACTIVE_CLINIC });
+    expect(fake.tx.portalSession.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolvePortalSession — client access re-proven per request", () => {
+  it("revokes and refuses a session whose client was deactivated", async () => {
+    const { client, tx } = sessionClient(
+      sessionRow({ activeClinic: { id: CLINIC_ID, status: ClinicStatus.INACTIVE } })
+    );
+
+    const result = await resolvePortalSession({
+      rawToken: "tok",
+      client: client as never,
+      config: sessionConfig(),
+    });
+
+    expect(result).toEqual({ ok: false, reason: PORTAL_SESSION_CLIENT_ACCESS_REVOKED });
+    const update = tx.portalSession.update.mock.calls[0]![0] as { data: Record<string, unknown> };
+    expect(update.data["revokedReason"]).toBe("ADMIN_REVOKED");
+  });
+
+  it("revokes and refuses a session whose affiliation was ended", async () => {
+    // Client still ACTIVE; the prescriber's affiliation with it is gone.
+    const { client, tx } = sessionClient(sessionRow(), { affiliated: false });
+
+    const result = await resolvePortalSession({
+      rawToken: "tok",
+      client: client as never,
+      config: sessionConfig(),
+    });
+
+    expect(result).toEqual({ ok: false, reason: PORTAL_SESSION_CLIENT_ACCESS_REVOKED });
+    expect(tx.portalSession.update).toHaveBeenCalled();
+  });
+
+  it("scopes the affiliation re-check to the session's org, client and provider", async () => {
+    const { client, tx } = sessionClient(sessionRow());
+    await resolvePortalSession({
+      rawToken: "tok",
+      client: client as never,
+      config: sessionConfig(),
+    });
+
+    const call = tx.clinicProviderAffiliation.findFirst.mock.calls[0]![0] as {
+      where: Record<string, unknown>;
+    };
+    expect(call.where["organizationId"]).toBe(ORG_ID);
+    expect(call.where["clinicId"]).toBe(CLINIC_ID);
+    expect(call.where["providerId"]).toBe(PROVIDER_ID);
+  });
+
+  it("returns the active client so callers can scope their reads", async () => {
+    const { client } = sessionClient(sessionRow());
+    const result = await resolvePortalSession({
+      rawToken: "tok",
+      client: client as never,
+      config: sessionConfig(),
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.session.activeClinicId).toBe(CLINIC_ID);
+  });
+
+  it("skips the client check entirely for an unscoped session", async () => {
+    // Straight after sign-in with several affiliations: nothing to
+    // re-prove yet, and the chooser is the only page that will accept it.
+    const { client, tx } = sessionClient(sessionRow({ activeClinicId: null, activeClinic: null }));
+
+    const result = await resolvePortalSession({
+      rawToken: "tok",
+      client: client as never,
+      config: sessionConfig(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.session.activeClinicId).toBeNull();
+    expect(tx.clinicProviderAffiliation.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe("SwitchPortalClinic", () => {
+  function runSwitch(overrides: Record<string, unknown> = {}) {
+    return withSystemContext("test:switch", () =>
+      executeSystemCommand(SwitchPortalClinic, {
+        sessionId: "00000000-0000-4000-8000-0000000000f1",
+        organizationId: ORG_ID,
+        portalAccountId: ACCOUNT_ID,
+        providerId: PROVIDER_ID,
+        clinicId: SECOND_CLINIC_ID,
+        ...overrides,
+      })
+    );
+  }
+
+  function switchFake(opts: { current?: unknown; affiliated?: boolean } = {}) {
+    const fake = buildFake({ accountByEmail: ACTIVE_ACCOUNT });
+    fake.tx.portalSession.findFirst = vi.fn(async (_args: unknown) =>
+      opts.current === undefined
+        ? { id: "00000000-0000-4000-8000-0000000000f1", activeClinicId: CLINIC_ID }
+        : opts.current
+    ) as typeof fake.tx.portalSession.findFirst;
+    fake.tx.clinicProviderAffiliation.findFirst = vi.fn(async (_args: unknown) =>
+      (opts.affiliated ?? true) ? { id: "affiliation-1" } : null
+    ) as typeof fake.tx.clinicProviderAffiliation.findFirst;
+    return fake;
+  }
+
+  it("revokes the old session with SCOPE_CHANGED and mints a new scoped one", async () => {
+    const fake = switchFake();
+    configureBus(fake.client);
+
+    const out = await runSwitch();
+
+    expect(out.clinicId).toBe(SECOND_CLINIC_ID);
+    expect(out.previousClinicId).toBe(CLINIC_ID);
+    expect(out.rawToken).toEqual(expect.any(String));
+
+    // Revoke-and-re-mint, not an in-place edit: one token means one
+    // client for the token's whole life.
+    const revoke = fake.tx.portalSession.update.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    };
+    expect(revoke.data["revokedReason"]).toBe("SCOPE_CHANGED");
+    expect(revoke.data["revokedAt"]).toBeInstanceOf(Date);
+
+    const create = fake.tx.portalSession.create.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    };
+    expect(create.data["activeClinicId"]).toBe(SECOND_CLINIC_ID);
+  });
+
+  it("emits client_switched.v1 carrying both session ids", async () => {
+    const fake = switchFake();
+    configureBus(fake.client);
+
+    await runSwitch();
+
+    expect(outboxTypesOf(fake.tx)).toEqual(["provider.portal_session.client_switched.v1"]);
+  });
+
+  it("refuses a client the prescriber is not affiliated with, leaving the session intact", async () => {
+    const fake = switchFake({ affiliated: false });
+    configureBus(fake.client);
+
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: SWITCH_PORTAL_CLINIC_NOT_AFFILIATED,
+    });
+    // The old session must survive a refused switch — otherwise a bad
+    // request logs the prescriber out.
+    expect(fake.tx.portalSession.update).not.toHaveBeenCalled();
+    expect(fake.tx.portalSession.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the session is not live, or is not this account's", async () => {
+    // The lookup filters on (id, organizationId, portalAccountId,
+    // revokedAt: null); a miss covers every one of those.
+    const fake = switchFake({ current: null });
+    configureBus(fake.client);
+
+    await expect(runSwitch()).rejects.toMatchObject({
+      code: SWITCH_PORTAL_CLINIC_SESSION_NOT_FOUND,
+    });
+    expect(fake.tx.portalSession.create).not.toHaveBeenCalled();
+  });
+
+  it("binds the session lookup to the claiming account, not the id alone", async () => {
+    const fake = switchFake();
+    configureBus(fake.client);
+
+    await runSwitch();
+
+    const call = fake.tx.portalSession.findFirst.mock.calls[0]![0] as {
+      where: Record<string, unknown>;
+    };
+    // Without portalAccountId, a leaked session id would be enough to
+    // re-scope somebody else's session.
+    expect(call.where["portalAccountId"]).toBe(ACCOUNT_ID);
+    expect(call.where["organizationId"]).toBe(ORG_ID);
+    expect(call.where["revokedAt"]).toBeNull();
   });
 });

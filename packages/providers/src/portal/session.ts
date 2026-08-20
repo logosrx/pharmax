@@ -20,7 +20,14 @@
 
 import { getAuthConfiguration, hashSessionToken, mintSessionToken } from "@pharmax/auth";
 import type { AuthConfiguration } from "@pharmax/auth";
-import { PortalAccountStatus, prisma, type Prisma, type PrismaClient } from "@pharmax/database";
+import {
+  ClinicProviderAffiliationStatus,
+  ClinicStatus,
+  PortalAccountStatus,
+  prisma,
+  type Prisma,
+  type PrismaClient,
+} from "@pharmax/database";
 import {
   applySystemSessionGuc,
   withSystemContext,
@@ -38,19 +45,33 @@ export const PORTAL_SESSION_REVOKED = "PORTAL_SESSION_REVOKED" as const;
 export const PORTAL_SESSION_IDLE_EXPIRED = "PORTAL_SESSION_IDLE_EXPIRED" as const;
 export const PORTAL_SESSION_ABSOLUTE_EXPIRED = "PORTAL_SESSION_ABSOLUTE_EXPIRED" as const;
 export const PORTAL_SESSION_ACCOUNT_DISABLED = "PORTAL_SESSION_ACCOUNT_DISABLED" as const;
+/**
+ * The session's client was deactivated, or the prescriber's affiliation
+ * with it ended, since the session was minted.
+ */
+export const PORTAL_SESSION_CLIENT_ACCESS_REVOKED = "PORTAL_SESSION_CLIENT_ACCESS_REVOKED" as const;
 
 export type PortalSessionFailureReason =
   | typeof PORTAL_SESSION_NOT_FOUND
   | typeof PORTAL_SESSION_REVOKED
   | typeof PORTAL_SESSION_IDLE_EXPIRED
   | typeof PORTAL_SESSION_ABSOLUTE_EXPIRED
-  | typeof PORTAL_SESSION_ACCOUNT_DISABLED;
+  | typeof PORTAL_SESSION_ACCOUNT_DISABLED
+  | typeof PORTAL_SESSION_CLIENT_ACCESS_REVOKED;
 
 export interface ResolvedPortalSession {
   readonly sessionId: string;
   readonly portalAccountId: string;
   readonly providerId: string;
   readonly organizationId: string;
+  /**
+   * The client practice this session is acting for, and the ONLY
+   * trustworthy source of that scope — a clinic id in a request body is
+   * caller-controlled. `null` means the prescriber authenticated but
+   * has not yet chosen among several affiliations; callers must send
+   * them to the chooser rather than reading data unscoped.
+   */
+  readonly activeClinicId: string | null;
   readonly idleExpiresAt: Date;
   readonly absoluteExpiresAt: Date;
 }
@@ -70,6 +91,15 @@ export interface CreatePortalSessionInput {
   readonly tx: PortalSessionDelegateClient;
   readonly portalAccountId: string;
   readonly organizationId: string;
+  /**
+   * Client practice this session acts for. REQUIRED rather than
+   * defaulted so every call site has to decide: a prescriber with one
+   * affiliation is minted already scoped, and only the
+   * multiple-affiliation chooser path passes `null`. An optional
+   * parameter would let a new caller create an unscoped session by
+   * forgetting about clients entirely.
+   */
+  readonly activeClinicId: string | null;
   readonly ipAddress?: string | null;
   readonly userAgent?: string | null;
   readonly config?: AuthConfiguration;
@@ -96,6 +126,7 @@ export async function createPortalSessionInTx(
     data: {
       organizationId: input.organizationId,
       portalAccountId: input.portalAccountId,
+      activeClinicId: input.activeClinicId,
       tokenHash: hashSessionToken(rawToken),
       ipAddress: input.ipAddress ?? null,
       userAgent: input.userAgent ?? null,
@@ -139,11 +170,13 @@ export async function resolvePortalSession(
           id: true,
           portalAccountId: true,
           organizationId: true,
+          activeClinicId: true,
           lastActivityAt: true,
           idleExpiresAt: true,
           absoluteExpiresAt: true,
           revokedAt: true,
           portalAccount: { select: { status: true, providerId: true, organizationId: true } },
+          activeClinic: { select: { id: true, status: true } },
         },
       });
 
@@ -187,6 +220,41 @@ export async function resolvePortalSession(
         return { ok: false, reason: PORTAL_SESSION_IDLE_EXPIRED } as const;
       }
 
+      // Client access, re-proven per request rather than trusted from
+      // mint time. SetClinicStatus and EndProviderClinicAffiliation
+      // both revoke affected sessions, so in the normal case this
+      // never fires — which is the point. It makes those revocation
+      // sweeps an optimization rather than the only thing standing
+      // between a withdrawn affiliation and a live scope, exactly as
+      // the account-status check above does for a disabled account.
+      if (row.activeClinicId !== null) {
+        // `?? null` rather than a bare `!== null` comparison: a relation
+        // that was not selected reads as `undefined`, and the failure
+        // direction matters here. Coercing first means an unexpected
+        // shape refuses the session instead of throwing past the check.
+        const activeClinic = row.activeClinic ?? null;
+        const clientStillOpen =
+          activeClinic !== null && activeClinic.status === ClinicStatus.ACTIVE;
+        const affiliation = clientStillOpen
+          ? await tx.clinicProviderAffiliation.findFirst({
+              where: {
+                organizationId: row.organizationId,
+                clinicId: row.activeClinicId,
+                providerId: row.portalAccount.providerId,
+                status: ClinicProviderAffiliationStatus.ACTIVE,
+              },
+              select: { id: true },
+            })
+          : null;
+        if (!clientStillOpen || affiliation === null) {
+          await tx.portalSession.update({
+            where: { id: row.id },
+            data: { revokedAt: now, revokedReason: "ADMIN_REVOKED" },
+          });
+          return { ok: false, reason: PORTAL_SESSION_CLIENT_ACCESS_REVOKED } as const;
+        }
+      }
+
       // Valid. Slide the idle window, throttled.
       let idleExpiresAt = row.idleExpiresAt;
       if (now.getTime() - row.lastActivityAt.getTime() >= ACTIVITY_WRITE_THROTTLE_MS) {
@@ -204,6 +272,7 @@ export async function resolvePortalSession(
           portalAccountId: row.portalAccountId,
           providerId: row.portalAccount.providerId,
           organizationId: row.organizationId,
+          activeClinicId: row.activeClinicId,
           idleExpiresAt,
           absoluteExpiresAt: row.absoluteExpiresAt,
         },
@@ -217,7 +286,16 @@ export async function resolvePortalSession(
 // ---------------------------------------------------------------------------
 
 export type PortalSessionRevokeReason =
-  "USER_LOGOUT" | "ADMIN_REVOKED" | "PASSWORD_CHANGED" | "USER_TERMINATED" | "SECURITY_EVENT";
+  | "USER_LOGOUT"
+  | "ADMIN_REVOKED"
+  | "PASSWORD_CHANGED"
+  | "USER_TERMINATED"
+  | "SECURITY_EVENT"
+  // The prescriber changed which client practice they are acting for.
+  // The old session is revoked and a new one minted rather than the
+  // scope being edited in place, so one token means one client for its
+  // whole life.
+  | "SCOPE_CHANGED";
 
 /** Revoke by raw token (portal logout). Opens its own system-context tx. */
 export async function revokePortalSessionByToken(input: {

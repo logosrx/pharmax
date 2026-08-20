@@ -31,9 +31,19 @@ export function PortalSignInForm() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        requiresClientSelection?: boolean;
+      };
       if (response.ok) {
-        window.location.assign("/portal");
+        // A prescriber affiliated with several client practices has no
+        // client on their session yet, and every data page bounces to
+        // the chooser anyway. Going straight there saves a redirect and,
+        // more usefully, makes the reason obvious rather than looking
+        // like the portal forgot where they were headed.
+        window.location.assign(
+          data.requiresClientSelection === true ? "/portal/select-client" : "/portal"
+        );
         return;
       }
       setError(data.error ?? "Sign-in failed.");
