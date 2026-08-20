@@ -9,7 +9,7 @@
 
 import * as Sentry from "@sentry/node";
 
-import type { logger as loggerNs } from "@pharmax/platform-core";
+import { phi, type logger as loggerNs } from "@pharmax/platform-core";
 
 const ALLOWED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "organizationId",
@@ -58,6 +58,9 @@ const ALLOWED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "zplMode",
 ]);
 
+/** Cap applied to free text after redaction. Matches apps/worker and apps/web. */
+const MAX_MESSAGE_LENGTH = 500;
+
 let initialized = false;
 
 export interface SentryInitOptions {
@@ -66,6 +69,57 @@ export interface SentryInitOptions {
   readonly release?: string;
   readonly tracesSampleRate?: number;
   readonly serverName?: string;
+}
+
+/**
+ * The `beforeSend` hook, exported for test. Mirrors
+ * `apps/worker/src/observability/sentry-init.ts` — same allowlist for
+ * structured bags, same pattern redaction for free text. Label content
+ * is patient-identifying by definition, so this process handles PHI as
+ * routinely as the worker does.
+ */
+export function scrubPrintAgentEvent(event: Sentry.ErrorEvent): Sentry.ErrorEvent {
+  delete event.request;
+  if (event.user !== undefined) {
+    const { id } = event.user;
+    if (id !== undefined) {
+      event.user = { id };
+    } else {
+      delete event.user;
+    }
+  }
+  const scrubbedExtra = scrubAllowlist(event.extra);
+  if (scrubbedExtra !== undefined) event.extra = scrubbedExtra;
+  else delete event.extra;
+  const scrubbedTags = scrubAllowlist(event.tags as Record<string, unknown> | undefined);
+  if (scrubbedTags !== undefined) {
+    event.tags = scrubbedTags as unknown as NonNullable<typeof event.tags>;
+  } else {
+    delete event.tags;
+  }
+  // Redact before capping — a truncation point can split a match and
+  // leave a fragment the pattern no longer recognises.
+  if (event.exception?.values !== undefined) {
+    for (const ex of event.exception.values) {
+      if (typeof ex.value === "string") {
+        ex.value = phi.redactAndCap(ex.value, MAX_MESSAGE_LENGTH);
+      }
+    }
+  }
+  if (typeof event.message === "string") {
+    event.message = phi.redactAndCap(event.message, MAX_MESSAGE_LENGTH);
+  }
+  if (event.breadcrumbs !== undefined) {
+    for (const crumb of event.breadcrumbs) {
+      if (typeof crumb.message === "string") {
+        crumb.message = phi.redactAndCap(crumb.message, MAX_MESSAGE_LENGTH);
+      }
+      const scrubbedData = scrubAllowlist(crumb.data);
+      if (scrubbedData !== undefined) crumb.data = scrubbedData;
+      else delete crumb.data;
+    }
+  }
+  return event;
 }
 
 export function initSentry(options: SentryInitOptions): boolean {
@@ -85,34 +139,7 @@ export function initSentry(options: SentryInitOptions): boolean {
       defaults.filter(
         (i) => i.name !== "Console" && i.name !== "ContextLines" && i.name !== "LocalVariables"
       ),
-    beforeSend(event) {
-      delete event.request;
-      if (event.user !== undefined) {
-        const { id } = event.user;
-        if (id !== undefined) {
-          event.user = { id };
-        } else {
-          delete event.user;
-        }
-      }
-      const scrubbedExtra = scrubAllowlist(event.extra);
-      if (scrubbedExtra !== undefined) event.extra = scrubbedExtra;
-      else delete event.extra;
-      const scrubbedTags = scrubAllowlist(event.tags as Record<string, unknown> | undefined);
-      if (scrubbedTags !== undefined) {
-        event.tags = scrubbedTags as unknown as NonNullable<typeof event.tags>;
-      } else {
-        delete event.tags;
-      }
-      if (event.exception?.values !== undefined) {
-        for (const ex of event.exception.values) {
-          if (typeof ex.value === "string" && ex.value.length > 500) {
-            ex.value = `${ex.value.slice(0, 500)}…`;
-          }
-        }
-      }
-      return event;
-    },
+    beforeSend: scrubPrintAgentEvent,
   });
 
   initialized = true;
