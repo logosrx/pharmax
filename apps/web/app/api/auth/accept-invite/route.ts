@@ -19,28 +19,12 @@ import { errors } from "@pharmax/platform-core";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 
+import { resolveClientIp } from "@/server/http/client-ip";
+
 const bodySchema = z.object({
   token: z.string().min(1),
   password: z.string().min(1),
 });
-
-/**
- * Client-most entry of the forwarded chain, matching the other
- * rate-limit call sites (`/api/portal/v1/auth/setup`).
- *
- * Trust caveat, recorded rather than papered over: a caller that sends
- * its own `x-forwarded-for` sits ahead of whatever the load balancer
- * appends, so this value is client-influenced and a determined attacker
- * can rotate it to buy fresh buckets. Fixing that means deciding how
- * many proxies are trusted and applies equally to sign-in — a
- * deployment-wide change, not one this route should make unilaterally.
- * The limit still holds against the ordinary flood and against a
- * misbehaving client.
- */
-function clientIpOf(request: NextRequest): string | undefined {
-  const first = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return first !== undefined && first.length > 0 ? first : undefined;
-}
 
 export async function POST(request: NextRequest): Promise<Response> {
   const raw: unknown = await request.json().catch(() => null);
@@ -52,7 +36,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     await acceptInvite({
       rawToken: parsed.data.token,
       newPassword: parsed.data.password,
-      ipAddress: clientIpOf(request),
+      ipAddress: resolveClientIp(request),
     });
     return NextResponse.json({ ok: true });
   } catch (cause) {

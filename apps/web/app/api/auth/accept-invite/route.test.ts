@@ -20,6 +20,11 @@ vi.mock("@pharmax/auth", () => ({
   acceptInvite: acceptInviteMock,
 }));
 
+// One trusted proxy in front of this tier, so `resolveClientIp` reads the
+// single right-most forwarded entry (the address that proxy appended) and
+// ignores anything a client injected to its left.
+vi.mock("@/server/env", () => ({ env: { TRUSTED_PROXY_HOP_COUNT: 1 } }));
+
 import type { NextRequest } from "next/server";
 
 import { errors } from "@pharmax/platform-core";
@@ -60,13 +65,30 @@ beforeEach(() => {
 });
 
 describe("POST /api/auth/accept-invite — rate-limit seam", () => {
-  it("hands the engine the client-most forwarded address", async () => {
+  it("hands the engine the address the trusted proxy appended, not a client-injected one", async () => {
+    // With one trusted hop the real client address is the RIGHT-most
+    // entry (the one our proxy appended). `198.51.100.7` here is a
+    // client-supplied prefix an attacker would rotate to buy fresh
+    // buckets; it must be ignored.
     await POST(request({ "x-forwarded-for": "198.51.100.7, 10.0.0.4" }));
 
     expect(acceptInviteMock).toHaveBeenCalledWith({
       rawToken: TOKEN,
       newPassword: PASSWORD,
-      ipAddress: "198.51.100.7",
+      ipAddress: "10.0.0.4",
+    });
+  });
+
+  it("collapses a spoofed extra hop into the shared bucket rather than trusting it", async () => {
+    // Two entries but only one trusted proxy: the attacker prepended a
+    // forged hop. We still read only the right-most (real) address, so
+    // the forged left entry never becomes a per-caller key.
+    await POST(request({ "x-forwarded-for": "203.0.113.9, 10.0.0.4" }));
+
+    expect(acceptInviteMock).toHaveBeenCalledWith({
+      rawToken: TOKEN,
+      newPassword: PASSWORD,
+      ipAddress: "10.0.0.4",
     });
   });
 

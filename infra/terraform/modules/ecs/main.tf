@@ -256,6 +256,12 @@ resource "aws_ecs_task_definition" "web" {
         # Setting it here (task-definition env beats image ENV) restores the
         # bind to all interfaces.
         { name = "HOSTNAME", value = "0.0.0.0" },
+        # Trusted reverse-proxy hop count for X-Forwarded-For client-IP
+        # resolution (rate-limit keying). MUST match the real edge topology
+        # of THIS stack: CloudFront->ALB is 2, ALB-only is 1. A too-low
+        # value only coarsens buckets (the extra hop's address is never
+        # client-controlled); the app defaults to 0 (fail-closed) when unset.
+        { name = "TRUSTED_PROXY_HOP_COUNT", value = tostring(var.web_trusted_proxy_hop_count) },
         { name = "PHARMAX_REGION", value = var.aws_region },
         { name = "AWS_REGION", value = var.aws_region },
         # Legacy alias — keep until packages/crypto/aws-kms-adapter.ts swaps to

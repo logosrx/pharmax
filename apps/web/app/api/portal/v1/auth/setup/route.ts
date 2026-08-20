@@ -23,6 +23,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 
 import { env } from "@/server/env";
+import { resolveClientIp } from "@/server/http/client-ip";
 import { logger } from "@/server/logger";
 
 const rateLimiterHandle = createRateLimiterFromEnv({
@@ -40,7 +41,7 @@ const bodySchema = z
   .strict();
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const ip = resolveClientIp(request) ?? "unknown";
   const hit = await rateLimiterHandle.rateLimiter.hit(`portal-setup:ip:${ip}`, PER_IP_RULE);
   if (!hit.allowed) {
     return NextResponse.json(
