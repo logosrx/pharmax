@@ -89,6 +89,12 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       // drug catalog / lot status and need to see which practice an
       // order came from. Neither grant exposes PHI or a mutation path.
       PERMISSIONS.CLINICS_READ,
+      // Deciding which prescribers may write for a client is a
+      // professional judgement about prescriptive authority, so a
+      // pharmacist holds it. Note it does NOT come with authority to
+      // create or deactivate the client itself — that is administrative
+      // and stays with OrgAdmin.
+      PERMISSIONS.CLINICS_AFFILIATE_PROVIDER,
       PERMISSIONS.INVENTORY_READ,
       PERMISSIONS.INVENTORY_RECEIVE,
       // Product catalog + AI guardrail authority. Pharmacist-level
@@ -154,6 +160,13 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       // Techs type orders against clinics and fill from lots — the
       // read-only directory tabs are their reference surfaces.
       PERMISSIONS.CLINICS_READ,
+      // Granted on the same reasoning as PROVIDERS_CREATE above: a tech
+      // already registers prescribers outright, DEA number included, so
+      // attaching an existing prescriber to a client is strictly less
+      // authority than they hold today. "Client X says Dr. Chen writes
+      // for them now" is routine data entry, and routing it through a
+      // pharmacist would queue the common case behind the rare one.
+      PERMISSIONS.CLINICS_AFFILIATE_PROVIDER,
       PERMISSIONS.INVENTORY_READ,
       // Techs receive inbound stock (DSCSA receipt is data entry with
       // hard statutory gates enforced by the command).

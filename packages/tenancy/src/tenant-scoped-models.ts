@@ -119,6 +119,14 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["PatientAllergy", { kind: "organizationId" }] as const,
   ["PatientAllergyHistoryAssertion", { kind: "organizationId" }] as const,
   ["Provider", { kind: "organizationId" }] as const,
+  // Prescriber-to-client roster. Org auto-scoping is necessary but NOT
+  // sufficient here, and the distinction matters: two clients of the
+  // same pharmacy share an organizationId, so this filter cannot
+  // separate them. It stops cross-tenant reads; keeping one client's
+  // roster out of another client's portal is the caller's job, via
+  // `readInClinicScope`. Registered anyway so a missing frame fails
+  // closed rather than returning every tenant's affiliations.
+  ["ClinicProviderAffiliation", { kind: "organizationId" }] as const,
   ["Prescription", { kind: "organizationId" }] as const,
   // Rx-number allocator. Carries no PHI, but auto-scoping matters for
   // a different reason: an unscoped increment would hand one tenant's

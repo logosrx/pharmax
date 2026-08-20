@@ -81,8 +81,23 @@ export const PERMISSIONS = Object.freeze({
   // an already-transcribed prescription to an order.
   PRESCRIPTIONS_CREATE: "prescriptions.create",
 
-  // Clinic (practice) directory.
+  // Clinic (practice) directory. The product calls these "clients";
+  // the schema and these codes say Clinic. One entity, two names.
   CLINICS_READ: "clinics.read",
+  // Onboard a client practice. Separate from CLINICS_UPDATE because
+  // creating one is what admits a new billing counterparty to the
+  // org, while updating one only corrects its details.
+  CLINICS_CREATE: "clinics.create",
+  CLINICS_UPDATE: "clinics.update",
+  // Deactivate or reactivate a client. Deactivation revokes every
+  // portal session still acting for that client, so it is a
+  // security-relevant action and not merely a status flip.
+  CLINICS_SET_STATUS: "clinics.set_status",
+  // Grant or end a prescriber's authority to write for a client.
+  // Distinct from PROVIDERS_UPDATE: that edits who a prescriber IS,
+  // this decides which clients they may act for — an access-control
+  // decision, and the one an access review asks about.
+  CLINICS_AFFILIATE_PROVIDER: "clinics.affiliate_provider",
 
   // Inventory catalog: drug products + lots/batches.
   INVENTORY_READ: "inventory.read",
@@ -424,6 +439,26 @@ export const PERMISSION_METADATA: Readonly<
   [PERMISSIONS.CLINICS_READ]: {
     description:
       "View the clinic (practice) directory: codes, names, statuses, and pharmacy-site links. Directory metadata only — no PHI.",
+    category: "Clinics",
+  },
+  [PERMISSIONS.CLINICS_CREATE]: {
+    description:
+      "Onboard a client practice: allocate its code and name and open it for prescriptions. Admits a new billing counterparty to the organization, so it is separate from clinics.update.",
+    category: "Clinics",
+  },
+  [PERMISSIONS.CLINICS_UPDATE]: {
+    description:
+      "Correct a client practice's directory details (name). The code is immutable once issued because invoices and prescriptions cite it.",
+    category: "Clinics",
+  },
+  [PERMISSIONS.CLINICS_SET_STATUS]: {
+    description:
+      "Deactivate or reactivate a client practice. Deactivation also revokes every provider-portal session still acting for that client, making this a security-relevant action rather than a status flip.",
+    category: "Clinics",
+  },
+  [PERMISSIONS.CLINICS_AFFILIATE_PROVIDER]: {
+    description:
+      "Grant or end a prescriber's authority to write prescriptions for a client practice. An access-control decision — this is the grant an access review reads to answer 'who could prescribe for this client'.",
     category: "Clinics",
   },
   [PERMISSIONS.INVENTORY_READ]: {
