@@ -37,14 +37,14 @@ describe("configureShipping", () => {
     const seen: CarrierCredentialContext[] = [];
     configureShipping({
       factories: {
-        [ShippingProvider.EASYPOST]: (ctx) => {
+        [ShippingProvider.FEDEX]: (ctx) => {
           seen.push(ctx);
           return STUB_ADAPTER;
         },
       },
     });
 
-    const factory = getShippingAdapterFactory(ShippingProvider.EASYPOST);
+    const factory = getShippingAdapterFactory(ShippingProvider.FEDEX);
     const adapter = factory({
       organizationId: "org-1",
       credentialId: "cred-1",
@@ -60,24 +60,61 @@ describe("configureShipping", () => {
   });
 
   it("throws SHIPPING_PROVIDER_NOT_REGISTERED for unregistered providers", () => {
+    // Two DISTINCT providers: register one, ask for the other.
     configureShipping({
-      factories: { [ShippingProvider.EASYPOST]: () => STUB_ADAPTER },
+      factories: { [ShippingProvider.FEDEX]: () => STUB_ADAPTER },
     });
-    expect(() => getShippingAdapterFactory(ShippingProvider.FEDEX)).toThrowError(
+    expect(() => getShippingAdapterFactory(ShippingProvider.UPS)).toThrowError(
       /No ShippingAdapter factory is registered/
     );
   });
 
   it("calling configureShipping again replaces the registry", () => {
     configureShipping({
-      factories: { [ShippingProvider.EASYPOST]: () => STUB_ADAPTER },
+      factories: { [ShippingProvider.UPS]: () => STUB_ADAPTER },
     });
     configureShipping({
       factories: { [ShippingProvider.FEDEX]: () => STUB_ADAPTER },
     });
-    expect(() => getShippingAdapterFactory(ShippingProvider.EASYPOST)).toThrowError(
+    // The first registration is gone, not merged.
+    expect(() => getShippingAdapterFactory(ShippingProvider.UPS)).toThrowError(
       /No ShippingAdapter factory is registered/
     );
+    expect(getShippingAdapterFactory(ShippingProvider.FEDEX)).toBeTypeOf("function");
+  });
+
+  it("refuses to register a provider with no BAA covering it", () => {
+    // The control this file exists to protect. EasyPost is not a
+    // conduit — it stored recipient names and addresses in its own
+    // platform — and no BAA was ever executed. Registration must fail
+    // at boot rather than on the first label purchase, and it must fail
+    // even though the provider is still a valid `ShippingProvider`
+    // value for historical rows and inbound tracking webhooks.
+    expect(() =>
+      configureShipping({
+        factories: { [ShippingProvider.EASYPOST]: () => STUB_ADAPTER },
+      })
+    ).toThrowError(/no BAA covers them/);
+  });
+
+  it("names every blocked provider in the refusal, not just the first", () => {
+    expect(() =>
+      configureShipping({
+        factories: {
+          [ShippingProvider.EASYPOST]: () => STUB_ADAPTER,
+          [ShippingProvider.FEDEX]: () => STUB_ADAPTER,
+        },
+      })
+    ).toThrowError(/EASYPOST/);
+  });
+
+  it("leaves the previous configuration intact when it refuses", () => {
+    // A refused call must not half-apply. If it cleared the box, a bad
+    // deploy would take working carriers down with it.
+    configureShipping({ factories: { [ShippingProvider.FEDEX]: () => STUB_ADAPTER } });
+    expect(() =>
+      configureShipping({ factories: { [ShippingProvider.EASYPOST]: () => STUB_ADAPTER } })
+    ).toThrow();
     expect(getShippingAdapterFactory(ShippingProvider.FEDEX)).toBeTypeOf("function");
   });
 });

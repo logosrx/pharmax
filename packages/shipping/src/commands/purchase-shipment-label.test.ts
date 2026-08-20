@@ -73,7 +73,7 @@ function ctxFor(overrides: Partial<TenancyContext> = {}): TenancyContext {
 function validInput() {
   return {
     orderId: ORDER_ID,
-    provider: ShippingProvider.EASYPOST,
+    provider: ShippingProvider.FEDEX,
     carrier: ShipmentCarrier.USPS,
     serviceLevel: "Priority",
     fromAddress: {
@@ -318,7 +318,7 @@ function stubFactory(adapter: ShippingAdapter): ShippingAdapterFactory {
 }
 
 function configureShippingWithFakeAdapter(adapter: ShippingAdapter): void {
-  configureShipping({ factories: { [ShippingProvider.EASYPOST]: stubFactory(adapter) } });
+  configureShipping({ factories: { [ShippingProvider.FEDEX]: stubFactory(adapter) } });
 }
 
 // The resolver decrypts `apiKeyEnc` via @pharmax/crypto. We pre-encrypt
@@ -379,7 +379,7 @@ describe("PurchaseShipmentLabel — happy path", () => {
     expect(out).toMatchObject({
       orderId: ORDER_ID,
       shipmentId: SHIPMENT_ID,
-      provider: ShippingProvider.EASYPOST,
+      provider: ShippingProvider.FEDEX,
       trackingNumber: "9400111899223344556677",
       externalShipmentId: "shp_demo",
       externalTrackerId: "trk_demo",

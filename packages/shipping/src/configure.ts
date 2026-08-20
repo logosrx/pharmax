@@ -60,12 +60,64 @@ export interface ShippingConfiguration {
 const box = runtime.globalSingletonBox<ShippingConfiguration>("pharmax:shipping:config");
 
 /**
+ * Providers that must not receive outbound traffic because no BAA
+ * covers them.
+ *
+ * EASYPOST is not a conduit. Unlike FedEx or UPS it received recipient
+ * names and addresses into its own platform and stored them, which is
+ * persistent access rather than transport, and **no BAA was ever
+ * executed**. It is being decommissioned (2026-08-17) rather than
+ * signed — see the
+ * [BAA tracker](../../../docs/governance/baa-tracker.md#easypost).
+ *
+ * That document states the control as "the engineering switch stays
+ * off." Until 2026-08-20 no switch existed: the factory was registered
+ * at boot in both `apps/web` and `apps/worker`, and the only thing
+ * standing between full recipient PHI and a vendor with no BAA was that
+ * no organization happened to hold an ACTIVE credential row. A single
+ * admin action would have opened that path and nothing in code would
+ * have objected.
+ *
+ * The refusal lives HERE, at registration, rather than only as an
+ * omission at the call sites. An omission is a convention — someone
+ * re-adds the line in a merge and the control is gone with no signal.
+ * A throw is a control.
+ *
+ * Inbound tracking webhooks are unaffected and must keep working:
+ * shipments already in flight still emit events, and
+ * `process-easypost-webhook-event.ts` projects them PHI-free before
+ * storage. This gate is about outbound traffic only.
+ */
+export const BAA_BLOCKED_SHIPPING_PROVIDERS: ReadonlySet<string> = Object.freeze(
+  new Set<string>(["EASYPOST"])
+);
+
+/**
  * Register one factory per provider you want to support. Call once
  * at boot (apps/web, apps/worker, scripts). Calling again replaces
  * the previous configuration — useful in tests via
  * `resetShippingConfigurationForTests`.
+ *
+ * Throws if any registered provider appears in
+ * `BAA_BLOCKED_SHIPPING_PROVIDERS`. Failing at boot is deliberate: a
+ * misconfiguration that routes PHI to an uncovered vendor should stop
+ * the process, not degrade quietly and surface on the first label
+ * purchase.
  */
 export function configureShipping(config: ShippingConfiguration): void {
+  const blocked = Object.keys(config.factories).filter((p) =>
+    BAA_BLOCKED_SHIPPING_PROVIDERS.has(p)
+  );
+  if (blocked.length > 0) {
+    throw new errors.InternalError({
+      code: "SHIPPING_PROVIDER_BAA_BLOCKED",
+      message:
+        `Refusing to register shipping provider(s) ${blocked.join(", ")}: no BAA covers them, ` +
+        `so recipient name and address must not be transmitted. Remove the factory from ` +
+        `configureShipping. See docs/governance/baa-tracker.md.`,
+      metadata: { blocked },
+    });
+  }
   box.value = Object.freeze({
     factories: Object.freeze({ ...config.factories }),
   });

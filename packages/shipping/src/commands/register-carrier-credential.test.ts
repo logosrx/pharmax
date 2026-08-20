@@ -179,20 +179,20 @@ describe("RegisterCarrierCredential — happy path", () => {
       executeCommand(
         RegisterCarrierCredential,
         {
-          provider: ShippingProvider.EASYPOST,
+          provider: ShippingProvider.FEDEX,
           apiKey: "EZTK_demo_api_key",
         },
         { idempotencyKey: "register-easypost-1" }
       )
     );
 
-    expect(out.provider).toBe(ShippingProvider.EASYPOST);
+    expect(out.provider).toBe(ShippingProvider.FEDEX);
     expect(out.replacedCredentialId).toBeNull();
 
     const create = fake.createArgs();
     expect(create).toBeDefined();
     const data = create!.data;
-    expect(data["provider"]).toBe(ShippingProvider.EASYPOST);
+    expect(data["provider"]).toBe(ShippingProvider.FEDEX);
     expect(data["status"]).toBe(CarrierCredentialStatus.ACTIVE);
     expect(data["webhookSecretEnc"]).toBeDefined();
 
@@ -219,7 +219,7 @@ describe("RegisterCarrierCredential — happy path", () => {
       executeCommand(
         RegisterCarrierCredential,
         {
-          provider: ShippingProvider.EASYPOST,
+          provider: ShippingProvider.FEDEX,
           apiKey: "EZTK_new_key",
         },
         { idempotencyKey: "register-rotate-1" }

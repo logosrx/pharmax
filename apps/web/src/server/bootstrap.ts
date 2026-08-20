@@ -49,12 +49,7 @@ import {
   S3ReportRunArchive,
   type ReportRunArchivePort,
 } from "@pharmax/reporting";
-import {
-  configureShipping,
-  createEasyPostFactory,
-  createFedExFactory,
-  createUpsFactory,
-} from "@pharmax/shipping";
+import { configureShipping, createFedExFactory, createUpsFactory } from "@pharmax/shipping";
 import {
   initTelemetry,
   resolveTelemetryConfigFromEnv,
@@ -403,9 +398,12 @@ async function doBootstrap(): Promise<void> {
   // the wrong adapter. Crypto MUST be wired first (above) — the
   // factories themselves do not touch crypto, but
   // `resolveShippingAdapter` will the moment a request reaches it.
+  // EASYPOST is deliberately absent: no BAA covers it and it is being
+  // decommissioned. `configureShipping` now refuses it outright, so
+  // re-adding the line fails at boot rather than silently reopening a
+  // PHI path. See BAA_BLOCKED_SHIPPING_PROVIDERS.
   configureShipping({
     factories: {
-      EASYPOST: createEasyPostFactory(),
       FEDEX: createFedExFactory(),
       UPS: createUpsFactory(),
     },
@@ -628,7 +626,7 @@ async function doBootstrap(): Promise<void> {
   logger.info("apps/web bootstrap complete", {
     nodeEnv: env.NODE_ENV,
     cryptoAdapter: adapterName,
-    shippingProviders: ["EASYPOST", "FEDEX", "UPS"],
+    shippingProviders: ["FEDEX", "UPS"],
     packagePhotoStorage: packagePhotoStorage.adapterName,
     stripeRefundReady: stripeRefundPort !== null,
     sentryReady,
