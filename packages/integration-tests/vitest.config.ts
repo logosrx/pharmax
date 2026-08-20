@@ -32,6 +32,13 @@ export default defineConfig({
     exclude: ["**/node_modules/**", "**/dist/**"],
     environment: "node",
     globals: false,
+    // MUST run before any test file's imports are evaluated.
+    // `@pharmax/database` builds its Prisma client at module scope from
+    // DATABASE_URL, so the connection string — including the session
+    // role that makes RLS enforceable — can only be influenced earlier
+    // than the first import. See the file's header for the full
+    // reasoning.
+    setupFiles: ["./src/support/setup-env.ts"],
     pool: "forks",
     poolOptions: {
       forks: {

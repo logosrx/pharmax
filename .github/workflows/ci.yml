@@ -2,8 +2,9 @@
 #
 # This workflow is the SOURCE OF TRUTH for "the build is green". A PR
 # may not merge unless every job below succeeds. Locally, `pnpm verify`
-# runs the same gates (except the integration-tests job, which lives
-# in `integration.yml` and needs a Postgres service container).
+# runs the same gates except the `integration` and `drift` jobs, which
+# need a Postgres service container (run those locally with `pnpm db:up`
+# + `pnpm test:integration` / `pnpm check:drift`).
 #
 # Job design:
 #   - One `setup` job that installs deps + generates Prisma client and
@@ -249,6 +250,145 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # Real-Postgres integration suite. This job used to live in
+  # integration.yml, path-filtered to database-adjacent changes, on the
+  # argument that a Postgres service container "roughly doubles job
+  # startup time" and running it on every PR "is wasteful when the
+  # change touches no SQL". That rationale stopped holding when the
+  # suite became the ONLY verification of the command bus's core
+  # invariant — the atomic command_log/order_event/audit_log/
+  # event_outbox write, RLS enforced as `pharmax_app`, rollback on
+  # conflict. Any package can add a command that breaks those, so path
+  # filtering was a hole, and a merge-blocking check cannot live outside
+  # this workflow anyway: `ci-pass` aggregates via `needs`, which cannot
+  # cross workflows. The ~1–2 min per PR is the price of the invariant
+  # actually blocking a merge.
+  #
+  # Still sequential within the job (single-fork pool — see
+  # packages/integration-tests/vitest.config.ts): one Postgres instance,
+  # one test process, per-tenant advisory locks.
+  integration:
+    name: Integration tests
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pharmax
+        ports:
+          - 5432:5432
+        # Wait for Postgres to be ready before the steps run. Without
+        # this, the first `prisma migrate deploy` races the container
+        # startup and fails intermittently.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pharmax"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pharmax
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/pharmax
+      # The integration suite never wires apps' KMS env vars, but the
+      # tenancy + crypto packages need a seed for their own boots.
+      PHARMAX_LOCAL_KMS_SEED: ci-integration-seed-do-not-use-in-prod-32+chars
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
+      - uses: actions/setup-node@v7
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations
+        run: pnpm db:migrate:deploy
+
+      - name: Run integration tests
+        run: pnpm test:integration
+
+      # Seed smoke + completeness. Runs AFTER the integration suite so the
+      # demo dataset can never influence its fixtures.
+      #
+      # prisma/seed.ts had no automated exercise of any kind until now,
+      # which is how the ADR-0033 provider portal reached main without its
+      # seed wiring and stayed that way — the only file in the repo where a
+      # regression was invisible to CI.
+      - name: Seed the demo dataset
+        run: pnpm db:seed
+
+      # Twice, because the seed is upsert-based and the whole workflow
+      # (`db:seed` after a schema change, re-running it locally) depends on
+      # re-runnability. A non-idempotent write shows up here as a unique
+      # constraint violation rather than in someone's local database.
+      - name: Seed again — idempotency
+        run: pnpm db:seed
+
+      # A seed that OMITS a fixture still exits 0, so the two steps above
+      # prove only that it isn't broken. This asserts it isn't incomplete.
+      - name: Assert the demo dataset is complete
+        run: pnpm check:seed
+
+  # Migration <-> schema drift guard. Runs in its OWN Postgres service
+  # (not the integration job's) because `check:drift` replays every
+  # migration into a shadow database, and the RLS baseline creates
+  # CLUSTER-GLOBAL roles (pharmax_app / pharmax_system). Replaying into a
+  # shadow that shares a cluster with an already-migrated `pharmax` DB
+  # would collide on the role creation; a dedicated fresh cluster creates
+  # those roles exactly once. The pharmax DB here is only used to DERIVE
+  # the shadow URL (DATABASE_URL + "_drift_shadow"); it is never migrated.
+  #
+  # Moved here from the retired integration.yml alongside the
+  # integration job, for the same reason: a check that can block a merge
+  # has to be aggregated by `ci-pass`, and `needs` cannot cross
+  # workflows.
+  drift:
+    name: Prisma migration↔schema drift
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pharmax
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pharmax"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pharmax
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/pharmax
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with: { version: "${{ env.PNPM_VERSION }}", run_install: false }
+      - uses: actions/setup-node@v7
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      # The shadow DB must exist + be empty; check:drift resets it and
+      # replays the migration history into it. (Prisma resets objects but
+      # does not CREATE the database itself.)
+      - name: Create drift shadow database
+        run: PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE pharmax_drift_shadow;'
+
+      - name: Check migration↔schema drift
+        run: pnpm check:drift
+
   audit:
     name: Dependency audit (advisory)
     needs: setup
@@ -275,7 +415,7 @@ jobs:
   ci-pass:
     name: ci-pass
     runs-on: ubuntu-latest
-    needs: [lint, format, typecheck, prisma-validate, safety-linters, test]
+    needs: [lint, format, typecheck, prisma-validate, safety-linters, test, integration, drift]
     if: always()
     steps:
       - name: All required jobs succeeded

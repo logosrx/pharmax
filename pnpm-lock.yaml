@@ -1005,18 +1005,36 @@ importers:
       '@pharmax/drug-knowledge':
         specifier: workspace:*
         version: link:../drug-knowledge
+      '@pharmax/fill':
+        specifier: workspace:*
+        version: link:../fill
+      '@pharmax/labels':
+        specifier: workspace:*
+        version: link:../labels
+      '@pharmax/orders':
+        specifier: workspace:*
+        version: link:../orders
+      '@pharmax/patients':
+        specifier: workspace:*
+        version: link:../patients
       '@pharmax/platform-core':
         specifier: workspace:*
         version: link:../platform-core
       '@pharmax/rbac':
         specifier: workspace:*
         version: link:../rbac
+      '@pharmax/shipping':
+        specifier: workspace:*
+        version: link:../shipping
       '@pharmax/tenancy':
         specifier: workspace:*
         version: link:../tenancy
       '@pharmax/verification':
         specifier: workspace:*
         version: link:../verification
+      '@pharmax/workflow':
+        specifier: workspace:*
+        version: link:../workflow
       '@prisma/generator-helper':
         specifier: ^7.9.1
         version: 7.9.1

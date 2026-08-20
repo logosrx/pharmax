@@ -69,9 +69,11 @@ description = "Pharmax local KMS seed leaking out of a fixture (>=32 chars)"
 regex = '''(?i)PHARMAX_LOCAL_KMS_SEED\s*[:=]\s*['"]?[A-Za-z0-9+/=_-]{32,}['"]?'''
 keywords = ["PHARMAX_LOCAL_KMS_SEED"]
 # Allow the value to remain inside CI workflow files where it's an
-# intentional CI-only seed; the env files would still trip.
+# intentional CI-only seed; the env files would still trip. The
+# integration job (and its seed env var) lives in ci.yml since the
+# suite became merge-blocking; integration.yml is retired.
 [rules.allowlist]
-paths = ['''^\.github/workflows/integration\.yml$''']
+paths = ['''^\.github/workflows/ci\.yml$''']
 
 # -----------------------------------------------------------------
 # General allowlists

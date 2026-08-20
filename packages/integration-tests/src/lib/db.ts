@@ -32,13 +32,48 @@ export type DbRole =
   | "system";
 
 function resolveDatabaseUrl(): string {
+  // `support/setup-env.ts` rewrites DATABASE_URL to pin the session role
+  // to `pharmax_app` via the libpq `options` parameter, because the
+  // Prisma client can only be steered by connection string. This file
+  // must NOT inherit that: it steers the role with an explicit
+  // `SET ROLE` instead, and `connect("owner")` depends on starting as
+  // the login user. A connection that began life as `pharmax_app` would
+  // make `"owner"` silently non-owner, and every cross-tenant seeding
+  // call would start failing RLS in a way that reads as a policy bug
+  // rather than a harness bug.
+  //
+  // The un-pinned URL is preserved under its own name for exactly this
+  // reason; `stripSessionRole` is the belt to that braces, so a URL that
+  // arrives pinned from the environment is still usable here.
+  const owner = process.env["INTEGRATION_OWNER_DATABASE_URL"];
+  if (typeof owner === "string" && owner.length > 0) return stripSessionRole(owner);
   const intg = process.env["INTEGRATION_DATABASE_URL"];
-  if (typeof intg === "string" && intg.length > 0) return intg;
+  if (typeof intg === "string" && intg.length > 0) return stripSessionRole(intg);
   const dev = process.env["DATABASE_URL"];
-  if (typeof dev === "string" && dev.length > 0) return dev;
+  if (typeof dev === "string" && dev.length > 0) return stripSessionRole(dev);
   throw new Error(
     "No INTEGRATION_DATABASE_URL or DATABASE_URL set. Start docker-compose postgres (`pnpm db:up`), set DATABASE_URL, and re-run."
   );
+}
+
+/**
+ * Drop the libpq `options` startup parameter so the connection opens as
+ * the login user and the explicit `SET ROLE` in `connect()` decides the
+ * role.
+ *
+ * Returns the input unchanged if it will not parse — an unparseable URL
+ * should surface as a connection error naming the target, not as a
+ * silent rewrite here.
+ */
+function stripSessionRole(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.searchParams.has("options")) return url;
+    parsed.searchParams.delete("options");
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 /**

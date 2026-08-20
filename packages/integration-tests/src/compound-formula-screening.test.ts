@@ -36,6 +36,7 @@ import {
 
 import { connect, assertSchemaReady } from "./lib/db.js";
 import { cleanupTenant, seedOrderChain, seedTenant, type SeededTenant } from "./lib/seed.js";
+import { disconnectSystemDb, systemDb } from "./support/system-prisma.js";
 
 import type { Client } from "pg";
 
@@ -259,6 +260,13 @@ beforeAll(async () => {
   tenant = await seedTenant(owner);
   otherTenant = await seedTenant(owner);
 
+  // Several assertions below depend on NO RxNorm release existing
+  // ("the stamped release identity is honestly null"), so enforce that
+  // precondition instead of assuming it: a crashed run of the rxnorm
+  // suites can leave a LIVE release behind, and file ordering does not
+  // guarantee their cleanup runs before this file.
+  await systemDb().rxnormRelease.deleteMany({});
+
   // The production wiring, verbatim (see apps/web bootstrap): the
   // composite source over RxNorm (no release loaded here — that is
   // the point) and the org's coded formulas.
@@ -289,6 +297,7 @@ afterAll(async () => {
     await cleanupTenant(owner, t.organizationId);
   }
   await owner.end();
+  await disconnectSystemDb();
   await prisma.$disconnect().catch(() => undefined);
   resetClinicalScreeningConfigurationForTests();
 });

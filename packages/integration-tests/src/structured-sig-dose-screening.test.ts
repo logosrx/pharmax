@@ -49,6 +49,7 @@ import {
 
 import { connect, assertSchemaReady } from "./lib/db.js";
 import { cleanupTenant, seedOrderChain, seedTenant, type SeededTenant } from "./lib/seed.js";
+import { disconnectSystemDb, systemDb } from "./support/system-prisma.js";
 
 import type { Client } from "pg";
 
@@ -273,8 +274,12 @@ beforeAll(async () => {
   // A LIVE synthetic release, so the production-shape tests exercise
   // the real composite: the drug RESOLVES (no knowledge gap) while
   // dose-range content honestly does not exist.
-  await prisma.rxnormRelease.deleteMany({});
-  await ingestRxnormRelease({ db: prisma, directory: writeReleaseDir(), version: "07152026" });
+  //
+  // Written as pharmax_system — the role production's ingestion job
+  // holds — because pharmax_app deliberately has no write grant on the
+  // global drug-knowledge tables.
+  await systemDb().rxnormRelease.deleteMany({});
+  await ingestRxnormRelease({ db: systemDb(), directory: writeReleaseDir(), version: "07152026" });
 
   configureClinicalScreening({
     knowledgeSourceResolver: (context) =>
@@ -293,8 +298,9 @@ afterAll(async () => {
     ]);
   }
   await cleanupTenant(owner, tenant.organizationId);
-  await prisma.rxnormRelease.deleteMany({});
+  await systemDb().rxnormRelease.deleteMany({});
   await owner.end();
+  await disconnectSystemDb();
   await prisma.$disconnect().catch(() => undefined);
   resetClinicalScreeningConfigurationForTests();
 });

@@ -83,6 +83,13 @@ const SKIP_DIR_SEGMENTS = new Set(["node_modules", "generated", "dist", ".next",
 // number of infrastructure primitives (the session-GUC setter and
 // the audit-chain advisory lock).
 const ALLOWLIST: ReadonlySet<string> = new Set<string>([
+  // Integration-harness role sentinel: a parameterless tagged-template
+  // `select current_user` that FAILS the suite unless Prisma is
+  // connected as `pharmax_app` (i.e. unless RLS is actually live for
+  // every command the harness dispatches). Session introspection, no
+  // tenant data touched; the raw form is the point — it must see the
+  // session the same way the RLS policies do.
+  "packages/integration-tests/src/support/bus-harness.ts",
   // FOR UPDATE SKIP LOCKED claim of sent print jobs (agent context).
   "apps/print-agent/src/claim-sent-print-job.ts",
   // Clinic-row SELECT … FOR UPDATE that serializes credit-ledger
