@@ -178,6 +178,55 @@ variable "package_photos_kms_key_alias" {
   type        = string
 }
 
+variable "reports_bucket_name" {
+  description = "Scheduled-report CSV archive bucket. Injected as REPORT_ARCHIVE_S3_BUCKET; without it the worker falls back to an in-memory archive that discards every report on restart (R-028)."
+  type        = string
+}
+
+variable "reports_kms_key_alias" {
+  description = "KMS alias for the reports bucket. Injected as REPORT_ARCHIVE_S3_KMS_KEY_ID. The S3 adapter is only selected when BOTH this and the bucket are set."
+  type        = string
+}
+
+# --- Notifications -----------------------------------------------------
+#
+# Gated behind a flag that defaults OFF, deliberately.
+#
+# An ECS task definition referencing a Secrets Manager secret with no
+# version fails to start with ResourceInitializationError — see the Clerk
+# decommission note in this module and the placeholder comment in
+# modules/secrets. Wiring RESEND_API_KEY unconditionally would therefore
+# convert "notifications degrade to log-only" into "the worker does not
+# boot", which is a strictly worse failure than the one being fixed.
+#
+# So: create the secret, leave it empty, and flip this to true once it is
+# populated. Until then the worker keeps its in-memory channel and its
+# existing boot warning.
+
+variable "notifications_enabled" {
+  description = "Inject the Resend notification channel into the worker. Requires the resend-api-key secret to be POPULATED first — an empty referenced secret fails task startup, not just notification delivery."
+  type        = bool
+  default     = false
+}
+
+variable "notification_from_email" {
+  description = "From address for operational notifications (NOTIFICATION_FROM_EMAIL). Must be a verified Resend sender."
+  type        = string
+  default     = ""
+}
+
+variable "compliance_notify_recipient_email" {
+  description = "Recipient for quarterly access-review notifications (COMPLIANCE_NOTIFY_RECIPIENT_EMAIL). Unset means an access review that finds something notifies nobody."
+  type        = string
+  default     = ""
+}
+
+variable "nightly_security_digest_recipient_email" {
+  description = "Recipient for the nightly security digest (NIGHTLY_SECURITY_DIGEST_RECIPIENT_EMAIL). Unset means the digest is computed and discarded at INFO."
+  type        = string
+  default     = ""
+}
+
 variable "audit_archive_bucket_name" {
   description = "Bucket name for the Object-Lock audit archive. Injected as AUDIT_ARCHIVE_BUCKET into the worker container."
   type        = string

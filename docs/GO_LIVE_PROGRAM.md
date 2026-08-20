@@ -1034,14 +1034,37 @@ intended.
 | `COMPLIANCE_NOTIFY_RECIPIENT_EMAIL`       | A quarterly access review that finds something tells nobody              |
 | `NIGHTLY_SECURITY_DIGEST_RECIPIENT_EMAIL` | The nightly security digest is computed and discarded                    |
 
-Two of these have prerequisites that are not engineering tasks and should
-be started before they are needed. **No reports bucket exists in
-Terraform** — `infra/terraform/modules/` has `s3-audit-archive` and
-`s3-documents` only, so one must be added and applied. And **Resend has
-no executed BAA** ([`baa-tracker.md`](./governance/baa-tracker.md)); it is
-currently `not requested` and gated to non-PHI templates by
-`phiCapable: false`, which is sufficient for operational alerting but not
-for anything patient-facing.
+**Status as of 2026-08-20: the infrastructure exists; two operator steps
+remain.**
+
+The reports bucket has been added (`module "s3_reports"` in
+`infra/terraform/main.tf`, reusing the `s3-documents` profile with
+`purpose = "reports"`), the worker task role has scoped write and read on
+it, and both `REPORT_ARCHIVE_S3_*` variables are injected. That half needs
+only an apply.
+
+The notification half is provisioned but **switched off on purpose**. The
+`resend-api-key` secret is created empty and referenced by nothing, behind
+`notifications_enabled = false`. The order cannot be reversed:
+
+1. Create the Resend account, verify the sending domain.
+2. `terraform apply` — creates the empty secret.
+3. `aws secretsmanager put-secret-value --secret-id <prefix>/resend-api-key …`
+4. Set `notifications_enabled = true`, set the three addresses, apply again.
+
+Enabling before populating fails the task with
+`ResourceInitializationError`, turning a degraded notification path into a
+worker that will not boot. That is the trap the Clerk decommission hit,
+and it is why creating the secret and referencing it are two applies
+rather than one.
+
+**Resend still has no executed BAA**
+([`baa-tracker.md`](./governance/baa-tracker.md)). It is `not requested`
+and gated to non-PHI templates by `phiCapable: false`, with every template
+carrying `phiAllowed: false` and the channel asserting it at the boundary.
+That is sufficient for operational alerting — order numbers, escalation
+reasons — and **not** sufficient for anything patient-facing. A BAA
+becomes mandatory the moment a template flips.
 
 Confirm from the boot log that the resolved adapters read `s3` and
 `resend` rather than `in-memory`, and record the check in the go-live
