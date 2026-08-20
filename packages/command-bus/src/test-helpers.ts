@@ -29,8 +29,17 @@ export interface FakePrisma {
    * this rather than trusting review to catch a missed call site.
    */
   readonly transactionOptions: Array<{ timeout?: number; maxWait?: number } | undefined>;
-  /** Set the row that `idempotencyKey.findUnique` returns. */
+  /** Set the row that `idempotencyKey.findUnique` returns for ANY key. */
   setIdempotencyHit: (row: Record<string, unknown> | null) => void;
+  /**
+   * Set the row that `idempotencyKey.findUnique` returns for ONE
+   * specific stored key (the actor-scoped value the bus composes,
+   * e.g. `u:user-A|shared`). Keyed rows take precedence over the
+   * flat `setIdempotencyHit` fallback, so a lookup for any OTHER key
+   * misses — which is exactly how the cross-actor isolation test
+   * proves actor B cannot select actor A's row.
+   */
+  setIdempotencyHitForKey: (key: string, row: Record<string, unknown> | null) => void;
   /**
    * If set, the next MAIN `$transaction` (the one that ran the
    * handler — detected by an in-tx `auditLog.create` /
@@ -122,6 +131,15 @@ export function buildFakePrisma(): FakePrisma {
   // running on Prisma's defaults.
   const transactionOptions: Array<{ timeout?: number; maxWait?: number } | undefined> = [];
   let idempotencyHit: Record<string, unknown> | null = null;
+  const idempotencyHitsByKey = new Map<string, Record<string, unknown> | null>();
+  const idempotencyKeyOf = (args: unknown): string | undefined =>
+    (args as { where?: { organizationId_commandName_key?: { key?: string } } })?.where
+      ?.organizationId_commandName_key?.key;
+  const resolveIdempotencyHit = (args: unknown): Record<string, unknown> | null => {
+    const k = idempotencyKeyOf(args);
+    if (k !== undefined && idempotencyHitsByKey.has(k)) return idempotencyHitsByKey.get(k) ?? null;
+    return idempotencyHit;
+  };
   let commitError: Error | null = null;
   let commandLogRow: { id: string; status: string; responsePayload: unknown } | null = null;
   let commandLogCreateError: Error | null = null;
@@ -290,7 +308,7 @@ export function buildFakePrisma(): FakePrisma {
       create: record("idempotencyKey", "create"),
       findUnique: vi.fn(async (args: unknown) => {
         calls.push({ table: "idempotencyKey", op: "findUnique", args });
-        return idempotencyHit;
+        return resolveIdempotencyHit(args);
       }),
     },
     workflowPolicy: { findUnique: workflowPolicyFindUnique },
@@ -317,7 +335,7 @@ export function buildFakePrisma(): FakePrisma {
     idempotencyKey: {
       findUnique: vi.fn(async (args: unknown) => {
         calls.push({ table: "idempotencyKey", op: "findUnique", args });
-        return idempotencyHit;
+        return resolveIdempotencyHit(args);
       }),
     },
     // The second parameter is Prisma's transaction option bag. The fake
@@ -350,6 +368,9 @@ export function buildFakePrisma(): FakePrisma {
     transactionOptions,
     setIdempotencyHit: (row) => {
       idempotencyHit = row;
+    },
+    setIdempotencyHitForKey: (key, row) => {
+      idempotencyHitsByKey.set(key, row);
     },
     throwOnCommit: (err) => {
       commitError = err;

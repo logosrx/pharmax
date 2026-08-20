@@ -71,6 +71,7 @@ export {
 export { redactPayload, REDACT_CENSOR } from "./redact.js";
 
 export {
+  actorScopedIdempotencyKey,
   lookupIdempotency,
   storeIdempotencyInTx,
   type LookupIdempotencyInput,
