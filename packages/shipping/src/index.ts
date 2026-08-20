@@ -305,3 +305,11 @@ export const shipping = {
     RegisterCarrierCredential: registerCarrierCredentialModule.RegisterCarrierCredential,
   },
 } as const;
+
+export {
+  assertShipToStateAllowed,
+  readOrderDestinationState,
+  SHIP_TO_STATE_NOT_LICENSED,
+  SHIP_TO_STATE_UNKNOWN_DESTINATION,
+  type AssertShipToStateAllowedInput,
+} from "./ship-to-state-guard.js";

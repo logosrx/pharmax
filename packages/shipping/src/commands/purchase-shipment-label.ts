@@ -38,7 +38,7 @@
 
 import { defineCommand, ORDER_VERSION_MISMATCH } from "@pharmax/command-bus";
 import { ShipmentCarrier, ShipmentStatus, ShippingProvider } from "@pharmax/database";
-import { errors } from "@pharmax/platform-core";
+import { errors, geo } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { z } from "zod";
 
@@ -51,6 +51,8 @@ import {
 } from "../shipping-guards.js";
 
 import { SHIPMENT_ALREADY_EXISTS } from "./create-shipment.js";
+
+import { assertShipToStateAllowed } from "../ship-to-state-guard.js";
 
 export const PURCHASE_LABEL_ADAPTER_FAILED = "PURCHASE_LABEL_ADAPTER_FAILED";
 export const SHIPPING_ADDRESS_UNDELIVERABLE = "SHIPPING_ADDRESS_UNDELIVERABLE";
@@ -170,6 +172,22 @@ export const PurchaseShipmentLabel = defineCommand<
         metadata: { orderId: target.id, shipmentId: existing.id },
       });
     }
+
+    // Ship-to-state licensure (G-2), BEFORE the adapter call — refusing
+    // after buying a label would mean refunding one.
+    //
+    // Checked against `input.toAddress.state`, the address actually
+    // being shipped to, rather than the destination recorded at intake:
+    // an operator can correct the address on this form, and validating
+    // the stored value while shipping to a typed one would be a bypass
+    // of exactly the kind this guard exists to close.
+    await assertShipToStateAllowed({
+      tx,
+      organizationId: ctx.organizationId,
+      siteId: target.siteId,
+      orderId: target.id,
+      destinationState: geo.normalizeJurisdictionCode(input.toAddress.state),
+    });
 
     // Resolve the per-org credential and build the adapter via the
     // configured factory. The resolver decrypts the API key with AAD

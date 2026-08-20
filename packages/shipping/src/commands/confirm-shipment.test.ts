@@ -22,6 +22,8 @@ import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@p
 import { ConfirmShipment, SHIPMENT_NOT_FOUND, SHIPMENT_NOT_READY } from "./confirm-shipment.js";
 import { SHIP_NOT_ASSIGNED_TO_ACTOR } from "../shipping-guards.js";
 
+import { SHIP_TO_STATE_NOT_LICENSED } from "../ship-to-state-guard.js";
+
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const CLINIC_ID = "00000000-0000-4000-8000-000000000002";
 const SITE_ID = "00000000-0000-4000-8000-000000000003";
@@ -56,6 +58,10 @@ interface FakeCall {
 }
 
 interface FakeOverrides {
+  /** Ship-to-state licensure (G-2). Empty means the site is unenforced. */
+  authorizedShipStates?: ReadonlyArray<string>;
+  /** `null` means the order has no recorded destination. */
+  destinationState?: string | null;
   lockedRow?: { currentStatus: string; version: number } | null;
   assigneeUserId?: string | null;
   policy?: { code: string; version: number; status: string } | null;
@@ -94,7 +100,25 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
   const orderEventHead =
     "orderEventHead" in overrides ? (overrides.orderEventHead ?? null) : { sequenceNumber: 10 };
 
+  const authorizedShipStates = overrides.authorizedShipStates ?? [];
+  // `=== undefined`, not `??`: a deliberate `null` means "no
+  // destination recorded", which is a case the G-2 guard must see.
+  // Coalescing it to a state would make the null test pass by
+  // never reaching the guard at all.
+  const destinationState =
+    overrides.destinationState === undefined ? "CA" : overrides.destinationState;
+
   const tx = {
+    // Ship-to-state licensure (G-2). Empty by default, which
+    // means the site has declared nothing and enforcement is
+    // off — so every pre-existing assertion in this file keeps
+    // meaning what it meant.
+    siteAuthorizedShipState: {
+      findMany: vi.fn(async (args: unknown) => {
+        calls.push({ table: "siteAuthorizedShipState", op: "findMany", args });
+        return authorizedShipStates.map((state: string) => ({ state }));
+      }),
+    },
     orderStageInterval: createOrderStageIntervalTxStub(
       (table, op, args) => calls.push({ table, op, args }),
       OrderStageIntervalKind.SHIPPING_ACTIVE
@@ -108,7 +132,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     order: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "findFirst", args });
-        return { currentAssigneeUserId: assigneeUserId };
+        return { destinationState, currentAssigneeUserId: assigneeUserId };
       }),
       update: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "update", args });
@@ -479,5 +503,44 @@ describe("ConfirmShipment — RBAC + tenancy", () => {
     await expect(
       executeCommand(ConfirmShipment, validInput(), { idempotencyKey: "k" })
     ).rejects.toMatchObject({ code: "TENANCY_NO_CONTEXT" });
+  });
+});
+
+describe("ConfirmShipment — ship-to-state licensure (G-2)", () => {
+  // The backstop. This is the command that sets order.currentStatus =
+  // SHIPPED, so it is the last point an unlawful destination can be
+  // stopped — and the only one that catches a shipment created before
+  // enforcement was switched on for the site.
+
+  it("refuses to mark an order shipped to an unlicensed state", async () => {
+    const fake = buildPrismaFake({
+      authorizedShipStates: ["CA"],
+      destinationState: "TX",
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(ConfirmShipment, { orderId: ORDER_ID }, { idempotencyKey: "g2-confirm" })
+      ).rejects.toMatchObject({ code: SHIP_TO_STATE_NOT_LICENSED });
+    });
+
+    // The order must not reach SHIPPED.
+    expect(fake.calls.filter((c) => c.table === "order" && c.op === "updateMany")).toHaveLength(0);
+  });
+
+  it("permits a licensed destination", async () => {
+    const fake = buildPrismaFake({
+      authorizedShipStates: ["CA", "TX"],
+      destinationState: "TX",
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(ConfirmShipment, { orderId: ORDER_ID }, { idempotencyKey: "g2-confirm-ok" })
+    );
+    expect(
+      fake.calls.filter((c) => c.table === "order" && c.op === "updateMany").length
+    ).toBeGreaterThan(0);
   });
 });

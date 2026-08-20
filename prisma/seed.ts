@@ -123,6 +123,26 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
       "Transcribe a new prescription (encrypts the sig; enforces DEA Part 1306 authorization limits for controlled substances)",
   },
   {
+    code: "providers.credentials.read",
+    description:
+      "View a prescriber's DEA registration and state licence numbers in full; separate from providers.read because a DEA number is a controlled-substance prescribing credential",
+  },
+  {
+    code: "providers.credentials.manage",
+    description:
+      "Record, renew and revoke a prescriber's DEA registrations and state licences, including which controlled schedules a registration authorizes",
+  },
+  {
+    code: "org.site_credentials.manage",
+    description:
+      "Record and revoke a pharmacy site's own regulatory credentials: state pharmacy licences, DEA registration, NPI, NCPDP, NABP",
+  },
+  {
+    code: "org.ship_states.manage",
+    description:
+      "Declare which states a pharmacy site may dispense into; the set that ship-to-state licensure enforcement refuses against",
+  },
+  {
     code: "clinics.read",
     description:
       "View the clinic (practice) directory: codes, names, statuses, and pharmacy-site links; no PHI",

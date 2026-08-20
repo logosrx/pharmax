@@ -85,6 +85,18 @@ export const ROLE_TEMPLATES: ReadonlyArray<RoleTemplate> = Object.freeze([
       PERMISSIONS.PATIENTS_ALLERGIES_RECORD,
       PERMISSIONS.PATIENTS_ALLERGIES_AMEND_STATUS,
       PERMISSIONS.PROVIDERS_READ,
+      // Verifying a controlled prescription at PV1 means checking the
+      // prescriber's registration against what is on the paper, so a
+      // pharmacist sees the credential itself. Deliberately NOT granted
+      // to PharmacyTechnician below: a tech transcribes from the
+      // document in front of them and the command validates the number,
+      // so reading the stored credential adds exposure without adding
+      // capability.
+      PERMISSIONS.PROVIDERS_CREDENTIALS_READ,
+      // Recording that a registration expires on a date and covers
+      // Schedule III through V is a professional judgement about
+      // prescriptive authority, not data entry.
+      PERMISSIONS.PROVIDERS_CREDENTIALS_MANAGE,
       // Read-only directory surfaces: pharmacists verify against the
       // drug catalog / lot status and need to see which practice an
       // order came from. Neither grant exposes PHI or a mutation path.
