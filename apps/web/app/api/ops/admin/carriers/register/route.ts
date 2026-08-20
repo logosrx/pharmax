@@ -19,8 +19,18 @@ import { RegisterCarrierCredential } from "@pharmax/shipping";
 
 import { dispatchOpsCommandWithMfa } from "../../../../../../src/server/auth/dispatch-ops-with-mfa.js";
 
-const PROVIDERS: ReadonlySet<ShippingProvider> = new Set([
-  ShippingProvider.EASYPOST,
+/**
+ * EASYPOST is deliberately absent — no BAA covers it.
+ *
+ * The type is narrowed rather than left as `ShippingProvider` so that
+ * re-adding a blocked provider here is a compile error, not a runtime
+ * rejection discovered by an admin. The command's schema refuses it
+ * independently; this list decides only what the route advertises, and
+ * it must not name a provider the command will reject.
+ */
+type RegistrableProvider = typeof ShippingProvider.FEDEX | typeof ShippingProvider.UPS;
+
+const PROVIDERS: ReadonlySet<RegistrableProvider> = new Set([
   ShippingProvider.FEDEX,
   ShippingProvider.UPS,
 ]);
@@ -38,7 +48,7 @@ export async function POST(request: Request): Promise<Response> {
     buildInput: ({ body }) => {
       const provider = readString(body, "provider");
       const apiKey = readString(body, "apiKey");
-      if (provider === null || !PROVIDERS.has(provider as ShippingProvider)) {
+      if (provider === null || !PROVIDERS.has(provider as RegistrableProvider)) {
         return {
           error: `provider must be one of: ${Array.from(PROVIDERS).join(", ")}.`,
         };
@@ -49,7 +59,7 @@ export async function POST(request: Request): Promise<Response> {
       const baseUrl = readString(body, "baseUrl");
       const notes = readString(body, "notes");
       return {
-        provider: provider as ShippingProvider,
+        provider: provider as RegistrableProvider,
         apiKey,
         ...(webhookSecret !== null ? { webhookSecret } : {}),
         ...(carrierAccountId !== null ? { carrierAccountId } : {}),

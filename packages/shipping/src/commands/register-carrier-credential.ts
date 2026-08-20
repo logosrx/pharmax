@@ -69,11 +69,31 @@ export const REGISTER_CARRIER_CREDENTIAL_BASE_URL_NON_DEFAULT_PORT =
 export const REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_PUBLIC =
   "REGISTER_CARRIER_CREDENTIAL_BASE_URL_NOT_PUBLIC";
 
-const providerSchema = z.enum([
-  ShippingProvider.EASYPOST,
-  ShippingProvider.FEDEX,
-  ShippingProvider.UPS,
-]);
+/**
+ * Providers a credential may be registered for.
+ *
+ * EASYPOST is deliberately absent. It remains in the `ShippingProvider`
+ * enum because historical `shipment` and `carrier_credential` rows
+ * reference it and the inbound tracking-webhook path still processes
+ * events for shipments already in flight — the value cannot be dropped
+ * from the schema without rewriting history.
+ *
+ * What it must not do is accept new outbound traffic. EasyPost is not a
+ * conduit: unlike FedEx or UPS it received recipient names and addresses
+ * into its own platform and stored them, which is persistent access.
+ * **No BAA was ever executed**, and the vendor is being decommissioned
+ * (2026-08-17) rather than signed. See the
+ * [BAA tracker](../../../../docs/governance/baa-tracker.md#easypost).
+ *
+ * That document states the control as "the engineering switch stays
+ * off." Until 2026-08-20 there was no switch — the factory was
+ * registered in both `apps/web` and `apps/worker`, and the only thing
+ * preventing full recipient PHI reaching a vendor with no BAA was that
+ * no organization happened to hold an ACTIVE credential row. One admin
+ * action would have opened it, and nothing in code would have objected.
+ * This enum is now that switch, and `configure.ts` is its second half.
+ */
+const providerSchema = z.enum([ShippingProvider.FEDEX, ShippingProvider.UPS]);
 
 const inputSchema = z
   .object({

@@ -49,7 +49,7 @@ describe("resolveShippingAdapter", () => {
     const seen: CarrierCredentialContext[] = [];
     configureShipping({
       factories: {
-        [ShippingProvider.EASYPOST]: (ctx) => {
+        [ShippingProvider.FEDEX]: (ctx) => {
           seen.push(ctx);
           return STUB_ADAPTER;
         },
@@ -71,7 +71,7 @@ describe("resolveShippingAdapter", () => {
     const result = await resolveShippingAdapter({
       tx,
       organizationId: ORG_ID,
-      provider: ShippingProvider.EASYPOST,
+      provider: ShippingProvider.FEDEX,
     });
 
     expect(result.adapter).toBe(STUB_ADAPTER);
@@ -84,7 +84,7 @@ describe("resolveShippingAdapter", () => {
     const seen: CarrierCredentialContext[] = [];
     configureShipping({
       factories: {
-        [ShippingProvider.EASYPOST]: (ctx) => {
+        [ShippingProvider.FEDEX]: (ctx) => {
           seen.push(ctx);
           return STUB_ADAPTER;
         },
@@ -114,27 +114,27 @@ describe("resolveShippingAdapter", () => {
     await resolveShippingAdapter({
       tx,
       organizationId: ORG_ID,
-      provider: ShippingProvider.EASYPOST,
+      provider: ShippingProvider.FEDEX,
     });
     expect(seen[0]?.webhookSecret).toBe("whsec_demo");
   });
 
   it("throws SHIPPING_CREDENTIAL_NOT_FOUND when no ACTIVE credential exists", async () => {
     configureShipping({
-      factories: { [ShippingProvider.EASYPOST]: () => STUB_ADAPTER },
+      factories: { [ShippingProvider.FEDEX]: () => STUB_ADAPTER },
     });
     await expect(
       resolveShippingAdapter({
         tx: buildTx([]),
         organizationId: ORG_ID,
-        provider: ShippingProvider.EASYPOST,
+        provider: ShippingProvider.FEDEX,
       })
     ).rejects.toMatchObject({ code: SHIPPING_CREDENTIAL_NOT_FOUND });
   });
 
   it("filters the findFirst to status=ACTIVE so DISABLED rows are invisible", async () => {
     configureShipping({
-      factories: { [ShippingProvider.EASYPOST]: () => STUB_ADAPTER },
+      factories: { [ShippingProvider.FEDEX]: () => STUB_ADAPTER },
     });
     const apiKeyEnc = await encryptField({
       plaintext: "k",
@@ -149,7 +149,7 @@ describe("resolveShippingAdapter", () => {
     await resolveShippingAdapter({
       tx,
       organizationId: ORG_ID,
-      provider: ShippingProvider.EASYPOST,
+      provider: ShippingProvider.FEDEX,
     });
     const findFirst = (
       tx as unknown as { carrierCredential: { findFirst: ReturnType<typeof vi.fn> } }
@@ -158,7 +158,7 @@ describe("resolveShippingAdapter", () => {
       expect.objectContaining({
         where: expect.objectContaining({
           organizationId: ORG_ID,
-          provider: ShippingProvider.EASYPOST,
+          provider: ShippingProvider.FEDEX,
           status: CarrierCredentialStatus.ACTIVE,
         }),
       })

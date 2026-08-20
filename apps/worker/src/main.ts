@@ -41,7 +41,6 @@ import {
 import { CmsNppesClient } from "@pharmax/providers";
 import {
   configureShipping,
-  createEasyPostFactory,
   createFedExFactory,
   createUpsFactory,
   PrismaEasyPostWebhookEventStore,
@@ -341,9 +340,11 @@ async function main(): Promise<void> {
   // Listing all three providers here keeps factory registration as
   // the single source of truth — adding a fourth carrier means one
   // line here, not a hunt across packages.
+  // EASYPOST is deliberately absent — no BAA, decommissioning in
+  // progress, and `configureShipping` refuses it outright so re-adding
+  // this line fails at boot instead of quietly reopening a PHI path.
   configureShipping({
     factories: {
-      EASYPOST: createEasyPostFactory(),
       FEDEX: createFedExFactory(),
       UPS: createUpsFactory(),
     },
@@ -438,7 +439,7 @@ async function main(): Promise<void> {
       bucket:
         reportArchive instanceof S3ReportRunArchive ? env.REPORT_ARCHIVE_S3_BUCKET : "in-memory",
     },
-    shippingProviders: ["EASYPOST", "FEDEX", "UPS"],
+    shippingProviders: ["FEDEX", "UPS"],
     merkleRootJob: {
       utcHour: env.DAILY_MERKLE_ROOT_HOUR_UTC,
       utcMinute: env.DAILY_MERKLE_ROOT_MINUTE_UTC,
