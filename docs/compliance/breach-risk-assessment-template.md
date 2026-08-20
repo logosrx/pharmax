@@ -81,6 +81,35 @@ Counsel reviewer and date: ______________________
 An exception applies only if **all** of its conditions hold. Record the facts,
 not the conclusion.
 
+### B3. If a vendor received the PHI, was a BAA in force **on the incident date**?
+
+| Field                                                                     | Value |
+| ------------------------------------------------------------------------- | ----- |
+| Vendor                                                                    |       |
+| BAA effective date (from the [BAA tracker](../governance/baa-tracker.md)) |       |
+| Incident date                                                             |       |
+| BAA in force at the time?                                                 |       |
+
+Answer this **before** the four factors, because it can end the analysis. A
+disclosure to a business associate operating under a BAA, for a purpose the BAA
+permits, is not an impermissible use or disclosure and never reaches the breach
+definition. A disclosure to the same vendor the week before the BAA was executed
+is a disclosure to an unauthorised third party.
+
+Added 2026-08-19 after the annual tabletop, where an identical set of facts
+resolved to "not a breach" or "reportable breach" depending only on which side of
+a vendor's BAA execution date the incident fell — and nothing in this form asked.
+
+Two cautions:
+
+- **A BAA is not unlimited scope.** It covers PHI the associate creates or
+  receives _for the engaged service_. If the [vendor inventory](../governance/vendor-inventory.md)
+  records the vendor as receiving no PHI, then PHI reaching it exceeds minimum
+  necessary and contradicts a written control, even where no breach occurred.
+  Record that as a security incident regardless.
+- **"Executed" is not the same as "effective."** Use the date the agreement took
+  effect, not the date it was signed, where they differ.
+
 Approver and date: ______________________
 
 ---
