@@ -34,6 +34,7 @@ import {
   requireIdempotencyKeyHeader,
 } from "../../../../../../src/server/partner/resolve-partner-context.js";
 import { env } from "../../../../../../src/server/env.js";
+import { resolveClientIp } from "../../../../../../src/server/http/client-ip.js";
 import { logger } from "../../../../../../src/server/logger.js";
 
 const rateLimiterHandle = createRateLimiterFromEnv({
@@ -65,14 +66,6 @@ const PER_ORG_NPI_RULE = { limit: 3, windowMs: 60 * 60_000 };
 
 const ONBOARDING_ACTOR_EMAIL_LOCAL_PART = "provider-onboarding";
 
-function clientIpOf(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded !== null && forwarded.length > 0) {
-    return forwarded.split(",")[0]?.trim() ?? "unknown";
-  }
-  return "unknown";
-}
-
 export async function POST(request: Request): Promise<Response> {
   const idem = requireIdempotencyKeyHeader(request);
   if (!idem.ok) return idem.response;
@@ -100,7 +93,7 @@ export async function POST(request: Request): Promise<Response> {
   // IPs. Both fail open on limiter errors (same posture as the
   // partner API).
   const ipHit = await rateLimiterHandle.rateLimiter.hit(
-    `portal-onboarding:ip:${clientIpOf(request)}`,
+    `portal-onboarding:ip:${resolveClientIp(request) ?? "unknown"}`,
     PER_IP_RULE
   );
   if (!ipHit.allowed) {

@@ -229,6 +229,17 @@ variable "web_app_url" {
   default     = ""
 }
 
+variable "web_trusted_proxy_hop_count" {
+  description = "Number of trusted reverse proxies in front of the web tier that append to X-Forwarded-For, injected as TRUSTED_PROXY_HOP_COUNT. Set to the real edge topology of this stack: CloudFront->ALB is 2, ALB-only is 1. Governs which XFF entry is trusted as the client IP for rate-limit keying; a client cannot influence entries at or right of the outermost trusted hop."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.web_trusted_proxy_hop_count >= 0 && var.web_trusted_proxy_hop_count <= 8
+    error_message = "web_trusted_proxy_hop_count must be between 0 and 8."
+  }
+}
+
 variable "tags" {
   description = "Tags applied to every ECS resource."
   type        = map(string)

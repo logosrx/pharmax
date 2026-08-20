@@ -19,6 +19,29 @@ const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_URL: z.string().url().default("http://localhost:3000"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+
+  // Number of trusted reverse proxies that sit in front of this tier and
+  // APPEND to `X-Forwarded-For`. This is the ONLY input that makes a
+  // per-IP rate-limit key trustworthy: `resolveClientIp` (see
+  // server/http/client-ip.ts) takes the Nth-from-the-right XFF entry,
+  // where N is this count, because each trusted proxy appends the address
+  // it received the connection from and a spoofed client-supplied entry
+  // can only ever sit further LEFT than the outermost trusted hop.
+  //
+  // The value is DEPLOYMENT-SPECIFIC, which is why it is configuration and
+  // not a constant:
+  //   - prod us-east-1 : CloudFront -> ALB -> app   => 2
+  //   - ALB-only tiers (staging / dev / secondary)  => 1
+  //   - local / direct connection (no proxy)        => 0
+  //
+  // Default 0 is fail-CLOSED for security: when unset we trust no header,
+  // so `resolveClientIp` returns undefined and every caller collapses into
+  // one shared limiter bucket (stricter, never looser). A misconfigured
+  // deployment therefore over-limits rather than handing attackers a fresh
+  // bucket per spoofed header — but production MUST set the real hop count
+  // (wired in infra/terraform per environment) so legitimate per-IP
+  // isolation is preserved.
+  TRUSTED_PROXY_HOP_COUNT: z.coerce.number().int().min(0).max(8).default(0),
   DATABASE_URL: z.string().url(),
   DIRECT_URL: z.string().url().optional(),
   // Optional read-replica connection for heavy report scans. When

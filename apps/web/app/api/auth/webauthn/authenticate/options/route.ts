@@ -15,6 +15,7 @@ import { errors } from "@pharmax/platform-core";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 
+import { resolveClientIp } from "@/server/http/client-ip";
 import { resolveOrganizationIdFromHost } from "@/server/auth/resolve-org-from-host";
 import { resolveWebAuthnRp } from "@/server/auth/webauthn-rp";
 
@@ -46,7 +47,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       email: parsed.data.email,
       password: parsed.data.password,
       rpId: rp.rpId,
-      ipAddress: request.headers.get("x-forwarded-for") ?? undefined,
+      ipAddress: resolveClientIp(request),
       userAgent: request.headers.get("user-agent") ?? undefined,
     });
     return NextResponse.json({

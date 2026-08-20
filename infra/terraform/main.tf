@@ -306,6 +306,13 @@ module "ecs" {
   web_support_email = var.support_email
   web_app_url       = var.app_url
 
+  # Trusted XFF hop count follows the edge topology of this stack: with
+  # CloudFront in front of the ALB the client address is 2 hops away; an
+  # ALB-only stack is 1. Derived from the same flag that provisions
+  # CloudFront and locks the ALB to its prefix list, so the two can never
+  # drift apart.
+  web_trusted_proxy_hop_count = var.enable_cloudfront ? 2 : 1
+
   aws_region = var.region
   tags       = local.common_tags
 }

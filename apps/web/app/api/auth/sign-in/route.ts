@@ -14,6 +14,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 
 import { themeChoiceFromPreference } from "@/lib/theme";
+import { resolveClientIp } from "@/server/http/client-ip";
 import { resolveOrganizationIdFromHost } from "@/server/auth/resolve-org-from-host";
 import { resolveWebAuthnRp } from "@/server/auth/webauthn-rp";
 import { setSessionCookie } from "@/server/auth/session-cookie";
@@ -74,7 +75,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             },
           }
         : {}),
-      ipAddress: request.headers.get("x-forwarded-for") ?? undefined,
+      ipAddress: resolveClientIp(request),
       userAgent: request.headers.get("user-agent") ?? undefined,
     });
     const response = NextResponse.json({ ok: true, userId: result.userId });

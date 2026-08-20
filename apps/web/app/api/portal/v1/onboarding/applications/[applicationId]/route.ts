@@ -14,6 +14,7 @@ import { z } from "zod";
 import { partnerJsonError } from "@/server/partner/resolve-partner-context";
 import { getPortalApplicationStatus } from "@/server/portal/application-status";
 import { env } from "@/server/env";
+import { resolveClientIp } from "@/server/http/client-ip";
 import { logger } from "@/server/logger";
 
 const rateLimiterHandle = createRateLimiterFromEnv({
@@ -29,7 +30,7 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ applicationId: string }> }
 ): Promise<Response> {
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const ip = resolveClientIp(request) ?? "unknown";
   const hit = await rateLimiterHandle.rateLimiter.hit(
     `portal-onboarding-status:ip:${ip}`,
     PER_IP_RULE
