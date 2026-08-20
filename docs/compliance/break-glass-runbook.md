@@ -16,12 +16,81 @@ Use break-glass when **all** of the following are true:
 - Normal tenant-scoped code paths cannot reach the data you need to
   diagnose or repair the issue.
 - A change ticket / incident ticket exists with a documented reason.
-- A second engineer is available to approve (four-eyes).
+- A second engineer is available to approve (four-eyes) — **or the
+  single-operator exception below applies**.
 - The session can be closed within ≤ 60 minutes (default cap; hard
   ceiling 240 minutes per `BREAK_GLASS_SESSION_MAX_DURATION_MINUTES`).
 
 If any of those is false, escalate to the security officer instead of
 opening a session.
+
+### The single-operator exception
+
+This section exists because the list above previously stated four-eyes
+as an unconditional precondition and the code has never enforced one.
+`approvedByUserId` is **optional** in `openBreakGlassSession`; the only
+approval check is `BREAK_GLASS_SESSION_SELF_APPROVAL_FORBIDDEN`, which
+rejects an approver equal to the requester. Omit the field and the
+session opens with `approvedByUserId: null`.
+
+So the validation catches the operator who _names themselves_ as their
+own approver, and permits the one who simply leaves it blank. That is
+not a bug to close by tightening the check. A hard four-eyes requirement
+would make the emergency tool unusable in precisely the emergency it
+exists for — one person, at 3am, with production broken — and an
+operator facing that choice will reach for `--no-verify`'s moral
+equivalent rather than leave the incident burning. The honest design is
+to permit the solo path and make it **loud**, not to forbid it and make
+it **furtive**.
+
+**The rule, stated so the document and the code agree:**
+
+- When a second engineer exists, four-eyes is **required**. Pass
+  `approvedByUserId`. A session opened without one while a colleague was
+  available is a review finding.
+- When you are the only operator, open the session with
+  `approvedByUserId` omitted. Record in the ticket that no second
+  approver existed at the time — the null column says an approver is
+  missing, not why.
+- Every null-approver session is reviewed at the next
+  [access review](../governance/access-review-procedure.md), alongside
+  the concentration-of-privilege position. Reviewing them is what keeps
+  the exception an exception.
+
+Tracked as **R-029** in the [risk register](../governance/risk-register.md).
+
+### If the sole administrator is unavailable
+
+**This runbook does not answer that question, and it is a different
+question.** Everything here governs privileged data access by an
+operator who is present and able to act. Who reaches production when the
+only person who can is unreachable — ill, travelling, or gone — is a
+contingency-planning matter under 45 CFR § 164.308(a)(7), not an
+access-control one.
+
+The answer is a **written acceptance**, recorded 2026-08-19 in
+[business continuity §3.4](../policies/business-continuity-and-disaster-recovery.md).
+Read it before you need it; the short version is:
+
+- There is no credential escrow, external trustee, or second
+  administrator. Each was considered and declined, because at this
+  headcount they trade a real availability risk for a real
+  confidentiality one — an escrowed production credential is a standing
+  target with no operational purpose the rest of the year.
+- Consequently the 4-hour RTO, the 24-hour MTD, and the SEV0 timelines
+  are **objectives conditional on operator availability**, not
+  guarantees, and must be stated that way to customers and auditors.
+- The breach-notification clock is the sharpest edge: its deadlines are
+  statutory and do not pause for staffing.
+- The acceptance **expires at the first engineering hire**, when the
+  Identity Center groups that already exist can finally be staffed by
+  more than one person.
+
+So if you are reading this because the administrator is unavailable:
+there is no hidden path and no sealed envelope. That was a decision, not
+an oversight.
+
+Tracked as **R-029**.
 
 ## Examples
 
@@ -80,6 +149,9 @@ const handle = await openBreakGlassSession({
     reasonCode: BREAK_GLASS_SESSION_REASONS.FORENSIC_INVESTIGATION,
     reasonDetail: "audit chain break on org-acme per INC-1234",
     requestedByUserId: "<requester user id>",
+    // Omit entirely when you are the only operator — see the
+    // single-operator exception above. Do NOT pass your own id here;
+    // that is rejected as BREAK_GLASS_SESSION_SELF_APPROVAL_FORBIDDEN.
     approvedByUserId: "<second engineer user id>",
     ticketUrl: "https://tickets/INC-1234",
     maxDurationMinutes: 60,
@@ -92,6 +164,10 @@ Expected:
 - A `break_glass_session` row exists with `closedAt = NULL`.
 - An audit event `BREAK_GLASS_SESSION_OPENED` written.
 - An outbox event `security.break_glass_opened.v1` queued.
+- If you opened without an approver, `approvedByUserId` is `NULL`. Note
+  that nothing currently emits a distinct signal for that — the absence
+  is legible only to someone reading the column. Raising it into the
+  digest is mitigation (b) under R-029.
 - An immediate Slack ping to `#security-events` (Lane 4 deliverable;
   until then, manually notify the channel).
 

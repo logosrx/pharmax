@@ -56,6 +56,34 @@ A real-world disaster restore is verified against the RPO by checking the most r
 
 Beyond 24 hours of unavailability, the cumulative impact (delayed patient shipments, missed billing, customer trust) crosses into the territory of "we are damaging the product's value proposition". Restoration plans assume the MTD is not exceeded; an event projected to exceed MTD triggers an executive decision on temporary degradation alternatives (e.g. manual-workflow standup with downstream backfill).
 
+### 3.4 Operator availability — the assumption underneath all three objectives
+
+**Accepted risk, recorded 2026-08-19.**
+
+Every justification above is technical. The 4-hour RTO rests on PITR restore speed, the 5-minute RPO on backup granularity, the 24-hour MTD on commercial tolerance. Not one of them mentions the person who runs the restore, and all three silently assume that someone is awake, reachable, and authorised at the moment the disruption starts.
+
+Today that is one person. The [2026-Q3 infrastructure access review](../governance/access-review-procedure.md) confirmed a single AWS Identity Center principal holding Administrator on both the production and management accounts, and the same identity is the sole GitHub admin and sole production deploy approver. **The bus factor for every objective in §3 is one.**
+
+The honest consequence: if the sole administrator is unreachable when a disaster-class event begins, the achieved RTO is not 4 hours. It is however long it takes that person to become reachable, and the technical objectives are unreachable in the meantime regardless of how good the tooling is.
+
+**The position, stated rather than implied.** Pharmax accepts this risk at current headcount. No credential escrow, no external trustee, and no second administrator is established, because each carries its own exposure — an escrowed production credential is a standing target with no operational purpose the rest of the year, and a trustee who never exercises the path will not succeed at it under pressure. At a two-person company those controls would trade a real availability risk for a real confidentiality one, and the trade is not obviously favourable.
+
+What is not accepted is leaving it unsaid. Specifically:
+
+- The §3.1 RTO, §3.3 MTD, and the [incident response](./incident-response-policy.md) SEV0 timelines are **objectives conditional on operator availability**, not guarantees. Any statement of them to a customer, an auditor, or in a contract must carry that condition.
+- The [breach notification](./breach-notification-policy.md) clock is the sharpest instance. Its deadlines are statutory and do not pause for staffing. An event discovered while the sole operator is unavailable consumes notification budget in real time, and the shortest applicable state deadline may pass before anyone can act.
+- This acceptance **expires at the first engineering hire.** The Identity Center group structure needed to split these duties already exists (`pharmax-platform-admins`, `pharmax-engineers`, `pharmax-support`) and is currently staffed by one person across all three. On the day a second person can hold `pharmax-platform-admins`, this section is rewritten rather than renewed.
+- It is re-affirmed or withdrawn at each [annual risk assessment](../governance/risk-assessment-procedure.md), and reviewed each quarter as part of the concentration-of-privilege item in the access review.
+
+Tracked as **R-029** in the [risk register](../governance/risk-register.md).
+
+| Field                 | Value                                                                                                                                                                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Risk accepted by      | CEO                                                                                                                                                                                                                                                                                         |
+| Date accepted         | 2026-08-19                                                                                                                                                                                                                                                                                  |
+| Expiry condition      | First engineering hire, or the next annual risk assessment, whichever comes first                                                                                                                                                                                                           |
+| Compensating controls | Automated restore paths that need no bespoke knowledge (RDS PITR, Terraform-defined infrastructure); immutable audit chain and CloudTrail under Object Lock, so evidence survives an extended absence; documented runbooks so a future second operator can execute without tribal knowledge |
+
 ## 4. Critical functions
 
 The functions ranked by criticality:
@@ -244,7 +272,8 @@ Revisions are approved by the CEO and recorded in the revision history.
 
 ## Revision history
 
-| Version | Date       | Author | Change                                                     |
-| ------- | ---------- | ------ | ---------------------------------------------------------- |
-| 0.1     | 2026-05-27 | CTO    | Initial drafting                                           |
-| 1.0     | 2026-08-18 | CEO    | Adopted. Effective date set; annual review cadence begins. |
+| Version | Date       | Author | Change                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------- | ---------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0.1     | 2026-05-27 | CTO    | Initial drafting                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 1.0     | 2026-08-18 | CEO    | Adopted. Effective date set; annual review cadence begins.                                                                                                                                                                                                                                                                                                                                                        |
+| 1.1     | 2026-08-19 | CEO    | New §3.4 records an accepted risk surfaced by the 2026-Q3 infrastructure access review: every objective in §3 was justified technically and none accounted for operator availability, while the bus factor across all of them is one. Escrow and trustee declined with reasons; the acceptance expires at the first engineering hire and makes the RTO, MTD and SEV0 timelines explicitly conditional. See R-029. |
