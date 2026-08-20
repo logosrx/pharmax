@@ -34,6 +34,41 @@ import { errors } from "@pharmax/platform-core";
 import { COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH } from "./errors.js";
 import type { PrismaTxClient } from "./types.js";
 
+/**
+ * Bind the acting user into the idempotency identity.
+ *
+ * The stored dedup identity is `(organizationId, commandName, key)`.
+ * Route handlers build `key` from the RESOURCE and a minute bucket
+ * (e.g. `pv1-approve:{orderId}:{fingerprint}:{minute}`) — the actor
+ * is deliberately NOT in it, because a legitimate retry is the same
+ * actor resubmitting. But that also meant two DIFFERENT operators
+ * acting on the same resource in the same minute produced the SAME
+ * key: the second one's preflight lookup HIT the first's row and the
+ * bus replayed the first actor's response WITHOUT running the second
+ * actor's handler — so the second actor's own RBAC/scope/SoD checks
+ * never ran and no command_log / audit_log row was written for their
+ * attempt (pentest M — cross-actor replay + audit gap).
+ *
+ * Qualifying the key with the actor makes a replay reachable ONLY by
+ * the actor that created it. A different actor misses the cache and
+ * executes the full pipeline (its own authorization, its own audit),
+ * or is correctly refused by the workflow-state guard if the first
+ * actor already advanced the order.
+ *
+ * System commands (`actorUserId === null`) collapse to a single
+ * `sys` segment, preserving today's behavior: their idempotency is
+ * keyed on an external event id (e.g. a Stripe event) and there is
+ * no differing actor to isolate.
+ *
+ * The separator `|` never appears in a UUID or in the route-built
+ * key segments, so the composed value round-trips unambiguously (it
+ * is only ever compared, never parsed back apart).
+ */
+export function actorScopedIdempotencyKey(actorUserId: string | null, key: string): string {
+  const actorSegment = actorUserId === null ? "sys" : `u:${actorUserId}`;
+  return `${actorSegment}|${key}`;
+}
+
 export type LookupResult =
   | { readonly kind: "miss" }
   | {

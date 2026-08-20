@@ -73,7 +73,12 @@ import {
   commandWorkstationRequiredError,
 } from "./errors.js";
 import { FALLBACK_REQUEST_HASH_KEY, hashRequestKeyed } from "./hash.js";
-import { lookupIdempotency, storeIdempotencyInTx, type LookupResult } from "./idempotency.js";
+import {
+  actorScopedIdempotencyKey,
+  lookupIdempotency,
+  storeIdempotencyInTx,
+  type LookupResult,
+} from "./idempotency.js";
 import { redactPayload } from "./redact.js";
 import { transactionOptionsFor } from "./transaction-budget.js";
 import type { Command, ExecuteCommandResult, ExecuteOptions, PrismaTxClient } from "./types.js";
@@ -194,6 +199,14 @@ export async function executeCommandDetailed<TInput, TOutput>(
   // secret material (regenerated per HTTP attempt) so an honest
   // retry hashes identically and replays instead of 409ing.
   const idempotencyKey = options.idempotencyKey;
+  // Actor-qualified dedup identity. The caller's key is resource- and
+  // time-scoped but NOT actor-scoped, so two operators acting on the
+  // same resource in the same minute would otherwise share a row and
+  // the second would replay the first's response without ever running
+  // its own authorization or writing its own audit trail (pentest M).
+  // Everything that touches command_log / idempotency_key below uses
+  // THIS value; the caller's raw key stays in logs for readability.
+  const scopedIdempotencyKey = actorScopedIdempotencyKey(ctx.actor.userId, idempotencyKey);
   const requestHash = hashRequestKeyed(
     omitHashExcludedFields(input, command.hashExcludeFields),
     resolveRequestHashKey(config, log)
@@ -228,7 +241,7 @@ export async function executeCommandDetailed<TInput, TOutput>(
       const lookup = await lookupIdempotency(tx, {
         organizationId: ctx.organizationId,
         commandName: command.name,
-        key: idempotencyKey,
+        key: scopedIdempotencyKey,
         currentRequestHash: requestHash,
       });
       if (lookup.kind === "replay") {
@@ -239,7 +252,7 @@ export async function executeCommandDetailed<TInput, TOutput>(
         id: commandLogId,
         organizationId: ctx.organizationId,
         commandName: command.name,
-        idempotencyKey,
+        idempotencyKey: scopedIdempotencyKey,
         actorUserId: ctx.actor.userId,
         workstationId: ctx.workstationId ?? null,
         requestPayload: redactedRequest,
@@ -253,7 +266,7 @@ export async function executeCommandDetailed<TInput, TOutput>(
       config,
       ctx,
       commandName: command.name,
-      idempotencyKey,
+      idempotencyKey: scopedIdempotencyKey,
       requestHash,
       redactedRequest,
     });
@@ -317,7 +330,7 @@ export async function executeCommandDetailed<TInput, TOutput>(
         await storeIdempotencyInTx(tx, {
           organizationId: ctx.organizationId,
           commandName: command.name,
-          key: idempotencyKey,
+          key: scopedIdempotencyKey,
           requestHash,
           responsePayload,
           responseStatus: null,
@@ -338,7 +351,7 @@ export async function executeCommandDetailed<TInput, TOutput>(
         lookupIdempotency(tx, {
           organizationId: ctx.organizationId,
           commandName: command.name,
-          key: idempotencyKey,
+          key: scopedIdempotencyKey,
           currentRequestHash: requestHash,
         })
       );

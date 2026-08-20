@@ -172,7 +172,10 @@ describe("executeCommand — happy path", () => {
       data: expect.objectContaining({
         organizationId: "org-1",
         commandName: "SampleCommand",
-        idempotencyKey: "key-1",
+        // Stored key is actor-qualified: the caller passed "key-1",
+        // the bus binds the acting user so a replay can only ever be
+        // served back to that same actor (pentest M).
+        idempotencyKey: "u:user-1|key-1",
         status: CommandStatus.RUNNING,
         actorUserId: "user-1",
       }),
@@ -249,7 +252,7 @@ describe("executeCommand — happy path", () => {
       data: expect.objectContaining({
         organizationId: "org-1",
         commandName: "SampleCommand",
-        key: "key-1",
+        key: "u:user-1|key-1",
       }),
     });
 
@@ -420,6 +423,108 @@ describe("executeCommand — idempotency", () => {
       ).rejects.toMatchObject({ code: "COMMAND_IDEMPOTENCY_PAYLOAD_MISMATCH" });
     });
     expect(callsTo(prisma, "commandLog")).toHaveLength(0);
+  });
+});
+
+describe("executeCommand — idempotency is actor-scoped (pentest M)", () => {
+  // The route-built key carries the resource + minute, not the actor.
+  // Before this fix, two operators acting on the same order in the
+  // same minute produced the SAME key, so the second one's preflight
+  // lookup HIT the first's row and the bus replayed the first actor's
+  // response — the second actor's own RBAC/scope/SoD never ran and no
+  // command_log / audit_log was written for their attempt.
+  const ACTOR_A = "aaaaaaaa-aaaa-7aaa-aaaa-aaaaaaaaaaaa";
+  const ACTOR_B = "bbbbbbbb-bbbb-7bbb-bbbb-bbbbbbbbbbbb";
+  const ORDER_ID = "55555555-5555-7555-a555-555555555555";
+
+  function actorCtx(userId: string): TenancyContext {
+    return ctxFor({ actor: { userId, correlationId: "01CORRELATION0000000000000" } });
+  }
+
+  function grantBoth(): void {
+    configureRbac({
+      loader: new InMemoryPermissionLoader([
+        { organizationId: "org-1", userId: ACTOR_A, grants: orgWideAdminGrants },
+        { organizationId: "org-1", userId: ACTOR_B, grants: orgWideAdminGrants },
+      ]),
+    });
+  }
+
+  function countingCommand(counter: { n: number }): Command<SampleInput, SampleOutput> {
+    return sampleCommand({
+      handle: async ({ input: i }) => {
+        counter.n += 1;
+        return {
+          output: { accepted: true },
+          audit: { action: "sample.x", resourceType: "Order", resourceId: i.orderId },
+          outboxEvents: [],
+        };
+      },
+    });
+  }
+
+  it("serves a replay to the actor that created the row", async () => {
+    grantBoth();
+    const input = { orderId: ORDER_ID };
+    prisma.setIdempotencyHitForKey(`u:${ACTOR_A}|shared`, {
+      requestHash: hashRequestKeyed(input, TEST_REQUEST_HASH_KEY),
+      responsePayload: { accepted: false },
+      responseStatus: null,
+    });
+
+    const counter = { n: 0 };
+    const out = await withTenancyContext(actorCtx(ACTOR_A), () =>
+      executeCommand(countingCommand(counter), input, { idempotencyKey: "shared" })
+    );
+
+    expect(out).toEqual({ accepted: false });
+    expect(counter.n).toBe(0);
+    expect(callsTo(prisma, "commandLog", "create")).toHaveLength(0);
+  });
+
+  it("a DIFFERENT actor with the SAME raw key misses the row and runs its own pipeline", async () => {
+    grantBoth();
+    const input = { orderId: ORDER_ID };
+    // Actor A's row already exists at A's actor-qualified key.
+    prisma.setIdempotencyHitForKey(`u:${ACTOR_A}|shared`, {
+      requestHash: hashRequestKeyed(input, TEST_REQUEST_HASH_KEY),
+      responsePayload: { accepted: false },
+      responseStatus: null,
+    });
+
+    const counter = { n: 0 };
+    const out = await withTenancyContext(actorCtx(ACTOR_B), () =>
+      executeCommand(countingCommand(counter), input, { idempotencyKey: "shared" })
+    );
+
+    // No replay: B ran its own handler and got its own result.
+    expect(out).toEqual({ accepted: true });
+    expect(counter.n).toBe(1);
+
+    // The audit gap is closed: B's attempt wrote its own command_log
+    // and audit_log, keyed to B — never A.
+    const cmdLogCreate = callsTo(prisma, "commandLog", "create");
+    expect(cmdLogCreate).toHaveLength(1);
+    expect(cmdLogCreate[0]?.args).toMatchObject({
+      data: expect.objectContaining({
+        actorUserId: ACTOR_B,
+        idempotencyKey: `u:${ACTOR_B}|shared`,
+      }),
+    });
+    expect(callsTo(prisma, "auditLog", "create")).toHaveLength(1);
+
+    const idemCreate = callsTo(prisma, "idempotencyKey", "create");
+    expect(idemCreate).toHaveLength(1);
+    expect(idemCreate[0]?.args).toMatchObject({
+      data: expect.objectContaining({ key: `u:${ACTOR_B}|shared` }),
+    });
+
+    // Every lookup B issued was for B's key; A's row was never queried.
+    for (const call of callsTo(prisma, "idempotencyKey", "findUnique")) {
+      const key = (call.args as { where: { organizationId_commandName_key: { key: string } } })
+        .where.organizationId_commandName_key.key;
+      expect(key).toBe(`u:${ACTOR_B}|shared`);
+    }
   });
 });
 
