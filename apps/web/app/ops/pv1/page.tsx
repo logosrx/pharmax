@@ -42,9 +42,7 @@ import {
   loadOperatorPermissions,
 } from "../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../src/server/auth/resolve-tenancy.js";
-import { listOrdersInBucketByCode } from "../../../src/server/ops/list-orders-in-bucket.js";
-import { attachQueueRowDetails } from "../../../src/server/ops/attach-queue-row-details.js";
-import { loadQueueFilterOptions } from "../../../src/server/ops/load-queue-filter-options.js";
+import { loadQueuePageData } from "../../../src/server/ops/load-queue-page-data.js";
 import {
   buildQueueHref,
   parseQueueCursor,
@@ -95,23 +93,13 @@ export default async function Pv1QueuePage({
 
   const filters = parseQueueFilters(params);
   const cursor = parseQueueCursor(params);
-  const queue = await listOrdersInBucketByCode({
+  const { queue, filterOptions, detailed } = await loadQueuePageData({
     organizationId: session.tenancy.organizationId,
+    operatorUserId: session.operator.userId,
     bucketCode: "PV1",
     filters,
     ...(cursor === undefined ? {} : { cursor }),
   });
-
-  // Patient / client / prescriber / drugs for the visible page only.
-  // Attaching before pagination would decrypt the whole backlog.
-  const [detailed, filterOptions] = await Promise.all([
-    attachQueueRowDetails({
-      organizationId: session.tenancy.organizationId,
-      operatorUserId: session.operator.userId,
-      rows: queue.rows,
-    }),
-    loadQueueFilterOptions({ organizationId: session.tenancy.organizationId }),
-  ]);
   const now = new Date();
 
   const hrefFor = (override: Readonly<Record<string, string | undefined>>) =>

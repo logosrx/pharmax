@@ -15,7 +15,7 @@
 
 import "server-only";
 
-import { readInOrgScope } from "@pharmax/database";
+import { readInOrgScope, type TenantTransactionClient } from "@pharmax/database";
 
 export interface QueueFilterOptions {
   readonly clinics: ReadonlyArray<{ readonly id: string; readonly label: string }>;
@@ -26,8 +26,13 @@ export async function loadQueueFilterOptions(input: {
   readonly organizationId: string;
   /** Kept in the list even if deactivated. See the header. */
   readonly selectedClinicId?: string;
+  /**
+   * Share an outer `readInOrgScope` so a queue render pays one
+   * BEGIN/GUC/COMMIT for all its reads instead of one per read.
+   */
+  readonly tx?: TenantTransactionClient;
 }): Promise<QueueFilterOptions> {
-  return readInOrgScope(input.organizationId, async (tx) => {
+  const run = async (tx: TenantTransactionClient): Promise<QueueFilterOptions> => {
     const clinicWhere =
       input.selectedClinicId === undefined
         ? { organizationId: input.organizationId, status: "ACTIVE" as const }
@@ -62,5 +67,7 @@ export async function loadQueueFilterOptions(input: {
         sites.map((s) => Object.freeze({ id: s.id, label: `${s.code} · ${s.name}` }))
       ),
     });
-  });
+  };
+
+  return input.tx !== undefined ? run(input.tx) : readInOrgScope(input.organizationId, run);
 }

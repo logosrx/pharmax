@@ -27,15 +27,9 @@ import {
   loadOperatorPermissions,
 } from "../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../src/server/auth/resolve-tenancy.js";
-import {
-  listOrdersInBucketsByCode,
-  type BucketOrderRow,
-} from "../../../src/server/ops/list-orders-in-bucket.js";
-import {
-  attachQueueRowDetails,
-  type QueueRowDetails,
-} from "../../../src/server/ops/attach-queue-row-details.js";
-import { loadQueueFilterOptions } from "../../../src/server/ops/load-queue-filter-options.js";
+import type { BucketOrderRow } from "../../../src/server/ops/list-orders-in-bucket.js";
+import type { QueueRowDetails } from "../../../src/server/ops/attach-queue-row-details.js";
+import { loadMultiBucketQueuePageData } from "../../../src/server/ops/load-queue-page-data.js";
 import {
   buildQueueHref,
   parseQueueCursor,
@@ -210,25 +204,19 @@ export default async function TypingQueuePage({
   // paging the typing list must not reset the inbox beside it.
   const inboxCursor = parseQueueCursor(params, "INBOX");
   const typingCursor = parseQueueCursor(params, "TYPING");
-  const buckets = await listOrdersInBucketsByCode({
+  // Both buckets and the filter options share one transaction; the
+  // enrichment pass runs after it closes, since it decrypts and audits.
+  // One pass over both buckets means a patient with an order in each is
+  // decrypted and audited once rather than twice.
+  const { buckets, filterOptions, detailed } = await loadMultiBucketQueuePageData({
     organizationId: session.tenancy.organizationId,
+    operatorUserId: session.operator.userId,
     bucketCodes: ["INBOX", "TYPING"],
     filters,
     cursors: { INBOX: inboxCursor, TYPING: typingCursor },
   });
   const inbox = buckets["INBOX"]!;
   const typing = buckets["TYPING"]!;
-
-  // One enrichment pass over both buckets, so a patient appearing in
-  // each is decrypted and audited once rather than twice.
-  const [detailed, filterOptions] = await Promise.all([
-    attachQueueRowDetails({
-      organizationId: session.tenancy.organizationId,
-      operatorUserId: session.operator.userId,
-      rows: [...inbox.rows, ...typing.rows],
-    }),
-    loadQueueFilterOptions({ organizationId: session.tenancy.organizationId }),
-  ]);
   const now = new Date();
 
   const inboxIds = new Set(inbox.rows.map((r) => r.orderId));
