@@ -16,10 +16,79 @@ For the **engineering-grade companion** — control → exact code paths + Prism
 
 Status vocabulary:
 
-- **Implemented** — the control is in production, evidence is being generated continuously.
+- **Implemented** — the control is in production **and evidence is being generated**. This is a claim about operating effectiveness, not about design, and it is only true when the artifact named in the Evidence column actually exists.
+- **Adopted** — the control is designed, documented, and in force, but has **not yet produced evidence of operation**. Design effectiveness without operating effectiveness.
 - **Partial** — the control is partially in place; there is a tracked gap with a plan.
 - **Planned** — the control is on the roadmap with an owner and a target.
 - **N/A** — the control is not applicable to Pharmax's scope (justification noted).
+
+### Why `Adopted` exists
+
+Added 2026-08-20 after an independent audit found this matrix marking every
+Administrative Safeguard row `Implemented` while three of the evidence
+directories those rows cited did not exist on disk. The repository's own
+[first-cycle runbook](../compliance/first-cycle-runbook.md) said the opposite in
+plain terms — _"Every control in the policy bundle is designed. None has
+operated."_ — so two documents in one repository gave an assessor contradictory
+answers, and the one an assessor reads first was the wrong one.
+
+The vocabulary was the root cause. It offered no way to say _"written, adopted,
+and genuinely in force, but it has not run yet,"_ which is the honest status of a
+policy bundle adopted 2026-08-18. Faced with `Implemented` or `Partial`, an
+author describing a real and complete policy will reasonably pick the former,
+and the definition's second clause — _evidence is being generated continuously_ —
+gets carried along silently.
+
+`Adopted` is not a lesser status to be embarrassed by. For a control adopted two
+days ago it is the accurate one, and a matrix that says so is worth more to an
+assessor than one that overstates and gets caught.
+
+**The test for `Implemented` is now mechanical:** open the path in the Evidence
+column. If it does not exist, the status is at best `Adopted`.
+
+### Reconciliation, 2026-08-20
+
+Sixteen rows moved from `Implemented` to `Adopted`, in two passes.
+
+**Ten by the mechanical test** — the Evidence column named a directory that does
+not exist on disk: CC1.1, CC1.4, CC2.2 and § 164.308(a)(5) (`evidence/training/`);
+CC1.5 and § 164.308(a)(1)(ii)(C) (`evidence/sanctions/`); CC3.2
+(`evidence/risk-assessment/`); CC4.2 and CC7.5 (`evidence/incidents/`); CC9.1
+(drill reports).
+
+**Six by judgment**, because the mechanical test is not sufficient on its own.
+Those rows cited an abstract noun rather than a path — "The SRA itself",
+"Training completion records", "Annual review records" — which passes a
+path check while naming nothing that has happened:
+
+- **§ 164.308(a)(1)(ii)(A)** — the SRA was authored 2026-08-18 and has never been
+  performed as a dated exercise. A risk analysis is an activity; the document is
+  its output, not its evidence.
+- **§ 164.308(a)(1)(ii)(D)** — the access review ran once, but the automated
+  verification it depends on has never run.
+- **§ 164.308(a)(2)** — security responsibility is assigned by _role_ in ISP §4.2,
+  with no dated designation naming an individual.
+- **§ 164.308(a)(5)** — no training has been completed by anyone.
+- **§ 164.308(a)(7)** — one restore drill was performed, against a database
+  containing zero rows. It proved the mechanism and nothing about the data.
+- **§ 164.308(a)(8)** — no periodic evaluation has occurred; every policy is at
+  v1.0 with a 2027 review date.
+
+Two further corrections in the same pass, both doc-to-doc drift rather than
+overstatement:
+
+- `evidence/drills/` corrected to `evidence/dr-drills/` in two rows. The
+  directory has always had the second name, so the mechanical test above would
+  have produced a false negative on a path that does exist.
+- Two rows described drills as **quarterly**, citing a BCP/DR section that was
+  deliberately relaxed to **annual** during the cadence right-sizing. The matrix
+  was asserting a commitment the policy it cites had already withdrawn.
+
+Rows deliberately left at `Implemented` because they genuinely operate:
+§ 164.308(a)(1)(ii)(B), whose register is continuously maintained;
+§ 164.308(a)(3), vacuously but truthfully, at a headcount of one with no
+departures; § 164.308(a)(4), where RBAC and RLS enforce continuously; and
+§ 164.308(b)(1), where the AWS and Sentry BAAs are executed with PDFs on file.
 
 ## SOC 2 — Common Criteria
 
@@ -27,18 +96,18 @@ Status vocabulary:
 
 | Control ID | Statement                                                            | Implementation                                                                                                                                                                               | Evidence                                                           | Owner | Status      |
 | ---------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ----- | ----------- |
-| CC1.1      | Commitment to integrity and ethical values.                          | [Information Security Policy](../policies/information-security-policy.md), [Acceptable Use Policy](../policies/acceptable-use-policy.md). Code of conduct (separately maintained by People). | Signed policy acknowledgments under `evidence/training/<year>/`.   | CTO   | Implemented |
+| CC1.1      | Commitment to integrity and ethical values.                          | [Information Security Policy](../policies/information-security-policy.md), [Acceptable Use Policy](../policies/acceptable-use-policy.md). Code of conduct (separately maintained by People). | Signed policy acknowledgments under `evidence/training/<year>/`.   | CTO   | Adopted     |
 | CC1.2      | Independence of governance (board oversight).                        | CEO approves policies; in early stage the CEO is also the founder. As the company grows, a board governance pattern formalizes.                                                              | Signed PDFs of each policy under `evidence/policies/<year>/`.      | CEO   | Partial     |
 | CC1.3      | Management establishes structures, reporting lines, and authorities. | Roles in [ISP §4](../policies/information-security-policy.md). CTO as HIPAA Security Official.                                                                                               | This bundle; org chart maintained by People.                       | CEO   | Implemented |
-| CC1.4      | Commitment to competence (training).                                 | [Security and HIPAA Training Program](../governance/security-training-program.md).                                                                                                           | Training completion records under `evidence/training/<year>/`.     | CTO   | Implemented |
-| CC1.5      | Accountability for internal control responsibilities.                | Sanctions in [ISP §9](../policies/information-security-policy.md). Code reviews, CODEOWNERS in [Change Management Policy](../policies/change-management-policy.md) §3.4.                     | Performance reviews; sanction records under `evidence/sanctions/`. | CEO   | Implemented |
+| CC1.4      | Commitment to competence (training).                                 | [Security and HIPAA Training Program](../governance/security-training-program.md).                                                                                                           | Training completion records under `evidence/training/<year>/`.     | CTO   | Adopted     |
+| CC1.5      | Accountability for internal control responsibilities.                | Sanctions in [ISP §9](../policies/information-security-policy.md). Code reviews, CODEOWNERS in [Change Management Policy](../policies/change-management-policy.md) §3.4.                     | Performance reviews; sanction records under `evidence/sanctions/`. | CEO   | Adopted     |
 
 ### CC2 — Communication and Information
 
 | Control ID | Statement                                                                                      | Implementation                                                                                                                                                                      | Evidence                                                                | Owner | Status      |
 | ---------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----- | ----------- |
 | CC2.1      | Internally generated information used to support control function.                             | Audit chain (ADR 0006), command log, order event, outbox. `../OBSERVABILITY.md`. Quarterly access reviews ([access-review-procedure.md](../governance/access-review-procedure.md)). | `audit_log` table; access-review CSVs under `evidence/access-reviews/`. | CTO   | Implemented |
-| CC2.2      | Internal communications including objectives, responsibilities, and the operation of controls. | This policy bundle. Onboarding curriculum. Slack team channel. Incident channel.                                                                                                    | Acknowledgments under `evidence/training/<year>/`.                      | CTO   | Implemented |
+| CC2.2      | Internal communications including objectives, responsibilities, and the operation of controls. | This policy bundle. Onboarding curriculum. Slack team channel. Incident channel.                                                                                                    | Acknowledgments under `evidence/training/<year>/`.                      | CTO   | Adopted     |
 | CC2.3      | External communications about the system and its controls.                                     | Customer security packet (drawn from this bundle). Public-facing security page (when published). [Incident Response Policy](../policies/incident-response-policy.md) §4.2.          | Customer security packet PDFs under `evidence/external-comms/<year>/`.  | CTO   | Partial     |
 
 ### CC3 — Risk Assessment
@@ -46,7 +115,7 @@ Status vocabulary:
 | Control ID | Statement                                                                                      | Implementation                                                                                                                                                | Evidence                                                                                     | Owner | Status      |
 | ---------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----- | ----------- |
 | CC3.1      | Specifies objectives with sufficient clarity to enable identification and assessment of risks. | [ISP §3](../policies/information-security-policy.md). The objectives are explicit and prioritized.                                                            | This bundle.                                                                                 | CTO   | Implemented |
-| CC3.2      | Identifies risks and analyzes them.                                                            | [Risk register](../governance/risk-register.md), refreshed annually per [risk-assessment-procedure.md](../governance/risk-assessment-procedure.md).           | `risk-register.md` in this repo; refresh artifacts under `evidence/risk-assessment/<year>/`. | CTO   | Implemented |
+| CC3.2      | Identifies risks and analyzes them.                                                            | [Risk register](../governance/risk-register.md), refreshed annually per [risk-assessment-procedure.md](../governance/risk-assessment-procedure.md).           | `risk-register.md` in this repo; refresh artifacts under `evidence/risk-assessment/<year>/`. | CTO   | Adopted     |
 | CC3.3      | Considers the potential for fraud.                                                             | Risk entries R-007 (malicious insider), R-005 (Stripe webhook replay), R-016 (carrier credential compromise). Separation of duties (ADR 0011) for workflow.   | Risk register entries; ADR 0011.                                                             | CTO   | Implemented |
 | CC3.4      | Identifies and assesses change.                                                                | [Change Management Policy](../policies/change-management-policy.md). [Risk-assessment material-change re-run](../governance/risk-assessment-procedure.md) §2. | PR history; change records.                                                                  | CTO   | Implemented |
 
@@ -55,7 +124,7 @@ Status vocabulary:
 | Control ID | Statement                                            | Implementation                                                                                                                            | Evidence                                                                                         | Owner | Status      |
 | ---------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----- | ----------- |
 | CC4.1      | Selects, develops, and performs ongoing evaluations. | `../OBSERVABILITY.md` four-layer model. Sentry / CloudWatch / `audit_log` / operational tables.                                           | Live monitoring dashboards; alert configurations.                                                | CTO   | Implemented |
-| CC4.2      | Evaluates and communicates deficiencies.             | Postmortems per [Incident Response Policy](../policies/incident-response-policy.md) §7. Quarterly access reviews. Annual risk assessment. | Postmortems under `evidence/incidents/<year>/`; access reviews under `evidence/access-reviews/`. | CTO   | Implemented |
+| CC4.2      | Evaluates and communicates deficiencies.             | Postmortems per [Incident Response Policy](../policies/incident-response-policy.md) §7. Quarterly access reviews. Annual risk assessment. | Postmortems under `evidence/incidents/<year>/`; access reviews under `evidence/access-reviews/`. | CTO   | Adopted     |
 
 ### CC5 — Control Activities
 
@@ -86,7 +155,7 @@ Status vocabulary:
 | CC7.2      | Monitors system components and operation for anomalies. | `../OBSERVABILITY.md`. Alert routing in Sentry; high-volume threshold + audit-chain integrity alerts.                                                | Sentry alert configuration; CloudWatch alarms.                      | CTO   | Implemented |
 | CC7.3      | Evaluates security events.                              | [Incident Response Policy](../policies/incident-response-policy.md) §3 classification. SEV0–SEV3 definitions in `../INCIDENT_RESPONSE.md`.           | Incident channels; postmortems.                                     | CTO   | Implemented |
 | CC7.4      | Responds to identified security events.                 | [Incident Response Policy](../policies/incident-response-policy.md). The runbook procedures in `../RUNBOOK.md`.                                      | Postmortems; runbook references in incident records.                | CTO   | Implemented |
-| CC7.5      | Communicates security events.                           | [Incident Response Policy](../policies/incident-response-policy.md) §4 communications tree.                                                          | Incident channel exports under `evidence/incidents/`.               | CTO   | Implemented |
+| CC7.5      | Communicates security events.                           | [Incident Response Policy](../policies/incident-response-policy.md) §4 communications tree.                                                          | Incident channel exports under `evidence/incidents/`.               | CTO   | Adopted     |
 
 ### CC8 — Change Management
 
@@ -96,20 +165,20 @@ Status vocabulary:
 
 ### CC9 — Risk Mitigation
 
-| Control ID | Statement                                                                 | Implementation                                                                                                                                                           | Evidence                                                        | Owner | Status      |
-| ---------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- | ----- | ----------- |
-| CC9.1      | Identifies, selects, and develops risk mitigation activities.             | [Risk register](../governance/risk-register.md) §"Maintenance" mitigation plans. [BCP/DR Policy](../policies/business-continuity-and-disaster-recovery.md).              | Risk register entries; drill reports under `evidence/drills/`.  | CTO   | Implemented |
-| CC9.2      | Assesses and manages risks associated with vendors and business partners. | [Vendor Management Policy](../policies/vendor-management-policy.md). [Vendor inventory](../governance/vendor-inventory.md). [BAA tracker](../governance/baa-tracker.md). | Inventory and tracker; BAA PDFs under `evidence/baa/<vendor>/`. | CTO   | Implemented |
+| Control ID | Statement                                                                 | Implementation                                                                                                                                                           | Evidence                                                          | Owner | Status      |
+| ---------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- | ----- | ----------- |
+| CC9.1      | Identifies, selects, and develops risk mitigation activities.             | [Risk register](../governance/risk-register.md) §"Maintenance" mitigation plans. [BCP/DR Policy](../policies/business-continuity-and-disaster-recovery.md).              | Risk register entries; drill reports under `evidence/dr-drills/`. | CTO   | Adopted     |
+| CC9.2      | Assesses and manages risks associated with vendors and business partners. | [Vendor Management Policy](../policies/vendor-management-policy.md). [Vendor inventory](../governance/vendor-inventory.md). [BAA tracker](../governance/baa-tracker.md). | Inventory and tracker; BAA PDFs under `evidence/baa/<vendor>/`.   | CTO   | Implemented |
 
 ## SOC 2 — Additional Criteria
 
 ### A1 — Availability
 
-| Control ID | Statement                                                                                                                                     | Implementation                                                                                                                                                  | Evidence                                           | Owner | Status      |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ----- | ----------- |
-| A1.1       | Maintains, monitors, and evaluates current processing capacity and use.                                                                       | `../OBSERVABILITY.md`. Worker drain metrics, p95 latency, queue depths.                                                                                         | Observability dashboards.                          | CTO   | Implemented |
-| A1.2       | Authorizes, designs, develops, configures, implements, operates, monitors, and recovers environmental protections, software, and data backup. | RDS Multi-AZ; automated backups + PITR; S3 versioning + cross-region replication. [BCP/DR Policy](../policies/business-continuity-and-disaster-recovery.md) §7. | RDS backup configuration; S3 bucket configuration. | CTO   | Implemented |
-| A1.3       | Tests recovery plan procedures.                                                                                                               | Quarterly drills per [BCP/DR Policy](../policies/business-continuity-and-disaster-recovery.md) §8.                                                              | Drill reports under `evidence/drills/`.            | CTO   | Partial     |
+| Control ID | Statement                                                                                                                                     | Implementation                                                                                                                                                   | Evidence                                           | Owner | Status      |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ----- | ----------- |
+| A1.1       | Maintains, monitors, and evaluates current processing capacity and use.                                                                       | `../OBSERVABILITY.md`. Worker drain metrics, p95 latency, queue depths.                                                                                          | Observability dashboards.                          | CTO   | Implemented |
+| A1.2       | Authorizes, designs, develops, configures, implements, operates, monitors, and recovers environmental protections, software, and data backup. | RDS Multi-AZ; automated backups + PITR; S3 versioning + cross-region replication. [BCP/DR Policy](../policies/business-continuity-and-disaster-recovery.md) §7.  | RDS backup configuration; S3 bucket configuration. | CTO   | Implemented |
+| A1.3       | Tests recovery plan procedures.                                                                                                               | Annual drills per [BCP/DR Policy](../policies/business-continuity-and-disaster-recovery.md) §8 — one full-procedure restore plus one rotating scenario tabletop. | Drill reports under `evidence/dr-drills/`.         | CTO   | Partial     |
 
 ### C1 — Confidentiality
 
@@ -142,17 +211,17 @@ Privacy (P-series) controls are scoped against the next audit period. The curren
 
 | Control ID                                                | Statement                                                                                                                                        | Implementation                                                                                                                                                                             | Evidence                                          | Owner | Status      |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- | ----- | ----------- |
-| § 164.308(a)(1)(ii)(A) Risk analysis                      | Conduct an accurate and thorough assessment of risks.                                                                                            | [`hipaa-security-risk-analysis.md`](./hipaa-security-risk-analysis.md). Refreshed annually per [`../governance/risk-assessment-procedure.md`](../governance/risk-assessment-procedure.md). | The SRA itself; refresh artifacts.                | CTO   | Implemented |
+| § 164.308(a)(1)(ii)(A) Risk analysis                      | Conduct an accurate and thorough assessment of risks.                                                                                            | [`hipaa-security-risk-analysis.md`](./hipaa-security-risk-analysis.md). Refreshed annually per [`../governance/risk-assessment-procedure.md`](../governance/risk-assessment-procedure.md). | The SRA itself; refresh artifacts.                | CTO   | Adopted     |
 | § 164.308(a)(1)(ii)(B) Risk management                    | Implement security measures sufficient to reduce risks to a reasonable level.                                                                    | [Risk register](../governance/risk-register.md) mitigation plans. This control matrix.                                                                                                     | Risk register; this matrix.                       | CTO   | Implemented |
-| § 164.308(a)(1)(ii)(C) Sanction policy                    | Apply appropriate sanctions for workforce violations.                                                                                            | [ISP §9](../policies/information-security-policy.md). Sanction records.                                                                                                                    | `evidence/sanctions/`.                            | CTO   | Implemented |
-| § 164.308(a)(1)(ii)(D) Information system activity review | Regularly review records of information system activity.                                                                                         | `../OBSERVABILITY.md`. Quarterly access reviews. Audit chain.                                                                                                                              | Access-review records; `audit_log` query history. | CTO   | Implemented |
-| § 164.308(a)(2) Assigned security responsibility          | Identify the security official.                                                                                                                  | CTO as HIPAA Security Official per [ISP §4.2](../policies/information-security-policy.md).                                                                                                 | This bundle.                                      | CEO   | Implemented |
+| § 164.308(a)(1)(ii)(C) Sanction policy                    | Apply appropriate sanctions for workforce violations.                                                                                            | [ISP §9](../policies/information-security-policy.md). Sanction records.                                                                                                                    | `evidence/sanctions/`.                            | CTO   | Adopted     |
+| § 164.308(a)(1)(ii)(D) Information system activity review | Regularly review records of information system activity.                                                                                         | `../OBSERVABILITY.md`. Quarterly access reviews. Audit chain.                                                                                                                              | Access-review records; `audit_log` query history. | CTO   | Adopted     |
+| § 164.308(a)(2) Assigned security responsibility          | Identify the security official.                                                                                                                  | CTO as HIPAA Security Official per [ISP §4.2](../policies/information-security-policy.md).                                                                                                 | This bundle.                                      | CEO   | Adopted     |
 | § 164.308(a)(3) Workforce security                        | Implement policies for authorization/supervision and access establishment/modification.                                                          | [Access Control Policy](../policies/access-control-policy.md) §7.                                                                                                                          | `audit_log`; quarterly access reviews.            | CTO   | Implemented |
 | § 164.308(a)(4) Information access management             | Implement policies and procedures for authorizing access to ePHI.                                                                                | [Access Control Policy](../policies/access-control-policy.md) §5–§6. `@pharmax/rbac`. ADR 0004 RLS.                                                                                        | RBAC registry; RLS configuration.                 | CTO   | Implemented |
-| § 164.308(a)(5) Security awareness and training           | Implement a security awareness and training program for all members of the workforce.                                                            | [Security and HIPAA Training Program](../governance/security-training-program.md).                                                                                                         | Training completion records.                      | CTO   | Implemented |
-| § 164.308(a)(6) Security incident procedures              | Implement policies and procedures to address security incidents.                                                                                 | [Incident Response Policy](../policies/incident-response-policy.md). `../INCIDENT_RESPONSE.md`.                                                                                            | Incident records under `evidence/incidents/`.     | CTO   | Implemented |
-| § 164.308(a)(7) Contingency plan                          | Establish data backup, disaster recovery, emergency-mode operation, testing and revision procedures, and applications/data criticality analysis. | [BCP/DR Policy](../policies/business-continuity-and-disaster-recovery.md). RDS backups + PITR. Quarterly drills.                                                                           | BCP/DR policy; drill reports.                     | CTO   | Implemented |
-| § 164.308(a)(8) Evaluation                                | Periodic technical and nontechnical evaluation.                                                                                                  | Annual review of this bundle. Annual risk assessment. SOC 2 audit cycle.                                                                                                                   | Annual review records.                            | CTO   | Implemented |
+| § 164.308(a)(5) Security awareness and training           | Implement a security awareness and training program for all members of the workforce.                                                            | [Security and HIPAA Training Program](../governance/security-training-program.md).                                                                                                         | Training completion records.                      | CTO   | Adopted     |
+| § 164.308(a)(6) Security incident procedures              | Implement policies and procedures to address security incidents.                                                                                 | [Incident Response Policy](../policies/incident-response-policy.md). `../INCIDENT_RESPONSE.md`.                                                                                            | Incident records under `evidence/incidents/`.     | CTO   | Adopted     |
+| § 164.308(a)(7) Contingency plan                          | Establish data backup, disaster recovery, emergency-mode operation, testing and revision procedures, and applications/data criticality analysis. | [BCP/DR Policy](../policies/business-continuity-and-disaster-recovery.md). RDS backups + PITR. Annual drills per §8.                                                                       | BCP/DR policy; drill reports.                     | CTO   | Adopted     |
+| § 164.308(a)(8) Evaluation                                | Periodic technical and nontechnical evaluation.                                                                                                  | Annual review of this bundle. Annual risk assessment. SOC 2 audit cycle.                                                                                                                   | Annual review records.                            | CTO   | Adopted     |
 | § 164.308(b)(1) Business associate contracts              | Obtain satisfactory assurances from BAs and BSAs.                                                                                                | [Vendor Management Policy](../policies/vendor-management-policy.md). [BAA tracker](../governance/baa-tracker.md).                                                                          | BAA PDFs.                                         | CTO   | Implemented |
 
 ### Physical Safeguards — § 164.310
