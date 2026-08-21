@@ -32,6 +32,7 @@ import {
   type OrderLineStatus,
   type OrderStatus,
   type PrescriptionStatus,
+  type TenantTransactionClient,
 } from "@pharmax/database";
 import { decryptField } from "@pharmax/crypto";
 
@@ -90,6 +91,17 @@ export async function getPatientRxHistory(input: {
   readonly patientId: string;
   readonly cursor?: string;
   readonly limit?: number;
+  /**
+   * Optional shared tenant-scoped transaction, matching
+   * `listOrdersInBucketByCode` and the other batched page reads — one
+   * connection instead of one per read. When provided it MUST already
+   * be scoped to `organizationId`.
+   *
+   * Only the DB phase uses it; the KMS decryption in phase 2 runs after
+   * the read either way, so sharing a transaction never holds a
+   * connection across the slow part.
+   */
+  readonly tx?: TenantTransactionClient;
 }): Promise<PatientRxHistory> {
   const limit = Math.min(input.limit ?? RX_HISTORY_PAGE_SIZE, RX_HISTORY_MAX_PAGE_SIZE);
   const { organizationId, patientId } = input;
@@ -97,7 +109,7 @@ export async function getPatientRxHistory(input: {
   // Phase 1 — all DB reads inside a short tenant transaction, so the
   // connection is released before the slow KMS work in phase 2. Same
   // shape as `getPatientDetail`.
-  const { prescriptions, totalPrescriptions } = await readInOrgScope(organizationId, async (tx) => {
+  const readPhase = async (tx: TenantTransactionClient) => {
     const where = { organizationId, patientId };
     const [rows, total] = await Promise.all([
       tx.prescription.findMany({
@@ -151,7 +163,12 @@ export async function getPatientRxHistory(input: {
       tx.prescription.count({ where }),
     ]);
     return { prescriptions: rows, totalPrescriptions: total };
-  });
+  };
+
+  const { prescriptions, totalPrescriptions } =
+    input.tx !== undefined
+      ? await readPhase(input.tx)
+      : await readInOrgScope(organizationId, readPhase);
 
   const hasMore = prescriptions.length > limit;
   const page = hasMore ? prescriptions.slice(0, limit) : prescriptions;

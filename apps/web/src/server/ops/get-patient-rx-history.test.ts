@@ -138,6 +138,28 @@ describe("getPatientRxHistory", () => {
     expect(payload).not.toHaveProperty("patientId");
   });
 
+  it("runs on a provided tx without opening its own scope", async () => {
+    // The patient page renders several read models; sharing one
+    // transaction is how it avoids one open connection per read.
+    const fakeTx = {
+      prescription: {
+        findMany: vi.fn().mockResolvedValueOnce([rxRow()]),
+        count: vi.fn().mockResolvedValueOnce(1),
+      },
+    };
+    const result = await getPatientRxHistory({
+      organizationId: ORG_ID,
+      patientId: PATIENT_ID,
+      tx: fakeTx as never,
+    });
+    expect(result.rows).toHaveLength(1);
+    expect(fakeTx.prescription.findMany).toHaveBeenCalledOnce();
+    expect(prismaMock.prescription.findMany).not.toHaveBeenCalled();
+    // The KMS phase still runs after the read, so a shared transaction
+    // never spans the slow part.
+    expect(result.rows[0]?.sig).toBe("Take one capsule by mouth twice daily");
+  });
+
   it("counts every prescription, not just the page", async () => {
     prismaMock.prescription.count.mockResolvedValueOnce(57);
     prismaMock.prescription.findMany.mockResolvedValueOnce([rxRow()]);

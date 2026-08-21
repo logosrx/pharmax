@@ -93,17 +93,26 @@ export default async function PatientDetailPage({
   // recording a distinct access. The gate below still governs whether
   // any of it renders.
   const rxCursor = typeof sp["rxCursor"] === "string" ? sp["rxCursor"] : undefined;
-  const [detail, allergyProfile, rxHistory] = await Promise.all([
+  const [detail, allergyProfile] = await Promise.all([
     getPatientDetail({ organizationId: session.tenancy.organizationId, patientId }),
     canReadAllergies
       ? getPatientAllergies({ organizationId: session.tenancy.organizationId, patientId })
       : Promise.resolve(null),
-    getPatientRxHistory({
-      organizationId: session.tenancy.organizationId,
-      patientId,
-      ...(rxCursor === undefined ? {} : { cursor: rxCursor }),
-    }),
   ]);
+
+  // Sequential, NOT a third entry in the Promise.all above. Each of
+  // these read models opens its own `readInOrgScope`, so adding a third
+  // concurrent one would take this page from two open transactions per
+  // render to three. `list-shipping-queue.ts` records what that costs —
+  // concurrency there once tripled the connection pressure for one
+  // page. The reads are fast and indexed; this page already blocks on
+  // fourteen KMS unwraps, so one more short serial read is not what
+  // makes it slow.
+  const rxHistory = await getPatientRxHistory({
+    organizationId: session.tenancy.organizationId,
+    patientId,
+    ...(rxCursor === undefined ? {} : { cursor: rxCursor }),
+  });
   if (detail === null) {
     return (
       <div className="space-y-6">
