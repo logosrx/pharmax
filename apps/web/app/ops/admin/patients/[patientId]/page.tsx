@@ -20,8 +20,10 @@ import {
 import { resolveOperatorTenancyContext } from "../../../../../src/server/auth/resolve-tenancy.js";
 import { auditPatientView } from "../../../../../src/server/ops/audit-patient-view.js";
 import { getPatientAllergies } from "../../../../../src/server/ops/get-patient-allergies.js";
+import { getPatientRxHistory } from "../../../../../src/server/ops/get-patient-rx-history.js";
 import { getPatientDetail } from "../../../../../src/server/ops/get-patient-detail.js";
 import { PatientAllergyPanel } from "../../../../../src/components/ops/patient-allergy-panel.js";
+import { PatientRxHistoryPanel } from "../../../../../src/components/ops/patient-rx-history.js";
 import { PageHeader, Section } from "../../../../../src/components/ui/page.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../../../src/components/ui/card.js";
 import { Badge, type Tone } from "../../../../../src/components/ui/badge.js";
@@ -84,11 +86,23 @@ export default async function PatientDetailPage({
 
   // Loaded before the audit gate below, alongside the identity read, but
   // rendered only after it passes — same posture as the identity block.
-  const [detail, allergyProfile] = await Promise.all([
+  //
+  // The prescription history rides the SAME `ViewPatient` audit as the
+  // identity block: it is the same patient on the same page under the
+  // same surface, so a second dispatch would inflate the trail without
+  // recording a distinct access. The gate below still governs whether
+  // any of it renders.
+  const rxCursor = typeof sp["rxCursor"] === "string" ? sp["rxCursor"] : undefined;
+  const [detail, allergyProfile, rxHistory] = await Promise.all([
     getPatientDetail({ organizationId: session.tenancy.organizationId, patientId }),
     canReadAllergies
       ? getPatientAllergies({ organizationId: session.tenancy.organizationId, patientId })
       : Promise.resolve(null),
+    getPatientRxHistory({
+      organizationId: session.tenancy.organizationId,
+      patientId,
+      ...(rxCursor === undefined ? {} : { cursor: rxCursor }),
+    }),
   ]);
   if (detail === null) {
     return (
@@ -250,6 +264,23 @@ export default async function PatientDetailPage({
           actionBase={`/api/ops/admin/patients/${detail.patientId}`}
         />
       )}
+
+      {/* Below allergies, above the edit form. Allergies gate PV1 and
+          are the sharper safety fact; the medication history is what a
+          pharmacist reads next, and both belong ahead of contact-detail
+          editing. */}
+      <Section title="Prescription history" count={rxHistory.totalPrescriptions}>
+        <PatientRxHistoryPanel
+          history={rxHistory}
+          nextHref={
+            rxHistory.nextCursor === null
+              ? null
+              : `/ops/admin/patients/${detail.patientId}?rxCursor=${encodeURIComponent(
+                  rxHistory.nextCursor
+                )}`
+          }
+        />
+      </Section>
 
       {canUpdate && !isShredded ? (
         <Section title="Edit patient">
