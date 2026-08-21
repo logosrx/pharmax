@@ -5,7 +5,10 @@
 // (dispatches `ResolveOrderEscalation` through the bus) to return the
 // order to a workflow bucket or acknowledge ongoing triage.
 //
-// PHI: non-PHI structural columns only.
+// PHI: the queue card shows the patient's name, so this page is a PHI
+// surface. `attachQueueRowDetails` audits each distinct patient view
+// before render and masks any name whose audit write failed, keeping the
+// escalated order visible — an unnamed emergency is still an emergency.
 
 import { redirect } from "next/navigation";
 
@@ -17,6 +20,7 @@ import {
 } from "../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../src/server/auth/resolve-tenancy.js";
 import { listEmergencyOrders } from "../../../src/server/ops/list-emergency-orders.js";
+import { attachQueueRowDetails } from "../../../src/server/ops/attach-queue-row-details.js";
 import { PageHeader } from "../../../src/components/ui/page.js";
 import { EmptyState, PermissionDenied, Banner } from "../../../src/components/ui/feedback.js";
 import { Badge } from "../../../src/components/ui/badge.js";
@@ -56,6 +60,14 @@ export default async function EmergencyQueuePage({
   }
 
   const queue = await listEmergencyOrders({ organizationId: result.tenancy.organizationId });
+  // An escalated order is the one an operator most needs to identify at
+  // a glance, so the emergency card carries the same identity as the
+  // workflow queues.
+  const detailed = await attachQueueRowDetails({
+    organizationId: result.tenancy.organizationId,
+    operatorUserId: result.operator.userId,
+    rows: queue.rows,
+  });
   const resolved = pick(params, "resolved");
   const error = pick(params, "error");
   const now = Date.now();
@@ -85,7 +97,7 @@ export default async function EmergencyQueuePage({
         <Banner tone="warning" title="EMERGENCY bucket not provisioned">
           Run <code>ProvisionDefaultBuckets</code> to create it for this organization.
         </Banner>
-      ) : queue.rows.length === 0 ? (
+      ) : detailed.rows.length === 0 ? (
         <EmptyState
           icon="check"
           title="Nothing on fire"
@@ -94,7 +106,7 @@ export default async function EmergencyQueuePage({
         />
       ) : (
         <ul className="space-y-3">
-          {queue.rows.map((row) => {
+          {detailed.rows.map((row) => {
             const isSlaEscalation =
               row.latestShipmentEvent === null &&
               row.slaDeadlineAt !== null &&
@@ -109,6 +121,12 @@ export default async function EmergencyQueuePage({
                   slaDeadlineAt={row.slaDeadlineAt}
                   receivedAt={row.enteredEmergencyAt}
                   now={nowDate}
+                  clinicCode={row.clinicCode}
+                  clinicName={row.clinicName}
+                  patientName={row.patientName}
+                  patientNameWithheld={row.patientNameWithheld}
+                  prescribers={row.prescribers}
+                  medications={row.medications}
                   headerExtra={
                     isSlaEscalation ? (
                       <Badge tone="danger" icon="alert">
