@@ -62,6 +62,11 @@ variable "documents_bucket_arn" {
   type        = string
 }
 
+variable "reports_bucket_arn" {
+  description = "ARN of the scheduled-report CSV archive bucket (REPORT_ARCHIVE_S3_BUCKET). Written by the worker's report scheduler."
+  type        = string
+}
+
 variable "audit_archive_bucket_arn" {
   description = "ARN of the audit archive S3 bucket."
   type        = string

@@ -185,6 +185,35 @@ module "s3_package_photos" {
   tags                       = local.phi_tags
 }
 
+# Scheduled-report CSV archive (REPORT_ARCHIVE_S3_BUCKET).
+#
+# Added 2026-08-20 for R-028. The worker's report archive falls back to an
+# in-memory adapter when this bucket is unset, and production was running
+# that fallback: every scheduled report was written to process memory and
+# lost on restart. The fallback is deliberate — a missing env var should
+# not stop the worker draining the outbox — but the compliance consequence
+# is that a control can run, succeed, and deliver its output nowhere.
+#
+# Same profile as documents and package photos: SSE-KMS, versioned,
+# TLS-only, public access blocked, and deliberately NO Object Lock. Reports
+# are regenerable from the transactional source and a tenant shred must be
+# able to delete them, which is the same reasoning that keeps Object Lock
+# off the documents bucket. The audit archive remains the immutable one.
+#
+# Reuses the documents CMK rather than minting a third: the key's own
+# legacy alias is `s3`, it already covers both S3 buckets carrying tenant
+# data, and a separate CMK here would add rotation and grant-review
+# surface without separating anything a reviewer would want separated.
+module "s3_reports" {
+  source = "./modules/s3-documents"
+
+  name_prefix                = local.name_prefix
+  purpose                    = "reports"
+  kms_key_arn                = module.kms.documents_key_arn
+  noncurrent_expiration_days = var.environment == "prod" ? 365 : 90
+  tags                       = local.phi_tags
+}
+
 # -----------------------------------------------------------------------------
 # IAM — least-privilege task roles per service, scoped to per-key ARNs.
 # -----------------------------------------------------------------------------
@@ -204,6 +233,7 @@ module "iam" {
   documents_key_arn         = module.kms.documents_key_arn
   documents_bucket_arn      = module.s3_documents.bucket_arn
   package_photos_bucket_arn = module.s3_package_photos.bucket_arn
+  reports_bucket_arn        = module.s3_reports.bucket_arn
   audit_archive_bucket_arn  = module.s3_audit_archive.bucket_arn
   secret_arns               = module.secrets.secret_arns
   tags                      = local.common_tags
@@ -273,6 +303,15 @@ module "ecs" {
   asymm_sign_kms_key_alias    = module.kms.asymm_sign_key_alias
   audit_archive_kms_key_alias = module.kms.audit_archive_key_alias
   audit_archive_bucket_name   = module.s3_audit_archive.bucket_name
+  reports_bucket_name         = module.s3_reports.bucket_name
+  reports_kms_key_alias       = module.kms.documents_key_alias
+
+  # Notifications stay OFF until resend-api-key is populated —
+  # referencing an empty secret fails task startup. See R-028.
+  notifications_enabled                   = var.notifications_enabled
+  notification_from_email                 = var.notification_from_email
+  compliance_notify_recipient_email       = var.compliance_notify_recipient_email
+  nightly_security_digest_recipient_email = var.nightly_security_digest_recipient_email
 
   # Package-photo storage (apps/web boot guard requires both in prod;
   # the worker uses the bucket name for the orphan-object sweeper).

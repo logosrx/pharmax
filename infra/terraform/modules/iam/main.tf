@@ -499,6 +499,31 @@ data "aws_iam_policy_document" "task_worker_buckets" {
     ]
   }
 
+  # Reports archive: WRITE + READ, no delete.
+  #
+  # The worker's report scheduler PUTs scheduled-report CSVs here, and
+  # reads them back when a caller re-downloads a completed run. Delete is
+  # withheld: expiry is the bucket lifecycle's job, and a report the
+  # application can erase is a weaker evidence artifact than one only the
+  # lifecycle policy can remove. Tenant shred deletes the underlying rows,
+  # which is what actually matters for a shred.
+  statement {
+    sid    = "ReportsWrite"
+    effect = "Allow"
+    actions = [
+      "s3:PutObject",
+      "s3:GetObject",
+    ]
+    resources = ["${var.reports_bucket_arn}/*"]
+  }
+
+  statement {
+    sid       = "ReportsList"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [var.reports_bucket_arn]
+  }
+
   # Audit archive: WRITE ONLY. Two writers share this grant — the
   # nightly signed Merkle roots, and the quarterly access-review
   # evidence packs.

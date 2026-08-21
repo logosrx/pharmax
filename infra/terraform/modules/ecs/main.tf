@@ -146,6 +146,20 @@ locals {
     { name = "OTEL_EXPORTER_OTLP_HEADERS", arn = var.secret_arns["grafana-cloud-otlp-headers"] },
   ] : []
 
+  # Notification channel (R-028). Recipients are injected only alongside a
+  # working transport: a recipient address with no channel to send on is
+  # configuration that reads as wired and behaves as unwired, which is the
+  # exact failure mode R-028 records.
+  notification_env = var.notifications_enabled ? [
+    { name = "NOTIFICATION_FROM_EMAIL", value = var.notification_from_email },
+    { name = "COMPLIANCE_NOTIFY_RECIPIENT_EMAIL", value = var.compliance_notify_recipient_email },
+    { name = "NIGHTLY_SECURITY_DIGEST_RECIPIENT_EMAIL", value = var.nightly_security_digest_recipient_email },
+  ] : []
+
+  notification_secret_env = var.notifications_enabled ? [
+    { name = "RESEND_API_KEY", arn = var.secret_arns["resend-api-key"] },
+  ] : []
+
   web_secret_env = concat([
     { name = "DATABASE_URL", arn = var.secret_arns["database-url"] },
     { name = "DIRECT_URL", arn = var.secret_arns["direct-url"] },
@@ -187,7 +201,7 @@ locals {
     { name = "UPS_CLIENT_ID", arn = var.secret_arns["ups-client-id"] },
     { name = "UPS_CLIENT_SECRET", arn = var.secret_arns["ups-client-secret"] },
     { name = "SENTRY_DSN", arn = var.secret_arns["sentry-dsn"] },
-  ], local.reporting_secret_env, local.otel_secret_env)
+  ], local.reporting_secret_env, local.otel_secret_env, local.notification_secret_env)
 
   print_agent_secret_env = [
     { name = "DATABASE_URL", arn = var.secret_arns["database-url-system"] },
@@ -419,11 +433,19 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "MERKLE_SIGNER_KMS_KEY_ID", value = var.asymm_sign_kms_key_alias },
         { name = "AUDIT_ARCHIVE_S3_BUCKET", value = var.audit_archive_bucket_name },
         { name = "AUDIT_ARCHIVE_S3_KMS_KEY_ID", value = var.audit_archive_kms_key_alias },
+        # Scheduled-report archive (R-028). BOTH are required for the S3
+        # adapter to be selected; with either missing the worker falls
+        # back to an in-memory archive and every report is discarded on
+        # restart. Names must match apps/worker/src/env.ts — see the
+        # note above about a previous mismatch that injected real values
+        # under names the app never read.
+        { name = "REPORT_ARCHIVE_S3_BUCKET", value = var.reports_bucket_name },
+        { name = "REPORT_ARCHIVE_S3_KMS_KEY_ID", value = var.reports_kms_key_alias },
         # Enables the package-photo orphan-object sweeper (lists
         # org/*/photo/upload/* and deletes objects with no backing
         # package_photo row). MUST match the web tier's bucket.
         { name = "S3_PACKAGE_PHOTOS_BUCKET", value = var.package_photos_bucket_name },
-      ], local.otel_env)
+      ], local.otel_env, local.notification_env)
 
       secrets = [for s in local.worker_secret_env : {
         name      = s.name

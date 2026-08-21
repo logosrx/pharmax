@@ -68,6 +68,19 @@ locals {
     "clerk-webhook-secret",
     "next-public-clerk-publishable-key",
     "sentry-dsn",
+    # Resend API key for the worker's operational notification channel
+    # (R-028). Created empty and NOT referenced by any task definition
+    # until `notifications_enabled` is flipped in modules/ecs — an empty
+    # secret that a task definition references fails startup with
+    # ResourceInitializationError, so creating it and wiring it are
+    # deliberately two separate steps.
+    #
+    # Resend has NO executed BAA. That is acceptable here only because
+    # every notification template is `phiAllowed: false` and the channel
+    # asserts it at the boundary, so this transport carries order numbers
+    # and escalation reasons, never patient data. A BAA becomes mandatory
+    # the moment any template flips.
+    "resend-api-key",
     "fedex-client-id",
     "fedex-client-secret",
     "ups-client-id",
