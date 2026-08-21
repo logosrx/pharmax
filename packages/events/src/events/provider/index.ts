@@ -1,5 +1,7 @@
 // Per-domain barrel for provider.* event definitions.
 
+export { ProviderCredentialRevokedV1 } from "./credential-revoked-v1.js";
+export { ProviderDeaRegistrationRecordedV1 } from "./dea-registration-recorded-v1.js";
 export { ProviderDeactivatedV1 } from "./deactivated-v1.js";
 export { ProviderOnboardingApprovedV1 } from "./onboarding-approved-v1.js";
 export { ProviderOnboardingRejectedV1 } from "./onboarding-rejected-v1.js";
@@ -12,4 +14,5 @@ export { ProviderPortalAccountSignedInV1 } from "./portal-account-signed-in-v1.j
 export { ProviderPortalSessionClientSwitchedV1 } from "./portal-session-client-switched-v1.js";
 export { ProviderReactivatedV1 } from "./reactivated-v1.js";
 export { ProviderRegisteredV1 } from "./registered-v1.js";
+export { ProviderStateLicenseRecordedV1 } from "./state-license-recorded-v1.js";
 export { ProviderUpdatedV1 } from "./updated-v1.js";

@@ -17,7 +17,10 @@ import {
   loadOperatorPermissions,
 } from "../../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../../src/server/auth/resolve-tenancy.js";
-import { listProviders } from "../../../../src/server/ops/list-providers.js";
+import {
+  listProviders,
+  type ProviderDeaSummary,
+} from "../../../../src/server/ops/list-providers.js";
 import { PageHeader, Section, FilterTabs } from "../../../../src/components/ui/page.js";
 import { Table, THead, TH, TBody, TR, TD } from "../../../../src/components/ui/data.js";
 import { Badge } from "../../../../src/components/ui/badge.js";
@@ -39,6 +42,35 @@ function parseStatus(value: string | undefined): ProviderStatus | undefined {
   return value !== undefined && (Object.values(ProviderStatus) as string[]).includes(value)
     ? (value as ProviderStatus)
     : undefined;
+}
+
+/**
+ * The roster answers "may this prescriber write controlled
+ * substances", not "what is their DEA number". The number is a
+ * prescription-fraud vector — the write commands redact it from
+ * `command_log` for exactly that reason — and a roster view has no use
+ * for it. It lives on the credential surface behind its own grant.
+ */
+function deaCell(dea: ProviderDeaSummary) {
+  if (dea.total === 0) {
+    return <span className="text-subtle">No DEA on file</span>;
+  }
+  if (dea.hasLapsed) {
+    return <Badge tone="danger">Lapsed or revoked</Badge>;
+  }
+  if (dea.soonestExpiresAt === null) {
+    // Registered, but nobody recorded when it expires. Not a refusal —
+    // the gate lets it through — but it is the gap worth closing.
+    return <Badge tone="warning">No expiry recorded</Badge>;
+  }
+  return (
+    <span className="flex items-center gap-2">
+      <Badge tone="success">Authorized</Badge>
+      <span className="text-xs text-muted">
+        to {dea.soonestExpiresAt.toLocaleDateString("en-US")}
+      </span>
+    </span>
+  );
 }
 
 function pageHref(input: {
@@ -132,7 +164,7 @@ export default async function ProviderAdminPage({
             <THead>
               <TH>Provider</TH>
               <TH>NPI</TH>
-              <TH>DEA</TH>
+              <TH>Controlled substances</TH>
               <TH>Location</TH>
               <TH>Phone</TH>
               <TH>Status</TH>
@@ -147,7 +179,7 @@ export default async function ProviderAdminPage({
                     ) : null}
                   </TD>
                   <TD className="font-mono text-xs">{row.npi}</TD>
-                  <TD className="font-mono text-xs">{row.deaNumber ?? "—"}</TD>
+                  <TD>{deaCell(row.dea)}</TD>
                   <TD>
                     {row.city !== null || row.state !== null
                       ? [row.city, row.state].filter((s) => s !== null).join(", ")

@@ -19,6 +19,11 @@
 //     vocabulary.
 
 export {
+  resolveDestinationState,
+  type ResolveDestinationStateInput,
+} from "./resolve-destination-state.js";
+
+export {
   CreateOrder,
   type CreateOrderInput,
   type CreateOrderOutput,

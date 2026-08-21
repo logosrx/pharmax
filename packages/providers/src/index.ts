@@ -10,6 +10,7 @@
 //     import the diff engine without crossing package boundaries.
 
 export {
+  PROVIDER_DEA_INVALID,
   RegisterProvider,
   type RegisterProviderInput,
   type RegisterProviderOutput,
@@ -208,6 +209,51 @@ export {
   listPortalClinicOptions,
   type PortalClinicOption,
 } from "./portal/clinic-access.js";
+
+export {
+  canPrescribe,
+  validateDeaNumber,
+  DEA_INVALID_CHECKSUM,
+  DEA_INVALID_FORMAT,
+  DEA_LAST_NAME_MISMATCH,
+  DEA_UNKNOWN_REGISTRANT_TYPE,
+  type DeaRegistrantType,
+  type DeaValidationFailure,
+  type DeaValidationFailureCode,
+  type DeaValidationResult,
+  type DeaValidationSuccess,
+} from "./dea/validate-dea-number.js";
+
+export {
+  RecordProviderDeaRegistration,
+  RECORD_DEA_INVALID,
+  RECORD_DEA_NUMBER_BELONGS_TO_ANOTHER_PROVIDER,
+  RECORD_DEA_PROVIDER_INACTIVE,
+  RECORD_DEA_PROVIDER_NOT_FOUND,
+  RECORD_DEA_UNKNOWN_STATE,
+  type RecordProviderDeaRegistrationInput,
+  type RecordProviderDeaRegistrationOutput,
+} from "./commands/record-provider-dea-registration.js";
+
+export {
+  RecordProviderStateLicense,
+  RECORD_LICENSE_EXPIRY_BEFORE_ISSUE,
+  RECORD_LICENSE_PROVIDER_INACTIVE,
+  RECORD_LICENSE_PROVIDER_NOT_FOUND,
+  RECORD_LICENSE_UNKNOWN_STATE,
+  type RecordProviderStateLicenseInput,
+  type RecordProviderStateLicenseOutput,
+} from "./commands/record-provider-state-license.js";
+
+export {
+  RevokeProviderCredential,
+  PROVIDER_CREDENTIAL_KINDS,
+  REVOKE_CREDENTIAL_ALREADY_INACTIVE,
+  REVOKE_CREDENTIAL_NOT_FOUND,
+  type ProviderCredentialKind,
+  type RevokeProviderCredentialInput,
+  type RevokeProviderCredentialOutput,
+} from "./commands/revoke-provider-credential.js";
 export {
   SwitchPortalClinic,
   SWITCH_PORTAL_CLINIC_NOT_AFFILIATED,
@@ -255,6 +301,9 @@ export {
 import * as deactivateProviderModule from "./commands/deactivate-provider.js";
 import * as reactivateProviderModule from "./commands/reactivate-provider.js";
 import * as registerProviderModule from "./commands/register-provider.js";
+import * as recordProviderDeaRegistrationModule from "./commands/record-provider-dea-registration.js";
+import * as recordProviderStateLicenseModule from "./commands/record-provider-state-license.js";
+import * as revokeProviderCredentialModule from "./commands/revoke-provider-credential.js";
 import * as updateProviderModule from "./commands/update-provider.js";
 
 export const providers = {
@@ -263,5 +312,9 @@ export const providers = {
     UpdateProvider: updateProviderModule.UpdateProvider,
     DeactivateProvider: deactivateProviderModule.DeactivateProvider,
     ReactivateProvider: reactivateProviderModule.ReactivateProvider,
+    RecordProviderDeaRegistration:
+      recordProviderDeaRegistrationModule.RecordProviderDeaRegistration,
+    RecordProviderStateLicense: recordProviderStateLicenseModule.RecordProviderStateLicense,
+    RevokeProviderCredential: revokeProviderCredentialModule.RevokeProviderCredential,
   },
 } as const;

@@ -336,7 +336,11 @@ export default async function TranscribePrescriptionPage({
   const prescribers: ReadonlyArray<TranscriptionPrescriber> = providers.rows.map((p) => ({
     providerId: p.providerId,
     label: prescriberLabel(p),
-    hasDeaRegistration: p.deaNumber !== null && p.deaNumber.trim().length > 0,
+    // `hasActive` rather than "a number exists": a lapsed or revoked
+    // registration is refused by CreatePrescription, so a form that
+    // called it present would let the operator fill in the whole
+    // prescription before the command told them no.
+    hasDeaRegistration: p.dea.hasActive,
   }));
 
   const patientName = [patient.fields.firstName, patient.fields.middleName, patient.fields.lastName]

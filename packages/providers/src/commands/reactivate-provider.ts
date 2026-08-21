@@ -212,7 +212,9 @@ export const ReactivateProvider: Command<ReactivateProviderInput, ReactivateProv
         organizationId: true,
         npi: true,
         status: true,
-        deaNumber: true,
+        // Count only — same posture as the `deaNumber` column this
+        // replaces, which was selected solely to derive a boolean.
+        _count: { select: { deaRegistrations: true } },
       },
     });
 
@@ -263,7 +265,7 @@ export const ReactivateProvider: Command<ReactivateProviderInput, ReactivateProv
     // CS-fill-resume workers that want to know whether the
     // reactivated provider is even capable of CS prescribing.
     const hasReasonText = input.reasonText !== undefined && input.reasonText.length > 0;
-    const hadDea = provider.deaNumber !== null;
+    const hadDea = provider._count.deaRegistrations > 0;
 
     return {
       output: {

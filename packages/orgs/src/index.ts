@@ -73,6 +73,27 @@ export {
 } from "./commands/update-pharmacy-site-address.js";
 
 export {
+  RecordSiteCredential,
+  RECORD_SITE_CREDENTIAL_EXPIRY_BEFORE_ISSUE,
+  RECORD_SITE_CREDENTIAL_SITE_NOT_FOUND,
+  RECORD_SITE_CREDENTIAL_STATE_NOT_ALLOWED,
+  RECORD_SITE_CREDENTIAL_STATE_REQUIRED,
+  RECORD_SITE_CREDENTIAL_UNKNOWN_STATE,
+  type RecordSiteCredentialInput,
+  type RecordSiteCredentialOutput,
+} from "./commands/record-site-credential.js";
+
+export {
+  SetSiteAuthorizedShipStates,
+  SET_SHIP_STATES_DUPLICATE_STATE,
+  SET_SHIP_STATES_NO_LICENSE,
+  SET_SHIP_STATES_SITE_NOT_FOUND,
+  SET_SHIP_STATES_UNKNOWN_STATE,
+  type SetSiteAuthorizedShipStatesInput,
+  type SetSiteAuthorizedShipStatesOutput,
+} from "./commands/set-site-authorized-ship-states.js";
+
+export {
   CreateClinic,
   CLINIC_CODE_REGEX,
   CREATE_CLINIC_CODE_ALREADY_EXISTS,
@@ -179,6 +200,8 @@ import * as updateBucketModule from "./commands/update-bucket.js";
 import * as deleteBucketModule from "./commands/delete-bucket.js";
 import * as updatePharmacySiteAddressModule from "./commands/update-pharmacy-site-address.js";
 import * as createClinicModule from "./commands/create-clinic.js";
+import * as recordSiteCredentialModule from "./commands/record-site-credential.js";
+import * as setSiteAuthorizedShipStatesModule from "./commands/set-site-authorized-ship-states.js";
 import * as updateClinicModule from "./commands/update-clinic.js";
 import * as setClinicStatusModule from "./commands/set-clinic-status.js";
 import * as affiliateProviderWithClinicModule from "./commands/affiliate-provider-with-clinic.js";
@@ -199,6 +222,8 @@ export const orgs = {
     DeleteBucket: deleteBucketModule.DeleteBucket,
     UpdatePharmacySiteAddress: updatePharmacySiteAddressModule.UpdatePharmacySiteAddress,
     CreateClinic: createClinicModule.CreateClinic,
+    RecordSiteCredential: recordSiteCredentialModule.RecordSiteCredential,
+    SetSiteAuthorizedShipStates: setSiteAuthorizedShipStatesModule.SetSiteAuthorizedShipStates,
     UpdateClinic: updateClinicModule.UpdateClinic,
     SetClinicStatus: setClinicStatusModule.SetClinicStatus,
     AffiliateProviderWithClinic: affiliateProviderWithClinicModule.AffiliateProviderWithClinic,

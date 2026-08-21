@@ -24,6 +24,8 @@ import {
   SHIPPING_BUCKET_NOT_CONFIGURED,
 } from "./release-to-ship.js";
 
+import { assertShipToStateAllowed, readOrderDestinationState } from "../ship-to-state-guard.js";
+
 export const SHIPMENT_NOT_FOUND = "SHIPMENT_NOT_FOUND";
 export const SHIPMENT_NOT_READY = "SHIPMENT_NOT_READY";
 
@@ -113,6 +115,23 @@ export const ConfirmShipment = defineCommand<ConfirmShipmentInput, ConfirmShipme
     }
 
     await assertShippingAssignee({ tx, target, ctx });
+
+    // Ship-to-state licensure (G-2), as a backstop. This is the command
+    // that actually sets order.currentStatus = SHIPPED, so it is the
+    // last point at which an unlawful destination can be stopped — and
+    // it catches shipments created before enforcement was switched on
+    // for the site, which the earlier gates by definition could not.
+    await assertShipToStateAllowed({
+      tx,
+      organizationId: ctx.organizationId,
+      siteId: target.siteId,
+      orderId: target.id,
+      destinationState: await readOrderDestinationState({
+        tx,
+        organizationId: ctx.organizationId,
+        orderId: target.id,
+      }),
+    });
 
     const shipment = await tx.shipment.findFirst({
       where: { organizationId: ctx.organizationId, orderId: target.id },

@@ -54,6 +54,8 @@ import { IntakeSourceKind, OrderPriority, OrderStatus, Prisma } from "@pharmax/d
 import { errors } from "@pharmax/platform-core";
 import { PERMISSIONS } from "@pharmax/rbac";
 import { computeOrderSlaDeadline, openInitialWaitBeforeTyping } from "@pharmax/sla";
+
+import { resolveDestinationState } from "../resolve-destination-state.js";
 import { BUCKET_CODE_FOR_STATUS } from "@pharmax/workflow";
 import { z } from "zod";
 
@@ -217,7 +219,9 @@ export const CreateOrder = defineCommand<CreateOrderInput, CreateOrderOutput>({
     // clinic dropdown, while NOT FOUND usually means a stale id.
     const patient = await tx.patient.findFirst({
       where: { id: input.patientId, organizationId: orgId },
-      select: { id: true, clinicId: true, status: true },
+      // `stateEnc` is loaded to denormalize the destination state onto
+      // the order — see the `destinationState` write below.
+      select: { id: true, clinicId: true, status: true, stateEnc: true },
     });
     if (patient === null) {
       throw new errors.NotFoundError({
@@ -287,12 +291,29 @@ export const CreateOrder = defineCommand<CreateOrderInput, CreateOrderOutput>({
     // deadline via `classifySlaStatus`.
     const now = clock.now();
     const slaDeadlineAt = computeOrderSlaDeadline({ receivedAt: now, priority: input.priority });
+
+    // Destination state, denormalized from the patient's encrypted
+    // address so ship-to-state licensure (G-2) is enforceable from
+    // every ship-committing command rather than only the one that
+    // happens to receive an address. See the column comment for why
+    // this is plaintext and why nothing finer-grained may join it.
+    //
+    // A patient with no recorded state yields null, and a null on a
+    // site with enforcement active refuses at ship time. That is the
+    // right direction: we do not know where this is going.
+    const destinationState = await resolveDestinationState({
+      stateEnc: patient.stateEnc,
+      organizationId: orgId,
+      patientId: patient.id,
+    });
+
     const order = await tx.order.create({
       data: {
         organizationId: orgId,
         clinicId: input.clinicId,
         siteId: input.siteId,
         patientId: input.patientId,
+        ...(destinationState === null ? {} : { destinationState }),
         currentStatus: OrderStatus.RECEIVED,
         currentBucketId: intakeBucket.id,
         workflowPolicyId: policy.id,

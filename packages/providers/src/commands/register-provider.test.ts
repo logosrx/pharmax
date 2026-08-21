@@ -92,6 +92,12 @@ function buildFakePrisma(opts: FakePrismaOptions = {}): {
         return (args as { data: { id: string } }).data;
       }),
     },
+    providerDeaRegistration: {
+      create: vi.fn(async (args: unknown) => {
+        calls.push({ table: "providerDeaRegistration", op: "create", args });
+        return { id: "dea-registration-1" };
+      }),
+    },
     commandLog: {
       create: vi.fn(async (args: unknown) => {
         calls.push({ table: "commandLog", op: "create", args });
@@ -252,7 +258,6 @@ describe("RegisterProvider — happy path (required only)", () => {
 
     for (const k of [
       "credential",
-      "deaNumber",
       "phone",
       "email",
       "addressLine1",
@@ -279,7 +284,7 @@ describe("RegisterProvider — happy path (all fields)", () => {
           firstName: "Hannah",
           lastName: "Reyes",
           credential: "MD",
-          deaNumber: "BR1234567",
+          deaNumber: "BR1234563",
           phone: "(415) 555-0199",
           email: "office@reyes-clinic.test",
           addressLine1: "500 Howard St",
@@ -303,7 +308,6 @@ describe("RegisterProvider — happy path (all fields)", () => {
       firstName: "Hannah",
       lastName: "Reyes",
       credential: "MD",
-      deaNumber: "BR1234567",
       phone: "(415) 555-0199",
       email: "office@reyes-clinic.test",
       addressLine1: "500 Howard St",
@@ -313,6 +317,26 @@ describe("RegisterProvider — happy path (all fields)", () => {
       postalCode: "94105-1234",
       status: "ACTIVE",
     });
+    // The DEA number is no longer a provider column: it lands in its
+    // own row, in the same transaction, with the authority the old
+    // column implicitly conferred.
+    expect(data["deaNumber"]).toBeUndefined();
+
+    const registration = (
+      findOnly(fake.calls, "providerDeaRegistration", "create").args as {
+        data: Record<string, unknown>;
+      }
+    ).data;
+    expect(registration).toMatchObject({
+      organizationId: ORG_ID,
+      deaNumber: "BR1234563",
+      registrantType: "PRACTITIONER",
+      recordedByUserId: USER_ID,
+    });
+    // Every controlled schedule, matching what the superseded column
+    // granted. Narrowing here would refuse prescriptions the old code
+    // allowed.
+    expect(registration["authorizedSchedules"]).toEqual(["CII", "CIII", "CIV", "CV"]);
   });
 });
 
@@ -333,7 +357,7 @@ describe("RegisterProvider — command_log redaction", () => {
           firstName: "Hannah",
           lastName: "Reyes",
           credential: "MD",
-          deaNumber: "BR1234567",
+          deaNumber: "BR1234563",
           email: "office@reyes-clinic.test",
         },
         { idempotencyKey: "redact" }
@@ -359,7 +383,7 @@ describe("RegisterProvider — command_log redaction", () => {
     // Belt-and-suspenders: DEA plaintext appears NOWHERE in the
     // serialized command_log row.
     const cmdLogJson = JSON.stringify(cmdLogCreate.args);
-    expect(cmdLogJson).not.toContain("BR1234567");
+    expect(cmdLogJson).not.toContain("BR1234563");
   });
 });
 
@@ -380,7 +404,7 @@ describe("RegisterProvider — audit + outbox shape", () => {
           firstName: "Hannah",
           lastName: "Reyes",
           credential: "MD",
-          deaNumber: "BR1234567",
+          deaNumber: "BR1234563",
           phone: "(415) 555-0199",
         },
         { idempotencyKey: "audit" }
@@ -407,7 +431,7 @@ describe("RegisterProvider — audit + outbox shape", () => {
     // The audit row carries a BigInt `seq` column from the chain
     // writer, so JSON.stringify needs a BigInt-aware replacer.
     const auditJson = JSON.stringify(data, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
-    expect(auditJson).not.toContain("BR1234567");
+    expect(auditJson).not.toContain("BR1234563");
   });
 
   it("outbox event carries only ids + npi + timestamp; no DEA", async () => {
@@ -421,7 +445,7 @@ describe("RegisterProvider — audit + outbox shape", () => {
           npi: "1417935009",
           firstName: "Hannah",
           lastName: "Reyes",
-          deaNumber: "BR1234567",
+          deaNumber: "BR1234563",
         },
         { idempotencyKey: "outbox" }
       )
@@ -448,7 +472,7 @@ describe("RegisterProvider — audit + outbox shape", () => {
     });
 
     const payloadJson = JSON.stringify(payload);
-    expect(payloadJson).not.toContain("BR1234567");
+    expect(payloadJson).not.toContain("BR1234563");
     expect(payloadJson).not.toContain("Hannah");
     expect(payloadJson).not.toContain("Reyes");
   });
@@ -522,10 +546,6 @@ describe("RegisterProvider — input validation", () => {
     ["NPI must be exactly 10 digits", { npi: "123", firstName: "A", lastName: "B" }],
     ["NPI non-digit", { npi: "12345abcde", firstName: "A", lastName: "B" }],
     [
-      "DEA must be 2 letters + 7 digits (uppercase)",
-      { npi: "1234567893", firstName: "A", lastName: "B", deaNumber: "br1234567" },
-    ],
-    [
       "DEA wrong length",
       { npi: "1234567893", firstName: "A", lastName: "B", deaNumber: "BR123456" },
     ],
@@ -552,5 +572,101 @@ describe("RegisterProvider — input validation", () => {
     });
     // Validation runs before any DB write.
     expect(callsOf(fake.calls, "provider", "create")).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------
+// Offline DEA validation
+//
+// These refusals come from the HANDLER, not the Zod schema, so they
+// carry PROVIDER_DEA_INVALID rather than COMMAND_INPUT_INVALID. A
+// check digit and a surname initial are facts about the number's
+// content, which a schema cannot express.
+// ---------------------------------------------------------------------
+
+describe("RegisterProvider — offline DEA validation", () => {
+  let fake: ReturnType<typeof buildFakePrisma>;
+
+  beforeEach(() => {
+    fake = buildFakePrisma();
+    wireBusAndRbac(fake.client);
+  });
+
+  it.each([
+    [
+      // The old regex would have accepted this: it is the right shape
+      // and the wrong number.
+      "bad check digit",
+      { npi: "1234567893", firstName: "Bea", lastName: "Brennan", deaNumber: "BB1234567" },
+    ],
+    [
+      // Valid in every other respect, and belongs to someone else.
+      "surname initial does not match the prescriber",
+      { npi: "1234567893", firstName: "Ada", lastName: "Okonkwo", deaNumber: "BR1234563" },
+    ],
+    [
+      // A distributor's registration is not a prescribing credential.
+      "non-prescribing registrant type",
+      { npi: "1234567893", firstName: "Eve", lastName: "Reyes", deaNumber: "ER1234563" },
+    ],
+  ] as const)("refuses a %s, writing nothing", async (_label, input) => {
+    await withTenancyContext(ctx(), async () => {
+      await expect(
+        executeCommand(RegisterProvider, input as never, {
+          idempotencyKey: `dea-invalid-${_label.slice(0, 10)}-${Math.random()}`,
+        })
+      ).rejects.toMatchObject({ code: "PROVIDER_DEA_INVALID" });
+    });
+    // The prescriber row must not survive a rejected credential —
+    // otherwise onboarding leaves a provider behind with no DEA and no
+    // explanation of why.
+    expect(callsOf(fake.calls, "provider", "create")).toHaveLength(0);
+    expect(callsOf(fake.calls, "providerDeaRegistration", "create")).toHaveLength(0);
+  });
+
+  it("accepts a lowercase number and stores it normalized", async () => {
+    await withTenancyContext(ctx(), () =>
+      executeCommand(
+        RegisterProvider,
+        {
+          npi: "1417935009",
+          firstName: "Hannah",
+          lastName: "Reyes",
+          deaNumber: "br1234563",
+        },
+        { idempotencyKey: "dea-lowercase" }
+      )
+    );
+
+    const registration = (
+      findOnly(fake.calls, "providerDeaRegistration", "create").args as {
+        data: Record<string, unknown>;
+      }
+    ).data;
+    expect(registration["deaNumber"]).toBe("BR1234563");
+  });
+
+  it("accepts 9 as the second character — a business-name registration", async () => {
+    // The regex this replaced was `^[A-Z]{2}\d{7}$`, which refused
+    // every such number outright.
+    await withTenancyContext(ctx(), () =>
+      executeCommand(
+        RegisterProvider,
+        {
+          npi: "1417935009",
+          firstName: "Hannah",
+          lastName: "Reyes",
+          deaNumber: "B91234563",
+        },
+        { idempotencyKey: "dea-business-name" }
+      )
+    );
+
+    const registration = (
+      findOnly(fake.calls, "providerDeaRegistration", "create").args as {
+        data: Record<string, unknown>;
+      }
+    ).data;
+    expect(registration["deaNumber"]).toBe("B91234563");
   });
 });

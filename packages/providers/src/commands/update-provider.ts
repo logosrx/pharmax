@@ -84,11 +84,12 @@ const inputSchema = z
 
     // Optional fields — string sets, null clears, absent leaves alone.
     credential: z.string().min(1).max(40).nullable().optional(),
-    deaNumber: z
-      .string()
-      .regex(/^[A-Z]{2}\d{7}$/, "expected 2 uppercase letters followed by 7 digits")
-      .nullable()
-      .optional(),
+    // `deaNumber` is deliberately absent. A DEA registration is no
+    // longer a column on this row — it has an expiry, a registrant
+    // type, and per-schedule authority, and it is recorded and revoked
+    // by its own commands. Folding "revoke a controlled-substance
+    // credential" into "correct a prescriber's phone number" also meant
+    // one reason code and one audit shape for two very different acts.
     phone: z.string().min(7).max(40).nullable().optional(),
     email: z.email().max(320).nullable().optional(),
     addressLine1: z.string().min(1).max(200).nullable().optional(),
@@ -119,9 +120,11 @@ export interface UpdateProviderOutput {
   readonly clearedFields: ReadonlyArray<string>;
 }
 
-// Only `deaNumber` is confidential; everything else is plaintext
-// (or already public, in NPI's case — which isn't in this schema).
-const REDACT_FIELDS = Object.freeze(["deaNumber"] as const);
+// Nothing left to redact. `deaNumber` was the only confidential field
+// this command handled, and it no longer does — see the schema note
+// above. The empty list is kept rather than removed so a future
+// confidential field has an obvious home.
+const REDACT_FIELDS = Object.freeze([] as ReadonlyArray<string>);
 
 // All updatable input keys (excluding providerId). Used to walk the
 // input deterministically when building the audit change-set.
@@ -129,7 +132,6 @@ const UPDATABLE_KEYS = Object.freeze([
   "firstName",
   "lastName",
   "credential",
-  "deaNumber",
   "phone",
   "email",
   "addressLine1",
@@ -202,9 +204,10 @@ export const UpdateProvider: Command<UpdateProviderInput, UpdateProviderOutput> 
     //
     // Read columns we need for guards + audit metadata. `npi` rides
     // into audit/outbox as the action's anchor. `status` powers the
-    // INACTIVE guard. `deaNumber` (post-update) determines `hasDea`
-    // in audit metadata; we re-read it after the update to reflect
-    // the new state (an update that clears DEA flips hasDea to false).
+    // INACTIVE guard. The registration count feeds `hasDea`, which no
+    // longer needs a post-update re-read: this command cannot change a
+    // prescriber's DEA registrations, so the count is the same before
+    // and after.
     const provider = await tx.provider.findUnique({
       where: { id: input.providerId },
       select: {
@@ -212,7 +215,7 @@ export const UpdateProvider: Command<UpdateProviderInput, UpdateProviderOutput> 
         organizationId: true,
         npi: true,
         status: true,
-        deaNumber: true,
+        _count: { select: { deaRegistrations: true } },
       },
     });
 
@@ -281,16 +284,11 @@ export const UpdateProvider: Command<UpdateProviderInput, UpdateProviderOutput> 
     updatedFields.sort();
     clearedFields.sort();
 
-    // Compute the POST-UPDATE `hasDea` boolean. If the update set
-    // deaNumber, hasDea is true. If the update cleared it, hasDea
-    // is false. If the update didn't touch it, hasDea preserves the
-    // pre-read value.
-    const hasDea =
-      input.deaNumber === null
-        ? false
-        : input.deaNumber !== undefined
-          ? true
-          : provider.deaNumber !== null;
+    // Retained in audit metadata for continuity with the events already
+    // on the wire, but it is now a pure read-through: this command
+    // cannot add or remove a DEA registration, so the value cannot
+    // change as a result of it.
+    const hasDea = provider._count.deaRegistrations > 0;
 
     return {
       output: {

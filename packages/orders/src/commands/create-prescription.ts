@@ -55,13 +55,18 @@ import { randomUUID } from "node:crypto";
 
 import type { Command, HandlerResult } from "@pharmax/command-bus";
 import {
+  DEA_AUTHORITY_EXPIRED,
+  DEA_AUTHORITY_NO_REGISTRATION,
+  DEA_AUTHORITY_NOT_ACTIVE,
+  DEA_AUTHORITY_SCHEDULE_NOT_AUTHORIZED,
+  evaluatePrescriberDeaAuthority,
   federalRefillCap,
   hasSixMonthRefillHorizon,
   isControlled,
-  requiresPrescriberDeaRegistration,
   startOfUtcDay,
   validateControlledPrescriptionAuthorization,
   addUtcCalendarMonths,
+  type DeaAuthorityRefusalCode,
 } from "@pharmax/controlled-substances";
 import { encryptField } from "@pharmax/crypto";
 import {
@@ -329,7 +334,22 @@ export const CreatePrescription: Command<CreatePrescriptionInput, CreatePrescrip
 
     const provider = await tx.provider.findUnique({
       where: { id: input.providerId },
-      select: { id: true, status: true, deaNumber: true },
+      select: {
+        id: true,
+        status: true,
+        // Every registration, not only the live ones. The refusal
+        // reason depends on WHY none of them authorize — lapsed,
+        // revoked, or simply not covering this schedule — and filtering
+        // in the query would collapse all three into "none found".
+        deaRegistrations: {
+          select: {
+            deaNumber: true,
+            status: true,
+            expiresAt: true,
+            authorizedSchedules: true,
+          },
+        },
+      },
     });
     if (provider === null) {
       throw new errors.ValidationError({
@@ -359,12 +379,30 @@ export const CreatePrescription: Command<CreatePrescriptionInput, CreatePrescrip
     });
 
     // ---- Step 4: DEA authorization limits --------------------------
-    if (requiresPrescriberDeaRegistration(schedule) && !hasDeaNumber(provider.deaNumber)) {
+    //
+    // This used to be a presence check on a nullable column, which
+    // could only say "no DEA on file". A registration can also have
+    // lapsed, been revoked, or simply not cover this schedule, and the
+    // operator's next action differs for each — so the verdict carries
+    // a specific code and the message names the thing to go fix.
+    const deaAuthority = evaluatePrescriberDeaAuthority({
+      schedule,
+      registrations: provider.deaRegistrations,
+      asOf: now,
+    });
+    if (!deaAuthority.ok) {
       throw new errors.ValidationError({
         code: RX_PROVIDER_DEA_REQUIRED,
-        message: `Prescriber has no DEA registration on file and cannot authorize a ${schedule} prescription.`,
-        issues: [{ path: ["providerId"], message: "prescriber has no DEA number" }],
-        metadata: { providerId: input.providerId, schedule },
+        message: deaRefusalMessage(deaAuthority.code, schedule),
+        issues: [{ path: ["providerId"], message: "prescriber DEA authority insufficient" }],
+        // The DEA number itself never appears here — a refusal is not a
+        // reason to put a prescribing credential into an error payload.
+        metadata: {
+          providerId: input.providerId,
+          schedule,
+          reason: deaAuthority.code,
+          registrationCount: deaAuthority.registrationCount,
+        },
       });
     }
 
@@ -785,12 +823,32 @@ function validateDaysSupplyConsistency(input: CreatePrescriptionInput): void {
 }
 
 /**
- * A DEA number must be present and non-blank. We do not validate its
- * check digit here — provider onboarding owns that, and re-deriving
- * the rule in two places invites them to disagree.
+ * Operator-facing wording for a DEA refusal.
+ *
+ * One sentence per reason, each naming the action that resolves it.
+ * "No DEA registration on file" sends someone to record one; it is the
+ * wrong instruction when the real problem is that the registration
+ * lapsed last month, and worse when the registration is fine but does
+ * not cover Schedule II.
  */
-function hasDeaNumber(deaNumber: string | null): boolean {
-  return deaNumber !== null && deaNumber.trim().length > 0;
+function deaRefusalMessage(
+  code: DeaAuthorityRefusalCode,
+  schedule: ControlledSubstanceSchedule
+): string {
+  switch (code) {
+    case DEA_AUTHORITY_NO_REGISTRATION:
+      return `Prescriber has no DEA registration on file and cannot authorize a ${schedule} prescription. Record their registration first.`;
+    case DEA_AUTHORITY_EXPIRED:
+      return `Prescriber's DEA registration has expired and cannot authorize a ${schedule} prescription. Record the renewed registration.`;
+    case DEA_AUTHORITY_NOT_ACTIVE:
+      return `Prescriber's DEA registration is revoked or suspended and cannot authorize a ${schedule} prescription.`;
+    case DEA_AUTHORITY_SCHEDULE_NOT_AUTHORIZED:
+      return `Prescriber's DEA registration does not cover ${schedule}. Check which schedules their registration authorizes.`;
+    default: {
+      const exhaustive: never = code;
+      return exhaustive;
+    }
+  }
 }
 
 /**
