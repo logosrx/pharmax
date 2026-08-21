@@ -72,6 +72,14 @@ execution of each one, scoped for solo execution, and states the
 concentrated-roles position explicitly rather than fabricating separation that
 does not exist. Work through it before the first quarterly window closes.
 
+Once a control has run once, the [compliance calendar](../compliance/compliance-calendar.md)
+is where its **next** date lives. Every policy here states a cadence and none
+states a date, which is survivable until an observation window needs to sample
+recurrence — at which point "quarterly" is a policy and "2026-11-30" is
+something you can miss, notice, and be asked about. The calendar also records
+which obligations have never run, which have run exactly once, and the ordered
+prerequisites for a Type II window being worth starting at all.
+
 ## Related governance and security artifacts
 
 The policies above are the **what** and the **why**. Two sibling directories hold the **who**, the **when**, and the **how**:
