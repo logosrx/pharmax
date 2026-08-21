@@ -45,7 +45,7 @@
     "check:terraform-apply-workflow": "tsx scripts/check-terraform-apply-workflow.ts",
     "events:validate": "tsx scripts/events/validate-registry.ts",
     "events:migrate-check": "tsx scripts/events/migrate-allowlist.ts",
-    "verify": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm prisma:validate && pnpm check:migrations && pnpm check:drift && pnpm check:schema && pnpm check:commands && pnpm check:kms-inventory && pnpm check:alarm-actions && pnpm check:raw-prisma && pnpm check:raw-sql && pnpm check:caught-cause && pnpm check:layers && pnpm check:partner-contract && pnpm check:terraform-apply-workflow && pnpm events:validate && pnpm events:migrate-check && pnpm test",
+    "verify": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm prisma:validate && pnpm check:migrations && pnpm check:drift && pnpm check:schema && pnpm check:commands && pnpm check:kms-inventory && pnpm check:compliance-controls && pnpm check:alarm-actions && pnpm check:raw-prisma && pnpm check:raw-sql && pnpm check:caught-cause && pnpm check:layers && pnpm check:partner-contract && pnpm check:terraform-apply-workflow && pnpm events:validate && pnpm events:migrate-check && pnpm test",
     "verify:fast": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
@@ -77,7 +77,10 @@
     "db:studio": "prisma studio",
     "prepare": "husky",
     "postinstall": "pnpm db:generate",
-    "status": "git status"
+    "status": "git status",
+    "check:compliance-controls": "tsx scripts/check-compliance-controls.ts",
+    "compliance:seed": "tsx scripts/compliance/seed-control-plane.ts",
+    "compliance:seed:dry-run": "tsx scripts/compliance/seed-control-plane.ts --dry-run"
   },
   "//prisma": "Prisma CLI config (schema/migrations/seed/datasource) lives in prisma.config.ts as of Prisma 7.",
   "devDependencies": {
