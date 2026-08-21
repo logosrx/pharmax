@@ -184,4 +184,26 @@ export const E2E_WEB_ENV: Readonly<Record<string, string>> = Object.freeze({
   COMMAND_TX_MAX_WAIT_MS: process.env["COMMAND_TX_MAX_WAIT_MS"] ?? "20000",
   DATABASE_POOL_MAX: process.env["DATABASE_POOL_MAX"] ?? "25",
   DATABASE_POOL_ACQUIRE_TIMEOUT_MS: process.env["DATABASE_POOL_ACQUIRE_TIMEOUT_MS"] ?? "20000",
+
+  // ---- The same budgets, for READ transactions ----
+  //
+  // The command budgets above were necessary and not sufficient. Every
+  // page projection runs in `readInOrgScope`, and until
+  // `read-transaction-budget.ts` those scopes passed no options to
+  // `$transaction` — so they kept Prisma's `timeout: 5000` /
+  // `maxWait: 2000` no matter what the command variables said.
+  //
+  // That is why runs kept dying with "The timeout for this transaction
+  // was 5000 ms" AFTER the command budgets were raised to 60 s: 5000 ms
+  // was never a command bound, so the failing transaction was a read.
+  //
+  // The read numbers can be laxer than the command ones because a read
+  // scope holds a connection but no `FOR UPDATE` lock — over-running one
+  // costs throughput, not head-of-line blocking on an order row.
+  //
+  // INVARIANT: READ_TX_MAX_WAIT_MS <= DATABASE_POOL_ACQUIRE_TIMEOUT_MS,
+  // for the same reason as the command invariant above — beyond it the
+  // pg pool gives up first and the extra wait is unreachable.
+  READ_TX_TIMEOUT_MS: process.env["READ_TX_TIMEOUT_MS"] ?? "60000",
+  READ_TX_MAX_WAIT_MS: process.env["READ_TX_MAX_WAIT_MS"] ?? "20000",
 });

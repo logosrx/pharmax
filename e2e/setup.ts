@@ -24,7 +24,15 @@ import { fileURLToPath } from "node:url";
 
 import pg from "pg";
 
-import { E2E_DATABASE_URL, E2E_KMS_SEED, E2E_OPERATOR_EMAIL, E2E_OPERATOR_PASSWORD } from "./env";
+import { assertTransactionWaitWithinPoolTimeout } from "@pharmax/database";
+
+import {
+  E2E_DATABASE_URL,
+  E2E_KMS_SEED,
+  E2E_OPERATOR_EMAIL,
+  E2E_OPERATOR_PASSWORD,
+  E2E_WEB_ENV,
+} from "./env";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -81,7 +89,42 @@ async function ensureDatabase(): Promise<void> {
   }
 }
 
+/**
+ * Fail in seconds on a misconfigured budget, rather than after a
+ * 25-minute suite.
+ *
+ * `E2E_WEB_ENV` raises four transaction bounds, and two of them are
+ * only reachable if they sit under the pg pool's own acquisition
+ * timeout — past that the pool gives up first and the configuration
+ * lies about itself.
+ *
+ * This check was documented as already happening ("`e2e/setup.ts`
+ * asserts it here too") but `assertTransactionWaitWithinPoolTimeout`
+ * had no caller anywhere in the repo. A safety check nobody runs is
+ * worse than no check, because it stops anyone from looking.
+ */
+function assertTransactionBudgetsAreReachable(): void {
+  const poolTimeout = Number(E2E_WEB_ENV["DATABASE_POOL_ACQUIRE_TIMEOUT_MS"]);
+  const checks: ReadonlyArray<readonly [string, number]> = [
+    ["COMMAND_TX_MAX_WAIT_MS", Number(E2E_WEB_ENV["COMMAND_TX_MAX_WAIT_MS"])],
+    ["READ_TX_MAX_WAIT_MS", Number(E2E_WEB_ENV["READ_TX_MAX_WAIT_MS"])],
+  ];
+
+  for (const [name, maxWaitMs] of checks) {
+    const verdict = assertTransactionWaitWithinPoolTimeout(maxWaitMs, poolTimeout);
+    if (!verdict.ok) {
+      throw new Error(
+        `${name}=${verdict.maxWaitMs}ms exceeds ` +
+          `DATABASE_POOL_ACQUIRE_TIMEOUT_MS=${verdict.connectionTimeoutMillis}ms. ` +
+          `The pg pool would give up first, so the extra wait is unreachable. ` +
+          `Lower ${name} or raise the pool timeout.`
+      );
+    }
+  }
+}
+
 async function main(): Promise<void> {
+  assertTransactionBudgetsAreReachable();
   await ensureDatabase();
   run(["db:migrate:deploy"]);
   run(["db:seed"]);

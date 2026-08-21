@@ -41,7 +41,19 @@ jobs:
   e2e:
     name: Playwright smoke suite
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Headroom, not a fix. The suite runs `next dev`, so a cold ops
+    # route compiles on first request and the golden path crosses about
+    # fifteen of them on two shared vCPUs — a healthy run lands near 25
+    # minutes. At 30 the cap was close enough that runs were CANCELLED
+    # rather than failing, which reads identically to a real failure on
+    # the PR and sent more than one investigation down the wrong path.
+    #
+    # The compile cost itself is the thing to remove, and the way to do
+    # it is to run a production build. That is blocked on `NODE_ENV`
+    # doing double duty as a bundling flag and a transport-security
+    # switch — see `buildPgSslOptions` in packages/database and the
+    # composition-root note in e2e/README.md.
+    timeout-minutes: 45
 
     services:
       postgres:
