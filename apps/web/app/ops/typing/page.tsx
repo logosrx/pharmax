@@ -8,8 +8,13 @@
 //
 // Rendered as three sections — claim new work, finish in-progress
 // work, and handle exceptions — so a typist has one screen for their
-// whole day. PHI: the queue surface is non-PHI; the order-detail page
-// is where the typist reads patient + Rx data.
+// whole day.
+//
+// PHI: the queue cards show patient names, so this page is a PHI
+// surface. Both buckets are enriched in ONE `attachQueueRowDetails`
+// pass, which matters here more than on the single-bucket queues: a
+// patient with an order in each bucket is decrypted and audited once
+// rather than twice. The order-detail page remains the fuller read.
 
 import Link from "next/link";
 
@@ -22,10 +27,19 @@ import {
   loadOperatorPermissions,
 } from "../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../src/server/auth/resolve-tenancy.js";
+import type { BucketOrderRow } from "../../../src/server/ops/list-orders-in-bucket.js";
+import type { QueueRowDetails } from "../../../src/server/ops/attach-queue-row-details.js";
+import { loadMultiBucketQueuePageData } from "../../../src/server/ops/load-queue-page-data.js";
 import {
-  listOrdersInBucketsByCode,
-  type BucketOrderRow,
-} from "../../../src/server/ops/list-orders-in-bucket.js";
+  buildQueueHref,
+  parseQueueCursor,
+  parseQueueFilters,
+} from "../../../src/server/ops/queue-search-params.js";
+import {
+  QueuePager,
+  QueuePhiNotice,
+  QueueToolbar,
+} from "../../../src/components/ops/queue-toolbar.js";
 import { PageHeader, Section } from "../../../src/components/ui/page.js";
 import { EmptyState, PermissionDenied, Banner } from "../../../src/components/ui/feedback.js";
 import { Field, Select } from "../../../src/components/ui/field.js";
@@ -46,7 +60,7 @@ const TYPING_FLASH: Readonly<Record<string, string>> = {
 };
 
 interface RowProps {
-  readonly row: BucketOrderRow;
+  readonly row: BucketOrderRow & QueueRowDetails;
   readonly now: Date;
   readonly operatorUserId: string;
   readonly canComplete: boolean;
@@ -81,6 +95,12 @@ function TypingRow({
       receivedAt={row.receivedAt}
       now={now}
       assigneeUserId={otherAssignee}
+      clinicCode={row.clinicCode}
+      clinicName={row.clinicName}
+      patientName={row.patientName}
+      patientNameWithheld={row.patientNameWithheld}
+      prescribers={row.prescribers}
+      medications={row.medications}
       note={
         isBounced
           ? "Bounced back from PV1. Open the order detail for the rejection reason, then reopen with corrections."
@@ -179,16 +199,42 @@ export default async function TypingQueuePage({
   );
   const canReopen = hasOperatorPermission(permissions, PERMISSIONS.ORDERS_REOPEN_FOR_CORRECTION);
 
-  const buckets = await listOrdersInBucketsByCode({
+  const filters = parseQueueFilters(params);
+  // Per-bucket cursors: this page renders two independent lists, so
+  // paging the typing list must not reset the inbox beside it.
+  const inboxCursor = parseQueueCursor(params, "INBOX");
+  const typingCursor = parseQueueCursor(params, "TYPING");
+  // Both buckets and the filter options share one transaction; the
+  // enrichment pass runs after it closes, since it decrypts and audits.
+  // One pass over both buckets means a patient with an order in each is
+  // decrypted and audited once rather than twice.
+  const { buckets, filterOptions, detailed } = await loadMultiBucketQueuePageData({
     organizationId: session.tenancy.organizationId,
+    operatorUserId: session.operator.userId,
     bucketCodes: ["INBOX", "TYPING"],
+    filters,
+    cursors: { INBOX: inboxCursor, TYPING: typingCursor },
   });
   const inbox = buckets["INBOX"]!;
   const typing = buckets["TYPING"]!;
   const now = new Date();
 
-  const typingActive = typing.rows.filter((r) => r.currentStatus === "TYPING_IN_PROGRESS");
-  const typingExceptions = typing.rows.filter((r) => r.currentStatus !== "TYPING_IN_PROGRESS");
+  const inboxIds = new Set(inbox.rows.map((r) => r.orderId));
+  const inboxRows = detailed.rows.filter((r) => inboxIds.has(r.orderId));
+  const typingRows = detailed.rows.filter((r) => !inboxIds.has(r.orderId));
+
+  const typingActive = typingRows.filter((r) => r.currentStatus === "TYPING_IN_PROGRESS");
+  const typingExceptions = typingRows.filter((r) => r.currentStatus !== "TYPING_IN_PROGRESS");
+
+  // Cursors are namespaced, and each link carries the OTHER list's
+  // cursor forward so paging one leaves the other where it was.
+  const hrefFor = (override: Readonly<Record<string, string | undefined>>) =>
+    buildQueueHref({
+      basePath: "/ops/typing",
+      filters,
+      cursors: { cursor_INBOX: inboxCursor, cursor_TYPING: typingCursor },
+      override,
+    });
 
   const rowProps = {
     now,
@@ -210,26 +256,56 @@ export default async function TypingQueuePage({
       <QueueFlash params={params} messages={TYPING_FLASH} />
       <QueueLiveRefresher codes={["INBOX", "TYPING"]} />
 
-      <Section title="Inbox" count={inbox.rows.length} aside="Ready to claim">
+      {/* One toolbar for both lists: the filters apply to the whole
+          page, and two toolbars would let them disagree. */}
+      <QueueToolbar
+        basePath="/ops/typing"
+        filters={filters}
+        clinics={filterOptions.clinics}
+        sites={filterOptions.sites}
+        hrefFor={hrefFor}
+        totalMatching={inbox.totalMatching + typing.totalMatching}
+        shownCount={detailed.rows.length}
+      />
+
+      <QueuePhiNotice
+        withheldCount={detailed.patientNamesWithheld}
+        decryptErrorCount={detailed.phiDecryptErrors}
+      />
+
+      <Section title="Inbox" count={inbox.totalMatching} aside="Ready to claim">
         {!inbox.bucketExists ? (
           <Banner tone="warning" title="INBOX bucket not provisioned">
             Run <code>ProvisionDefaultBuckets</code> to create it.
           </Banner>
-        ) : inbox.rows.length === 0 ? (
+        ) : inboxRows.length === 0 ? (
           <EmptyState
             icon="typing"
-            title="No orders waiting to be typed"
-            description="The intake inbox is clear — new prescriptions land here for a typist to claim."
+            title={inbox.totalMatching === 0 ? "No orders waiting to be typed" : "No orders match"}
+            description={
+              inbox.totalMatching === 0
+                ? "The intake inbox is clear — new prescriptions land here for a typist to claim."
+                : "Every inbox order is filtered out. Clear the filters to see the full queue."
+            }
             hint="The queue refreshes live; new arrivals appear without a reload."
           />
         ) : (
-          <ul className="space-y-3">
-            {inbox.rows.map((row) => (
-              <li key={row.orderId}>
-                <TypingRow row={row} {...rowProps} />
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="space-y-3">
+              {inboxRows.map((row) => (
+                <li key={row.orderId}>
+                  <TypingRow row={row} {...rowProps} />
+                </li>
+              ))}
+            </ul>
+            <QueuePager
+              nextHref={
+                inbox.nextCursor === null ? null : hrefFor({ cursor_INBOX: inbox.nextCursor })
+              }
+              shownCount={inboxRows.length}
+              totalMatching={inbox.totalMatching}
+            />
+          </>
         )}
       </Section>
 
@@ -267,6 +343,14 @@ export default async function TypingQueuePage({
           </ul>
         </Section>
       ) : null}
+
+      {/* One pager for the TYPING bucket, which feeds both the
+          in-progress and exceptions sections above. */}
+      <QueuePager
+        nextHref={typing.nextCursor === null ? null : hrefFor({ cursor_TYPING: typing.nextCursor })}
+        shownCount={typingRows.length}
+        totalMatching={typing.totalMatching}
+      />
     </div>
   );
 }

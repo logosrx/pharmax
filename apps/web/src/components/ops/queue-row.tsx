@@ -5,6 +5,21 @@
 // Each queue page supplies only its stage-specific actions as
 // children; the row chrome, SLA accent rail, and "claimed by" line
 // are identical everywhere, so the queues read the same to operators.
+//
+// The card answers six questions without being opened: which client the
+// order came from, who prescribed it, whose prescription it is, the
+// order number, when it arrived, and what drugs are on it. Before, it
+// answered two — order number and a relative age — which meant every
+// triage decision cost a page load.
+//
+// `patient` is PHI. It arrives already audited and already masked by
+// `attachQueueRowDetails`; this component only renders what it is
+// handed. It must never be put in a data attribute or any prop that
+// reaches a client bundle — `data-kbd-href` carries the order id only.
+//
+// The identity fields are optional props so the shipping and emergency
+// queues could adopt them independently, and so a caller that has not
+// run the audit step cannot accidentally render a name.
 
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -22,6 +37,32 @@ export function formatAge(ms: number): string {
   return `${Math.floor(ms / 86_400_000)}d`;
 }
 
+/** Absolute receipt date. Relative age alone cannot answer "which day". */
+function formatReceived(receivedAt: Date): string {
+  return receivedAt.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+export interface QueueRowPrescriber {
+  readonly displayName: string;
+  readonly npi: string;
+}
+
+export interface QueueRowMedication {
+  readonly drugName: string;
+  readonly drugStrength: string | null;
+  readonly drugForm: string | null;
+  readonly isControlled: boolean;
+}
+
+function medicationLabel(m: QueueRowMedication): string {
+  return [m.drugName, m.drugStrength, m.drugForm].filter((p) => p !== null).join(" ");
+}
+
 export function QueueRow({
   orderId,
   externalOrderNumber,
@@ -31,6 +72,12 @@ export function QueueRow({
   receivedAt,
   now,
   assigneeUserId,
+  clinicCode,
+  clinicName,
+  patientName,
+  patientNameWithheld,
+  prescribers,
+  medications,
   note,
   headerExtra,
   children,
@@ -44,6 +91,15 @@ export function QueueRow({
   readonly now: Date;
   /** Shown as "Claimed by …" when another operator owns the row. */
   readonly assigneeUserId?: string | null;
+  /** The client this order came from. */
+  readonly clinicCode?: string;
+  readonly clinicName?: string;
+  /** PHI. Already audited and masked upstream; null renders a placeholder. */
+  readonly patientName?: string | null;
+  /** Distinguishes "audit failed" from "no name on file". */
+  readonly patientNameWithheld?: boolean;
+  readonly prescribers?: ReadonlyArray<QueueRowPrescriber>;
+  readonly medications?: ReadonlyArray<QueueRowMedication>;
   readonly note?: ReactNode;
   readonly headerExtra?: ReactNode;
   readonly children?: ReactNode;
@@ -52,6 +108,11 @@ export function QueueRow({
   const sm = statusMeta(status);
   const accent = slaTone(slaStatusFor(slaDeadlineAt, now));
   const age = formatAge(now.getTime() - receivedAt.getTime());
+  const hasIdentity =
+    clinicCode !== undefined ||
+    patientName !== undefined ||
+    (prescribers?.length ?? 0) > 0 ||
+    (medications?.length ?? 0) > 0;
 
   return (
     // data-kbd-* opts every queue row into the global j / k / Enter
@@ -75,11 +136,59 @@ export function QueueRow({
                 <Badge tone={sm.tone}>{sm.label}</Badge>
                 <SlaBadge slaDeadlineAt={slaDeadlineAt} now={now} />
               </div>
+              {/* Patient and client, the two facts that identify the
+                  work. Given the most prominence after the badges
+                  because they are what an operator scans for. */}
+              {hasIdentity ? (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                  {patientName !== undefined ? (
+                    patientName === null ? (
+                      <span className="italic text-subtle">
+                        {patientNameWithheld === true
+                          ? "Patient name withheld — view could not be recorded"
+                          : "Patient name unavailable"}
+                      </span>
+                    ) : (
+                      <span className="font-medium text-fg">{patientName}</span>
+                    )
+                  ) : null}
+                  {clinicCode !== undefined ? (
+                    <>
+                      {patientName !== undefined ? (
+                        <span aria-hidden="true" className="text-subtle">
+                          ·
+                        </span>
+                      ) : null}
+                      <span className="text-muted" title={clinicName}>
+                        {clinicCode}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {/* Medications, so a tech can see what the order is before
+                  claiming it. Controlled items are marked because they
+                  change how the fill is handled. */}
+              {medications !== undefined && medications.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {medications.map((m, i) => (
+                    <Badge key={`${m.drugName}-${i}`} tone={m.isControlled ? "warning" : "neutral"}>
+                      {medicationLabel(m)}
+                      {m.isControlled ? " · C" : ""}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
+
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-subtle">
                 <span className="inline-flex items-center gap-1">
                   <Icon name="clock" size={12} />
-                  aged {age}
+                  {formatReceived(receivedAt)} · aged {age}
                 </span>
+                {prescribers !== undefined && prescribers.length > 0 ? (
+                  <span>{prescribers.map((p) => p.displayName).join(", ")}</span>
+                ) : null}
                 {assigneeUserId ? (
                   <span>
                     claimed by <code className="text-muted">{assigneeUserId}</code>

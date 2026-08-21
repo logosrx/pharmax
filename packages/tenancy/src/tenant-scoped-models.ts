@@ -38,6 +38,11 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
 
   // Tenancy core.
   ["PharmacySite", { kind: "organizationId" }] as const,
+  // The tenant's OWN licences and DEA registration, and the states
+  // each site may dispense into. Not PHI, but a cross-tenant read
+  // would expose one customer's regulatory posture to another.
+  ["SiteCredential", { kind: "organizationId" }] as const,
+  ["SiteAuthorizedShipState", { kind: "organizationId" }] as const,
   ["Clinic", { kind: "organizationId" }] as const,
   ["Team", { kind: "organizationId" }] as const,
   ["Bucket", { kind: "organizationId" }] as const,
@@ -119,6 +124,20 @@ export const TENANT_SCOPED_MODELS: ReadonlyMap<string, TenantFilterKind> = new M
   ["PatientAllergy", { kind: "organizationId" }] as const,
   ["PatientAllergyHistoryAssertion", { kind: "organizationId" }] as const,
   ["Provider", { kind: "organizationId" }] as const,
+  // Prescriber-to-client roster. Org auto-scoping is necessary but NOT
+  // sufficient here, and the distinction matters: two clients of the
+  // same pharmacy share an organizationId, so this filter cannot
+  // separate them. It stops cross-tenant reads; keeping one client's
+  // roster out of another client's portal is the caller's job, via
+  // `readInClinicScope`. Registered anyway so a missing frame fails
+  // closed rather than returning every tenant's affiliations.
+  ["ClinicProviderAffiliation", { kind: "organizationId" }] as const,
+  // Prescriber credentials. A DEA registration is a controlled-substance
+  // prescribing credential; a cross-tenant read of one is a
+  // prescription-fraud tool, so these fail closed with no frame like
+  // everything else here.
+  ["ProviderDeaRegistration", { kind: "organizationId" }] as const,
+  ["ProviderStateLicense", { kind: "organizationId" }] as const,
   ["Prescription", { kind: "organizationId" }] as const,
   // Rx-number allocator. Carries no PHI, but auto-scoping matters for
   // a different reason: an unscoped increment would hand one tenant's

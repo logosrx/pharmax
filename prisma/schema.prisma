@@ -135,6 +135,13 @@ enum AuthSessionRevokeReason {
   ABSOLUTE_TIMEOUT
   USER_TERMINATED
   SECURITY_EVENT
+  // Portal only. A prescriber who acts for several client practices
+  // switched which one they are acting for. The old session is
+  // revoked and a new one minted rather than the scope being edited
+  // in place, so one session token means one client for its whole
+  // life and an in-flight request can never observe the scope
+  // changing underneath it.
+  SCOPE_CHANGED
 }
 
 // Multi-factor authenticator kind. v1 ships TOTP only; WebAuthn/passkey
@@ -314,6 +321,79 @@ enum PatientStatus {
 enum ProviderStatus {
   ACTIVE
   INACTIVE
+}
+
+/// Lifecycle of a recorded credential — a prescriber's DEA
+/// registration or state licence, or a pharmacy site's licence.
+///
+/// EXPIRY IS NOT A MEMBER, deliberately. Expiry is a fact about a date
+/// and the current time, so deriving it at the point of use cannot go
+/// stale; a stored EXPIRED would need a sweeper, and the window between
+/// the registration lapsing and the sweeper noticing is exactly when a
+/// controlled prescription must not be written. Same reasoning `Lot`
+/// applies to expired stock: checked at assignment, not swept.
+enum CredentialStatus {
+  ACTIVE
+  /// Withdrawn by the issuing authority. Terminal and hard-blocking,
+  /// regardless of the recorded expiry date.
+  REVOKED
+  /// Temporarily unusable but expected to return. Blocks like REVOKED.
+  SUSPENDED
+}
+
+/// What the first letter of a DEA number says the registrant is.
+/// Mirrors `DeaRegistrantType` in `@pharmax/providers`; the two are
+/// pinned together by a test so the persisted vocabulary and the
+/// reasoning vocabulary cannot drift.
+enum DeaRegistrantType {
+  PRACTITIONER
+  MID_LEVEL_PRACTITIONER
+  NARCOTIC_TREATMENT_PROGRAM
+  DATA_WAIVED_LEGACY
+  NON_PRESCRIBING
+}
+
+/// How a recorded credential came to be believed.
+///
+/// There is no free authoritative registry for either DEA
+/// registrations or state pharmacy licences, so ATTESTED is the honest
+/// default: an operator entered what the paperwork says. REGISTRY_FILE
+/// exists for a future licensed data feed and is the reason
+/// `verificationMethod` is a column rather than a boolean.
+enum CredentialVerificationMethod {
+  /// An operator entered it from a document. Checksum-validated where
+  /// the format allows, not confirmed against an issuer.
+  ATTESTED
+  /// A human viewed the issuing board's verification portal.
+  PORTAL_CHECKED
+  /// Matched against a licensed registry file.
+  REGISTRY_FILE
+}
+
+/// Credential kinds a pharmacy site holds. Distinct from a
+/// prescriber's credentials: these are the TENANT's, and they are what
+/// a board inspector asks for.
+enum SiteCredentialKind {
+  /// Resident or non-resident pharmacy licence, scoped to one state.
+  STATE_PHARMACY_LICENSE
+  /// The site's own DEA registration.
+  DEA_REGISTRATION
+  /// Site NPI (an NPI-2 organizational number).
+  NPI
+  /// NCPDP provider identifier.
+  NCPDP
+  /// NABP e-Profile identifier.
+  NABP
+}
+
+/// Lifecycle of a prescriber's affiliation with one client practice.
+/// ENDED is terminal for that row: re-affiliating the same prescriber
+/// to the same client reactivates the existing row rather than
+/// inserting a second one, so the `(organizationId, clinicId,
+/// providerId)` key stays a genuine identity.
+enum ClinicProviderAffiliationStatus {
+  ACTIVE
+  ENDED
 }
 
 // ---------- Patient allergy capture -----------------------------------
@@ -937,6 +1017,11 @@ model Organization {
 
   patients                         Patient[]
   providers                        Provider[]
+  clinicProviderAffiliations       ClinicProviderAffiliation[]
+  providerDeaRegistrations         ProviderDeaRegistration[]
+  providerStateLicenses            ProviderStateLicense[]
+  siteCredentials                  SiteCredential[]
+  siteAuthorizedShipStates         SiteAuthorizedShipState[]
   prescriptions                    Prescription[]
   rxNumberSequences                RxNumberSequence[]
   orders                           Order[]
@@ -1056,10 +1141,118 @@ model PharmacySite {
   orderStageIntervals      OrderStageInterval[]
   packagePhotos            PackagePhoto[]
   packagePhotoUploadTokens PackagePhotoUploadToken[]
+  credentials              SiteCredential[]
+  authorizedShipStates     SiteAuthorizedShipState[]
 
   @@unique([organizationId, code])
   @@index([organizationId, status])
   @@map("pharmacy_site")
+}
+
+// The TENANT's own credentials — go-live G-1.
+//
+// Pharmax is a software vendor and a HIPAA Business Associate, not a
+// pharmacy. It holds no licence and no DEA registration. Its customers
+// do, and a pharmacy cannot adopt software that has nowhere to record
+// them: the gap surfaces as the customer's inspection finding, which
+// makes it Pharmax's commercial problem. Until this model existed,
+// `PharmacySite` carried name, code, timezone, address and phone, and
+// no credential field at all.
+//
+// One row per credential per site. A pharmacy shipping into twelve
+// states holds twelve non-resident licences plus a resident one, so
+// STATE_PHARMACY_LICENSE rows are the many, and `state` is required
+// for that kind and meaningless for the others.
+//
+// PHI: none. These are the pharmacy's own registration identifiers.
+model SiteCredential {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  siteId String       @db.Uuid
+  site   PharmacySite @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  kind SiteCredentialKind
+
+  /// Required for STATE_PHARMACY_LICENSE, null for every other kind.
+  /// Enforced by a CHECK constraint in the migration, because a
+  /// state licence with no state is not a record of anything.
+  state String? @db.VarChar(2)
+
+  /// The licence, registration, NPI, NCPDP or NABP number itself.
+  identifier String
+
+  issuedAt  DateTime? @db.Date
+  /// Null = not recorded. Recorded and past = lapsed, and a lapsed
+  /// resident licence is what the ship-to-state check refuses on.
+  expiresAt DateTime? @db.Date
+
+  status             CredentialStatus             @default(ACTIVE)
+  verificationMethod CredentialVerificationMethod @default(ATTESTED)
+  verifiedAt         DateTime?
+  verifiedByUserId   String?                      @db.Uuid
+  verifiedByUser     User?                        @relation("SiteCredentialVerifier", fields: [verifiedByUserId], references: [id], onDelete: Restrict)
+
+  recordedByUserId String @db.Uuid
+  recordedByUser   User   @relation("SiteCredentialRecorder", fields: [recordedByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  authorizedShipStates SiteAuthorizedShipState[]
+
+  @@unique([organizationId, siteId, kind, identifier])
+  @@index([organizationId, siteId, status])
+  @@index([organizationId, expiresAt])
+  @@map("site_credential")
+}
+
+// Where a site may lawfully dispense to — go-live G-2.
+//
+// A pharmacy may only ship into a state it holds a licence for
+// (resident in its own state, non-resident elsewhere). This table is
+// the declared set, and every ship-committing command refuses a
+// destination outside it.
+//
+// ENFORCEMENT IS OFF UNTIL A SITE DECLARES ITS SET, and that is
+// deliberate rather than a loophole. A site with zero rows here has
+// made no assertion about where it is licensed, so there is nothing to
+// enforce against and refusing everything would break every existing
+// tenant on deploy. The moment a site declares one state, enforcement
+// engages for that site — which makes the rollout per-tenant and
+// self-gating instead of a flag someone has to remember to flip.
+//
+// Each row cites the licence that authorizes it, so "why may we ship
+// to Oregon" has an answer an inspector can follow, and so revoking a
+// licence can find the ship-states that depended on it.
+model SiteAuthorizedShipState {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  siteId String       @db.Uuid
+  site   PharmacySite @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  /// Two-letter USPS state code, uppercase.
+  state String @db.VarChar(2)
+
+  /// The STATE_PHARMACY_LICENSE that permits dispensing here. Required:
+  /// an authorization with no licence behind it is the assertion this
+  /// table exists to prevent anyone making.
+  licenseCredentialId String         @db.Uuid
+  licenseCredential   SiteCredential @relation(fields: [licenseCredentialId], references: [id], onDelete: Restrict)
+
+  authorizedByUserId String @db.Uuid
+  authorizedByUser   User   @relation("SiteShipStateAuthorizer", fields: [authorizedByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Also serves the hot path — "may this site ship to XX" — so no
+  /// separate index: the unique constraint's B-tree already answers it.
+  @@unique([organizationId, siteId, state])
+  @@map("site_authorized_ship_state")
 }
 
 // A clinic (practice account / customer) that places orders. Clinics
@@ -1098,6 +1291,9 @@ model Clinic {
 
   patientAllergies                PatientAllergy[]
   patientAllergyHistoryAssertions PatientAllergyHistoryAssertion[]
+
+  providerAffiliations ClinicProviderAffiliation[]
+  portalSessions       PortalSession[]
 
   @@unique([organizationId, code])
   @@index([organizationId, status])
@@ -1275,6 +1471,15 @@ model User {
   packagePhotosArchived            PackagePhoto[]                    @relation("PackagePhotoArchiver")
   packagePhotoUploadTokens         PackagePhotoUploadToken[]         @relation("PackagePhotoUploadTokenUploader")
   workflowPolicyOverlaysCreated    WorkflowPolicyOverlay[]           @relation("WorkflowPolicyOverlayCreator")
+  clinicAffiliationsCreated        ClinicProviderAffiliation[]       @relation("ClinicProviderAffiliationCreator")
+  clinicAffiliationsEnded          ClinicProviderAffiliation[]       @relation("ClinicProviderAffiliationEndedBy")
+  deaRegistrationsRecorded         ProviderDeaRegistration[]         @relation("ProviderDeaRegistrationRecorder")
+  deaRegistrationsVerified         ProviderDeaRegistration[]         @relation("ProviderDeaRegistrationVerifier")
+  stateLicensesRecorded            ProviderStateLicense[]            @relation("ProviderStateLicenseRecorder")
+  stateLicensesVerified            ProviderStateLicense[]            @relation("ProviderStateLicenseVerifier")
+  siteCredentialsRecorded          SiteCredential[]                  @relation("SiteCredentialRecorder")
+  siteCredentialsVerified          SiteCredential[]                  @relation("SiteCredentialVerifier")
+  siteShipStatesAuthorized         SiteAuthorizedShipState[]         @relation("SiteShipStateAuthorizer")
   reportRuns                       ReportRun[]                       @relation("ReportRunActor")
   reportSchedulesCreated           ReportSchedule[]                  @relation("ReportScheduleCreator")
   accessReviewSnapshotsRecorded    AccessReviewSnapshot[]            @relation("AccessReviewSnapshotRecordedBy")
@@ -2955,8 +3160,14 @@ model Provider {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
 
   // Identifiers (public per HIPAA Safe Harbor + NPI registry).
-  npi       String // 10 digits
-  deaNumber String? // 2 letters + 7 digits, when applicable
+  npi String // 10 digits
+
+  // `deaNumber` used to live here as a bare nullable string. It moved
+  // to `ProviderDeaRegistration` because a DEA registration is not one
+  // fact: it expires, it can be revoked, it names a registrant type,
+  // and a prescriber can hold more than one. A column could express
+  // none of that, so the controlled-substance gate could only ask
+  // "is a string present" — which it did.
 
   firstName  String
   lastName   String
@@ -2981,6 +3192,9 @@ model Provider {
   syncReviewItems        ProviderSyncReviewItem[]
   onboardingApplications ProviderOnboardingApplication[]
   portalAccount          PortalAccount?
+  clinicAffiliations     ClinicProviderAffiliation[]
+  deaRegistrations       ProviderDeaRegistration[]
+  stateLicenses          ProviderStateLicense[]
 
   // NPI is globally unique by definition; but a provider can appear
   // in multiple orgs (each gets its own row). The unique key is
@@ -2988,8 +3202,211 @@ model Provider {
   @@unique([organizationId, npi])
   @@index([organizationId, status])
   @@index([organizationId, lastName])
-  @@index([organizationId, deaNumber])
   @@map("provider")
+}
+
+// A prescriber's DEA registration.
+//
+// WHY THIS IS A TABLE AND NOT A COLUMN. `Provider.deaNumber` was a
+// nullable string, so the only question `CreatePrescription` could ask
+// was "is it non-blank". It could not ask whether the registration had
+// expired, whether the DEA had revoked it, or whether it covers the
+// schedule being prescribed — and all three are the difference between
+// a lawful controlled prescription and an unlawful one.
+//
+// WHAT VERIFICATION MEANS HERE. There is no free authoritative DEA
+// registry; the Active Registrant file is a paid data licence. So
+// `validateDeaNumber` in `@pharmax/providers` proves the number is
+// internally consistent (check digit), says what kind of registrant it
+// claims to be (first letter), and can cross-check the surname initial
+// (second letter). It cannot prove the registration exists or is
+// current. `verificationMethod` records which of those was actually
+// done, and defaults to ATTESTED — an operator read it off a document.
+// Do not let a stored row be read as "confirmed with the DEA".
+//
+// EXPIRY IS NULLABLE, on purpose. A pharmacy migrating onto Pharmax
+// has DEA numbers on file and no expiry dates recorded. Requiring the
+// date would block every controlled prescription on day one; treating
+// a missing date as expired would do the same. Null means "not
+// recorded" and does not block — it is surfaced as a gap to close, not
+// a lapse to enforce. A recorded date in the past DOES block.
+//
+// PHI: none, but a DEA number is a controlled-substance prescribing
+// credential and a forensic dump of it is a tool for prescription
+// fraud. It is redacted from `command_log` by every command that
+// writes it, and never appears in audit metadata or an outbox payload
+// — presence and status are expressed as booleans there, exactly as
+// the old column's commands did.
+model ProviderDeaRegistration {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  providerId String   @db.Uuid
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+
+  /// Letter, then letter-or-9, then seven digits. Stored uppercase.
+  deaNumber      String
+  registrantType DeaRegistrantType
+
+  /// Schedules this registration authorizes. Backfilled rows get every
+  /// controlled schedule, which is exactly the authority the old
+  /// presence check granted — the migration must not silently tighten
+  /// a gate, only make it expressible.
+  authorizedSchedules ControlledSubstanceSchedule[] @default([])
+
+  /// State the registration is issued in, when recorded. A DEA
+  /// registration is site-specific; this is informational today and is
+  /// the hook for a future per-state prescribing check.
+  issuedState String? @db.VarChar(2)
+
+  issuedAt  DateTime? @db.Date
+  /// Null = not recorded (does not block). A past date DOES block.
+  expiresAt DateTime? @db.Date
+
+  status             CredentialStatus             @default(ACTIVE)
+  verificationMethod CredentialVerificationMethod @default(ATTESTED)
+  verifiedAt         DateTime?
+  verifiedByUserId   String?                      @db.Uuid
+  verifiedByUser     User?                        @relation("ProviderDeaRegistrationVerifier", fields: [verifiedByUserId], references: [id], onDelete: Restrict)
+
+  /// Null ONLY for rows migrated out of the legacy
+  /// `Provider.deaNumber` column, which recorded no actor. Every row
+  /// written since carries one. Nullable rather than attributed to a
+  /// synthetic user for the same reason `ProviderSyncRun.triggeredByUserId`
+  /// is: inventing an actor to satisfy a foreign key puts a person's
+  /// name on something they did not do.
+  recordedByUserId String? @db.Uuid
+  recordedByUser   User?   @relation("ProviderDeaRegistrationRecorder", fields: [recordedByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One row per number per org. A prescriber may hold several
+  /// registrations (different states, or a mid-level and a practitioner
+  /// number), so the key is the number rather than the provider.
+  @@unique([organizationId, deaNumber])
+  /// The gate's access path: "this prescriber's live registrations".
+  @@index([organizationId, providerId, status])
+  @@index([organizationId, expiresAt])
+  @@map("provider_dea_registration")
+}
+
+// A prescriber's state licence to practise.
+//
+// Distinct from the DEA registration: the DEA authorizes controlled
+// substances federally, the state licence authorizes practising at all.
+// A prescriber can hold a current DEA and a lapsed state licence, and
+// that combination is precisely the one worth catching.
+//
+// Same verification honesty as the DEA model, and for the same reason:
+// there is no national board-of-pharmacy API. NABP's verification
+// service is paid and every state board runs its own portal, so
+// PORTAL_CHECKED (a human looked) is the strongest routinely available
+// method. `documentId` points at the uploaded verification if one was
+// captured.
+//
+// PHI: none. Licence numbers are public professional credentials —
+// unlike a DEA number, boards publish them in searchable directories,
+// so this model does not carry the DEA's redaction discipline.
+model ProviderStateLicense {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  providerId String   @db.Uuid
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+
+  /// Two-letter USPS state code, uppercase.
+  state         String  @db.VarChar(2)
+  licenseNumber String
+  /// Board-specific licence class, e.g. "MD", "DO", "NP", "PA-C".
+  /// Free text because the vocabulary differs by state and profession.
+  licenseType   String?
+
+  issuedAt  DateTime? @db.Date
+  /// Null = not recorded. Same non-blocking semantics as the DEA model.
+  expiresAt DateTime? @db.Date
+
+  status             CredentialStatus             @default(ACTIVE)
+  verificationMethod CredentialVerificationMethod @default(ATTESTED)
+  verifiedAt         DateTime?
+  verifiedByUserId   String?                      @db.Uuid
+  verifiedByUser     User?                        @relation("ProviderStateLicenseVerifier", fields: [verifiedByUserId], references: [id], onDelete: Restrict)
+
+  recordedByUserId String @db.Uuid
+  recordedByUser   User   @relation("ProviderStateLicenseRecorder", fields: [recordedByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, providerId, state, licenseNumber])
+  @@index([organizationId, providerId, status])
+  @@index([organizationId, state, status])
+  @@index([organizationId, expiresAt])
+  @@map("provider_state_license")
+}
+
+// The prescriber-to-client roster. One prescriber commonly writes for
+// several client practices, and each of those practices is a separate
+// billing and patient-roster boundary — `Patient.clinicId`,
+// `PricingRule.clinicId` and `Invoice.clinicId` are all clinic-keyed.
+// So "which client is this prescriber acting for right now" is not a
+// display preference; it decides which patients are visible and which
+// client is invoiced for the fill.
+//
+// This table answers "may they act for that client at all". The
+// currently-selected one lives on `portal_session.activeClinicId`,
+// because a session is the only thing the server can trust for scope
+// (a request parameter is caller-controlled).
+//
+// Note that the tenancy extension does NOT filter by clinic — only by
+// organization (see `TenantFilterKind` in @pharmax/tenancy). Two
+// clients of the same pharmacy share an `organizationId`, so nothing
+// in the data layer separates them. Portal reads must therefore carry
+// an explicit clinic filter; `readInClinicScope` is the one helper
+// that does it, and portal code must not hand-roll the filter.
+//
+// PHI-free: prescriber identity is public registry data (see the
+// `Provider` model) and no patient row is referenced.
+model ClinicProviderAffiliation {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  clinicId String @db.Uuid
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  providerId String   @db.Uuid
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+
+  status ClinicProviderAffiliationStatus @default(ACTIVE)
+
+  affiliatedAt DateTime @default(now())
+
+  // ENDED rows only. The column is nullable because an ACTIVE row has
+  // nothing to explain; the command requires a reason to end one.
+  endedAt       DateTime?
+  endedReason   String?
+  endedByUserId String?   @db.Uuid
+  endedByUser   User?     @relation("ClinicProviderAffiliationEndedBy", fields: [endedByUserId], references: [id], onDelete: Restrict)
+
+  createdByUserId String @db.Uuid
+  createdByUser   User   @relation("ClinicProviderAffiliationCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One row per (client, prescriber). Re-affiliating flips an ENDED
+  // row back to ACTIVE rather than inserting a duplicate, so the
+  // affiliation history stays on one row and this key stays an
+  // identity rather than a "most recent attempt".
+  @@unique([organizationId, clinicId, providerId])
+  // "Who prescribes for this client" — the ops roster view.
+  @@index([organizationId, clinicId, status])
+  // "Which clients may this prescriber act for" — the portal chooser.
+  @@index([organizationId, providerId, status])
+  @@map("clinic_provider_affiliation")
 }
 
 // ----- NPI Registry sync (SyncFromNpiRegistry slice 3) ---------------
@@ -3345,6 +3762,24 @@ model PortalSession {
   portalAccountId String        @db.Uuid
   portalAccount   PortalAccount @relation(fields: [portalAccountId], references: [id], onDelete: Cascade)
 
+  // Which client practice this session is acting for. THE server-side
+  // scope proof for every portal read: a prescriber affiliated with
+  // three clients gets one session per client, never one session that
+  // can see all three.
+  //
+  // Nullable for exactly one window — between authenticating and
+  // choosing, when the prescriber has more than one active
+  // affiliation. `getCurrentPortalIdentity` returns a discriminated
+  // result so that window is unrepresentable in a data read: only the
+  // chooser page accepts the unscoped variant, and every other portal
+  // surface requires the scoped one. Sessions for a single-affiliation
+  // prescriber are minted already scoped and never see null.
+  //
+  // Immutable for the life of the row. Switching client revokes with
+  // `SCOPE_CHANGED` and mints a new session; see that enum member.
+  activeClinicId String? @db.Uuid
+  activeClinic   Clinic? @relation(fields: [activeClinicId], references: [id], onDelete: Restrict)
+
   // SHA-256 (hex) of the opaque session token.
   tokenHash String @unique
 
@@ -3362,6 +3797,10 @@ model PortalSession {
   @@index([portalAccountId, revokedAt])
   @@index([organizationId, createdAt])
   @@index([absoluteExpiresAt])
+  // Deactivating a client must revoke every session still acting for
+  // it — otherwise a prescriber keeps a live scope into a client the
+  // pharmacy has just switched off.
+  @@index([activeClinicId, revokedAt])
   @@map("portal_session")
 }
 
@@ -3634,6 +4073,36 @@ model Order {
   receivedAt        DateTime         @default(now())
   shippedAt         DateTime?
 
+  // Destination state, denormalized from the patient's address at
+  // intake. Two-letter USPS code, uppercase.
+  //
+  // WHY A PLAINTEXT COPY OF AN ENCRYPTED FIELD. Ship-to-state
+  // licensure (G-2) has to be enforced by three separate commands, and
+  // only one of them — PurchaseShipmentLabel — ever sees the
+  // destination address. CreateShipment takes a tracking number and is
+  // documented as the deliberate override for label-purchase
+  // validation, so enforcing only where the address happens to be
+  // available leaves a control an operator bypasses by pasting a
+  // tracking number.
+  //
+  // The alternative was decrypting `patient.stateEnc` inside each
+  // command, which puts a KMS round-trip inside a row-locked
+  // transaction — the thing `resolve-purchase-context.ts` deliberately
+  // avoids, and what go-live D2 flags for lock-contention measurement.
+  //
+  // This does NOT widen PHI exposure. HIPAA Safe Harbor
+  // §164.514(b)(2)(i)(B) covers geographic subdivisions SMALLER than a
+  // state — city, county, ZIP. The state itself is excluded, which is
+  // why this column is plaintext while `cityEnc` and `postalCodeEnc`
+  // are not, and why nothing finer-grained may be denormalized here.
+  //
+  // Nullable: orders that predate this column cannot be backfilled in
+  // SQL, since deriving the value requires a KMS decrypt per patient.
+  // `scripts/operations/backfill-order-destination-state.ts` does that
+  // pass, and until it runs, a null on a site with enforcement active
+  // refuses rather than waves through.
+  destinationState String? @db.VarChar(2)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -3672,6 +4141,10 @@ model Order {
   @@index([organizationId, externalOrderNumber])
   // SLA breach scanner (all orders, regardless of bucket).
   @@index([organizationId, currentStatus, slaDeadlineAt])
+  // Ship-to-state licensure: "which of this site's orders are bound
+  // for a state it is not licensed in", and the backfill's scan for
+  // orders still missing a destination.
+  @@index([organizationId, siteId, destinationState])
   @@map("order")
 }
 

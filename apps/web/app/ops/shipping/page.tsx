@@ -11,7 +11,11 @@
 //     gated ship.confirm) → SHIPPED.
 //   - SHIPPED → read-only carrier + tracking display.
 //
-// PHI: queue surface is non-PHI.
+// PHI: the queue card shows the patient's name, so this page is a PHI
+// surface. `attachQueueRowDetails` audits each distinct patient view
+// before render and masks any name whose audit write failed, keeping the
+// order visible. Shipping is where naming the patient earns the most:
+// a label bought for the wrong order is expensive to unwind.
 
 import Link from "next/link";
 
@@ -27,6 +31,10 @@ import {
   loadShippingQueuePageData,
   type ShippingQueueRow,
 } from "../../../src/server/ops/list-shipping-queue.js";
+import {
+  attachQueueRowDetails,
+  type QueueRowDetails,
+} from "../../../src/server/ops/attach-queue-row-details.js";
 import { ALLOWED_CARRIERS_BY_PROVIDER } from "../../../src/server/ops/resolve-purchase-context.js";
 import { PageHeader, Section } from "../../../src/components/ui/page.js";
 import { Badge, type Tone } from "../../../src/components/ui/badge.js";
@@ -79,7 +87,7 @@ function shipmentStatusTone(status: ShipmentStatus): Tone {
 }
 
 interface RowProps {
-  readonly row: ShippingQueueRow;
+  readonly row: ShippingQueueRow & QueueRowDetails;
   readonly now: Date;
   readonly operatorUserId: string;
   readonly canRelease: boolean;
@@ -119,6 +127,12 @@ function ShippingRow({
       receivedAt={row.receivedAt}
       now={now}
       assigneeUserId={otherAssignee}
+      clinicCode={row.clinicCode}
+      clinicName={row.clinicName}
+      patientName={row.patientName}
+      patientNameWithheld={row.patientNameWithheld}
+      prescribers={row.prescribers}
+      medications={row.medications}
     >
       <div className="w-full space-y-3">
         {hasShipment ? (
@@ -344,10 +358,18 @@ export default async function ShippingQueuePage({
     organizationId: session.tenancy.organizationId,
   });
   const siteAddressCompleteById = new Map(sites.map((s) => [s.siteId, s.addressComplete]));
+
+  // Shipping is where a mis-addressed order does real damage, so the
+  // card naming the patient and client matters here as much as anywhere.
+  const detailed = await attachQueueRowDetails({
+    organizationId: session.tenancy.organizationId,
+    operatorUserId: session.operator.userId,
+    rows: queue.rows,
+  });
   const now = new Date();
 
-  const active = queue.rows.filter((r) => r.currentStatus !== "SHIPPED");
-  const shipped = queue.rows.filter((r) => r.currentStatus === "SHIPPED");
+  const active = detailed.rows.filter((r) => r.currentStatus !== "SHIPPED");
+  const shipped = detailed.rows.filter((r) => r.currentStatus === "SHIPPED");
 
   const rowProps = {
     now,

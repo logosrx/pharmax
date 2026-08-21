@@ -6,11 +6,9 @@
 // fields) — see src/server/portal/provider-orders.ts for the access
 // rule and the widening policy.
 
-import { redirect } from "next/navigation";
-
 import { PortalShell } from "../../../src/components/portal/portal-shell.js";
-import { getCurrentPortalIdentity } from "../../../src/server/portal/current-session.js";
 import { listProviderOrders } from "../../../src/server/portal/provider-orders.js";
+import { requireScopedPortalIdentity } from "../../../src/server/portal/require-scoped-identity.js";
 
 const STATUS_LABELS: Readonly<Record<string, string>> = {
   RECEIVED: "Received",
@@ -36,18 +34,12 @@ function statusLabel(status: string): string {
 }
 
 export default async function Page() {
-  const identity = await getCurrentPortalIdentity();
-  if (identity === null) {
-    redirect("/portal/sign-in");
-  }
-
-  const page = await listProviderOrders({
-    organizationId: identity.session.organizationId,
-    providerId: identity.provider.id,
-  });
+  const identity = await requireScopedPortalIdentity();
+  const page = await listProviderOrders(identity);
+  const clientName = identity.activeClinic.name;
 
   return (
-    <PortalShell active="orders">
+    <PortalShell active="orders" identity={identity}>
       <section className="rounded-lg border border-line bg-surface">
         <div className="flex items-center justify-between border-b border-line px-6 py-4">
           <h1 className="text-sm font-semibold text-fg">Your orders</h1>
@@ -59,8 +51,8 @@ export default async function Page() {
 
         {page.orders.length === 0 ? (
           <p className="px-6 py-8 text-sm text-muted">
-            No orders yet. Orders containing your prescriptions appear here as the pharmacy receives
-            them.
+            No orders for {clientName} yet. Orders containing prescriptions you wrote for this
+            client appear here as the pharmacy receives them.
           </p>
         ) : (
           <ul className="divide-y divide-line">

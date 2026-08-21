@@ -49,6 +49,23 @@ export const PATIENT_VIEW_SURFACES = [
    * and address in plain sight.
    */
   "PACKAGE_PHOTO",
+  /**
+   * A workflow queue card showing whose prescription an order is, so an
+   * operator can tell two orders apart before opening either.
+   *
+   * This is the highest-volume patient view in the product: one row per
+   * order per queue render, where the other surfaces are one per
+   * deliberate navigation. Two things keep the audit trail readable
+   * rather than a flood. The idempotency key buckets by minute, so a
+   * queue an operator watches for an hour writes at most sixty rows per
+   * patient rather than one per refresh. And the queue is paginated, so
+   * the row count per render is bounded by the page size.
+   *
+   * The reason it still has to be audited: §164.312(b) is about access
+   * to ePHI, and a name on a card is access. Volume is an argument for
+   * making the record cheap, not for omitting it.
+   */
+  "WORK_QUEUE",
 ] as const;
 
 export type PatientViewSurface = (typeof PATIENT_VIEW_SURFACES)[number];

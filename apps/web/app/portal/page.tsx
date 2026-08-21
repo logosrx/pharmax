@@ -6,17 +6,12 @@
 // no valid portal cookie means a redirect to /portal/sign-in before
 // anything renders.
 
-import { redirect } from "next/navigation";
-
 import { PortalShell } from "../../src/components/portal/portal-shell.js";
 import { getPortalApplicationStatus } from "../../src/server/portal/application-status.js";
-import { getCurrentPortalIdentity } from "../../src/server/portal/current-session.js";
+import { requireScopedPortalIdentity } from "../../src/server/portal/require-scoped-identity.js";
 
 export default async function Page() {
-  const identity = await getCurrentPortalIdentity();
-  if (identity === null) {
-    redirect("/portal/sign-in");
-  }
+  const identity = await requireScopedPortalIdentity();
 
   const application =
     identity.account.applicationId === null
@@ -28,7 +23,7 @@ export default async function Page() {
   }`;
 
   return (
-    <PortalShell active="home">
+    <PortalShell active="home" identity={identity}>
       <section className="rounded-lg border border-line bg-surface p-6">
         <h1 className="text-xl font-semibold tracking-tight text-fg">{displayName}</h1>
         <dl className="mt-4 space-y-2 text-sm">

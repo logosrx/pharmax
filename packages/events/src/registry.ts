@@ -118,10 +118,17 @@ import { AiAssistPolicySetV1 } from "./events/org/ai-assist-policy-set-v1.js";
 import { OrgBucketCreatedV1 } from "./events/org/bucket-created-v1.js";
 import { OrgBucketDeletedV1 } from "./events/org/bucket-deleted-v1.js";
 import { OrgBucketUpdatedV1 } from "./events/org/bucket-updated-v1.js";
+import { OrgClinicCreatedV1 } from "./events/org/clinic-created-v1.js";
+import { OrgClinicProviderAffiliatedV1 } from "./events/org/clinic-provider-affiliated-v1.js";
+import { OrgClinicProviderAffiliationEndedV1 } from "./events/org/clinic-provider-affiliation-ended-v1.js";
+import { OrgClinicStatusChangedV1 } from "./events/org/clinic-status-changed-v1.js";
+import { OrgClinicUpdatedV1 } from "./events/org/clinic-updated-v1.js";
 import { OrgBucketsProvisionedV1 } from "./events/org/buckets-provisioned-v1.js";
 import { OrgRoleCreatedV1 } from "./events/org/role-created-v1.js";
 import { OrgRolePermissionsUpdatedV1 } from "./events/org/role-permissions-updated-v1.js";
 import { OrgSiteAddressUpdatedV1 } from "./events/org/site-address-updated-v1.js";
+import { OrgSiteCredentialRecordedV1 } from "./events/org/site-credential-recorded-v1.js";
+import { OrgSiteShipStatesChangedV1 } from "./events/org/site-ship-states-changed-v1.js";
 import { OrgUserInvitedV1 } from "./events/org/user-invited-v1.js";
 import { OrgUserRoleGrantedV1 } from "./events/org/user-role-granted-v1.js";
 import { OrgUserRoleRevokedV1 } from "./events/org/user-role-revoked-v1.js";
@@ -149,6 +156,8 @@ import { PatientViewedV1 } from "./events/patient/viewed-v1.js";
 import { PrescriptionCreatedV1 } from "./events/prescription/created-v1.js";
 
 // ---- provider ------------------------------------------------------------
+import { ProviderCredentialRevokedV1 } from "./events/provider/credential-revoked-v1.js";
+import { ProviderDeaRegistrationRecordedV1 } from "./events/provider/dea-registration-recorded-v1.js";
 import { ProviderDeactivatedV1 } from "./events/provider/deactivated-v1.js";
 import { ProviderOnboardingApprovedV1 } from "./events/provider/onboarding-approved-v1.js";
 import { ProviderOnboardingRejectedV1 } from "./events/provider/onboarding-rejected-v1.js";
@@ -158,8 +167,10 @@ import { ProviderPortalAccountActivatedV1 } from "./events/provider/portal-accou
 import { ProviderPortalAccountPasswordChangedV1 } from "./events/provider/portal-account-password-changed-v1.js";
 import { ProviderPortalAccountProvisionedV1 } from "./events/provider/portal-account-provisioned-v1.js";
 import { ProviderPortalAccountSignedInV1 } from "./events/provider/portal-account-signed-in-v1.js";
+import { ProviderPortalSessionClientSwitchedV1 } from "./events/provider/portal-session-client-switched-v1.js";
 import { ProviderReactivatedV1 } from "./events/provider/reactivated-v1.js";
 import { ProviderRegisteredV1 } from "./events/provider/registered-v1.js";
+import { ProviderStateLicenseRecordedV1 } from "./events/provider/state-license-recorded-v1.js";
 import { ProviderUpdatedV1 } from "./events/provider/updated-v1.js";
 
 // ---- reporting (on-demand + scheduled report runs) ----------------------
@@ -285,10 +296,17 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   OrgBucketCreatedV1,
   OrgBucketDeletedV1,
   OrgBucketUpdatedV1,
+  OrgClinicCreatedV1,
+  OrgClinicProviderAffiliatedV1,
+  OrgClinicProviderAffiliationEndedV1,
+  OrgClinicStatusChangedV1,
+  OrgClinicUpdatedV1,
   OrgBucketsProvisionedV1,
   OrgRoleCreatedV1,
   OrgRolePermissionsUpdatedV1,
   OrgSiteAddressUpdatedV1,
+  OrgSiteCredentialRecordedV1,
+  OrgSiteShipStatesChangedV1,
   OrgUserInvitedV1,
   OrgUserRoleGrantedV1,
   OrgUserRoleRevokedV1,
@@ -310,6 +328,8 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   // prescription
   PrescriptionCreatedV1,
   // provider
+  ProviderCredentialRevokedV1,
+  ProviderDeaRegistrationRecordedV1,
   ProviderDeactivatedV1,
   ProviderOnboardingApprovedV1,
   ProviderOnboardingRejectedV1,
@@ -319,8 +339,10 @@ const ALL_DEFINITIONS: ReadonlyArray<EventDefinition<Record<string, unknown>>> =
   ProviderPortalAccountPasswordChangedV1,
   ProviderPortalAccountProvisionedV1,
   ProviderPortalAccountSignedInV1,
+  ProviderPortalSessionClientSwitchedV1,
   ProviderReactivatedV1,
   ProviderRegisteredV1,
+  ProviderStateLicenseRecordedV1,
   ProviderUpdatedV1,
   // reporting
   ReportingRunCompletedV1,

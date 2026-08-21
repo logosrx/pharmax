@@ -11,6 +11,8 @@ import {
   SHIP_WRONG_STATUS,
 } from "../shipping-guards.js";
 
+import { assertShipToStateAllowed, readOrderDestinationState } from "../ship-to-state-guard.js";
+
 export const SHIPMENT_ALREADY_EXISTS = "SHIPMENT_ALREADY_EXISTS";
 
 const inputSchema = z
@@ -56,6 +58,23 @@ export const CreateShipment = defineCommand<CreateShipmentInput, CreateShipmentO
 
     assertReadyToShipWithAssignee({ target, ctx });
     await assertShippingAssignee({ tx, target, ctx });
+
+    // Ship-to-state licensure (G-2). This command is the manual
+    // tracking-number path and is documented below as the deliberate
+    // override for PurchaseShipmentLabel's address validation — which
+    // is exactly why the licensure check cannot live only there. It has
+    // no address, so it checks the destination recorded at intake.
+    await assertShipToStateAllowed({
+      tx,
+      organizationId: ctx.organizationId,
+      siteId: target.siteId,
+      orderId: target.id,
+      destinationState: await readOrderDestinationState({
+        tx,
+        organizationId: ctx.organizationId,
+        orderId: target.id,
+      }),
+    });
 
     const existing = await tx.shipment.findFirst({
       where: { organizationId: ctx.organizationId, orderId: target.id },

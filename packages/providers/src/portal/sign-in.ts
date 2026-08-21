@@ -26,6 +26,7 @@ import { errors } from "@pharmax/platform-core";
 import { withSystemContext } from "@pharmax/tenancy";
 
 import {
+  PORTAL_NO_ACTIVE_CLINIC,
   PortalSignIn,
   type PortalSignInInput,
   type PortalSignInOutput,
@@ -40,6 +41,9 @@ export interface PortalSignInResult {
   readonly sessionId: string;
   /** Bearer token to set as the portal session cookie. */
   readonly rawToken: string;
+  /** Null when the prescriber must still choose among several clients. */
+  readonly activeClinicId: string | null;
+  readonly clinicOptionCount: number;
 }
 
 export async function portalSignIn(input: PortalSignInInput): Promise<PortalSignInResult> {
@@ -96,6 +100,8 @@ export async function portalSignIn(input: PortalSignInInput): Promise<PortalSign
     organizationId: result.organizationId,
     sessionId: result.sessionId,
     rawToken: result.rawToken,
+    activeClinicId: result.activeClinicId,
+    clinicOptionCount: result.clinicOptionCount,
   };
 }
 
@@ -110,6 +116,18 @@ function classifyFailure(err: unknown): {
         outcome: LoginOutcome.INVALID_CREDENTIALS,
         reasonCode: typeof reason === "string" ? reason : "invalid_credentials",
       };
+    }
+    // Authentication SUCCEEDED and the prescriber simply has no live
+    // client to act for. USER_INACTIVE rather than
+    // INVALID_CREDENTIALS because `countRecentFailedAttempts` only
+    // counts the latter toward lockout — on the same reasoning its
+    // comment already gives for MFA_REQUIRED, "not a failed
+    // credential". Classifying this as a credential failure would let
+    // a prescriber whose practice was deactivated lock their own
+    // account out by retrying, and stay locked out after the pharmacy
+    // restored their client.
+    if (err.code === PORTAL_NO_ACTIVE_CLINIC) {
+      return { outcome: LoginOutcome.USER_INACTIVE, reasonCode: PORTAL_NO_ACTIVE_CLINIC };
     }
     return { outcome: LoginOutcome.INVALID_CREDENTIALS, reasonCode: err.code };
   }

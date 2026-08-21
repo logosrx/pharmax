@@ -9,8 +9,13 @@
 //     command-bus assignee guard enforces this); others see the row
 //     read-only with "claimed by <other>".
 //
-// PHI: order rows are non-PHI; the order-detail page is the
-// PHI-decrypting read a pharmacist opens before approving.
+// PHI: the queue card shows the patient's name, so this page IS a PHI
+// surface. `attachQueueRowDetails` dispatches a `ViewPatient` audit per
+// distinct patient before anything renders, and masks any name whose
+// audit write failed while keeping the order visible — hiding a name is
+// an inconvenience, hiding pharmacy work is a safety problem. The
+// order-detail page remains the fuller PHI read a pharmacist opens
+// before approving.
 //
 // CLINICAL SCREENING IS NOT SUMMARIZED HERE, AND THAT IS DELIBERATE.
 // The obvious move is a per-row badge counting outstanding findings.
@@ -37,7 +42,12 @@ import {
   loadOperatorPermissions,
 } from "../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../src/server/auth/resolve-tenancy.js";
-import { listOrdersInBucketByCode } from "../../../src/server/ops/list-orders-in-bucket.js";
+import { loadQueuePageData } from "../../../src/server/ops/load-queue-page-data.js";
+import {
+  buildQueueHref,
+  parseQueueCursor,
+  parseQueueFilters,
+} from "../../../src/server/ops/queue-search-params.js";
 import { PageHeader } from "../../../src/components/ui/page.js";
 import { EmptyState, PermissionDenied, Banner } from "../../../src/components/ui/feedback.js";
 import { Field, Select } from "../../../src/components/ui/field.js";
@@ -46,6 +56,11 @@ import { QueueFlash } from "../../../src/components/ops/flash.js";
 import { describePv1ScreeningError } from "../../../src/components/ops/pv1-screening-errors.js";
 import { QueueLiveRefresher } from "../../../src/components/ops/queue-live-refresher.js";
 import { QueueRow } from "../../../src/components/ops/queue-row.js";
+import {
+  QueuePager,
+  QueuePhiNotice,
+  QueueToolbar,
+} from "../../../src/components/ops/queue-toolbar.js";
 import { ActionForm, SubmitButton } from "../../../src/components/ops/action-form.js";
 
 const PV1_FLASH: Readonly<Record<string, string>> = {
@@ -76,11 +91,19 @@ export default async function Pv1QueuePage({
   const canApprove = hasOperatorPermission(permissions, PERMISSIONS.PV1_APPROVE);
   const canReject = hasOperatorPermission(permissions, PERMISSIONS.PV1_REJECT);
 
-  const queue = await listOrdersInBucketByCode({
+  const filters = parseQueueFilters(params);
+  const cursor = parseQueueCursor(params);
+  const { queue, filterOptions, detailed } = await loadQueuePageData({
     organizationId: session.tenancy.organizationId,
+    operatorUserId: session.operator.userId,
     bucketCode: "PV1",
+    filters,
+    ...(cursor === undefined ? {} : { cursor }),
   });
   const now = new Date();
+
+  const hrefFor = (override: Readonly<Record<string, string | undefined>>) =>
+    buildQueueHref({ basePath: "/ops/pv1", filters, override });
 
   // A screening refusal gets its own wording and its own destination.
   // When it is recognized the generic "that action didn't go through"
@@ -124,20 +147,41 @@ export default async function Pv1QueuePage({
 
       <QueueLiveRefresher codes={["PV1"]} />
 
+      {queue.bucketExists ? (
+        <QueueToolbar
+          basePath="/ops/pv1"
+          filters={filters}
+          clinics={filterOptions.clinics}
+          sites={filterOptions.sites}
+          hrefFor={hrefFor}
+          totalMatching={queue.totalMatching}
+          shownCount={detailed.rows.length}
+        />
+      ) : null}
+
+      <QueuePhiNotice
+        withheldCount={detailed.patientNamesWithheld}
+        decryptErrorCount={detailed.phiDecryptErrors}
+      />
+
       {!queue.bucketExists ? (
         <Banner tone="warning" title="PV1 bucket not provisioned">
           Run <code>ProvisionDefaultBuckets</code> to create it for this organization.
         </Banner>
-      ) : queue.rows.length === 0 ? (
+      ) : detailed.rows.length === 0 ? (
         <EmptyState
           icon="verify"
-          title="No orders waiting for PV1"
-          description="Nothing needs verification right now — approved typing lands here for pharmacist review."
+          title={queue.totalMatching === 0 ? "No orders waiting for PV1" : "No orders match"}
+          description={
+            queue.totalMatching === 0
+              ? "Nothing needs verification right now — approved typing lands here for pharmacist review."
+              : "Every order in this bucket is filtered out. Clear the filters to see the full queue."
+          }
           hint="The queue refreshes live; new arrivals appear without a reload."
         />
       ) : (
         <ul className="space-y-3">
-          {queue.rows.map((row) => {
+          {detailed.rows.map((row) => {
             const isReady = row.currentStatus === "TYPED_READY_FOR_PV1";
             const isInProgress = row.currentStatus === "PV1_IN_PROGRESS";
             const isMine = isInProgress && row.currentAssigneeUserId === session.operator.userId;
@@ -154,6 +198,12 @@ export default async function Pv1QueuePage({
                   receivedAt={row.receivedAt}
                   now={now}
                   assigneeUserId={otherAssignee}
+                  clinicCode={row.clinicCode}
+                  clinicName={row.clinicName}
+                  patientName={row.patientName}
+                  patientNameWithheld={row.patientNameWithheld}
+                  prescribers={row.prescribers}
+                  medications={row.medications}
                 >
                   {isReady ? (
                     <ActionForm action={`/api/ops/orders/${row.orderId}/start-pv1`}>
@@ -206,6 +256,12 @@ export default async function Pv1QueuePage({
           })}
         </ul>
       )}
+
+      <QueuePager
+        nextHref={queue.nextCursor === null ? null : hrefFor({ cursor: queue.nextCursor })}
+        shownCount={detailed.rows.length}
+        totalMatching={queue.totalMatching}
+      />
     </div>
   );
 }

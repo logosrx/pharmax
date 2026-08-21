@@ -7,6 +7,8 @@
 //
 // Permission gate: `org.manage_sites`.
 
+import Link from "next/link";
+
 import { PERMISSIONS } from "@pharmax/rbac";
 
 import {
@@ -22,6 +24,7 @@ import { PageHeader, Section } from "../../../../src/components/ui/page.js";
 import { Card, CardContent, CardHeader } from "../../../../src/components/ui/card.js";
 import { Badge } from "../../../../src/components/ui/badge.js";
 import { Banner, EmptyState, PermissionDenied } from "../../../../src/components/ui/feedback.js";
+import { Icon } from "../../../../src/components/ui/icon.js";
 import { Field, Input } from "../../../../src/components/ui/field.js";
 import { ActionForm, SubmitButton } from "../../../../src/components/ops/action-form.js";
 
@@ -39,6 +42,13 @@ function SiteForm({ site }: { readonly site: PharmacySiteRow }) {
             </Badge>
           </div>
           <div className="text-xs text-subtle">timezone {site.timezone}</div>
+          <Link
+            href={`/ops/admin/sites/${site.siteId}`}
+            className="inline-flex items-center gap-1.5 text-sm text-brand transition-colors hover:text-fg"
+          >
+            Credentials and licensed states
+            <Icon name="arrowRight" size={14} />
+          </Link>
         </div>
       </CardHeader>
       <CardContent>

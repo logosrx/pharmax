@@ -21,6 +21,11 @@ import { buildTenancyContext, withTenancyContext, type TenancyContext } from "@p
 import { CreateShipment, SHIPMENT_ALREADY_EXISTS } from "./create-shipment.js";
 import { SHIP_NOT_ASSIGNED_TO_ACTOR, SHIP_WRONG_STATUS } from "../shipping-guards.js";
 
+import {
+  SHIP_TO_STATE_NOT_LICENSED,
+  SHIP_TO_STATE_UNKNOWN_DESTINATION,
+} from "../ship-to-state-guard.js";
+
 const ORG_ID = "00000000-0000-4000-8000-000000000001";
 const CLINIC_ID = "00000000-0000-4000-8000-000000000002";
 const SITE_ID = "00000000-0000-4000-8000-000000000003";
@@ -60,6 +65,10 @@ interface FakeCall {
 }
 
 interface FakeOverrides {
+  /** Ship-to-state licensure (G-2). Empty means the site is unenforced. */
+  authorizedShipStates?: ReadonlyArray<string>;
+  /** `null` means the order has no recorded destination. */
+  destinationState?: string | null;
   lockedRow?: { currentStatus: string; version: number } | null;
   assigneeUserId?: string | null;
   existingShipment?: { id: string } | null;
@@ -85,11 +94,29 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
   const orderEventHead =
     "orderEventHead" in overrides ? (overrides.orderEventHead ?? null) : { sequenceNumber: 9 };
 
+  const authorizedShipStates = overrides.authorizedShipStates ?? [];
+  // `=== undefined`, not `??`: a deliberate `null` means "no
+  // destination recorded", which is a case the G-2 guard must see.
+  // Coalescing it to a state would make the null test pass by
+  // never reaching the guard at all.
+  const destinationState =
+    overrides.destinationState === undefined ? "CA" : overrides.destinationState;
+
   const tx = {
+    // Ship-to-state licensure (G-2). Empty by default, which
+    // means the site has declared nothing and enforcement is
+    // off — so every pre-existing assertion in this file keeps
+    // meaning what it meant.
+    siteAuthorizedShipState: {
+      findMany: vi.fn(async (args: unknown) => {
+        calls.push({ table: "siteAuthorizedShipState", op: "findMany", args });
+        return authorizedShipStates.map((state: string) => ({ state }));
+      }),
+    },
     order: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "findFirst", args });
-        return { currentAssigneeUserId: assigneeUserId };
+        return { destinationState, currentAssigneeUserId: assigneeUserId };
       }),
       updateMany: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "updateMany", args });
@@ -426,5 +453,58 @@ describe("CreateShipment — input + RBAC", () => {
     await expect(
       executeCommand(CreateShipment, validInput(), { idempotencyKey: "k" })
     ).rejects.toMatchObject({ code: "TENANCY_NO_CONTEXT" });
+  });
+});
+
+describe("CreateShipment — ship-to-state licensure (G-2)", () => {
+  // This command is documented in its own header as the deliberate
+  // override for PurchaseShipmentLabel's address validation, so it is
+  // the path an operator would use to sidestep a licensure check that
+  // only guarded label purchase. It has no address of its own, so it
+  // checks the destination recorded at intake.
+
+  it("refuses a destination the site holds no licence for", async () => {
+    const fake = buildPrismaFake({
+      authorizedShipStates: ["CA", "OR"],
+      destinationState: "TX",
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(CreateShipment, validInput(), { idempotencyKey: "g2-refuse" })
+      ).rejects.toMatchObject({ code: SHIP_TO_STATE_NOT_LICENSED });
+    });
+
+    // No tracking number gets recorded for an unlawful destination.
+    expect(fake.calls.filter((c) => c.table === "shipment" && c.op === "create")).toHaveLength(0);
+  });
+
+  it("refuses an order with no recorded destination once the site enforces", async () => {
+    const fake = buildPrismaFake({
+      authorizedShipStates: ["CA"],
+      destinationState: null,
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), async () => {
+      await expect(
+        executeCommand(CreateShipment, validInput(), { idempotencyKey: "g2-unknown" })
+      ).rejects.toMatchObject({ code: SHIP_TO_STATE_UNKNOWN_DESTINATION });
+    });
+    expect(fake.calls.filter((c) => c.table === "shipment" && c.op === "create")).toHaveLength(0);
+  });
+
+  it("permits a licensed destination", async () => {
+    const fake = buildPrismaFake({
+      authorizedShipStates: ["CA", "NV"],
+      destinationState: "NV",
+    });
+    configureBus(fake.client);
+
+    await withTenancyContext(ctxFor(), () =>
+      executeCommand(CreateShipment, validInput(), { idempotencyKey: "g2-allow" })
+    );
+    expect(fake.calls.filter((c) => c.table === "shipment" && c.op === "create")).toHaveLength(1);
   });
 });

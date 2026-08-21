@@ -32,7 +32,12 @@ import {
   LocalKmsAdapter,
   resetCryptoConfigurationForTests,
 } from "@pharmax/crypto";
-import { ControlledSubstanceSchedule, Prisma, RoleScope } from "@pharmax/database";
+import {
+  ControlledSubstanceSchedule,
+  CredentialStatus,
+  Prisma,
+  RoleScope,
+} from "@pharmax/database";
 import { clock, logger } from "@pharmax/platform-core";
 import {
   configureRbac,
@@ -115,10 +120,36 @@ interface FakeCall {
   args: unknown;
 }
 
+/**
+ * The default prescriber credential: live, no recorded expiry, every
+ * controlled schedule. That is exactly what the superseded
+ * `Provider.deaNumber` column conferred, so tests written against the
+ * old presence check keep meaning what they meant.
+ */
+const ACTIVE_DEA_REGISTRATION = Object.freeze({
+  deaNumber: "AB1234563",
+  status: CredentialStatus.ACTIVE,
+  expiresAt: null,
+  authorizedSchedules: [
+    ControlledSubstanceSchedule.CII,
+    ControlledSubstanceSchedule.CIII,
+    ControlledSubstanceSchedule.CIV,
+    ControlledSubstanceSchedule.CV,
+  ] as ReadonlyArray<ControlledSubstanceSchedule>,
+});
+
 interface FakePrismaOptions {
   clinicExists?: boolean;
   patient?: { clinicId: string; status: string } | null;
-  provider?: { status: string; deaNumber: string | null } | null;
+  provider?: {
+    status: string;
+    deaRegistrations: ReadonlyArray<{
+      deaNumber: string;
+      status: CredentialStatus;
+      expiresAt: Date | null;
+      authorizedSchedules: ReadonlyArray<ControlledSubstanceSchedule>;
+    }>;
+  } | null;
   /** Catalog entry for every NDC looked up, or null for "uncatalogued". */
   product?: { controlledSubstanceSchedule: ControlledSubstanceSchedule } | null;
   /** Counter value the allocator's upsert returns. */
@@ -132,7 +163,9 @@ function buildFakePrisma(opts: FakePrismaOptions = {}): { client: unknown; calls
   const patient =
     opts.patient === undefined ? { clinicId: CLINIC_ID, status: "ACTIVE" } : opts.patient;
   const provider =
-    opts.provider === undefined ? { status: "ACTIVE", deaNumber: "AB1234563" } : opts.provider;
+    opts.provider === undefined
+      ? { status: "ACTIVE", deaRegistrations: [ACTIVE_DEA_REGISTRATION] }
+      : opts.provider;
   const product =
     opts.product === undefined
       ? { controlledSubstanceSchedule: ControlledSubstanceSchedule.NON_CONTROLLED }
@@ -612,22 +645,133 @@ describe("CreatePrescription — 21 CFR part 1306 authorization limits", () => {
     expect(out.prescriptionId).toBeTruthy();
   });
 
-  it("refuses a controlled prescription from a prescriber with no DEA number", async () => {
+  it("refuses a controlled prescription from a prescriber with no DEA registration", async () => {
     const fake = buildFakePrisma({
-      provider: { status: "ACTIVE", deaNumber: null },
+      provider: { status: "ACTIVE", deaRegistrations: [] },
       product: { controlledSubstanceSchedule: ControlledSubstanceSchedule.CIV },
     });
     wire(fake.client);
 
     await expect(
       run(validInput({ drugNdc: NDC_OXYCODONE, refillsAuthorized: 0 }))
-    ).rejects.toMatchObject({ code: "RX_PROVIDER_DEA_REQUIRED" });
+    ).rejects.toMatchObject({
+      code: "RX_PROVIDER_DEA_REQUIRED",
+      metadata: { reason: "DEA_AUTHORITY_NO_REGISTRATION" },
+    });
 
     expectNoWrites(fake.calls);
   });
 
-  it("allows a non-controlled prescription from a prescriber with no DEA number", async () => {
-    const fake = buildFakePrisma({ provider: { status: "ACTIVE", deaNumber: null } });
+  it("refuses a controlled prescription when the registration has expired", async () => {
+    // The old presence check could not see this at all: a lapsed
+    // registration is still a non-blank string.
+    const fake = buildFakePrisma({
+      provider: {
+        status: "ACTIVE",
+        deaRegistrations: [
+          { ...ACTIVE_DEA_REGISTRATION, expiresAt: new Date("2026-01-01T00:00:00.000Z") },
+        ],
+      },
+      product: { controlledSubstanceSchedule: ControlledSubstanceSchedule.CIV },
+    });
+    wire(fake.client);
+
+    await expect(
+      run(validInput({ drugNdc: NDC_OXYCODONE, refillsAuthorized: 0 }))
+    ).rejects.toMatchObject({
+      code: "RX_PROVIDER_DEA_REQUIRED",
+      metadata: { reason: "DEA_AUTHORITY_EXPIRED" },
+    });
+    expectNoWrites(fake.calls);
+  });
+
+  it("refuses a controlled prescription when the registration is revoked", async () => {
+    const fake = buildFakePrisma({
+      provider: {
+        status: "ACTIVE",
+        deaRegistrations: [{ ...ACTIVE_DEA_REGISTRATION, status: CredentialStatus.REVOKED }],
+      },
+      product: { controlledSubstanceSchedule: ControlledSubstanceSchedule.CIV },
+    });
+    wire(fake.client);
+
+    await expect(
+      run(validInput({ drugNdc: NDC_OXYCODONE, refillsAuthorized: 0 }))
+    ).rejects.toMatchObject({
+      code: "RX_PROVIDER_DEA_REQUIRED",
+      metadata: { reason: "DEA_AUTHORITY_NOT_ACTIVE" },
+    });
+    expectNoWrites(fake.calls);
+  });
+
+  it("refuses a schedule the registration does not authorize", async () => {
+    // Live, unexpired, and limited to CIII-CV. A mid-level prescriber
+    // whose state does not grant CII authority is the real case.
+    const fake = buildFakePrisma({
+      provider: {
+        status: "ACTIVE",
+        deaRegistrations: [
+          {
+            ...ACTIVE_DEA_REGISTRATION,
+            authorizedSchedules: [
+              ControlledSubstanceSchedule.CIII,
+              ControlledSubstanceSchedule.CIV,
+              ControlledSubstanceSchedule.CV,
+            ],
+          },
+        ],
+      },
+      product: { controlledSubstanceSchedule: ControlledSubstanceSchedule.CII },
+    });
+    wire(fake.client);
+
+    await expect(
+      run(validInput({ drugNdc: NDC_OXYCODONE, refillsAuthorized: 0 }))
+    ).rejects.toMatchObject({
+      code: "RX_PROVIDER_DEA_REQUIRED",
+      metadata: { reason: "DEA_AUTHORITY_SCHEDULE_NOT_AUTHORIZED" },
+    });
+    expectNoWrites(fake.calls);
+  });
+
+  it("allows a controlled prescription when a second registration covers the schedule", async () => {
+    // A prescriber may hold more than one number; only one of them
+    // needs to authorize.
+    const fake = buildFakePrisma({
+      provider: {
+        status: "ACTIVE",
+        deaRegistrations: [
+          { ...ACTIVE_DEA_REGISTRATION, authorizedSchedules: [ControlledSubstanceSchedule.CV] },
+          ACTIVE_DEA_REGISTRATION,
+        ],
+      },
+      product: { controlledSubstanceSchedule: ControlledSubstanceSchedule.CIV },
+    });
+    wire(fake.client);
+
+    const out = await run(validInput({ drugNdc: NDC_OXYCODONE, refillsAuthorized: 0 }));
+    expect(out.prescriptionId).toBeTruthy();
+  });
+
+  it("allows a controlled prescription when no expiry was ever recorded", async () => {
+    // A pharmacy migrating on has numbers and no dates. Treating that
+    // as expired would take every tenant's controlled prescribing
+    // offline on the day this shipped.
+    const fake = buildFakePrisma({
+      provider: {
+        status: "ACTIVE",
+        deaRegistrations: [{ ...ACTIVE_DEA_REGISTRATION, expiresAt: null }],
+      },
+      product: { controlledSubstanceSchedule: ControlledSubstanceSchedule.CIV },
+    });
+    wire(fake.client);
+
+    const out = await run(validInput({ drugNdc: NDC_OXYCODONE, refillsAuthorized: 0 }));
+    expect(out.prescriptionId).toBeTruthy();
+  });
+
+  it("allows a non-controlled prescription from a prescriber with no DEA registration", async () => {
+    const fake = buildFakePrisma({ provider: { status: "ACTIVE", deaRegistrations: [] } });
     wire(fake.client);
 
     const out = await run(validInput());
@@ -731,7 +875,9 @@ describe("CreatePrescription — reference data", () => {
   });
 
   it("rejects an inactive prescriber", async () => {
-    const fake = buildFakePrisma({ provider: { status: "INACTIVE", deaNumber: "AB1234563" } });
+    const fake = buildFakePrisma({
+      provider: { status: "INACTIVE", deaRegistrations: [ACTIVE_DEA_REGISTRATION] },
+    });
     wire(fake.client);
 
     await expect(run(validInput())).rejects.toMatchObject({
@@ -822,7 +968,7 @@ describe("CreatePrescription — allocation and persistence", () => {
   it("allocates the Rx number only after every validation has passed", async () => {
     // A rejected transcription must not burn a number, and must not
     // hold the clinic's counter lock while it fails.
-    const fake = buildFakePrisma({ provider: { status: "INACTIVE", deaNumber: null } });
+    const fake = buildFakePrisma({ provider: { status: "INACTIVE", deaRegistrations: [] } });
     wire(fake.client);
 
     await expect(run(validInput())).rejects.toMatchObject({

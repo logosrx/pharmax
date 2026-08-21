@@ -45,7 +45,15 @@ export async function POST(request: NextRequest): Promise<Response> {
       ipAddress: resolveClientIp(request),
       userAgent: request.headers.get("user-agent") ?? undefined,
     });
-    const response = NextResponse.json({ ok: true, portalAccountId: result.portalAccountId });
+    const response = NextResponse.json({
+      ok: true,
+      portalAccountId: result.portalAccountId,
+      // Null means the prescriber writes for several client practices
+      // and the session is not scoped to one yet. The client id itself
+      // is deliberately NOT returned: the browser has no use for it,
+      // and the scope that matters lives on the session row.
+      requiresClientSelection: result.activeClinicId === null,
+    });
     setPortalSessionCookie(response, result.rawToken);
     return response;
   } catch (cause) {

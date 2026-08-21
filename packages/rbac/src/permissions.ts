@@ -29,6 +29,18 @@ export const PERMISSIONS = Object.freeze({
   USERS_MANAGE: "users.manage",
   ROLES_MANAGE: "roles.manage",
   ORG_MANAGE_SITES: "org.manage_sites",
+  // The TENANT's own regulatory credentials — state pharmacy licences,
+  // DEA registration, NPI, NCPDP, NABP. Separate from
+  // ORG_MANAGE_SITES: an address correction and "assert we hold a
+  // California pharmacy licence" are not the same act, and the second
+  // is what a board inspector reads.
+  ORG_SITE_CREDENTIALS_MANAGE: "org.site_credentials.manage",
+  // Which states a site may dispense into. Its own grant, held
+  // narrowly: this set is the only thing standing between the
+  // pharmacy and shipping a prescription into a state it holds no
+  // licence for, which is a finding against the customer's licence
+  // rather than a software bug.
+  ORG_SHIP_STATES_MANAGE: "org.ship_states.manage",
   // Create / edit / delete the org's operational queue buckets. Held
   // separately from ORG_MANAGE_SITES because a bucket is the unit the
   // workflow engine routes orders INTO: a bad bucket edit misroutes
@@ -72,6 +84,13 @@ export const PERMISSIONS = Object.freeze({
   // per-org ProviderOnboardingService identity behind the public
   // apply endpoint + the proofing drain); REVIEW is the human ops
   // decision on the NEEDS_REVIEW queue.
+  // Prescriber credentials: DEA registrations and state licences.
+  // READ is separate from the provider directory because it exposes
+  // the DEA number itself, which is a controlled-substance prescribing
+  // credential — a forensic dump of one is a prescription-fraud tool,
+  // which is why the write commands redact it from command_log.
+  PROVIDERS_CREDENTIALS_READ: "providers.credentials.read",
+  PROVIDERS_CREDENTIALS_MANAGE: "providers.credentials.manage",
   PROVIDERS_ONBOARDING_SUBMIT: "providers.onboarding.submit",
   PROVIDERS_ONBOARDING_REVIEW: "providers.onboarding.review",
 
@@ -81,8 +100,23 @@ export const PERMISSIONS = Object.freeze({
   // an already-transcribed prescription to an order.
   PRESCRIPTIONS_CREATE: "prescriptions.create",
 
-  // Clinic (practice) directory.
+  // Clinic (practice) directory. The product calls these "clients";
+  // the schema and these codes say Clinic. One entity, two names.
   CLINICS_READ: "clinics.read",
+  // Onboard a client practice. Separate from CLINICS_UPDATE because
+  // creating one is what admits a new billing counterparty to the
+  // org, while updating one only corrects its details.
+  CLINICS_CREATE: "clinics.create",
+  CLINICS_UPDATE: "clinics.update",
+  // Deactivate or reactivate a client. Deactivation revokes every
+  // portal session still acting for that client, so it is a
+  // security-relevant action and not merely a status flip.
+  CLINICS_SET_STATUS: "clinics.set_status",
+  // Grant or end a prescriber's authority to write for a client.
+  // Distinct from PROVIDERS_UPDATE: that edits who a prescriber IS,
+  // this decides which clients they may act for — an access-control
+  // decision, and the one an access review asks about.
+  CLINICS_AFFILIATE_PROVIDER: "clinics.affiliate_provider",
 
   // Inventory catalog: drug products + lots/batches.
   INVENTORY_READ: "inventory.read",
@@ -345,6 +379,16 @@ export const PERMISSION_METADATA: Readonly<
       "Edit pharmacy site profile and ship-from address used by the carrier auto-purchase flow.",
     category: "Administration",
   },
+  [PERMISSIONS.ORG_SITE_CREDENTIALS_MANAGE]: {
+    description:
+      "Record and revoke a pharmacy site's own regulatory credentials: state pharmacy licences (resident and non-resident), DEA registration, NPI, NCPDP, NABP. These are what a board inspector asks for, and what ship-to-state enforcement is derived from.",
+    category: "Administration",
+  },
+  [PERMISSIONS.ORG_SHIP_STATES_MANAGE]: {
+    description:
+      "Declare which states a pharmacy site may dispense into. Held narrowly: this set is the only thing preventing a prescription shipping to a state the pharmacy holds no licence for, which is a finding against the customer's licence.",
+    category: "Administration",
+  },
   [PERMISSIONS.ORG_MANAGE_BUCKETS]: {
     description:
       "Create, rename, reorder, and delete custom operational queue buckets. System buckets seeded by ProvisionDefaultBuckets accept display changes only; their code and kind stay immutable, and no bucket holding orders can be deleted.",
@@ -411,6 +455,16 @@ export const PERMISSION_METADATA: Readonly<
       "Reactivate a provider (status: INACTIVE \u2192 ACTIVE) with a reason code (license restored, sanction lifted, erroneous deactivation, etc.). Re-enables new orders against the prescriber. Distinct from PROVIDERS_DEACTIVATE so the audit and approval surfaces stay separable.",
     category: "Providers",
   },
+  [PERMISSIONS.PROVIDERS_CREDENTIALS_READ]: {
+    description:
+      "View a prescriber's DEA registration numbers and state licence numbers in full. Separate from providers.read because the DEA number is a controlled-substance prescribing credential; the roster shows only whether authority exists.",
+    category: "Providers",
+  },
+  [PERMISSIONS.PROVIDERS_CREDENTIALS_MANAGE]: {
+    description:
+      "Record, renew and revoke a prescriber's DEA registrations and state licences, including which controlled schedules a registration authorizes. Decides whether controlled prescriptions may be written.",
+    category: "Providers",
+  },
   [PERMISSIONS.PROVIDERS_ONBOARDING_SUBMIT]: {
     description:
       "Submit a provider self-serve onboarding application and record its automated NPPES proofing outcome (ADR-0033). Machine permission — granted only to the per-org ProviderOnboardingService identity that fronts the public apply endpoint and the proofing drain.",
@@ -424,6 +478,26 @@ export const PERMISSION_METADATA: Readonly<
   [PERMISSIONS.CLINICS_READ]: {
     description:
       "View the clinic (practice) directory: codes, names, statuses, and pharmacy-site links. Directory metadata only — no PHI.",
+    category: "Clinics",
+  },
+  [PERMISSIONS.CLINICS_CREATE]: {
+    description:
+      "Onboard a client practice: allocate its code and name and open it for prescriptions. Admits a new billing counterparty to the organization, so it is separate from clinics.update.",
+    category: "Clinics",
+  },
+  [PERMISSIONS.CLINICS_UPDATE]: {
+    description:
+      "Correct a client practice's directory details (name). The code is immutable once issued because invoices and prescriptions cite it.",
+    category: "Clinics",
+  },
+  [PERMISSIONS.CLINICS_SET_STATUS]: {
+    description:
+      "Deactivate or reactivate a client practice. Deactivation also revokes every provider-portal session still acting for that client, making this a security-relevant action rather than a status flip.",
+    category: "Clinics",
+  },
+  [PERMISSIONS.CLINICS_AFFILIATE_PROVIDER]: {
+    description:
+      "Grant or end a prescriber's authority to write prescriptions for a client practice. An access-control decision — this is the grant an access review reads to answer 'who could prescribe for this client'.",
     category: "Clinics",
   },
   [PERMISSIONS.INVENTORY_READ]: {

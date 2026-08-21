@@ -100,6 +100,56 @@ async function tryDecrypt(input: {
   }
 }
 
+/** The two envelopes a queue row needs. */
+export interface PatientNameEncryptedRow {
+  readonly firstNameEnc: unknown;
+  readonly lastNameEnc: unknown;
+}
+
+export interface DecryptedPatientName {
+  readonly firstName: string | null;
+  readonly lastName: string | null;
+  readonly phiDecryptErrors: boolean;
+}
+
+/**
+ * Decrypt only the two name envelopes.
+ *
+ * `decryptPatientFields` below unwraps fourteen, which is right for a
+ * detail page and wrong for a list: a work queue needs a name to
+ * identify the order and nothing else, and every extra envelope is a
+ * KMS call multiplied by the page size. At 25 rows this is 50 unwraps
+ * instead of 350.
+ *
+ * Decrypting less is also a smaller disclosure. A queue that only ever
+ * unwraps first and last name cannot leak an SSN fragment through a
+ * logging mistake, because it never held one.
+ */
+export async function decryptPatientName(input: {
+  readonly organizationId: string;
+  readonly patientId: string;
+  readonly row: PatientNameEncryptedRow;
+}): Promise<DecryptedPatientName> {
+  const bind = (column: string) =>
+    ({
+      tenantId: input.organizationId,
+      table: "patient",
+      column,
+      recordId: input.patientId,
+    }) as const;
+
+  const [firstName, lastName] = await Promise.all([
+    tryDecrypt({ envelope: input.row.firstNameEnc, binding: bind("firstName") }),
+    tryDecrypt({ envelope: input.row.lastNameEnc, binding: bind("lastName") }),
+  ]);
+
+  return Object.freeze({
+    firstName: firstName.value,
+    lastName: lastName.value,
+    phiDecryptErrors: !firstName.ok || !lastName.ok,
+  });
+}
+
 export async function decryptPatientFields(input: {
   readonly organizationId: string;
   readonly patientId: string;

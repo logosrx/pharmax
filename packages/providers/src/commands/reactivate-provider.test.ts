@@ -107,7 +107,7 @@ interface ProviderReadRow {
   organizationId: string;
   npi: string;
   status: ProviderStatus;
-  deaNumber: string | null;
+  _count: { deaRegistrations: number };
 }
 
 interface FakePrismaOptions {
@@ -126,7 +126,7 @@ function buildProviderRow(overrides: Partial<ProviderReadRow> = {}): ProviderRea
     // is meant to operate on. (DeactivateProvider's default is
     // ACTIVE; this asymmetry is deliberate.)
     status: ProviderStatus.INACTIVE,
-    deaNumber: null,
+    _count: { deaRegistrations: 0 },
     ...overrides,
   };
 }
@@ -489,7 +489,7 @@ describe("ReactivateProvider — command_log redaction", () => {
 describe("ReactivateProvider — audit + outbox shape", () => {
   it("audit metadata carries npi + reason + hasReasonText + hadDea; no reasonText", async () => {
     const fake = buildFakePrisma({
-      providerRow: buildProviderRow({ deaNumber: "BR1234567" }),
+      providerRow: buildProviderRow({ _count: { deaRegistrations: 1 } }),
     });
     wireBusAndRbac(fake.client);
 
@@ -529,7 +529,7 @@ describe("ReactivateProvider — audit + outbox shape", () => {
 
   it("outbox payload is ids + npi + reason + hasReasonText + hadDea + ts; no reasonText", async () => {
     const fake = buildFakePrisma({
-      providerRow: buildProviderRow({ deaNumber: "BR1234567" }),
+      providerRow: buildProviderRow({ _count: { deaRegistrations: 1 } }),
     });
     wireBusAndRbac(fake.client);
 
@@ -575,7 +575,7 @@ describe("ReactivateProvider — audit + outbox shape", () => {
 
   it("hadDea reflects nullity of pre-reactivation row (no DEA on file)", async () => {
     const fake = buildFakePrisma({
-      providerRow: buildProviderRow({ deaNumber: null }),
+      providerRow: buildProviderRow({ _count: { deaRegistrations: 0 } }),
     });
     wireBusAndRbac(fake.client);
 

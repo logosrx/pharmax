@@ -9,7 +9,10 @@
 //   - FINAL_VERIFICATION_REJECTED: a final-verification bounce-back —
 //     reopen for fill rework.
 //
-// PHI: queue surface is non-PHI; the workbench is the action surface.
+// PHI: the queue card shows the patient's name, so this page is a PHI
+// surface. `attachQueueRowDetails` audits each distinct patient view
+// before render and masks any name whose audit write failed, keeping the
+// order itself visible. The workbench remains the action surface.
 
 import Link from "next/link";
 
@@ -21,7 +24,17 @@ import {
   loadOperatorPermissions,
 } from "../../../src/server/auth/operator-permissions.js";
 import { resolveOperatorTenancyContext } from "../../../src/server/auth/resolve-tenancy.js";
-import { listOrdersInBucketByCode } from "../../../src/server/ops/list-orders-in-bucket.js";
+import { loadQueuePageData } from "../../../src/server/ops/load-queue-page-data.js";
+import {
+  buildQueueHref,
+  parseQueueCursor,
+  parseQueueFilters,
+} from "../../../src/server/ops/queue-search-params.js";
+import {
+  QueuePager,
+  QueuePhiNotice,
+  QueueToolbar,
+} from "../../../src/components/ops/queue-toolbar.js";
 import { PageHeader } from "../../../src/components/ui/page.js";
 import { EmptyState, PermissionDenied, Banner } from "../../../src/components/ui/feedback.js";
 import { buttonClass } from "../../../src/components/ui/button.js";
@@ -61,11 +74,19 @@ export default async function FillQueuePage({
 
   const canReopen = hasOperatorPermission(permissions, PERMISSIONS.ORDERS_REOPEN_FOR_CORRECTION);
 
-  const queue = await listOrdersInBucketByCode({
+  const filters = parseQueueFilters(params);
+  const cursor = parseQueueCursor(params);
+  const { queue, filterOptions, detailed } = await loadQueuePageData({
     organizationId: session.tenancy.organizationId,
+    operatorUserId: session.operator.userId,
     bucketCode: "FILL",
+    filters,
+    ...(cursor === undefined ? {} : { cursor }),
   });
   const now = new Date();
+
+  const hrefFor = (override: Readonly<Record<string, string | undefined>>) =>
+    buildQueueHref({ basePath: "/ops/fill", filters, override });
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -78,20 +99,41 @@ export default async function FillQueuePage({
       <QueueFlash params={params} messages={FILL_FLASH} />
       <QueueLiveRefresher codes={["FILL"]} />
 
+      {queue.bucketExists ? (
+        <QueueToolbar
+          basePath="/ops/fill"
+          filters={filters}
+          clinics={filterOptions.clinics}
+          sites={filterOptions.sites}
+          hrefFor={hrefFor}
+          totalMatching={queue.totalMatching}
+          shownCount={detailed.rows.length}
+        />
+      ) : null}
+
+      <QueuePhiNotice
+        withheldCount={detailed.patientNamesWithheld}
+        decryptErrorCount={detailed.phiDecryptErrors}
+      />
+
       {!queue.bucketExists ? (
         <Banner tone="warning" title="FILL bucket not provisioned">
           Run <code>ProvisionDefaultBuckets</code> to create it for this organization.
         </Banner>
-      ) : queue.rows.length === 0 ? (
+      ) : detailed.rows.length === 0 ? (
         <EmptyState
           icon="fill"
-          title="No orders waiting for fill"
-          description="The bench is clear — PV1-approved orders land here ready to fill."
+          title={queue.totalMatching === 0 ? "No orders waiting for fill" : "No orders match"}
+          description={
+            queue.totalMatching === 0
+              ? "The bench is clear — PV1-approved orders land here ready to fill."
+              : "Every order in this bucket is filtered out. Clear the filters to see the full queue."
+          }
           hint="The queue refreshes live; new arrivals appear without a reload."
         />
       ) : (
         <ul className="space-y-3">
-          {queue.rows.map((row) => {
+          {detailed.rows.map((row) => {
             const isReady = row.currentStatus === "PV1_APPROVED_READY_FOR_FILL";
             const isInProgress = row.currentStatus === "FILL_IN_PROGRESS";
             const isBounced = row.currentStatus === "FINAL_VERIFICATION_REJECTED";
@@ -109,6 +151,12 @@ export default async function FillQueuePage({
                   receivedAt={row.receivedAt}
                   now={now}
                   assigneeUserId={otherAssignee}
+                  clinicCode={row.clinicCode}
+                  clinicName={row.clinicName}
+                  patientName={row.patientName}
+                  patientNameWithheld={row.patientNameWithheld}
+                  prescribers={row.prescribers}
+                  medications={row.medications}
                   note={
                     isBounced
                       ? "Bounced back from final verification. Open the order detail for the rejection reason, then reopen for fill rework."
@@ -149,6 +197,12 @@ export default async function FillQueuePage({
           })}
         </ul>
       )}
+
+      <QueuePager
+        nextHref={queue.nextCursor === null ? null : hrefFor({ cursor: queue.nextCursor })}
+        shownCount={detailed.rows.length}
+        totalMatching={queue.totalMatching}
+      />
     </div>
   );
 }

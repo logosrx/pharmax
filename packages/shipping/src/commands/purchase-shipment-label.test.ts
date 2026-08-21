@@ -111,6 +111,10 @@ interface CarrierCredentialFake {
 }
 
 interface FakeOverrides {
+  /** Ship-to-state licensure (G-2). Empty means the site is unenforced. */
+  authorizedShipStates?: ReadonlyArray<string>;
+  /** `null` means the order has no recorded destination. */
+  destinationState?: string | null;
   lockedRow?: { currentStatus: string; version: number } | null;
   assigneeUserId?: string | null;
   existingShipment?: { id: string } | null;
@@ -139,7 +143,25 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
   const carrierCredential =
     "carrierCredential" in overrides ? overrides.carrierCredential : defaultCredential;
 
+  const authorizedShipStates = overrides.authorizedShipStates ?? [];
+  // `=== undefined`, not `??`: a deliberate `null` means "no
+  // destination recorded", which is a case the G-2 guard must see.
+  // Coalescing it to a state would make the null test pass by
+  // never reaching the guard at all.
+  const destinationState =
+    overrides.destinationState === undefined ? "CA" : overrides.destinationState;
+
   const tx = {
+    // Ship-to-state licensure (G-2). Empty by default, which
+    // means the site has declared nothing and enforcement is
+    // off — so every pre-existing assertion in this file keeps
+    // meaning what it meant.
+    siteAuthorizedShipState: {
+      findMany: vi.fn(async (args: unknown) => {
+        calls.push({ table: "siteAuthorizedShipState", op: "findMany", args });
+        return authorizedShipStates.map((state: string) => ({ state }));
+      }),
+    },
     carrierCredential: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "carrierCredential", op: "findFirst", args });
@@ -149,7 +171,7 @@ function buildPrismaFake(overrides: FakeOverrides = {}): {
     order: {
       findFirst: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "findFirst", args });
-        return { currentAssigneeUserId: assigneeUserId };
+        return { destinationState, currentAssigneeUserId: assigneeUserId };
       }),
       updateMany: vi.fn(async (args: unknown) => {
         calls.push({ table: "order", op: "updateMany", args });

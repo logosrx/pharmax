@@ -451,6 +451,55 @@ variable "enable_synthetics" {
 
 # ---- OpenTelemetry backend (Grafana Cloud) -----------------------------------
 
+# -----------------------------------------------------------------------------
+# Operational notifications (R-028)
+# -----------------------------------------------------------------------------
+#
+# The worker composes a quarterly access-review notification and a nightly
+# security digest whether or not a transport exists. Without one it logs
+# them at INFO and continues, which is a deliberate availability choice —
+# a missing env var must not stop the outbox draining — and a compliance
+# problem: a control that runs, succeeds, and reaches nobody has
+# terminated in a log line.
+#
+# ORDER MATTERS when enabling this:
+#
+#   1. Create a Resend account and verify the sending domain.
+#   2. `terraform apply` — creates the empty `resend-api-key` secret.
+#   3. Populate it:
+#        aws secretsmanager put-secret-value \
+#          --secret-id <name_prefix>/resend-api-key --secret-string '<key>'
+#   4. Set `notifications_enabled = true` and apply again.
+#
+# Steps 3 and 4 cannot be swapped. A task definition that references a
+# secret with no version fails to start with ResourceInitializationError,
+# so enabling before populating turns a degraded notification path into a
+# worker that does not boot.
+
+variable "notifications_enabled" {
+  description = "Inject the Resend notification channel into the worker. Requires the resend-api-key secret to be POPULATED first — see the ordering note above."
+  type        = bool
+  default     = false
+}
+
+variable "notification_from_email" {
+  description = "From address for operational notifications. Must be a verified sender on the Resend account."
+  type        = string
+  default     = ""
+}
+
+variable "compliance_notify_recipient_email" {
+  description = "Recipient for quarterly access-review notifications. Unset means an access review that finds something notifies nobody."
+  type        = string
+  default     = ""
+}
+
+variable "nightly_security_digest_recipient_email" {
+  description = "Recipient for the nightly security digest. Unset means the digest is computed and discarded at INFO."
+  type        = string
+  default     = ""
+}
+
 variable "otel_backend_enabled" {
   description = <<-EOT
     Wire the web + worker tasks to export OpenTelemetry traces + metrics to
