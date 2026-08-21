@@ -19,6 +19,15 @@ export {
   DEFAULT_POOL_MAX,
   resolvePoolSettings,
 } from "./client.js";
+// Read-transaction bounds. Separate from the command budget on purpose:
+// a read scope takes no row locks, so it does not inherit the lock-hold
+// ceiling that keeps the command budget tight.
+export {
+  DEFAULT_READ_TRANSACTION_BUDGET,
+  readTransactionBudgetFromEnv,
+  readTransactionOptionsFor,
+  type ReadTransactionBudget,
+} from "./read-transaction-budget.js";
 // Tenant-scoped read wrappers (ORM extension + optional RLS GUC).
 export {
   readInTenantContext,

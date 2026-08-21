@@ -40,7 +40,26 @@ import {
 } from "@pharmax/tenancy";
 
 import { prisma } from "./scoped-client.js";
+import {
+  readTransactionBudgetFromEnv,
+  readTransactionOptionsFor,
+} from "./read-transaction-budget.js";
 import type { PrismaClient } from "./generated/client/client.js";
+
+/**
+ * Read-transaction bounds, resolved once at module load.
+ *
+ * Every scope below passes these. Before, all three called
+ * `$transaction` with no options and silently inherited Prisma's
+ * `timeout: 5000` / `maxWait: 2000` — see
+ * `read-transaction-budget.ts` for how that kept failing the E2E suite
+ * even after the command budgets were raised.
+ *
+ * Read once rather than per call: these are process configuration, and
+ * re-reading `process.env` on every page projection would be a
+ * measurable cost for a value that cannot change.
+ */
+const READ_TX_OPTIONS = readTransactionOptionsFor(readTransactionBudgetFromEnv());
 
 // Sentinel actor for server-side READ scopes that have authenticated
 // the operator and resolved their org, but do not have (or need) the
@@ -85,7 +104,7 @@ export function readInTenantContext<T>(
     prisma.$transaction(async (tx) => {
       await applyTenancySessionGuc(tx as unknown as SessionGucExecutor, ctx);
       return fn(tx as unknown as TenantTransactionClient);
-    })
+    }, READ_TX_OPTIONS)
   );
 }
 
@@ -135,6 +154,6 @@ export function readInSystemContext<T>(
     prisma.$transaction(async (tx) => {
       await applySystemSessionGuc(tx as unknown as SessionGucExecutor, reason);
       return fn(tx as unknown as TenantTransactionClient);
-    })
+    }, READ_TX_OPTIONS)
   );
 }
