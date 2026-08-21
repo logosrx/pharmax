@@ -20,8 +20,10 @@
 import { getAuthConfiguration, invalidCredentialsError } from "@pharmax/auth";
 import type { SystemCommand, SystemHandlerResult } from "@pharmax/command-bus";
 import { PortalAccountStatus } from "@pharmax/database";
+import { errors } from "@pharmax/platform-core";
 import { z } from "zod";
 
+import { listPortalClinicOptions } from "./clinic-access.js";
 import { createPortalSessionInTx } from "./session.js";
 
 const inputSchema = z
@@ -43,7 +45,25 @@ export interface PortalSignInOutput {
   readonly sessionId: string;
   /** Bearer session token. Redacted from command_log; returned to caller. */
   readonly rawToken: string;
+  /**
+   * The client this session was minted scoped to, or `null` when the
+   * prescriber has several affiliations and must choose. The web tier
+   * routes on this: null means redirect to the chooser.
+   */
+  readonly activeClinicId: string | null;
+  /** How many clients the prescriber may act for. 1 means auto-scoped. */
+  readonly clinicOptionCount: number;
 }
+
+/**
+ * A prescriber with a live portal credential but no live client
+ * affiliation. Distinct from bad credentials: authentication succeeded,
+ * there is simply nothing they may act for. Not folded into
+ * INVALID_CREDENTIALS because that would tell a prescriber whose
+ * practice was just deactivated that their password is wrong, and they
+ * would spend the afternoon resetting it.
+ */
+export const PORTAL_NO_ACTIVE_CLINIC = "PORTAL_NO_ACTIVE_CLINIC";
 
 export const PortalSignIn: SystemCommand<PortalSignInInput, PortalSignInOutput> = {
   name: "PortalSignIn",
@@ -93,10 +113,38 @@ export const PortalSignIn: SystemCommand<PortalSignInInput, PortalSignInOutput> 
       rehashed = true;
     }
 
+    // Which clients may this prescriber act for? Resolved here, inside
+    // the sign-in transaction, because the answer decides what kind of
+    // session to mint — and minting first and scoping afterwards would
+    // put an unscoped session on the wire for the single-affiliation
+    // case, which is the common one.
+    const clinicOptions = await listPortalClinicOptions({
+      tx,
+      organizationId: input.organizationId,
+      providerId: account.providerId,
+    });
+
+    if (clinicOptions.length === 0) {
+      throw new errors.AuthorizationError({
+        code: PORTAL_NO_ACTIVE_CLINIC,
+        message:
+          "Your account is not currently associated with an active client practice. Contact the pharmacy to restore access.",
+        metadata: { portalAccountId: account.id },
+      });
+    }
+
+    // Exactly one affiliation is the common case and needs no chooser:
+    // mint scoped and let them straight in. More than one leaves
+    // `activeClinicId` null for exactly as long as it takes them to
+    // pick, and `getCurrentPortalIdentity` refuses to hand that session
+    // to a data read.
+    const soleClinicId = clinicOptions.length === 1 ? clinicOptions[0]!.clinicId : null;
+
     const session = await createPortalSessionInTx({
       tx,
       portalAccountId: account.id,
       organizationId: input.organizationId,
+      activeClinicId: soleClinicId,
       ipAddress: input.ipAddress ?? null,
       userAgent: input.userAgent ?? null,
       config,
@@ -114,13 +162,20 @@ export const PortalSignIn: SystemCommand<PortalSignInInput, PortalSignInOutput> 
         organizationId: input.organizationId,
         sessionId: session.sessionId,
         rawToken: session.rawToken,
+        activeClinicId: soleClinicId,
+        clinicOptionCount: clinicOptions.length,
       },
       targetOrganizationId: input.organizationId,
       audit: {
         action: "portal_account.signed_in",
         resourceType: "PortalAccount",
         resourceId: account.id,
-        metadata: { commandLogId, rehashed },
+        metadata: {
+          commandLogId,
+          rehashed,
+          activeClinicId: soleClinicId,
+          clinicOptionCount: clinicOptions.length,
+        },
       },
       outboxEvents: [
         {

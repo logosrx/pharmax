@@ -135,6 +135,13 @@ enum AuthSessionRevokeReason {
   ABSOLUTE_TIMEOUT
   USER_TERMINATED
   SECURITY_EVENT
+  // Portal only. A prescriber who acts for several client practices
+  // switched which one they are acting for. The old session is
+  // revoked and a new one minted rather than the scope being edited
+  // in place, so one session token means one client for its whole
+  // life and an in-flight request can never observe the scope
+  // changing underneath it.
+  SCOPE_CHANGED
 }
 
 // Multi-factor authenticator kind. v1 ships TOTP only; WebAuthn/passkey
@@ -314,6 +321,16 @@ enum PatientStatus {
 enum ProviderStatus {
   ACTIVE
   INACTIVE
+}
+
+/// Lifecycle of a prescriber's affiliation with one client practice.
+/// ENDED is terminal for that row: re-affiliating the same prescriber
+/// to the same client reactivates the existing row rather than
+/// inserting a second one, so the `(organizationId, clinicId,
+/// providerId)` key stays a genuine identity.
+enum ClinicProviderAffiliationStatus {
+  ACTIVE
+  ENDED
 }
 
 // ---------- Patient allergy capture -----------------------------------
@@ -937,6 +954,7 @@ model Organization {
 
   patients                         Patient[]
   providers                        Provider[]
+  clinicProviderAffiliations       ClinicProviderAffiliation[]
   prescriptions                    Prescription[]
   rxNumberSequences                RxNumberSequence[]
   orders                           Order[]
@@ -1098,6 +1116,9 @@ model Clinic {
 
   patientAllergies                PatientAllergy[]
   patientAllergyHistoryAssertions PatientAllergyHistoryAssertion[]
+
+  providerAffiliations ClinicProviderAffiliation[]
+  portalSessions       PortalSession[]
 
   @@unique([organizationId, code])
   @@index([organizationId, status])
@@ -1275,6 +1296,8 @@ model User {
   packagePhotosArchived            PackagePhoto[]                    @relation("PackagePhotoArchiver")
   packagePhotoUploadTokens         PackagePhotoUploadToken[]         @relation("PackagePhotoUploadTokenUploader")
   workflowPolicyOverlaysCreated    WorkflowPolicyOverlay[]           @relation("WorkflowPolicyOverlayCreator")
+  clinicAffiliationsCreated        ClinicProviderAffiliation[]       @relation("ClinicProviderAffiliationCreator")
+  clinicAffiliationsEnded          ClinicProviderAffiliation[]       @relation("ClinicProviderAffiliationEndedBy")
   reportRuns                       ReportRun[]                       @relation("ReportRunActor")
   reportSchedulesCreated           ReportSchedule[]                  @relation("ReportScheduleCreator")
   accessReviewSnapshotsRecorded    AccessReviewSnapshot[]            @relation("AccessReviewSnapshotRecordedBy")
@@ -2981,6 +3004,7 @@ model Provider {
   syncReviewItems        ProviderSyncReviewItem[]
   onboardingApplications ProviderOnboardingApplication[]
   portalAccount          PortalAccount?
+  clinicAffiliations     ClinicProviderAffiliation[]
 
   // NPI is globally unique by definition; but a provider can appear
   // in multiple orgs (each gets its own row). The unique key is
@@ -2990,6 +3014,68 @@ model Provider {
   @@index([organizationId, lastName])
   @@index([organizationId, deaNumber])
   @@map("provider")
+}
+
+// The prescriber-to-client roster. One prescriber commonly writes for
+// several client practices, and each of those practices is a separate
+// billing and patient-roster boundary — `Patient.clinicId`,
+// `PricingRule.clinicId` and `Invoice.clinicId` are all clinic-keyed.
+// So "which client is this prescriber acting for right now" is not a
+// display preference; it decides which patients are visible and which
+// client is invoiced for the fill.
+//
+// This table answers "may they act for that client at all". The
+// currently-selected one lives on `portal_session.activeClinicId`,
+// because a session is the only thing the server can trust for scope
+// (a request parameter is caller-controlled).
+//
+// Note that the tenancy extension does NOT filter by clinic — only by
+// organization (see `TenantFilterKind` in @pharmax/tenancy). Two
+// clients of the same pharmacy share an `organizationId`, so nothing
+// in the data layer separates them. Portal reads must therefore carry
+// an explicit clinic filter; `readInClinicScope` is the one helper
+// that does it, and portal code must not hand-roll the filter.
+//
+// PHI-free: prescriber identity is public registry data (see the
+// `Provider` model) and no patient row is referenced.
+model ClinicProviderAffiliation {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  clinicId String @db.Uuid
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Restrict)
+
+  providerId String   @db.Uuid
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+
+  status ClinicProviderAffiliationStatus @default(ACTIVE)
+
+  affiliatedAt DateTime @default(now())
+
+  // ENDED rows only. The column is nullable because an ACTIVE row has
+  // nothing to explain; the command requires a reason to end one.
+  endedAt       DateTime?
+  endedReason   String?
+  endedByUserId String?   @db.Uuid
+  endedByUser   User?     @relation("ClinicProviderAffiliationEndedBy", fields: [endedByUserId], references: [id], onDelete: Restrict)
+
+  createdByUserId String @db.Uuid
+  createdByUser   User   @relation("ClinicProviderAffiliationCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One row per (client, prescriber). Re-affiliating flips an ENDED
+  // row back to ACTIVE rather than inserting a duplicate, so the
+  // affiliation history stays on one row and this key stays an
+  // identity rather than a "most recent attempt".
+  @@unique([organizationId, clinicId, providerId])
+  // "Who prescribes for this client" — the ops roster view.
+  @@index([organizationId, clinicId, status])
+  // "Which clients may this prescriber act for" — the portal chooser.
+  @@index([organizationId, providerId, status])
+  @@map("clinic_provider_affiliation")
 }
 
 // ----- NPI Registry sync (SyncFromNpiRegistry slice 3) ---------------
@@ -3345,6 +3431,24 @@ model PortalSession {
   portalAccountId String        @db.Uuid
   portalAccount   PortalAccount @relation(fields: [portalAccountId], references: [id], onDelete: Cascade)
 
+  // Which client practice this session is acting for. THE server-side
+  // scope proof for every portal read: a prescriber affiliated with
+  // three clients gets one session per client, never one session that
+  // can see all three.
+  //
+  // Nullable for exactly one window — between authenticating and
+  // choosing, when the prescriber has more than one active
+  // affiliation. `getCurrentPortalIdentity` returns a discriminated
+  // result so that window is unrepresentable in a data read: only the
+  // chooser page accepts the unscoped variant, and every other portal
+  // surface requires the scoped one. Sessions for a single-affiliation
+  // prescriber are minted already scoped and never see null.
+  //
+  // Immutable for the life of the row. Switching client revokes with
+  // `SCOPE_CHANGED` and mints a new session; see that enum member.
+  activeClinicId String? @db.Uuid
+  activeClinic   Clinic? @relation(fields: [activeClinicId], references: [id], onDelete: Restrict)
+
   // SHA-256 (hex) of the opaque session token.
   tokenHash String @unique
 
@@ -3362,6 +3466,10 @@ model PortalSession {
   @@index([portalAccountId, revokedAt])
   @@index([organizationId, createdAt])
   @@index([absoluteExpiresAt])
+  // Deactivating a client must revoke every session still acting for
+  // it — otherwise a prescriber keeps a live scope into a client the
+  // pharmacy has just switched off.
+  @@index([activeClinicId, revokedAt])
   @@map("portal_session")
 }
 

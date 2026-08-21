@@ -198,10 +198,23 @@ export {
   type SetupPortalAccountOutput,
 } from "./portal/setup-account.js";
 export {
+  PORTAL_NO_ACTIVE_CLINIC,
   PortalSignIn,
   type PortalSignInInput,
   type PortalSignInOutput,
 } from "./portal/sign-in-command.js";
+export {
+  canActForClinic,
+  listPortalClinicOptions,
+  type PortalClinicOption,
+} from "./portal/clinic-access.js";
+export {
+  SwitchPortalClinic,
+  SWITCH_PORTAL_CLINIC_NOT_AFFILIATED,
+  SWITCH_PORTAL_CLINIC_SESSION_NOT_FOUND,
+  type SwitchPortalClinicInput,
+  type SwitchPortalClinicOutput,
+} from "./portal/switch-clinic-command.js";
 export {
   ChangePortalPassword,
   changePortalPassword,
@@ -219,6 +232,7 @@ export {
   PORTAL_SESSION_IDLE_EXPIRED,
   PORTAL_SESSION_ABSOLUTE_EXPIRED,
   PORTAL_SESSION_ACCOUNT_DISABLED,
+  PORTAL_SESSION_CLIENT_ACCESS_REVOKED,
   type PortalSessionResolution,
   type PortalSessionFailureReason,
   type ResolvedPortalSession,

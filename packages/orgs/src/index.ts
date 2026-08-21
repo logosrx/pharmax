@@ -72,6 +72,53 @@ export {
   type UpdatePharmacySiteAddressOutput,
 } from "./commands/update-pharmacy-site-address.js";
 
+export {
+  CreateClinic,
+  CLINIC_CODE_REGEX,
+  CREATE_CLINIC_CODE_ALREADY_EXISTS,
+  CREATE_CLINIC_DUPLICATE_SITE,
+  CREATE_CLINIC_SITE_NOT_IN_ORG,
+  type CreateClinicInput,
+  type CreateClinicOutput,
+} from "./commands/create-clinic.js";
+
+export {
+  UpdateClinic,
+  UPDATE_CLINIC_ARCHIVED,
+  UPDATE_CLINIC_NOT_FOUND,
+  type UpdateClinicInput,
+  type UpdateClinicOutput,
+} from "./commands/update-clinic.js";
+
+export {
+  SetClinicStatus,
+  SET_CLINIC_STATUS_ALREADY_SET,
+  SET_CLINIC_STATUS_ILLEGAL_TRANSITION,
+  SET_CLINIC_STATUS_NOT_FOUND,
+  SET_CLINIC_STATUS_ORDERS_IN_FLIGHT,
+  type SetClinicStatusInput,
+  type SetClinicStatusOutput,
+} from "./commands/set-clinic-status.js";
+
+export {
+  AffiliateProviderWithClinic,
+  AFFILIATE_PROVIDER_ALREADY_AFFILIATED,
+  AFFILIATE_PROVIDER_CLINIC_NOT_ACTIVE,
+  AFFILIATE_PROVIDER_CLINIC_NOT_FOUND,
+  AFFILIATE_PROVIDER_NOT_ACTIVE,
+  AFFILIATE_PROVIDER_NOT_FOUND,
+  type AffiliateProviderWithClinicInput,
+  type AffiliateProviderWithClinicOutput,
+} from "./commands/affiliate-provider-with-clinic.js";
+
+export {
+  EndProviderClinicAffiliation,
+  END_AFFILIATION_ALREADY_ENDED,
+  END_AFFILIATION_NOT_FOUND,
+  type EndProviderClinicAffiliationInput,
+  type EndProviderClinicAffiliationOutput,
+} from "./commands/end-provider-clinic-affiliation.js";
+
 export { InviteUser, type InviteUserInput, type InviteUserOutput } from "./commands/invite-user.js";
 
 export {
@@ -131,6 +178,11 @@ import * as createBucketModule from "./commands/create-bucket.js";
 import * as updateBucketModule from "./commands/update-bucket.js";
 import * as deleteBucketModule from "./commands/delete-bucket.js";
 import * as updatePharmacySiteAddressModule from "./commands/update-pharmacy-site-address.js";
+import * as createClinicModule from "./commands/create-clinic.js";
+import * as updateClinicModule from "./commands/update-clinic.js";
+import * as setClinicStatusModule from "./commands/set-clinic-status.js";
+import * as affiliateProviderWithClinicModule from "./commands/affiliate-provider-with-clinic.js";
+import * as endProviderClinicAffiliationModule from "./commands/end-provider-clinic-affiliation.js";
 import * as inviteUserModule from "./commands/invite-user.js";
 import * as assignRoleModule from "./commands/assign-role.js";
 import * as revokeUserRoleModule from "./commands/revoke-user-role.js";
@@ -146,6 +198,11 @@ export const orgs = {
     UpdateBucket: updateBucketModule.UpdateBucket,
     DeleteBucket: deleteBucketModule.DeleteBucket,
     UpdatePharmacySiteAddress: updatePharmacySiteAddressModule.UpdatePharmacySiteAddress,
+    CreateClinic: createClinicModule.CreateClinic,
+    UpdateClinic: updateClinicModule.UpdateClinic,
+    SetClinicStatus: setClinicStatusModule.SetClinicStatus,
+    AffiliateProviderWithClinic: affiliateProviderWithClinicModule.AffiliateProviderWithClinic,
+    EndProviderClinicAffiliation: endProviderClinicAffiliationModule.EndProviderClinicAffiliation,
     InviteUser: inviteUserModule.InviteUser,
     AssignRole: assignRoleModule.AssignRole,
     RevokeUserRole: revokeUserRoleModule.RevokeUserRole,

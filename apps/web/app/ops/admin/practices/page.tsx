@@ -6,6 +6,8 @@
 //
 // Permission gate: `clinics.read`.
 
+import Link from "next/link";
+
 import type { ClinicStatus } from "@pharmax/database";
 import { PERMISSIONS } from "@pharmax/rbac";
 
@@ -18,6 +20,7 @@ import { listClinics } from "../../../../src/server/ops/list-clinics.js";
 import { PageHeader, Section } from "../../../../src/components/ui/page.js";
 import { Table, THead, TH, TBody, TR, TD } from "../../../../src/components/ui/data.js";
 import { Badge, type Tone } from "../../../../src/components/ui/badge.js";
+import { buttonClass } from "../../../../src/components/ui/button.js";
 import { EmptyState, PermissionDenied } from "../../../../src/components/ui/feedback.js";
 
 function statusTone(status: ClinicStatus): Tone {
@@ -50,6 +53,7 @@ export default async function PracticeAdminPage() {
   }
 
   const clinics = await listClinics({ organizationId: session.tenancy.organizationId });
+  const canCreate = hasOperatorPermission(permissions, PERMISSIONS.CLINICS_CREATE);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -57,6 +61,13 @@ export default async function PracticeAdminPage() {
         eyebrow="Directory"
         title="Practices"
         description="The clinics and practice accounts this organization fills for, with their pharmacy-site links. Counts are aggregates — patient identity lives behind the PHI-gated roster."
+        actions={
+          canCreate ? (
+            <Link href="/ops/admin/practices/new" className={buttonClass({ variant: "go" })}>
+              New client
+            </Link>
+          ) : undefined
+        }
       />
 
       {clinics.length === 0 ? (
@@ -64,6 +75,11 @@ export default async function PracticeAdminPage() {
           icon="practices"
           title="No practices configured"
           description="Practices are the clinic accounts that submit prescriptions — orders can't be attributed to a clinic until one exists."
+          action={
+            canCreate
+              ? { href: "/ops/admin/practices/new", label: "Onboard the first client" }
+              : undefined
+          }
         />
       ) : (
         <Section title="Practices" count={clinics.length}>
@@ -79,7 +95,14 @@ export default async function PracticeAdminPage() {
             <TBody>
               {clinics.map((clinic) => (
                 <TR key={clinic.clinicId}>
-                  <TD className="font-mono text-xs font-medium">{clinic.code}</TD>
+                  <TD className="font-mono text-xs font-medium">
+                    <Link
+                      href={`/ops/admin/practices/${clinic.clinicId}`}
+                      className="text-brand hover:underline"
+                    >
+                      {clinic.code}
+                    </Link>
+                  </TD>
                   <TD className="font-medium">{clinic.name}</TD>
                   <TD>
                     <Badge tone={statusTone(clinic.status)}>{clinic.status}</Badge>

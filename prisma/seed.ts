@@ -128,6 +128,26 @@ const PERMISSIONS: ReadonlyArray<{ code: string; description: string }> = [
       "View the clinic (practice) directory: codes, names, statuses, and pharmacy-site links; no PHI",
   },
   {
+    code: "clinics.create",
+    description:
+      "Onboard a client practice: allocate its code and name and open it for prescriptions; admits a new billing counterparty to the organization",
+  },
+  {
+    code: "clinics.update",
+    description:
+      "Correct a client practice's directory details; the code is immutable once issued because invoices and prescriptions cite it",
+  },
+  {
+    code: "clinics.set_status",
+    description:
+      "Deactivate or reactivate a client practice; deactivation also revokes every provider-portal session still acting for that client",
+  },
+  {
+    code: "clinics.affiliate_provider",
+    description:
+      "Grant or end a prescriber's authority to write prescriptions for a client practice; the grant an access review reads to answer who could prescribe for a client",
+  },
+  {
     code: "inventory.read",
     description:
       "View the drug product catalog and inventory lots/batches (NDC, name, lot number, expiration, status); read-only",

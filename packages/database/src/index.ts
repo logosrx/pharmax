@@ -47,6 +47,7 @@ export {
   CancellationDisposition,
   CarrierCredentialStatus,
   ClerkWebhookEventStatus,
+  ClinicProviderAffiliationStatus,
   ClinicStatus,
   CommandStatus,
   ComplianceCadence,

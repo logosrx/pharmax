@@ -5,14 +5,11 @@ import { redirect } from "next/navigation";
 
 import { PortalProfileForm } from "../../../src/components/portal/portal-profile-form.js";
 import { PortalShell } from "../../../src/components/portal/portal-shell.js";
-import { getCurrentPortalIdentity } from "../../../src/server/portal/current-session.js";
 import { getPortalProviderProfile } from "../../../src/server/portal/provider-profile.js";
+import { requireScopedPortalIdentity } from "../../../src/server/portal/require-scoped-identity.js";
 
 export default async function Page() {
-  const identity = await getCurrentPortalIdentity();
-  if (identity === null) {
-    redirect("/portal/sign-in");
-  }
+  const identity = await requireScopedPortalIdentity();
 
   const profile = await getPortalProviderProfile({
     organizationId: identity.session.organizationId,
@@ -27,7 +24,7 @@ export default async function Page() {
   }`;
 
   return (
-    <PortalShell active="profile">
+    <PortalShell active="profile" identity={identity}>
       <section className="rounded-lg border border-line bg-surface p-6">
         <h1 className="text-sm font-semibold text-fg">Identity</h1>
         <dl className="mt-4 space-y-2 text-sm">
