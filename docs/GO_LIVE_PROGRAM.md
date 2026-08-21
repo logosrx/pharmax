@@ -916,18 +916,57 @@ is the entire reason for the volume cap.
 
 ## 9. Risk register deltas
 
+> **Renumbered 2026-08-20. These IDs collided.**
+>
+> This table was written against an earlier register and proposed six
+> entries under **R-023 to R-028**. All six of those identifiers are now
+> taken by unrelated risks — R-023 is carrier credential exfiltration,
+> R-027 is the documented-guarantee-the-code-does-not-keep pattern, R-028
+> is degraded production adapters — and the register runs to R-029.
+>
+> Anyone adding these under their original numbers would have overwritten
+> live entries or, more likely, created two risks sharing an ID, which is
+> the failure mode a register can least afford: a citation that resolves
+> to the wrong risk is worse than one that resolves to nothing.
+>
+> Renumbered to **R-030 to R-035**. They remain **proposed**, not added.
+> The register is amended by the annual risk assessment
+> ([`compliance/first-cycle-runbook.md`](./compliance/first-cycle-runbook.md)
+> Session 7), which scores likelihood and impact and names current
+> controls. Adding them here by hand would produce entries with no
+> scoring rationale, which is how a register fills with rows nobody
+> re-reads.
+>
+> **Adjudication as of 2026-08-20**, so Session 7 does not re-litigate
+> what has already moved:
+>
+> - **R-031 (was R-024), production alarms with no action — ALREADY
+>   CLOSED.** [`scripts/check-alarm-actions.ts`](../scripts/check-alarm-actions.ts)
+>   is now a pre-merge guard in `verify` asserting that a production alarm
+>   cannot be declared with an empty action list. It was written because
+>   of this exact incident. Record it as closed with the reason rather
+>   than opening it.
+> - **R-032 (was R-025), unvalidated intake path — STILL PARTLY LIVE.**
+>   `scripts/seed-demo-orders.ts` routes most steps through
+>   `executeCommand`, but line 313 still calls
+>   `prisma.prescription.create()` directly, bypassing the bus and its
+>   audit, RBAC and idempotency guarantees.
+> - **R-033 (was R-026), restore drill proved mechanism not data — STILL
+>   LIVE.** Confirmed 2026-08-20: the 2026-07-23 drill verified
+>   `{"organizations": 0, "users": 0, "orders": 0, "auditLogRows": 0}`.
+
 Add to `docs/governance/risk-register.md` using its existing field
 structure (Description, Likelihood, Impact, Composite, Current controls,
 Residual rating, Owner, Review date, Mitigation plan):
 
 | ID    | Risk                                                                                                                                                                                                                                                                                                          |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| R-023 | **Unscreened clinical dispensing.** No drug knowledge base means interactions, allergies and duplicate therapy are unscreened. Mitigation: B1–B3; until then, controlled by written SOP requiring manual pharmacist review against an external reference, which must be documented as a compensating control. |
-| R-024 | **Production alarms with no action.** 14 of 18 alarms page nobody. Mitigation: C1.                                                                                                                                                                                                                            |
-| R-025 | **Unvalidated intake path.** Prescriptions created by script rather than command bypass audit, RBAC and idempotency. Mitigation: A1; delete or gate the seed path before G3.                                                                                                                                  |
-| R-026 | **Restore drill proved mechanism, not timing.** The 2026-07-23 drill restored a database containing zero organizations. Mitigation: D5.                                                                                                                                                                       |
-| R-027 | **Vendor knowledge-base staleness.** Screening against an out-of-date drug database is worse than none because it is trusted. Mitigation: record the KB version on every screening result; alarm on staleness.                                                                                                |
-| R-028 | **Mixed-version production after partial deploy.** The matrix deploys services independently and the circuit breaker rolls back individually. Mitigation: cutover step 2; post-deploy image-tag assertion in `deploy.yml`.                                                                                    |
+| R-030 | **Unscreened clinical dispensing.** No drug knowledge base means interactions, allergies and duplicate therapy are unscreened. Mitigation: B1–B3; until then, controlled by written SOP requiring manual pharmacist review against an external reference, which must be documented as a compensating control. |
+| R-031 | **Production alarms with no action.** ~~14 of 18 alarms page nobody.~~ **CLOSED 2026-08-20** — `scripts/check-alarm-actions.ts` is now a pre-merge guard in `verify` that refuses a production alarm declared with an empty action list. Record as closed with the reason; do not open.                       |
+| R-032 | **Unvalidated intake path.** Prescriptions created by script rather than command bypass audit, RBAC and idempotency. Mitigation: A1; delete or gate the seed path before G3.                                                                                                                                  |
+| R-033 | **Restore drill proved mechanism, not timing.** The 2026-07-23 drill restored a database containing zero organizations. Mitigation: D5.                                                                                                                                                                       |
+| R-034 | **Vendor knowledge-base staleness.** Screening against an out-of-date drug database is worse than none because it is trusted. Mitigation: record the KB version on every screening result; alarm on staleness.                                                                                                |
+| R-035 | **Mixed-version production after partial deploy.** The matrix deploys services independently and the circuit breaker rolls back individually. Mitigation: cutover step 2; post-deploy image-tag assertion in `deploy.yml`.                                                                                    |
 
 Retire **R-004** (Clerk account takeover) — Clerk is retired.
 
