@@ -280,6 +280,17 @@ Per [risk-assessment-procedure](../governance/risk-assessment-procedure.md).
 The bundle schedules this for Q2; the first one runs now because the register
 needs a baseline before it can be refreshed.
 
+**Read [`session-7-working-paper.md`](./session-7-working-paper.md) first.** It
+proposes eight new entries with draft scores and reasoning, one scoring
+correction, and records four adjudications already settled — so the session is
+spent contesting numbers rather than staring at a blank page. Every claim in it
+was verified in source rather than carried over from a report.
+
+It also raises a structural question the session should settle: **the triage
+threshold is composite ≥ 16 and the register's highest entry scores 15**, so by
+its own rule zero of 29 entries require an active mitigation plan. None of the
+eight proposals would reach it either.
+
 Solo agenda:
 
 1. Walk the [risk register](../governance/risk-register.md) top to bottom.
