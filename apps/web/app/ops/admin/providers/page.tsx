@@ -121,6 +121,17 @@ export default async function ProviderAdminPage({
         eyebrow="Directory"
         title="Providers"
         description="Prescribing providers this organization fills for. NPI and practice contact are public registry data — not PHI. The NPI sync worker keeps rows reconciled against CMS NPPES."
+        actions={
+          hasOperatorPermission(permissions, PERMISSIONS.PROVIDERS_CREATE) ? (
+            <Link
+              href="/ops/admin/providers/new"
+              className="inline-flex items-center gap-1.5 text-sm text-brand transition-colors hover:text-fg"
+            >
+              <Icon name="plus" size={15} />
+              Register a prescriber
+            </Link>
+          ) : null
+        }
       />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -173,10 +184,15 @@ export default async function ProviderAdminPage({
               {result.rows.map((row) => (
                 <TR key={row.providerId}>
                   <TD className="font-medium">
-                    {row.lastName}, {row.firstName}
-                    {row.credential !== null ? (
-                      <span className="text-muted"> · {row.credential}</span>
-                    ) : null}
+                    <Link
+                      href={`/ops/admin/providers/${row.providerId}`}
+                      className="transition-colors hover:text-brand"
+                    >
+                      {row.lastName}, {row.firstName}
+                      {row.credential !== null ? (
+                        <span className="text-muted"> · {row.credential}</span>
+                      ) : null}
+                    </Link>
                   </TD>
                   <TD className="font-mono text-xs">{row.npi}</TD>
                   <TD>{deaCell(row.dea)}</TD>
